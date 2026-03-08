@@ -1,4 +1,4 @@
-use secure_agent_proxy::config::AppConfig;
+use agent_locksmith::config::AppConfig;
 
 #[test]
 fn test_active_tools_filters_empty_credentials() {

@@ -1,6 +1,6 @@
 use axum_test::{TestResponse, TestServer};
-use secure_agent_proxy::app::build_app;
-use secure_agent_proxy::config::AppConfig;
+use agent_locksmith::app::build_app;
+use agent_locksmith::config::AppConfig;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

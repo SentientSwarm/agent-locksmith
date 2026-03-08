@@ -3,6 +3,30 @@
 version = 4
 
 [[package]]
+name = "agent-locksmith"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "axum",
+ "axum-test",
+ "clap",
+ "http-body-util",
+ "hyper",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tokio-test",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1537,30 +1561,6 @@ checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "serde",
  "zeroize",
-]
-
-[[package]]
-name = "secure-agent-proxy"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "axum",
- "axum-test",
- "clap",
- "http-body-util",
- "hyper",
- "reqwest",
- "secrecy",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "tokio-test",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "wiremock",
 ]
 
 [[package]]

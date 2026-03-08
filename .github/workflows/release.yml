@@ -19,16 +19,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: sap-linux-amd64
+            artifact: locksmith-linux-amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: sap-linux-arm64
+            artifact: locksmith-linux-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: sap-darwin-amd64
+            artifact: locksmith-darwin-amd64
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: sap-darwin-arm64
+            artifact: locksmith-darwin-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -58,7 +58,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/sap ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/locksmith ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -82,15 +82,15 @@ jobs:
       - name: Create checksums
         run: |
           cd artifacts
-          sha256sum sap-* > SHA256SUMS
+          sha256sum locksmith-* > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            artifacts/sap-linux-amd64
-            artifacts/sap-linux-arm64
-            artifacts/sap-darwin-amd64
-            artifacts/sap-darwin-arm64
+            artifacts/locksmith-linux-amd64
+            artifacts/locksmith-linux-arm64
+            artifacts/locksmith-darwin-amd64
+            artifacts/locksmith-darwin-arm64
             artifacts/SHA256SUMS

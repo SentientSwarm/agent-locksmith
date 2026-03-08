@@ -1,13 +1,13 @@
 [package]
-name = "secure-agent-proxy"
+name = "agent-locksmith"
 version = "0.1.0"
 edition = "2024"
 description = "Secure proxy for AI agent tool access with credential injection"
 license = "MIT"
-repository = "https://github.com/SentientSwarm/secure-agent-proxy"
+repository = "https://github.com/SentientSwarm/agent-locksmith"
 
 [[bin]]
-name = "sap"
+name = "locksmith"
 path = "src/main.rs"
 
 [dependencies]

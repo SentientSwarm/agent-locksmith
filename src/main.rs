@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use secure_agent_proxy::{app, config, telemetry};
+use agent_locksmith::{app, config, telemetry};
 
 #[derive(Parser)]
-#[command(name = "sap", about = "Secure Agent Proxy")]
+#[command(name = "locksmith", about = "Agent Locksmith")]
 struct Cli {
     /// Path to config file
-    #[arg(short, long, default_value = "/etc/sap/config.yaml")]
+    #[arg(short, long, default_value = "/etc/locksmith/config.yaml")]
     config: PathBuf,
 }
 
@@ -43,7 +43,7 @@ async fn main() {
     info!(
         listen = %addr,
         tools = tool_count,
-        "Starting secure-agent-proxy"
+        "Starting agent-locksmith"
     );
 
     let router = app::build_app(loaded);

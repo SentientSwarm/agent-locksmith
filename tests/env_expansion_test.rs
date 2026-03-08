@@ -1,4 +1,4 @@
-use secure_agent_proxy::config::expand_env_vars;
+use agent_locksmith::config::expand_env_vars;
 
 #[test]
 fn test_expand_single_var() {

@@ -1,13 +1,13 @@
-# Secure Agent Proxy (SAP)
+# Agent Locksmith
 
 A Rust proxy that sits between AI agents and external services. It injects credentials, enforces access policies, and provides tool discovery — so the agent never sees API keys or secrets.
 
 ## Why?
 
-AI agents need access to external tools (GitHub, search APIs, web scrapers) but shouldn't hold API keys directly. SAP acts as a credential-injecting reverse proxy:
+AI agents need access to external tools (GitHub, search APIs, web scrapers) but shouldn't hold API keys directly. Locksmith acts as a credential-injecting reverse proxy:
 
 - **Agent sends:** `POST /api/github/repos` (no auth header)
-- **SAP forwards:** `POST https://api.github.com/repos` with `Authorization: Bearer <real-token>`
+- **Locksmith forwards:** `POST https://api.github.com/repos` with `Authorization: Bearer <real-token>`
 
 The agent discovers available tools via `GET /tools` and never sees the actual credentials.
 
@@ -29,13 +29,13 @@ The agent discovers available tools via `GET /tools` and never sees the actual c
 
 ```bash
 cargo build --release
-# Binary: target/release/sap
+# Binary: target/release/locksmith
 ```
 
 ### Configure
 
 ```yaml
-# /etc/sap/config.yaml
+# /etc/locksmith/config.yaml
 listen:
   host: "127.0.0.1"
   port: 9200
@@ -67,7 +67,7 @@ Credentials use `${VAR_NAME}` syntax — resolved from environment variables at 
 ```bash
 export GITHUB_TOKEN="ghp_..."
 export TAVILY_API_KEY="tvly-..."
-sap --config /etc/sap/config.yaml
+locksmith --config /etc/locksmith/config.yaml
 ```
 
 ## API
@@ -105,10 +105,10 @@ Only lists tools with valid (non-empty) credentials configured.
 Proxied to the tool's upstream URL with credential injection. The upstream response is returned as-is (status code, headers, body).
 
 ```bash
-# Agent calls SAP (no credentials needed):
+# Agent calls Locksmith (no credentials needed):
 curl http://localhost:9200/api/github/repos/octocat/hello-world
 
-# SAP forwards to https://api.github.com/repos/octocat/hello-world
+# Locksmith forwards to https://api.github.com/repos/octocat/hello-world
 # with Authorization: Bearer <configured-token>
 ```
 
@@ -130,14 +130,14 @@ listen:
 # Optional: require bearer token from agents
 inbound_auth:
   mode: "bearer"              # none | bearer
-  token: "${SAP_INBOUND_TOKEN}"
+  token: "${LOCKSMITH_INBOUND_TOKEN}"
 
 # Optional: route cloud-bound requests through egress proxy
 egress_proxy: "http://127.0.0.1:8888"
 
 logging:
   level: "info"               # debug | info | warn | error
-  file: "/var/log/sap/proxy.log"
+  file: "/var/log/locksmith/proxy.log"
 
 tools:
   - name: "github"            # URL prefix: /api/github/*
@@ -176,15 +176,15 @@ Tools with no `auth` block are always active (no credentials required).
 
 ## Deployment
 
-SAP is designed to run as a systemd service alongside tools like [Pipelock](https://github.com/luckyPipewrench/pipelock) for network-layer egress control.
+Locksmith is designed to run as a systemd service alongside tools like [Pipelock](https://github.com/luckyPipewrench/pipelock) for network-layer egress control.
 
 ```
-Agent ──► SAP (:9200) ──► Pipelock (:8888) ──► Internet
+Agent ──► Locksmith (:9200) ──► Pipelock (:8888) ──► Internet
               │
               └──► LAN services (direct)
 ```
 
-For Ansible-based deployment, see the `roles/sap/` role in [openclaw-deploy](https://github.com/SentientSwarm/openclaw-deploy).
+For Ansible-based deployment, see the `roles/locksmith/` role in [openclaw-deploy](https://github.com/SentientSwarm/openclaw-deploy).
 
 ## Roadmap
 
@@ -208,7 +208,7 @@ cargo test
 cargo clippy -- -D warnings
 
 # Run with example config
-GITHUB_TOKEN=test sap --config config.example.yaml
+GITHUB_TOKEN=test locksmith --config config.example.yaml
 ```
 
 ## License
