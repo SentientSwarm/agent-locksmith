@@ -1,0 +1,46 @@
+# /etc/sap/config.yaml
+
+listen:
+  host: "127.0.0.1"
+  port: 9200
+
+# Optional auth for inbound requests from agent/gateway
+# inbound_auth:
+#   mode: "bearer"
+#   token: "${SAP_INBOUND_TOKEN}"
+
+# Pipelock proxy for cloud-bound requests
+# egress_proxy: "http://127.0.0.1:8888"
+
+logging:
+  level: "info"
+  # file: "/var/log/sap/proxy.log"
+
+# ── Tool APIs ──────────────────────────────────────────────
+tools:
+  - name: "github"
+    description: "GitHub REST API"
+    upstream: "https://api.github.com"
+    cloud: true
+    auth:
+      header: "Authorization"
+      value: "Bearer ${GITHUB_TOKEN}"
+    timeout_seconds: 30
+
+  - name: "tavily"
+    description: "Tavily web search"
+    upstream: "https://api.tavily.com"
+    cloud: true
+    auth:
+      header: "x-api-key"
+      value: "${TAVILY_API_KEY}"
+    timeout_seconds: 15
+
+  - name: "firecrawl"
+    description: "Firecrawl web scraping"
+    upstream: "https://api.firecrawl.dev"
+    cloud: true
+    auth:
+      header: "Authorization"
+      value: "Bearer ${FIRECRAWL_API_KEY}"
+    timeout_seconds: 60
