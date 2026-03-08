@@ -3,7 +3,8 @@ name = "secure-agent-proxy"
 version = "0.1.0"
 edition = "2024"
 description = "Secure proxy for AI agent tool access with credential injection"
-license = "Apache-2.0"
+license = "MIT"
+repository = "https://github.com/SentientSwarm/secure-agent-proxy"
 
 [[bin]]
 name = "sap"

@@ -8,7 +8,7 @@ agent never sees API keys or secrets.
 
 **Binary name:** `sap`
 
-**Repository:** `github.com/jxstanford/secure-agent-proxy`
+**Repository:** `github.com/SentientSwarm/secure-agent-proxy`
 
 ---
 
@@ -383,7 +383,7 @@ as-is (status code, headers, body).
 - **Binary:** `sap`
 - **Targets:** `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
 - **CI:** GitHub Actions — build, test, release binaries
-- **License:** Apache-2.0
+- **License:** MIT
 
 ---
 
