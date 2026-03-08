@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
-use axum::{extract::State, middleware, routing, Json, Router};
-use serde_json::{json, Value};
+use axum::{Json, Router, extract::State, middleware, routing};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::trace::TraceLayer;
@@ -23,7 +23,10 @@ pub fn build_app(config: AppConfig) -> Router {
     Router::new()
         .route("/health", routing::get(health_handler))
         .route("/tools", routing::get(tools_handler))
-        .route("/api/{tool_name}/{*path}", routing::any(proxy::proxy_handler))
+        .route(
+            "/api/{tool_name}/{*path}",
+            routing::any(proxy::proxy_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
@@ -34,7 +37,11 @@ pub fn build_app(config: AppConfig) -> Router {
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
     let config = state.config.load();
-    let tool_names: Vec<String> = config.active_tools().iter().map(|t| t.name.clone()).collect();
+    let tool_names: Vec<String> = config
+        .active_tools()
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
 
     Json(json!({
         "status": "ok",

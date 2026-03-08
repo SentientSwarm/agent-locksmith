@@ -1,9 +1,9 @@
 use axum::{
+    Json,
     extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
 use secrecy::ExposeSecret;
 use serde_json::json;

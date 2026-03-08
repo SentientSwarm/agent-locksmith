@@ -1,6 +1,6 @@
-use axum_test::{TestResponse, TestServer};
 use agent_locksmith::app::build_app;
 use agent_locksmith::config::AppConfig;
+use axum_test::{TestResponse, TestServer};
 
 #[tokio::test]
 async fn test_no_auth_configured_allows_all() {
@@ -54,10 +54,7 @@ tools: []
 
     let resp: TestResponse = server
         .get("/tools")
-        .add_header(
-            "Authorization",
-            "Bearer wrong-token",
-        )
+        .add_header("Authorization", "Bearer wrong-token")
         .await;
     resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
 }
@@ -79,10 +76,7 @@ tools: []
 
     let resp: TestResponse = server
         .get("/tools")
-        .add_header(
-            "Authorization",
-            "Bearer my-secret-token",
-        )
+        .add_header("Authorization", "Bearer my-secret-token")
         .await;
     resp.assert_status_ok();
 }

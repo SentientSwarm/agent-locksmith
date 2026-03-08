@@ -1,6 +1,6 @@
-use axum_test::{TestResponse, TestServer};
 use agent_locksmith::app::build_app;
 use agent_locksmith::config::AppConfig;
+use axum_test::{TestResponse, TestServer};
 
 #[tokio::test]
 async fn test_tools_returns_active_tools() {

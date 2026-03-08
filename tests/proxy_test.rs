@@ -1,6 +1,6 @@
-use axum_test::{TestResponse, TestServer};
 use agent_locksmith::app::build_app;
 use agent_locksmith::config::AppConfig;
+use axum_test::{TestResponse, TestServer};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -79,10 +79,7 @@ tools:
 
     let resp: TestResponse = server
         .get("/api/svc/test")
-        .add_header(
-            "Authorization",
-            "Bearer agent-token",
-        )
+        .add_header("Authorization", "Bearer agent-token")
         .await;
     resp.assert_status_ok();
 }
@@ -102,10 +99,12 @@ tools: []
     let resp: TestResponse = server.get("/api/unknown/test").await;
     resp.assert_status(axum::http::StatusCode::NOT_FOUND);
     let body: serde_json::Value = resp.json();
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Unknown tool"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown tool")
+    );
 }
 
 #[tokio::test]
@@ -115,10 +114,7 @@ async fn test_proxy_post_with_body() {
     Mock::given(method("POST"))
         .and(path("/v1/search"))
         .and(header("x-api-key", "tavily-key"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"results": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": []})))
         .mount(&mock)
         .await;
 

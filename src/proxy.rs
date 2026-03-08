@@ -1,9 +1,9 @@
 use axum::{
+    Json,
     body::Body,
     extract::{Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    Json,
 };
 use reqwest::Client;
 use secrecy::ExposeSecret;
@@ -22,7 +22,11 @@ pub async fn proxy_handler(
     let config = state.config.load();
 
     // Find the tool
-    let tool = match config.active_tools().into_iter().find(|t| t.name == tool_name) {
+    let tool = match config
+        .active_tools()
+        .into_iter()
+        .find(|t| t.name == tool_name)
+    {
         Some(t) => t,
         None => {
             return (
@@ -112,10 +116,7 @@ pub async fn proxy_handler(
     }
 }
 
-fn build_client(
-    tool: &ToolConfig,
-    config: &crate::config::AppConfig,
-) -> Client {
+fn build_client(tool: &ToolConfig, config: &crate::config::AppConfig) -> Client {
     let mut builder = Client::builder().timeout(Duration::from_secs(tool.timeout_seconds));
 
     if tool.cloud

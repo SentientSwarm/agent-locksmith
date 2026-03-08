@@ -19,22 +19,14 @@ async fn main() {
     let cli = Cli::parse();
 
     let loaded = config::load_config(&cli.config).unwrap_or_else(|e| {
-        eprintln!(
-            "Failed to load config from {}: {}",
-            cli.config.display(),
-            e
-        );
+        eprintln!("Failed to load config from {}: {}", cli.config.display(), e);
         std::process::exit(1);
     });
 
     telemetry::init_logging(loaded.logging.as_ref());
 
     let addr = SocketAddr::new(
-        loaded
-            .listen
-            .host
-            .parse()
-            .unwrap_or([127, 0, 0, 1].into()),
+        loaded.listen.host.parse().unwrap_or([127, 0, 0, 1].into()),
         loaded.listen.port,
     );
 

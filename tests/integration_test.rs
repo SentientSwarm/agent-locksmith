@@ -1,6 +1,6 @@
-use axum_test::{TestResponse, TestServer};
 use agent_locksmith::app::build_app;
 use agent_locksmith::config::AppConfig;
+use axum_test::{TestResponse, TestServer};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -55,20 +55,14 @@ tools:
     // 3. Discovery works with correct auth
     let resp: TestResponse = server
         .get("/tools")
-        .add_header(
-            "Authorization",
-            "Bearer agent-token",
-        )
+        .add_header("Authorization", "Bearer agent-token")
         .await;
     resp.assert_status_ok();
 
     // 4. Proxy injects credentials
     let resp: TestResponse = server
         .post("/api/tavily/v1/search")
-        .add_header(
-            "Authorization",
-            "Bearer agent-token",
-        )
+        .add_header("Authorization", "Bearer agent-token")
         .json(&serde_json::json!({"query": "rust proxy"}))
         .await;
     resp.assert_status_ok();
@@ -78,10 +72,7 @@ tools:
     // 5. Unknown tool returns 404
     let resp: TestResponse = server
         .get("/api/unknown/test")
-        .add_header(
-            "Authorization",
-            "Bearer agent-token",
-        )
+        .add_header("Authorization", "Bearer agent-token")
         .await;
     resp.assert_status(axum::http::StatusCode::NOT_FOUND);
 }
