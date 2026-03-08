@@ -77,14 +77,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Create checksums
         run: |
           cd artifacts
-          for dir in */; do
-            mv "$dir"/* .
-            rmdir "$dir"
-          done
           sha256sum sap-* > SHA256SUMS
 
       - name: Create GitHub Release
