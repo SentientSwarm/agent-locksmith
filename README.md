@@ -211,6 +211,63 @@ cargo clippy -- -D warnings
 GITHUB_TOKEN=test locksmith --config config.example.yaml
 ```
 
+## Integration with openclaw-hardened
+
+Locksmith is deployed as part of the
+[openclaw-hardened](https://github.com/SentientSwarm/openclaw-hardened)
+security stack. The `locksmith` Ansible role handles building the binary,
+generating config from site variables, and managing the systemd service.
+
+### Where Locksmith fits
+
+```
+Agent request (no auth)
+  → Locksmith (injects credentials)
+    → Pipelock (egress control + DLP scanning)
+      → Internet (GitHub, Tavily, Firecrawl, etc.)
+```
+
+The agent sends requests to `http://localhost:9200/api/<tool>/...` without
+any authentication headers. Locksmith injects the real credentials and
+forwards the request. For cloud-bound tools, the request routes through
+Pipelock for egress control.
+
+### Ansible configuration
+
+Tools are defined in site config under `locksmith.tools`:
+
+```yaml
+locksmith:
+  enabled: true
+  tools:
+    - name: "github"
+      description: "GitHub REST API"
+      upstream: "https://api.github.com"
+      cloud: true
+      auth:
+        header: "Authorization"
+        value: "Bearer {{ vault_github_token }}"
+    - name: "tavily"
+      description: "Tavily search API"
+      upstream: "https://api.tavily.com"
+      cloud: true
+      auth:
+        header: "Authorization"
+        value: "Bearer {{ vault_tavily_api_key }}"
+```
+
+See the
+[site config schema](https://github.com/SentientSwarm/openclaw-hardened/blob/main/docs/site-config-schema.md)
+for all Locksmith variables.
+
+### Security properties
+
+- Credentials stored in Ansible vault, injected at deploy time
+- Agent never sees API keys — Locksmith strips agent-sent auth headers
+- Locksmith process runs as the `openclaw` user
+- Inbound authentication via bearer token (`vault_locksmith_inbound_token`)
+- Memory-safe secrets via `secrecy::SecretString` (zeroized on drop)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
