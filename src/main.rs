@@ -41,7 +41,7 @@ async fn main() {
     let router = app::build_app(loaded);
 
     let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
-        eprintln!("Failed to bind to {}: {}", addr, e);
+        eprintln!("Failed to bind to {addr}: {e}");
         std::process::exit(1);
     });
 
