@@ -2,3 +2,6 @@
 *.swp
 *.swo
 .DS_Store
+
+# v2 handoff archive (contents already in docs/v2/{kickoff,roadmap}.md)
+docs/v2/files.zip
