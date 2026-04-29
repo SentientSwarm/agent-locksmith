@@ -1,5 +1,6 @@
 pub mod app;
 pub mod auth;
+pub mod client_pool;
 pub mod config;
 pub mod deprecation;
 pub mod proxy;

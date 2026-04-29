@@ -6,18 +6,21 @@ use std::time::Instant;
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
+use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
 use crate::proxy;
 
 pub struct AppState {
     pub config: ArcSwap<AppConfig>,
     pub started_at: Instant,
+    pub client_pool: ClientPool,
 }
 
 pub fn build_app(config: AppConfig) -> Router {
     let state = Arc::new(AppState {
         config: ArcSwap::from_pointee(config),
         started_at: Instant::now(),
+        client_pool: ClientPool::new(),
     });
 
     Router::new()

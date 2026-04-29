@@ -5,14 +5,11 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::json;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::app::AppState;
-use crate::config::ToolConfig;
 
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
@@ -57,7 +54,7 @@ pub async fn proxy_handler(
         }
     };
 
-    let client = build_client(tool, &config);
+    let client = state.client_pool.get_or_build(tool, &config);
     let mut upstream_req = client.request(method, &upstream_url);
 
     // Forward headers, stripping auth-related ones
@@ -132,19 +129,4 @@ pub async fn proxy_handler(
             }
         }
     }
-}
-
-fn build_client(tool: &ToolConfig, config: &crate::config::AppConfig) -> Client {
-    let mut builder = Client::builder()
-        .timeout(Duration::from_secs(tool.timeouts.request_seconds))
-        .read_timeout(Duration::from_secs(tool.timeouts.idle_seconds));
-
-    if matches!(tool.egress, crate::config::EgressMode::Proxied)
-        && let Some(proxy_url) = &config.egress_proxy
-        && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
-    {
-        builder = builder.proxy(proxy);
-    }
-
-    builder.build().unwrap_or_else(|_| Client::new())
 }
