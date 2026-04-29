@@ -14,7 +14,28 @@ pub struct AppConfig {
     pub egress_proxy: Option<String>,
     pub logging: Option<LoggingConfig>,
     #[serde(default)]
+    pub shutdown: ShutdownConfig,
+    #[serde(default)]
     pub tools: Vec<ToolConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownConfig {
+    #[serde(default = "default_drain_window")]
+    pub drain_window_seconds: u64,
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            drain_window_seconds: default_drain_window(),
+        }
+    }
+}
+
+fn default_drain_window() -> u64 {
+    crate::shutdown::DEFAULT_DRAIN_WINDOW_SECS
 }
 
 #[derive(Debug, Deserialize)]
