@@ -3533,7 +3533,36 @@ The PRD's M1..M7 ordering is risk-driven. The rationale:
 2. **The M2 schema compounding into M3..M7 (R-2 risk in §5 Q7).** Wrong column shape ripples. Mitigation: T2.4 schema review gate; §4.6.2 DDL is the artifact reviewed.
 3. **The M3 sync-vs-async-batched audit-write decision (Q-28, INF-26).** If the M3 benchmark trips the trigger, T3.10 (async-batched fallback) is medium-complexity and pushes M3 timeline. Mitigation: T3.10 is conditional and only runs if T3.9 measures hot-path impact; the design (§4.2.12) keeps SQLite as canonical so the fallback is bounded in scope.
 
-### 6.4 Definition of Done
+### 6.4 Execution workflow and verification policy
+
+The default execution workflow for v2 implementation is **outside-in TDD per task** (`superpowers:test-driven-development`), which honors the PRD §kickoff mandate: "write the integration test that exercises the use case first; do not write the implementation first and then write tests against it."
+
+In addition, designated high-risk gates receive an explicit **verification pass** beyond the per-task TDD cycle. The verification pass is a multi-engine review of the artifact at the gate (typically `devloop:local-review` or `devloop:pr-review`); its purpose is catching subtle defects that pass tests but violate the design's invariants.
+
+#### 6.4.1 Verification gates
+
+| Gate | Artifact under review | Why it warrants extra scrutiny |
+|------|----------------------|-------------------------------|
+| **T2.4 — Schema review gate** | `migrations/0001_init.sql` (full DDL per §4.6.2) | Schema decisions in M2 compound through M3..M7; wrong column shape costs migrations. R-2 risk in §5 Q7 |
+| **T2.9 — AgentAuthenticator bearer impl review** | `src/auth/bearer.rs` + structured-token utility | Constant-time semantics (INF-5); decoy-on-miss; rate-limit-aware audit on failure. Subtle to get right; expensive to get wrong. R-3 risk |
+| **T2.12 — AdminService review** | `src/admin/service.rs` + handler integration | This is the cross-transport business logic surface; identical-behavior-across-transports invariant is hard to test exhaustively. Defects here surface as "bug fixed in CLI but not in HTTPS API" later |
+| **T6.2 / T6.5 — MtlsValidator + MtlsAuthenticator review** | `src/auth/mtls_validator.rs`, `src/auth/mtls.rs` | Cert chain validation, CRL handling, identity extraction — security-critical and hard to fuzz. Multi-engine review catches what one pair of eyes misses |
+| **T6.7 — Operator mTLS review** | Integration of operator cert identity into `OperatorRecord` | Operator credentials are higher-value than agent credentials (D-9); the operator-mTLS path has the highest blast-radius mistakes |
+| **M3 closure — Audit retention correctness** | `src/repo/audit/retention.rs` + integration test results | Retention prune is a deletion path; off-by-one on the time window or class predicate destroys data |
+
+#### 6.4.2 Verification gate procedure
+
+For each gate:
+1. The implementation task completes through normal TDD; tests pass.
+2. Before merging the gate task's PR to `develop`:
+   - Open the PR with `risk:high` label and the relevant gate identifier in the title (e.g., `M2 (T2.4): Schema review gate`).
+   - Invoke `devloop:local-review` (for unstaged work pre-PR) or `devloop:pr-review` (post-PR) for multi-engine analysis.
+   - The review surfaces issues; address them; re-review.
+3. Merge only after the verification pass returns clean.
+
+**Honest framing of what verification gates are not:** they are not a substitute for tests. They are a defect-prevention layer *on top of* tests, applied where the cost of a defect exceeds the cost of the review. Every other task uses TDD-only; the verification gates pay their cost only at the six points above.
+
+### 6.5 Definition of Done
 
 A milestone is complete when *all* of the following hold:
 

@@ -1,0 +1,79 @@
+name: v2 Task
+description: A task derived from `docs/v2/SPEC.md` §6.2.
+title: "M{N} (R-F{X}, R-N{Y}): T{N}.{M} — <task name>"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Task issue for the Agent Locksmith v2 implementation. The structure mirrors the SPEC.md §6.2 task tables. Apply the appropriate `milestone:M{N}`, `component:*`, `layer:*`, `kind:*`, `risk:*` labels plus per-requirement labels (`R-F12`, `UC-6`, `INF-25`, ...) for live traceability.
+
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: Reference the task ID from SPEC.md §6.2 and a one-line description.
+      placeholder: T1.1 from `docs/v2/SPEC.md` §6.2 — Failing integration test for SSE passthrough timing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: component-layer
+    attributes:
+      label: Component(s) and Layer
+      description: Reference §4.2 component(s) and §4.3 layer(s).
+      value: |
+        - Component: C-{N} (per §4.2)
+        - Layer: {layer name} (per §4.3)
+    validations:
+      required: true
+
+  - type: textarea
+    id: covers
+    attributes:
+      label: Covers
+      description: List the UCs and requirements this task addresses. Apply matching labels.
+      value: |
+        - UC-{...}
+        - R-F{...}
+        - R-N{...}
+        - INF-{...}
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Bullet list copied or adapted from §6.2.
+      placeholder: |
+        - SSE chunks arrive at the test client within 100ms of upstream first-byte (R-N6).
+        - Long-running (>5min) generation completes under default config.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test scenarios (if applicable)
+      description: Specific test names matching §5 Q5 / §6.2 testing tables.
+      placeholder: |
+        - tests/streaming_passthrough_test.rs::test_sse_first_byte_within_100ms
+        - tests/streaming_passthrough_test.rs::test_long_generation_completes
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What might look in-scope but isn't (per the task table).
+      placeholder: |
+        - Provider-specific routing (D-11, D-15, R-F18)
+        - Inspecting request payloads
+
+  - type: textarea
+    id: risk-notes
+    attributes:
+      label: Risk and verification notes
+      description: If this task is at a verification gate (SPEC §6.4.1), note it. Otherwise note any subtle concerns.
+      placeholder: |
+        Verification gate: T2.4 schema review. Multi-engine review required before merge.
