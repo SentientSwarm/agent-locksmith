@@ -171,6 +171,94 @@ tools: []
 }
 
 #[test]
+fn test_per_tool_timeouts_parse() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "anthropic"
+    description: "Anthropic"
+    upstream: "https://api.anthropic.com"
+    egress: "proxied"
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 90
+    body_limit_bytes: 20971520
+"#;
+    let config = parse_config_str(yaml).expect("new shape parses");
+    let tool = &config.tools[0];
+    assert_eq!(tool.timeouts.request_seconds, 600);
+    assert_eq!(tool.timeouts.idle_seconds, 90);
+    assert_eq!(tool.body_limit_bytes, 20_971_520);
+}
+
+#[test]
+fn test_per_tool_timeouts_default_when_omitted() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "x"
+    description: "x"
+    upstream: "http://x"
+    egress: "direct"
+"#;
+    let config = parse_config_str(yaml).expect("defaults apply");
+    let tool = &config.tools[0];
+    assert_eq!(tool.timeouts.request_seconds, 30);
+    assert_eq!(tool.timeouts.idle_seconds, 60);
+    assert_eq!(tool.body_limit_bytes, 10_485_760);
+}
+
+#[test]
+fn test_legacy_timeout_seconds_renamed_to_request_seconds() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "x"
+    description: "x"
+    upstream: "http://x"
+    egress: "direct"
+    timeout_seconds: 600
+"#;
+    let config = parse_config_str(yaml).expect("legacy timeout_seconds translated");
+    let tool = &config.tools[0];
+    assert_eq!(
+        tool.timeouts.request_seconds, 600,
+        "legacy timeout_seconds maps to timeouts.request_seconds"
+    );
+    assert_eq!(
+        tool.timeouts.idle_seconds, 60,
+        "idle_seconds takes its default when only the legacy field is set"
+    );
+}
+
+#[test]
+fn test_explicit_timeouts_take_precedence_over_legacy_timeout_seconds() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "x"
+    description: "x"
+    upstream: "http://x"
+    egress: "direct"
+    timeout_seconds: 30
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 90
+"#;
+    let config = parse_config_str(yaml).expect("disagreement is non-fatal; explicit wins");
+    assert_eq!(config.tools[0].timeouts.request_seconds, 600);
+    assert_eq!(config.tools[0].timeouts.idle_seconds, 90);
+}
+
+#[test]
 fn test_explicit_egress_takes_precedence_over_legacy_cloud() {
     // If both old and new fields are present and disagree, the new field
     // wins. Operators mid-migration who left `cloud:` in place but added

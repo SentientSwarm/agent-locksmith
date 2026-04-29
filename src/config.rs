@@ -81,12 +81,45 @@ pub struct ToolConfig {
     #[serde(default)]
     pub egress: EgressMode,
     pub auth: Option<ToolAuthConfig>,
-    #[serde(default = "default_timeout")]
-    pub timeout_seconds: u64,
+    #[serde(default)]
+    pub timeouts: ToolTimeouts,
+    #[serde(default = "default_body_limit")]
+    pub body_limit_bytes: u64,
 }
 
-fn default_timeout() -> u64 {
+/// Per-tool timeout configuration (R-F12).
+/// `request_seconds` is the total request timeout (headers + body completion).
+/// `idle_seconds` is the per-read inactivity timeout — useful for streaming
+/// upstreams where the total duration is unbounded but inactivity should
+/// terminate the connection.
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct ToolTimeouts {
+    #[serde(default = "default_request_seconds")]
+    pub request_seconds: u64,
+    #[serde(default = "default_idle_seconds")]
+    pub idle_seconds: u64,
+}
+
+impl Default for ToolTimeouts {
+    fn default() -> Self {
+        Self {
+            request_seconds: default_request_seconds(),
+            idle_seconds: default_idle_seconds(),
+        }
+    }
+}
+
+fn default_request_seconds() -> u64 {
     30
+}
+
+fn default_idle_seconds() -> u64 {
+    60
+}
+
+fn default_body_limit() -> u64 {
+    10 * 1024 * 1024
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,32 +211,61 @@ fn apply_deprecations(value: &mut serde_yaml::Value, registry: &DeprecationRegis
         top.remove(&telemetry_key);
     }
 
-    // tools[]: cloud (renamed → egress), timeout_seconds (renamed → timeouts.request_seconds in T1.4; for now leave timeout_seconds as-is; T1.4 swaps it).
+    // tools[]: cloud → egress, timeout_seconds → timeouts.request_seconds.
     let tools_key = serde_yaml::Value::String("tools".to_string());
     if let Some(serde_yaml::Value::Sequence(tools)) = top.get_mut(&tools_key) {
         for tool in tools {
             let serde_yaml::Value::Mapping(tool_map) = tool else {
                 continue;
             };
-            let cloud_key = serde_yaml::Value::String("cloud".to_string());
-            let egress_key = serde_yaml::Value::String("egress".to_string());
-            if let Some(cloud_val) = tool_map.remove(&cloud_key) {
-                emit_deprecation(registry, "tools[].cloud");
-                // Explicit `egress` wins if both are present (test:
-                // test_explicit_egress_takes_precedence_over_legacy_cloud).
-                if !tool_map.contains_key(&egress_key) {
-                    let new_egress = match cloud_val {
-                        serde_yaml::Value::Bool(true) => "proxied",
-                        serde_yaml::Value::Bool(false) => "direct",
-                        _ => "direct",
-                    };
-                    tool_map.insert(
-                        egress_key,
-                        serde_yaml::Value::String(new_egress.to_string()),
-                    );
-                }
-            }
+            translate_cloud(tool_map, registry);
+            translate_timeout_seconds(tool_map, registry);
         }
+    }
+}
+
+fn translate_cloud(tool_map: &mut serde_yaml::Mapping, registry: &DeprecationRegistry) {
+    let cloud_key = serde_yaml::Value::String("cloud".to_string());
+    let egress_key = serde_yaml::Value::String("egress".to_string());
+    if let Some(cloud_val) = tool_map.remove(&cloud_key) {
+        emit_deprecation(registry, "tools[].cloud");
+        // Explicit `egress` wins if both are present.
+        if !tool_map.contains_key(&egress_key) {
+            let new_egress = match cloud_val {
+                serde_yaml::Value::Bool(true) => "proxied",
+                serde_yaml::Value::Bool(false) => "direct",
+                _ => "direct",
+            };
+            tool_map.insert(
+                egress_key,
+                serde_yaml::Value::String(new_egress.to_string()),
+            );
+        }
+    }
+}
+
+fn translate_timeout_seconds(tool_map: &mut serde_yaml::Mapping, registry: &DeprecationRegistry) {
+    let legacy_key = serde_yaml::Value::String("timeout_seconds".to_string());
+    let timeouts_key = serde_yaml::Value::String("timeouts".to_string());
+    let request_seconds_key = serde_yaml::Value::String("request_seconds".to_string());
+    let Some(legacy_val) = tool_map.remove(&legacy_key) else {
+        return;
+    };
+    emit_deprecation(registry, "tools[].timeout_seconds");
+    // Explicit `timeouts.request_seconds` wins if already set; do nothing
+    // beyond the warning + drop in that case.
+    if let Some(serde_yaml::Value::Mapping(existing_timeouts)) = tool_map.get(&timeouts_key)
+        && existing_timeouts.contains_key(&request_seconds_key)
+    {
+        return;
+    }
+    // Insert `timeouts.request_seconds: <legacy_val>`, preserving any
+    // partial timeouts mapping the operator may have provided.
+    let timeouts_entry = tool_map
+        .entry(timeouts_key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    if let serde_yaml::Value::Mapping(existing) = timeouts_entry {
+        existing.insert(request_seconds_key, legacy_val);
     }
 }
 

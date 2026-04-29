@@ -45,7 +45,8 @@ pub async fn proxy_handler(
     let upstream_url = format!("{}/{}", tool.upstream.trim_end_matches('/'), path);
     let method = req.method().clone();
     let headers = req.headers().clone();
-    let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+    let body_limit = usize::try_from(tool.body_limit_bytes).unwrap_or(usize::MAX);
+    let body_bytes = match axum::body::to_bytes(req.into_body(), body_limit).await {
         Ok(b) => b,
         Err(_) => {
             return (
@@ -134,7 +135,9 @@ pub async fn proxy_handler(
 }
 
 fn build_client(tool: &ToolConfig, config: &crate::config::AppConfig) -> Client {
-    let mut builder = Client::builder().timeout(Duration::from_secs(tool.timeout_seconds));
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(tool.timeouts.request_seconds))
+        .read_timeout(Duration::from_secs(tool.timeouts.idle_seconds));
 
     if matches!(tool.egress, crate::config::EgressMode::Proxied)
         && let Some(proxy_url) = &config.egress_proxy
