@@ -136,7 +136,7 @@ pub async fn proxy_handler(
 fn build_client(tool: &ToolConfig, config: &crate::config::AppConfig) -> Client {
     let mut builder = Client::builder().timeout(Duration::from_secs(tool.timeout_seconds));
 
-    if tool.cloud
+    if matches!(tool.egress, crate::config::EgressMode::Proxied)
         && let Some(proxy_url) = &config.egress_proxy
         && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
     {

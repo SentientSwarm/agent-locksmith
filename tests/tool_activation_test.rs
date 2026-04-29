@@ -1,4 +1,4 @@
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::parse_config_str;
 
 #[test]
 fn test_active_tools_filters_empty_credentials() {
@@ -26,7 +26,7 @@ tools:
     upstream: "https://example.com"
     timeout_seconds: 10
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     let active = config.active_tools();
     assert_eq!(active.len(), 2);
     assert_eq!(active[0].name, "github");

@@ -1,5 +1,5 @@
 use agent_locksmith::app::build_app;
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::parse_config_str;
 use axum_test::{TestResponse, TestServer};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -38,7 +38,7 @@ tools:
         mock.uri()
     );
 
-    let config: AppConfig = serde_yaml::from_str(&yaml).unwrap();
+    let config = parse_config_str(&yaml).unwrap();
     let app = build_app(config);
     let server = TestServer::new(app);
 

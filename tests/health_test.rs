@@ -1,5 +1,5 @@
 use agent_locksmith::app::build_app;
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::parse_config_str;
 use axum_test::{TestResponse, TestServer};
 
 #[tokio::test]
@@ -17,7 +17,7 @@ tools:
       value: "Bearer test-token"
     timeout_seconds: 30
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     let app = build_app(config);
     let server = TestServer::new(app);
 
@@ -39,7 +39,7 @@ listen:
   port: 9200
 tools: []
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     let app = build_app(config);
     let server = TestServer::new(app);
 

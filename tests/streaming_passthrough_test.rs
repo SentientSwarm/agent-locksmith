@@ -37,7 +37,7 @@
 //! Covers: UC-6, R-F12, R-N6 (≤100ms added first-byte latency).
 
 use agent_locksmith::app::build_app;
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::parse_config_str;
 use axum::Router;
 use axum::body::Body;
 use axum::routing::any;
@@ -104,7 +104,7 @@ tools:
     timeout_seconds: {timeout_seconds}
 "#
     );
-    let config: AppConfig = serde_yaml::from_str(&yaml).unwrap();
+    let config = parse_config_str(&yaml).unwrap();
     let app = build_app(config);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
