@@ -88,12 +88,29 @@ pub async fn proxy_handler(
                 StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let mut response_headers = HeaderMap::new();
             for (name, value) in resp.headers() {
+                // Skip hop-by-hop headers that are bound to the upstream
+                // connection's transport framing — the body is rebuilt as
+                // an axum stream below, so axum/hyper sets these afresh.
+                let lower = name.as_str().to_ascii_lowercase();
+                if lower == "transfer-encoding"
+                    || lower == "content-length"
+                    || lower == "connection"
+                    || lower == "keep-alive"
+                    || lower == "proxy-connection"
+                    || lower == "upgrade"
+                    || lower == "te"
+                    || lower == "trailer"
+                {
+                    continue;
+                }
                 if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
                     response_headers.insert(name.clone(), v);
                 }
             }
-            let body = resp.bytes().await.unwrap_or_default();
-            let mut response = Response::new(Body::from(body));
+            // Stream the upstream body to the agent rather than buffering
+            // (R-N6: ≤100ms first-byte added latency). T1.2 closes T1.1.
+            let body = Body::from_stream(resp.bytes_stream());
+            let mut response = Response::new(body);
             *response.status_mut() = status;
             *response.headers_mut() = response_headers;
             response
