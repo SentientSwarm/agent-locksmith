@@ -23,6 +23,7 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 bytes = "1"
+futures-util = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 http-body-util = "0.1"
 getrandom = "0.3"
@@ -40,13 +41,14 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+regex = "1"
+sha2 = "0.10"
 x509-parser = "0.16"
 pem = "3"
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "ring"] }
 
 [dev-dependencies]
 axum-test = "19"
-futures-util = "0.3"
 rcgen = "0.13"
 tempfile = "3"
 time = { version = "0.3", features = ["macros"] }

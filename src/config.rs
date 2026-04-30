@@ -298,6 +298,49 @@ pub struct ToolConfig {
     pub timeouts: ToolTimeouts,
     #[serde(default = "default_body_limit")]
     pub body_limit_bytes: u64,
+    /// Per-tool response controls (M7 / T7.1). Optional. When absent
+    /// the proxy passes the response through unmodified (M0..M6
+    /// behavior).
+    #[serde(default)]
+    pub response: Option<ResponseControlsConfig>,
+}
+
+/// Per-tool response controls. All fields optional; absent fields
+/// disable that specific control.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseControlsConfig {
+    /// Maximum total bytes accepted from the upstream. Applies to both
+    /// non-streaming and streaming responses. Streaming bodies that
+    /// exceed the cap emit a truncation marker and close the stream;
+    /// non-streaming responses return 502 with `response_size_exceeded`.
+    #[serde(default)]
+    pub max_size_bytes: Option<u64>,
+    /// Whitelist of acceptable upstream Content-Type values. The check
+    /// compares the part before any `;` (so `application/json;
+    /// charset=utf-8` matches `application/json`). Absent ⇒ no
+    /// content-type filtering.
+    #[serde(default)]
+    pub content_type_allowlist: Option<Vec<String>>,
+    /// Regex patterns applied to non-streaming response bodies.
+    /// Streaming bypasses redaction (R-N6 first-byte latency budget
+    /// doesn't tolerate per-chunk regex). Use M3 / D-18 for streaming
+    /// inspection (LlamaFirewall, etc.).
+    #[serde(default)]
+    pub redaction_patterns: Vec<RedactionPatternConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct RedactionPatternConfig {
+    /// Stable identifier; appears in `response_redaction` audit rows.
+    /// Operators choose a meaningful name (e.g. "openai_key") so audit
+    /// queries can filter by pattern source.
+    pub id: String,
+    pub regex: String,
+    /// Replacement text. Defaults to `[REDACTED:<id>]`.
+    #[serde(default)]
+    pub replacement: Option<String>,
 }
 
 /// Per-tool timeout configuration (R-F12).
@@ -429,7 +472,36 @@ fn parse_with_registry(
     let mut value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
     apply_deprecations(&mut value, registry);
     let config: AppConfig = serde_yaml::from_value(value)?;
+    validate_response_controls(&config)?;
     Ok(config)
+}
+
+/// Compile every `redaction_patterns[].regex` and reject duplicate
+/// pattern ids per tool. Catches misconfig at startup so the proxy
+/// hot path can pull pre-compiled regexes off `ResponseControls` (the
+/// runtime mirror) without ever hitting a parse path.
+fn validate_response_controls(cfg: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    for tool in &cfg.tools {
+        let Some(rc) = &tool.response else { continue };
+        let mut seen = std::collections::HashSet::new();
+        for pattern in &rc.redaction_patterns {
+            if !seen.insert(pattern.id.as_str()) {
+                return Err(format!(
+                    "tool `{}`: duplicate redaction_patterns id `{}`",
+                    tool.name, pattern.id
+                )
+                .into());
+            }
+            regex::Regex::new(&pattern.regex).map_err(|e| -> Box<dyn std::error::Error> {
+                format!(
+                    "tool `{}`: redaction pattern `{}` regex compile failed: {e}",
+                    tool.name, pattern.id
+                )
+                .into()
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Walk the parsed YAML tree and apply registered deprecation rules

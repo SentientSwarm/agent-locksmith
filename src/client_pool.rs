@@ -146,6 +146,7 @@ mod tests {
                 idle_seconds: 60,
             },
             body_limit_bytes: 1024,
+            response: None,
         }
     }
 
