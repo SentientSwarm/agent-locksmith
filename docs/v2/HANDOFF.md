@@ -1,7 +1,7 @@
 # Handoff — Agent Locksmith v2 Implementation
 
 **Last updated:** 2026-04-30
-**Default working branch:** `develop` (M6 merged via `m6/mtls-agent-side`)
+**Default working branch:** `develop` (M7 merged via `m7/response-controls`) — **v2 feature-complete**
 
 This document is the cold-start context for the next session. Read top to bottom before touching code.
 
@@ -12,8 +12,8 @@ This document is the cold-start context for the next session. Read top to bottom
 | Branch | State | What's there |
 |--------|-------|--------------|
 | `main` | Stable | M0 implementation. CI passes. |
-| `develop` | M6 closure | M0 + M1 + M2 + M3 + M4 + M5 + M6. mTLS validator + CRL + blocklist + authenticator + bootstrap-only listener + operator cert mapping. **Default working branch.** Tagged **v0.7.0**. |
-| `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest`, `m6/mtls-agent-side` | Merged | Kept for archaeology. |
+| `develop` | **v2 feature-complete** | M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7. Tagged **v1.0.0**. **Default working branch.** |
+| `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest`, `m6/mtls-agent-side`, `m7/response-controls` | Merged | Kept for archaeology. |
 
 ### What's merged into `develop`
 
@@ -24,12 +24,22 @@ This document is the cold-start context for the next session. Read top to bottom
 - **M4** (T4.1–T4.6): admin HTTPS listener for remote management.
 - **M5** (T2.17, T2.19, T5.1–T5.5): keys-at-rest hardening with file-sealed credentials.
 - **M6** (T6.1–T6.11): mTLS — validator, CRL fetcher, blocklist, authenticator, bootstrap-only listener, operator cert mapping, CLI mtls subcommands, smallstep example, 3 mTLS runbooks.
+- **M7** (T7.1–T7.4): per-tool response controls — max_size_bytes, content_type_allowlist, regex redaction with cleartext-never-in-audit hashing.
 
-### Test + lint state at M6 closure
+### Test + lint state at v1.0.0
 
-- `cargo test --tests`: **224 / 224 pass** across 41 test binaries.
+- `cargo test --tests`: **250 / 250 pass** across 47 test binaries.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --check`: clean.
+
+### M7 task progress (per SPEC §6.2)
+
+| Task | Status | Notes |
+|------|--------|-------|
+| T7.1 — response config schema | ✅ | tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }. Regex compile + duplicate-id rejection at parse time. 4 tests. |
+| T7.2 — apply_non_streaming | ✅ | ResponseControls runtime; SizeExceeded / ContentTypeDisallowed / Allowed outcomes. 10 unit tests. |
+| T7.3 — SizeCappedStream | ✅ | Zero-overhead passthrough when cap=None; truncation marker on overflow. 4 tests. |
+| T7.4 — audit events | ✅ | response_size_exceeded / response_content_type_disallowed / response_redaction. SHA-256 hash; cleartext NEVER recorded. 4 size + 2 content-type + 2 redaction integration tests. |
 
 ### M6 task progress (per SPEC §6.2)
 
@@ -70,13 +80,39 @@ This document is the cold-start context for the next session. Read top to bottom
 | T2.12 AdminService | Closed in M2 |
 | T3.3 retention worker | Closed in M3 |
 
-M4 + M5 had no verification gates (low-risk per SPEC §6.2). M6 closed three gates this session: T6.2 (MtlsValidator), T6.5 (MtlsAuthenticator), T6.7 (operator mTLS).
+M4 + M5 + M7 had no verification gates (low-risk per SPEC §6.2). M6 closed three gates: T6.2 (MtlsValidator), T6.5 (MtlsAuthenticator), T6.7 (operator mTLS).
 
-**Remaining gates: none.** M7 has no verification gate per SPEC §6.2.
+**All verification gates are closed.** v2 is feature-complete.
 
 ---
 
-## 2. M6 acceptance demo
+## 2. M7 acceptance demo
+
+```yaml
+# Bound an LLM stream at 5 MiB; reject HTML; redact known secret shapes.
+tools:
+  - name: openai
+    upstream: "https://api.openai.com"
+    response:
+      max_size_bytes: 5242880
+      content_type_allowlist: ["application/json", "text/event-stream"]
+      redaction_patterns:
+        - id: openai_key
+          regex: 'sk-[A-Za-z0-9]{20,}'
+        - id: aws_secret
+          regex: 'AKIA[A-Z0-9]{16}'
+```
+
+Streaming SSE under 5 MB passes through unchanged (R-N6 first-byte ≤100ms preserved). Over the cap, the proxy emits `STREAM_TRUNCATION_MARKER` and an audit row. Tools with `redaction_patterns` set take the buffered path; matches replaced with `[REDACTED:<pattern_id>]`; audit records `pattern_id` + `matches` count + SHA-256 hash of cleartext (not the cleartext).
+
+```bash
+locksmith audit query --event response_redaction --format json | jq
+locksmith audit query --event response_size_exceeded --since-ms <yesterday> --format json
+```
+
+Full operational guide: `docs/v2/runbooks/m7-response-controls.md`.
+
+## 2.1 M6 acceptance demo (kept for reference)
 
 Smallstep deployment per `dist/examples/smallstep/README.md`. Fast version:
 
@@ -204,42 +240,35 @@ locksmith --socket /var/run/locksmith/admin.sock agent list
 
 ---
 
-## 3. What's left to ship v1.0.0
+## 3. v2 is feature-complete — what comes next is post-v2
 
-One milestone remains (M7), plus the v0.7.x agent-listener bind-path follow-up and M2.x / M3.x carry-overs.
+All seven planned milestones are merged. v1.0.0 is tagged. The remaining work is post-v2 enhancement, not blocking the v2 contract.
 
-### Milestone walk to v1.0.0
+### Milestone walk
 
-| Milestone | Version | Tasks | Goal | Verification gates |
-|-----------|---------|-------|------|--------------------|
-| ~~M4~~ | ~~v0.5.0~~ | ~~T4.1–T4.6~~ | ~~Admin HTTPS for remote management.~~ | ~~—~~ ✅ Closed |
-| ~~M5~~ | ~~v0.6.0~~ | ~~T2.17 + T2.19 + T5.1–T5.5~~ | ~~Keys-at-rest hardening.~~ | ~~—~~ ✅ Closed |
-| ~~M6~~ | ~~v0.7.0~~ | ~~T6.1–T6.11~~ | ~~mTLS support.~~ | ~~T6.2, T6.5, T6.7~~ ✅ All closed |
-| **M7** | v1.0.0 | T7.1–T7.4 (~4) | Per-tool response controls: max_size_bytes, content_type_allowlist, regex redaction. Streaming preserved (only total-size cap applies). | — |
+| Milestone | Version | Status |
+|-----------|---------|--------|
+| ~~M4~~ | ~~v0.5.0~~ | ~~Admin HTTPS~~ ✅ Closed |
+| ~~M5~~ | ~~v0.6.0~~ | ~~Keys-at-rest~~ ✅ Closed |
+| ~~M6~~ | ~~v0.7.0~~ | ~~mTLS (validator/CRL/blocklist/authenticator/bootstrap-only listener/operator cert)~~ ✅ Closed |
+| ~~M7~~ | ~~v1.0.0~~ | ~~Response controls~~ ✅ Closed |
 
-### v0.7.x — agent-listener mTLS bind path (deferred from M6)
+### Post-v2 enhancement track (priority-ordered)
 
-Validator + authenticator + CRL + blocklist + audit threading + bootstrap-only listener + operator cert mapping all landed in v0.7.0 as production-ready code with full test coverage. The remaining piece is the agent-listener TLS bind that requires client certs at the handshake:
+The v0.7.x agent-listener mTLS bind path is the highest-value follow-up because it activates the M6 cert-validation infrastructure that already exists.
 
-- Replace the agent listener's plain TCP bind with `axum_server::bind_rustls` when `auth_mode` is `mtls` or `both`.
-- Configure the rustls `ServerConfig` with a `ClientCertVerifier` (rustls's `WebPkiClientVerifier::builder` against the `mtls.ca_bundle_path`).
-- Inject the peer cert DER into the request via an axum extractor that reads from rustls's connection state.
-- Middleware switches on `auth_mode` to call `MtlsAuthenticator::authenticate_cert` (with bearer fallback under `both`).
+| Track | Priority | Estimated session count | Notes |
+|-------|----------|-------------------------|-------|
+| **v0.7.x agent-listener mTLS bind** | High (when mTLS is a deployment requirement) | 1 | Validator + authenticator already landed in v0.7.0. The remaining piece is the rustls server config + peer-cert extractor + middleware switch on auth_mode. |
+| **T3.9 audit-write bench** | High before recommending production scale-up | 1 | Validates A-2 / INF-26 (~1000 sustained writes/sec on commodity SSD). Pre-v1.0.0 closure-checklist item. |
+| **T2.20 hot reload of non-listener config** | Medium | 1 | M0 ArcSwap is in place. Listener-shape config (M4 admin_https, M5 sealed paths, M6 cert paths) requires restart per the listener-shape carve-out — that stays. Tools, audit, retention can hot-reload. |
+| **Live Vault / AWS Secrets Manager backends** | Medium | 1–2 | Stubs landed in M5/T5.3 with rustdoc on the implementer's contract. Live impls are post-v2. |
+| **D-18 LlamaFirewall composition** | Low (depends on consumer demand) | 1 | Streaming-aware classifier integration; M7 redaction is regex-only by design. |
+| **T2.11 RateLimiter** | Low (nginx/Caddy in front works as stopgap) | 1 | Issue #24. Defensive; M2.x carry-over. |
+| **T2.18 field-scoped `${VAR}`** | Low | 0.5 | M0 textual expander in `LegacyString` covers dominant case. |
+| **T2.27 `locksmith config reload/show`** | Low | 0.5 | Useful for ops; not blocking. |
+| **T2.28/T2.29 bench subcommands** | Low | 0.5 | A-1 verification harness; useful, not blocking. |
 
-This is ~1 focused session; no new gates. Recommend landing it as `m6.1/agent-listener-mtls` before starting M7 if mTLS is a release-blocker for the user's deployment, or after M7 if not.
-
-### M7 — Response controls (next session — final milestone)
-
-**Goal:** Per-tool max_size_bytes, content_type_allowlist, regex redaction. Streaming first-byte latency must stay ≤100ms (R-N6).
-
-| Task | Summary |
-|------|---------|
-| T7.1 | `tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }` |
-| T7.2 | `ResponseControls.apply` for non-streaming (read body, check content-type, apply redaction) |
-| T7.3 | Streaming wrapper: byte-counter `Stream` adapter that emits truncation marker on cap-exceeded |
-| T7.4 | Audit events: `response_redaction` (with hash of match, NOT cleartext) and `response_size_exceeded` |
-
-**Acceptance criterion:** rerun M1 streaming tests with response controls enabled — first-byte latency must still be ≤100ms.
 
 
 ### M7 — Response controls (final milestone)
@@ -276,24 +305,25 @@ This is ~1 focused session; no new gates. Recommend landing it as `m6.1/agent-li
 | T3.9 audit-write bench | A-2 / INF-26 validation; **must run before v1.0.0 cut**. |
 | T3.10 conditional async-batched | Only if T3.9 trips the >5ms p95 trigger. |
 
-### Pre-v1.0.0 closure checklist
+### v1.0.0 closure checklist (status)
 
 - [x] M4 (admin HTTPS) merged. ✅
 - [x] M5 (keys-at-rest) merged. ✅
-- [x] M6 (mTLS) merged. ✅
-- [ ] M7 (response controls) merged.
-- [ ] v0.7.x — agent-listener mTLS bind path (T6.6 wiring follow-up).
-- [ ] M3 audit-write bench (T3.9) executed; report attached to closure issue.
-- [ ] If trigger tripped, T3.10 async-batched landed.
+- [x] M6 (mTLS infrastructure) merged. ✅
+- [x] M7 (response controls) merged. ✅
 - [x] All verification gates closed with self-review (T6.2, T6.5, T6.7). ✅
 - [x] Threat model (`docs/v2/threat-model.md`) reviewed and merged. ✅
 - [x] M4 runbook (`docs/v2/runbooks/m4-remote-management.md`) shipped. ✅
 - [x] M5 runbook (`docs/v2/runbooks/m5-sealed-secrets.md`) shipped. ✅
 - [x] M6 runbooks (`m6-mtls-onboarding.md`, `m6-mtls-migration.md`, `m6-mtls-revocation.md`) shipped. ✅
-- [ ] M7 runbook (`docs/v2/runbooks/m7-response-controls.md`) shipped.
-- [ ] §7 changelog v1.0.0 entry written.
+- [x] M7 runbook (`docs/v2/runbooks/m7-response-controls.md`) shipped. ✅
+- [x] v1.0.0 tagged. ✅
+- [ ] v0.7.x — agent-listener mTLS bind path (post-v2; activates M6 infrastructure).
+- [ ] M3 audit-write bench (T3.9) executed; report attached to closure issue.
+- [ ] If trigger tripped, T3.10 async-batched landed.
+- [ ] §7 changelog v1.0.0 entry in SPEC.md.
 
-**Rough estimate: 1–2 working sessions of similar density to land v1.0.0** (was 3–4 before M6).
+**v2 is feature-complete.** Remaining items are post-v2 quality-of-life and validation-bench work.
 
 ---
 
@@ -451,6 +481,7 @@ Stale `GITHUB_TOKEN` env overrides keyring auth. Always invoke as `env -u GITHUB
 | M6 migration recipe | `docs/v2/runbooks/m6-mtls-migration.md` |
 | M6 revocation playbook | `docs/v2/runbooks/m6-mtls-revocation.md` |
 | smallstep / step-ca example | `dist/examples/smallstep/README.md` |
+| M7 response-controls runbook | `docs/v2/runbooks/m7-response-controls.md` |
 
 ---
 
@@ -461,16 +492,18 @@ git fetch
 git checkout develop
 git pull
 
-# Sanity check current state (224/224, clean lint).
+# Sanity check current state (250/250, clean lint).
 cargo test --tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Branch off develop for M7 — final milestone, no verification gate.
-git checkout -b m7/response-controls
-
-# OR — close the M6 follow-up first if mTLS is a release blocker:
-# git checkout -b m6.1/agent-listener-mtls
+# v2 is feature-complete. Pick a post-v2 enhancement track per §3:
+# - mTLS bind path (highest priority if mTLS deployment required):
+git checkout -b m6.1/agent-listener-mtls
+# - Audit-write bench (validates A-2 / INF-26):
+# git checkout -b post-v2/audit-bench
+# - Hot reload of non-listener config:
+# git checkout -b post-v2/config-hot-reload
 ```
 
 Workflow that has held through M1 + M2 + M3 + M4 + M5 (and should keep holding):
@@ -486,29 +519,31 @@ Workflow that has held through M1 + M2 + M3 + M4 + M5 (and should keep holding):
 
 ## 7. What success looks like for the next session
 
-**Recommended target: M7 (per-tool response controls — final milestone).** Four tasks, no verification gate. ~1 session.
+v2 is feature-complete. Pick a post-v2 enhancement track aligned with deployment needs.
 
-The big idea: operators bound the response surface per-tool. A misbehaving upstream that streams an unbounded body, returns the wrong content-type, or leaks a secret in the response can be capped/rejected/redacted before the agent sees it. Streaming flows from M1 must stay intact: only total-size cap applies, and first-byte latency must remain ≤100ms (R-N6).
+### 7.1 Recommended: v0.7.x agent-listener mTLS bind path
 
-Concrete acceptance for the next session:
-1. `tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }` parses (T7.1).
-2. `ResponseControls.apply` for non-streaming responses: read body subject to `max_size_bytes`; reject content-types not in allowlist; apply regex `redaction_patterns` (T7.2).
-3. Streaming wrapper: a `Stream` adapter that counts bytes and emits a truncation marker on cap-exceeded; integrated into the proxy streaming path (T7.3).
-4. Audit events: `response_redaction` (with `pattern_id` + `matches` count + hashed-match identifier — NEVER cleartext) and `response_size_exceeded` (T7.4).
-5. Regression: rerun M1 streaming tests (`tests/streaming_passthrough_test.rs`) with response controls enabled on the test tool. First-byte latency still ≤100ms.
-6. `tests/response_controls_size_test.rs`, `tests/response_controls_content_type_test.rs`, `tests/response_controls_redaction_test.rs` cover the three control modes.
-7. `docs/v2/runbooks/m7-response-controls.md` shipped.
-8. End of session: merge → `v1.0.0` → tag.
+**Why this is the top recommendation:** M6 already landed validator + authenticator + CRL + blocklist + audit threading + operator cert resolution + bootstrap-only listener. The remaining piece is plumbing — without it, `auth_mode: mtls` is config-honored but agent-listener-side cert verification doesn't fire. Operators planning mTLS rollout need this.
 
-**Alternative target if mTLS is a release blocker:** the v0.7.x agent-listener bind path. Validator/authenticator already landed; this session wires the rustls server config + peer-cert extractor + middleware switch on `auth_mode`. ~1 session, no new gates.
+Concrete acceptance:
+1. Daemon switches the agent listener bind from plain TCP to `axum_server::bind_rustls` when `listen.auth_mode` is `Mtls` or `Both`.
+2. rustls `ServerConfig` configured with `WebPkiClientVerifier` against `mtls.ca_bundle_path`. Under `Both`, client cert is optional; under `Mtls`, required.
+3. Peer cert DER injected into the request via an axum extractor that reads from rustls's `ConnectionInfo` (or equivalent in axum-server 0.7).
+4. Middleware switches on `auth_mode`: under `Mtls`, call `MtlsAuthenticator::authenticate_cert`; under `Both`, try mTLS first then fall back to bearer.
+5. `tests/mtls_listener_e2e_test.rs` mints a CA + agent cert with rcgen, spins up the daemon with `auth_mode: mtls`, makes a real reqwest request with the client cert, asserts the proxy injected the agent's resolved credential and the audit row records `auth_method: mtls`.
+6. End of session: merge → `v0.7.1` → tag.
 
-**v1.0.0 closure tasks** (do AFTER M7 lands):
-- §7 changelog entry summarizing v0.2.0 → v1.0.0.
-- Pre-v1.0.0 closure checklist sweep (see §3 above).
-- M3 audit-write bench (T3.9) execution; report → closure issue.
-- Optional: T3.10 async-batched if T3.9 trips the >5ms p95 trigger.
+### 7.2 Alternative: T3.9 audit-write bench
 
-The path to v1.0.0 from here fits in 1–2 sessions of similar density. M7 is the last milestone; everything after is closure-checklist housekeeping.
+Pre-v1.0.0-checklist item kept open because it validates A-2 / INF-26 ("~1000 sustained writes/sec on commodity SSD"). One session of criterion-based bench harness landing on `tests/benches/audit_write_bench.rs` plus a result summary committed to the audit-bench closure issue. Tag `v1.0.1` if the trigger doesn't fire; if it does, T3.10 (conditional async-batched) is the natural follow-up.
+
+### 7.3 Alternative: T2.20 hot-reload of non-listener config
+
+ArcSwap is already in place. The work is structural: define what's reload-safe (tools, audit retention, response controls) vs listener-shape (admin_socket, admin_https, mtls, bootstrap_only — restart-only). One session.
+
+---
+
+The path forward is operator-driven from here. v2's exit criteria are met; pick the highest-value enhancement based on deployment posture.
 
 ---
 
