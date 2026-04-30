@@ -1,0 +1,69 @@
+# Worked example unit (T5.5). Specialized version of
+# dist/systemd/locksmith.service.template with the example's specifics
+# filled in. Read the template's comments first for directive
+# rationale.
+
+[Unit]
+Description=Agent Locksmith — sealed-secrets example
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/locksmithd --config /etc/locksmith/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+User=locksmith
+Group=locksmith
+UMask=0027
+
+# systemd-creds decrypts the blob and drops it at
+# /run/credentials/locksmith/openai_token (mode 0400, owned by locksmith).
+# Reseal with: dist/examples/sealed-secrets/seal-credential.sh
+LoadCredentialEncrypted=openai_token:/etc/locksmith/credentials/openai.enc
+
+# Filesystem isolation
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ReadWritePaths=/var/lib/locksmith /var/log/locksmith /run/locksmith
+
+# Capability + syscall reduction
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount
+
+# Memory hardening
+MemoryDenyWriteExecute=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+TasksMax=512
+
+StandardOutput=journal
+StandardError=journal
+
+TimeoutStopSec=60s
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
