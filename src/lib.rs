@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod agent_listener;
 pub mod app;
 pub mod argon2_helper;
 pub mod audit_sink;

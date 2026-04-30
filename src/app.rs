@@ -10,6 +10,7 @@ use tower_http::trace::TraceLayer;
 use crate::auth;
 use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
+use crate::mtls::MtlsAuthenticator;
 use crate::proxy;
 use crate::repo::AuditRepository;
 use crate::response_controls::ResponseControls;
@@ -37,6 +38,12 @@ pub struct AppState {
     /// `response:` block are absent from the map and the proxy
     /// streams unchanged (M0..M6 behavior).
     pub response_controls: Arc<HashMap<String, ResponseControls>>,
+    /// mTLS authenticator for the agent listener (post-v2 / #67). Only
+    /// populated when the daemon is configured for `auth_mode: mtls`
+    /// or `auth_mode: both`; absent under bearer-only deployments.
+    /// Agent-auth middleware consults this when a peer cert is present
+    /// in the request extensions.
+    pub mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -97,6 +104,18 @@ pub fn build_app_with_audit_and_creds(
     audit: Option<AuditRepository>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
 ) -> Router {
+    build_app_full(config, audit, resolved_creds, None)
+}
+
+/// Full-power constructor (post-v2 / #67): supplies all M0..M7 state
+/// plus the optional MtlsAuthenticator. Used by the daemon when
+/// `auth_mode` is `mtls` or `both`.
+pub fn build_app_full(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     drop(snapshot);
@@ -107,6 +126,7 @@ pub fn build_app_with_audit_and_creds(
         audit,
         resolved_creds,
         response_controls,
+        mtls_authenticator,
     });
 
     Router::new()
