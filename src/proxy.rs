@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::app::AppState;
 use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
+use crate::response_controls::{ApplyOutcome, ResponseControls, SizeCappedStream};
 
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
@@ -133,6 +134,14 @@ pub async fn proxy_handler(
         Ok(resp) => {
             let upstream_status = resp.status().as_u16();
             let status = StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
+            // Snapshot upstream Content-Type before consuming the
+            // response — needed for response-controls dispatch and
+            // for the response we hand to the agent.
+            let upstream_content_type = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
             let mut response_headers = HeaderMap::new();
             for (name, value) in resp.headers() {
                 // Skip hop-by-hop headers that are bound to the upstream
@@ -154,6 +163,65 @@ pub async fn proxy_handler(
                     response_headers.insert(name.clone(), v);
                 }
             }
+            // M7 / T7.2-T7.4: per-tool response controls.
+            let rc = state.response_controls.get(&tool_name).cloned();
+            if let Some(rc) = rc.as_ref() {
+                // Content-type allowlist (T7.2 streaming pre-check).
+                if !rc.streaming_content_type_allowed(upstream_content_type.as_deref()) {
+                    audit_record(
+                        &state.audit,
+                        AuditEvent {
+                            ts_ms: now_ms(),
+                            event_class: EventClass::Proxy,
+                            event: "response_content_type_disallowed".to_string(),
+                            tool: Some(tool_name.clone()),
+                            upstream_host: upstream_host.clone(),
+                            method: Some(method.as_str().to_string()),
+                            path: Some(request_path.clone()),
+                            status: Some(502),
+                            latency_ms: Some(started.elapsed().as_millis() as u64),
+                            decision: Decision::Denied,
+                            auth_method: Some("bearer".to_string()),
+                            details: Some(json!({
+                                "observed_content_type": upstream_content_type,
+                            })),
+                            ..AuditEvent::default()
+                        },
+                    )
+                    .await;
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(json!({
+                            "error": {
+                                "message": "upstream content-type not allowed",
+                                "type": "response_content_type_disallowed",
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
+                // Tool has redaction patterns ⇒ buffer + apply
+                // non-streaming. Tools that need streaming + redaction
+                // compose with D-18 in-process scanners (LlamaFirewall)
+                // — see m7-response-controls runbook.
+                if rc_should_buffer(rc) {
+                    return apply_buffered_response_controls(
+                        rc,
+                        &state.audit,
+                        &tool_name,
+                        upstream_host.clone(),
+                        method.as_str(),
+                        &request_path,
+                        upstream_status,
+                        upstream_content_type,
+                        response_headers,
+                        resp,
+                        started,
+                    )
+                    .await;
+                }
+            }
+
             let decision = if upstream_status >= 500 {
                 Decision::Error
             } else {
@@ -179,7 +247,47 @@ pub async fn proxy_handler(
             .await;
             // Stream the upstream body to the agent rather than buffering
             // (R-N6: ≤100ms first-byte added latency). T1.2 closes T1.1.
-            let body = Body::from_stream(resp.bytes_stream());
+            // Wrap with the M7 size-cap adapter when configured.
+            let body = match rc.as_ref().and_then(|c| c.streaming_size_cap()) {
+                Some(cap) => {
+                    let audit_for_truncate = state.audit.clone();
+                    let tool_for_truncate = tool_name.clone();
+                    let upstream_host_for_truncate = upstream_host.clone();
+                    let method_for_truncate = method.as_str().to_string();
+                    let path_for_truncate = request_path.clone();
+                    let on_truncate = move |observed: u64| {
+                        let event = AuditEvent {
+                            ts_ms: now_ms(),
+                            event_class: EventClass::Proxy,
+                            event: "response_size_exceeded".to_string(),
+                            tool: Some(tool_for_truncate),
+                            upstream_host: upstream_host_for_truncate,
+                            method: Some(method_for_truncate),
+                            path: Some(path_for_truncate),
+                            status: Some(upstream_status),
+                            decision: Decision::Denied,
+                            auth_method: Some("bearer".to_string()),
+                            details: Some(json!({
+                                "observed_bytes": observed,
+                                "cap_bytes": cap,
+                                "flow": "streaming",
+                            })),
+                            ..AuditEvent::default()
+                        };
+                        if let Some(repo) = audit_for_truncate {
+                            tokio::spawn(async move {
+                                if let Err(e) = repo.record(&event).await {
+                                    tracing::warn!(error = %e, "response_size_exceeded audit write failed");
+                                }
+                            });
+                        }
+                    };
+                    let wrapped =
+                        SizeCappedStream::new(resp.bytes_stream(), Some(cap), on_truncate);
+                    Body::from_stream(wrapped)
+                }
+                None => Body::from_stream(resp.bytes_stream()),
+            };
             let mut response = Response::new(body);
             *response.status_mut() = status;
             *response.headers_mut() = response_headers;
@@ -223,6 +331,191 @@ pub async fn proxy_handler(
 
 /// Best-effort audit write. Errors are logged and swallowed — audit must
 /// never block proxy traffic (INF-26).
+/// True when this tool's response controls require buffering the
+/// full body before responding (M7 / SPEC §6.2 T7.2). Streaming
+/// flows skip this path; redaction explicitly bypasses streaming
+/// per SPEC ("only total-size cap applies to streaming").
+fn rc_should_buffer(rc: &ResponseControls) -> bool {
+    // Empty pattern list ⇒ no redaction work; stream as usual.
+    // We discover this by attempting to compile a no-op against an
+    // empty string — cheap and avoids exposing the field.
+    rc_has_redaction(rc)
+}
+
+fn rc_has_redaction(rc: &ResponseControls) -> bool {
+    // ResponseControls keeps `patterns` private. Use the public
+    // surface: an empty body with no patterns produces an Allowed
+    // outcome with no redaction records. If we run apply on a real
+    // body we'd lose the bytes — but there's a cleaner check: the
+    // streaming path uses size_cap + content_type only; redaction
+    // is the differentiator. We expose this through the public API.
+    rc.has_redaction_patterns()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_buffered_response_controls(
+    rc: &ResponseControls,
+    audit: &Option<AuditRepository>,
+    tool_name: &str,
+    upstream_host: Option<String>,
+    method_str: &str,
+    request_path: &str,
+    upstream_status: u16,
+    upstream_content_type: Option<String>,
+    response_headers: HeaderMap,
+    resp: reqwest::Response,
+    started: Instant,
+) -> Response {
+    let body_bytes = match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            audit_record(
+                audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "upstream_body_read_error".to_string(),
+                    tool: Some(tool_name.to_string()),
+                    upstream_host,
+                    method: Some(method_str.to_string()),
+                    path: Some(request_path.to_string()),
+                    status: Some(502),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Error,
+                    auth_method: Some("bearer".to_string()),
+                    details: Some(json!({"error": e.to_string()})),
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": {"message": "upstream body read failed", "type": "upstream_error"}})),
+            )
+                .into_response();
+        }
+    };
+    match rc.apply_non_streaming(upstream_content_type.as_deref(), body_bytes) {
+        ApplyOutcome::SizeExceeded { observed, cap } => {
+            audit_record(
+                audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "response_size_exceeded".to_string(),
+                    tool: Some(tool_name.to_string()),
+                    upstream_host,
+                    method: Some(method_str.to_string()),
+                    path: Some(request_path.to_string()),
+                    status: Some(502),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Denied,
+                    auth_method: Some("bearer".to_string()),
+                    details: Some(json!({
+                        "observed_bytes": observed,
+                        "cap_bytes": cap,
+                        "flow": "non_streaming",
+                    })),
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {"message": "response too large", "type": "response_size_exceeded"}
+                })),
+            )
+                .into_response()
+        }
+        ApplyOutcome::ContentTypeDisallowed { observed } => {
+            audit_record(
+                audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "response_content_type_disallowed".to_string(),
+                    tool: Some(tool_name.to_string()),
+                    upstream_host,
+                    method: Some(method_str.to_string()),
+                    path: Some(request_path.to_string()),
+                    status: Some(502),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Denied,
+                    auth_method: Some("bearer".to_string()),
+                    details: Some(json!({"observed_content_type": observed})),
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {"message": "upstream content-type not allowed", "type": "response_content_type_disallowed"}
+                })),
+            )
+                .into_response()
+        }
+        ApplyOutcome::Allowed { body, redactions } => {
+            for rec in &redactions {
+                audit_record(
+                    audit,
+                    AuditEvent {
+                        ts_ms: now_ms(),
+                        event_class: EventClass::Proxy,
+                        event: "response_redaction".to_string(),
+                        tool: Some(tool_name.to_string()),
+                        upstream_host: upstream_host.clone(),
+                        method: Some(method_str.to_string()),
+                        path: Some(request_path.to_string()),
+                        status: Some(upstream_status),
+                        latency_ms: Some(started.elapsed().as_millis() as u64),
+                        decision: Decision::Allowed,
+                        auth_method: Some("bearer".to_string()),
+                        details: Some(json!({
+                            "pattern_id": rec.pattern_id,
+                            "matches": rec.matches,
+                            "match_hash": rec.match_hash,
+                        })),
+                        ..AuditEvent::default()
+                    },
+                )
+                .await;
+            }
+            // Final proxy_request audit row for the buffered flow.
+            let decision = if upstream_status >= 500 {
+                Decision::Error
+            } else {
+                Decision::Allowed
+            };
+            audit_record(
+                audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "proxy_request".to_string(),
+                    tool: Some(tool_name.to_string()),
+                    upstream_host,
+                    method: Some(method_str.to_string()),
+                    path: Some(request_path.to_string()),
+                    status: Some(upstream_status),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision,
+                    auth_method: Some("bearer".to_string()),
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
+            let status_code =
+                StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
+            let mut response = Response::new(Body::from(body));
+            *response.status_mut() = status_code;
+            *response.headers_mut() = response_headers;
+            response
+        }
+    }
+}
+
 async fn audit_record(audit: &Option<AuditRepository>, event: AuditEvent) {
     let Some(repo) = audit else {
         return;

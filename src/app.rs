@@ -12,7 +12,9 @@ use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
 use crate::proxy;
 use crate::repo::AuditRepository;
+use crate::response_controls::ResponseControls;
 use crate::secret::{ResolvedCreds, resolve_tool_creds_sync_env_only};
+use std::collections::HashMap;
 
 pub struct AppState {
     pub config: Arc<ArcSwap<AppConfig>>,
@@ -29,6 +31,36 @@ pub struct AppState {
     /// path reads from this map; tools whose credentials are absent
     /// are inactive (degraded per INF-4).
     pub resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    /// Per-tool response controls (M7 / T7.2 / T7.3). Compiled once
+    /// at AppState build; the proxy hot path looks up tool name and
+    /// applies size-cap / content-type / redaction. Tools without a
+    /// `response:` block are absent from the map and the proxy
+    /// streams unchanged (M0..M6 behavior).
+    pub response_controls: Arc<HashMap<String, ResponseControls>>,
+}
+
+fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
+    let mut out = HashMap::new();
+    for tool in &cfg.tools {
+        let Some(rc_cfg) = &tool.response else {
+            continue;
+        };
+        // parse_config_str validated the regex compile earlier; this
+        // unwrap is structurally safe.
+        match ResponseControls::compile(rc_cfg) {
+            Ok(rc) => {
+                out.insert(tool.name.clone(), rc);
+            }
+            Err(e) => {
+                tracing::error!(
+                    tool = %tool.name,
+                    error = %e,
+                    "response_controls compile failed at AppState build (config validation should have caught this)"
+                );
+            }
+        }
+    }
+    out
 }
 
 pub fn build_app(config: AppConfig) -> Router {
@@ -65,12 +97,16 @@ pub fn build_app_with_audit_and_creds(
     audit: Option<AuditRepository>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
 ) -> Router {
+    let snapshot = config.load();
+    let response_controls = Arc::new(compile_response_controls(&snapshot));
+    drop(snapshot);
     let state = Arc::new(AppState {
         config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
         audit,
         resolved_creds,
+        response_controls,
     });
 
     Router::new()
