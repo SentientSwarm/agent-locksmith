@@ -12,6 +12,7 @@ pub mod migrations;
 pub mod mtls;
 pub mod proxy;
 pub mod repo;
+pub mod response_controls;
 pub mod secret;
 pub mod shutdown;
 pub mod telemetry;
