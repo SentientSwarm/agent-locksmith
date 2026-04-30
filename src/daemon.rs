@@ -97,11 +97,13 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
     });
 
-    // Agent listener.
+    // Agent listener. Clone the shared config because the admin HTTPS
+    // wiring below needs a snapshot of `listen.admin_https` and the
+    // builder takes ownership.
     let agent_router = if let Some(audit) = audit_for_proxy {
-        build_app_with_audit(shared_config, Some(audit))
+        build_app_with_audit(shared_config.clone(), Some(audit))
     } else {
-        build_app_with_shared_config(shared_config)
+        build_app_with_shared_config(shared_config.clone())
     };
     let listener = TcpListener::bind(addr).await?;
     info!("agent listener bound on {addr}");
@@ -113,22 +115,65 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     });
 
     // Admin UDS listener (when configured).
-    let admin_task = if let Some(state) = admin_state {
+    // Admin HTTPS listener piggybacks on the same UdsState — same handlers,
+    // different transport (T4.3 / C-3, SPEC §4.2.5).
+    let (admin_task, admin_https_task) = if let Some(state) = admin_state {
         let path = admin_socket_path.expect("checked above");
-        let admin_shutdown = coord.shutdown_signal();
-        Some(tokio::spawn(async move {
-            crate::admin::uds::bind_and_serve(&path, state, admin_shutdown).await
-        }))
+        let uds_shutdown = coord.shutdown_signal();
+        let uds_state = state.clone();
+        let uds = tokio::spawn(async move {
+            crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await
+        });
+
+        // Build the HTTPS task only when explicitly enabled. The block
+        // present-but-disabled path is a no-op (off-by-default contract).
+        let snapshot = shared_config.load();
+        let https = snapshot
+            .listen
+            .admin_https
+            .as_ref()
+            .filter(|c| c.enabled)
+            .map(|c| {
+                let host: std::net::IpAddr = c.host.parse().unwrap_or([127, 0, 0, 1].into());
+                let addr = SocketAddr::new(host, c.port);
+                let cert = c.cert_path.clone();
+                let key = c.key_path.clone();
+                let https_shutdown = coord.shutdown_signal();
+                let https_state = state.clone();
+                tokio::spawn(async move {
+                    crate::admin::https::bind_and_serve(
+                        addr,
+                        &cert,
+                        &key,
+                        https_state,
+                        https_shutdown,
+                    )
+                    .await
+                })
+            });
+        drop(snapshot);
+        (Some(uds), https)
     } else {
-        None
+        (None, None)
     };
 
     let drain = async {
-        let (a, b) = if let Some(admin) = admin_task {
-            let (a, b) = tokio::join!(agent_task, admin);
-            (Some(a), Some(b))
-        } else {
-            (Some(agent_task.await), None)
+        let agent_res = match (admin_task, admin_https_task) {
+            (Some(uds), Some(https)) => {
+                let (a, u, h) = tokio::join!(agent_task, uds, https);
+                (Some(a), Some(u), Some(h))
+            }
+            (Some(uds), None) => {
+                let (a, u) = tokio::join!(agent_task, uds);
+                (Some(a), Some(u), None)
+            }
+            (None, Some(https)) => {
+                // Admin HTTPS without UDS is structurally permitted but
+                // unusual; carry it through anyway.
+                let (a, h) = tokio::join!(agent_task, https);
+                (Some(a), None, Some(h))
+            }
+            (None, None) => (Some(agent_task.await), None, None),
         };
         // Sweeper exits on its own when the shutdown signal fires; we
         // join it here so a slow tick can finish cleanly within the
@@ -136,16 +181,19 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         if let Some(s) = sweeper_task {
             let _ = s.await;
         }
-        (a, b)
+        agent_res
     };
 
     match coord.drain_or_timeout(drain).await {
-        Ok((agent_res, admin_res)) => {
+        Ok((agent_res, admin_res, https_res)) => {
             if let Some(Ok(Err(e))) = agent_res {
                 return Err(DaemonError::Server(format!("agent listener: {e}")));
             }
             if let Some(Ok(Err(e))) = admin_res {
                 return Err(DaemonError::Server(format!("admin listener: {e}")));
+            }
+            if let Some(Ok(Err(e))) = https_res {
+                return Err(DaemonError::Server(format!("admin HTTPS listener: {e}")));
             }
             info!("clean shutdown complete");
             Ok(())

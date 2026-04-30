@@ -117,12 +117,49 @@ pub struct ListenConfig {
     /// daemon binds the admin router (C-2) at this path with mode 0660.
     /// Absent ⇒ M0/M1 backward-compat behavior (TCP listener only).
     pub admin_socket: Option<AdminSocketConfig>,
+    /// Optional admin HTTPS listener (M4 / C-3, SPEC §4.2.5). When present
+    /// AND `enabled: true`, the daemon binds a TLS-terminated TCP listener
+    /// that serves the same admin router as `admin_socket` (C-2). The
+    /// fields under this block are listener-shape (R-N5 carve-out): a
+    /// change to host/port/cert_path/key_path requires a daemon restart.
+    pub admin_https: Option<AdminHttpsConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminSocketConfig {
     pub path: PathBuf,
+}
+
+/// Admin HTTPS listener configuration (C-3, T4.3).
+///
+/// Off-by-default. The daemon only attempts to bind when `enabled` is
+/// true; in that case `cert_path` and `key_path` must point at a valid
+/// PEM cert chain and PKCS#8 private key respectively. PEM loading is
+/// performed at startup so misconfiguration is fail-fast (T4.2).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct AdminHttpsConfig {
+    /// When false (default), the listener is not bound regardless of
+    /// other fields. Lets operators leave the block in their config
+    /// during onboarding without accidentally exposing the admin
+    /// surface.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_admin_https_host")]
+    pub host: String,
+    #[serde(default = "default_admin_https_port")]
+    pub port: u16,
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
+}
+
+fn default_admin_https_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_admin_https_port() -> u16 {
+    9201
 }
 
 fn default_host() -> String {
