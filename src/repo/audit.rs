@@ -145,6 +145,19 @@ impl AuditRepository {
         Ok(())
     }
 
+    /// Delete audit rows whose timestamp is strictly older than
+    /// `cutoff_ms`. Returns the number of rows removed. Bounded
+    /// scope — only the `audit` table is touched (T3.5 verification
+    /// gate). Idempotent — running twice with no new rows in between
+    /// is a no-op (the second call deletes 0 rows).
+    pub async fn sweep_older_than(&self, cutoff_ms: i64) -> Result<u64, RepoError> {
+        let res = sqlx::query("DELETE FROM audit WHERE ts < ?")
+            .bind(cutoff_ms)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn query(
         &self,
         filter: &AuditFilter,

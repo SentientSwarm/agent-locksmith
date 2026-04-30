@@ -74,12 +74,27 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // binding so a misconfig fails fast. The same pool feeds the audit
     // repository handed to the agent router, so proxy writes share one
     // SQLite connection pool with admin reads.
-    let (admin_state, audit_for_proxy) = if admin_enabled {
+    let (admin_state, audit_for_proxy, audit_for_sweeper) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone()).await?;
-        (Some(setup.uds_state), Some(setup.audit))
+        (
+            Some(setup.uds_state),
+            Some(setup.audit.clone()),
+            Some(setup.audit),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
+
+    // Audit retention sweeper (T3.5). Runs only when admin substrate is
+    // up — otherwise there's no audit to sweep. Defaults to
+    // 90 days / hourly when `audit:` is absent from config.
+    let sweeper_task = audit_for_sweeper.map(|audit| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot.audit.as_ref().cloned().unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
+    });
 
     // Agent listener.
     let agent_router = if let Some(audit) = audit_for_proxy {
@@ -108,12 +123,19 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
 
     let drain = async {
-        if let Some(admin) = admin_task {
+        let (a, b) = if let Some(admin) = admin_task {
             let (a, b) = tokio::join!(agent_task, admin);
             (Some(a), Some(b))
         } else {
             (Some(agent_task.await), None)
+        };
+        // Sweeper exits on its own when the shutdown signal fires; we
+        // join it here so a slow tick can finish cleanly within the
+        // drain window. Errors are logged but never poisoned shutdown.
+        if let Some(s) = sweeper_task {
+            let _ = s.await;
         }
+        (a, b)
     };
 
     match coord.drain_or_timeout(drain).await {
@@ -132,6 +154,54 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             Ok(())
         }
     }
+}
+
+/// Periodically sweep audit rows older than `now - retention_days`.
+/// Exits cleanly when the shutdown future resolves.
+///
+/// Verification gate (T3.5):
+/// - Cutoff is `now_ms - retention_days * MS_PER_DAY` — single integer
+///   path, no floats.
+/// - SELECT-then-DELETE is unnecessary; the bounded `DELETE WHERE ts <
+///   ?` only touches the audit table.
+/// - tokio::select between `tick()` and the shutdown future ensures we
+///   never start a fresh DELETE after shutdown was signalled; we
+///   complete the in-flight one and exit.
+async fn audit_retention_sweeper(
+    audit: AuditRepository,
+    cfg: crate::config::AuditConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const MS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    // We want immediate first sweep on startup so freshly-rotated
+    // databases drop ancient rows on boot.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("audit sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let cutoff = now_ms() - i64::from(cfg.retention_days) * MS_PER_DAY;
+                match audit.sweep_older_than(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "audit retention sweep deleted rows"),
+                    Err(e) => warn!(error = %e, "audit retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Bundle of the admin substrate that the daemon runtime hands out:

@@ -25,12 +25,44 @@ pub struct AppConfig {
     /// SQLite database location (M2). Required iff `listen.admin_socket`
     /// is set; main.rs validates the pairing at startup.
     pub database: Option<DatabaseConfig>,
+    /// Audit subsystem tuning (M3). Optional — daemon applies defaults
+    /// (90-day retention, hourly sweep) when absent.
+    pub audit: Option<AuditConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     pub path: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct AuditConfig {
+    /// Days of audit history to retain. Rows older than `now -
+    /// retention_days` are deleted by the sweeper. Default 90 (Q-26 C).
+    #[serde(default = "default_audit_retention_days")]
+    pub retention_days: u32,
+    /// Sweep cadence in seconds. Default 3600 (hourly).
+    #[serde(default = "default_audit_sweep_interval_seconds")]
+    pub sweep_interval_seconds: u64,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_audit_retention_days(),
+            sweep_interval_seconds: default_audit_sweep_interval_seconds(),
+        }
+    }
+}
+
+fn default_audit_retention_days() -> u32 {
+    90
+}
+
+fn default_audit_sweep_interval_seconds() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize)]
