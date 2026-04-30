@@ -1,5 +1,5 @@
 use agent_locksmith::app::build_app;
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::parse_config_str;
 use axum_test::{TestResponse, TestServer};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -38,15 +38,18 @@ tools:
         mock.uri()
     );
 
-    let config: AppConfig = serde_yaml::from_str(&yaml).unwrap();
+    let config = parse_config_str(&yaml).unwrap();
     let app = build_app(config);
     let server = TestServer::new(app);
 
-    // 1. Health works without auth
+    // 1. Liveness works without auth (health alias preserved for M0)
+    let resp: TestResponse = server.get("/livez").await;
+    resp.assert_status_ok();
+    let live: serde_json::Value = resp.json();
+    assert_eq!(live["status"], "live");
+
     let resp: TestResponse = server.get("/health").await;
     resp.assert_status_ok();
-    let health: serde_json::Value = resp.json();
-    assert_eq!(health["tools"][0], "tavily");
 
     // 2. Discovery requires auth
     let resp: TestResponse = server.get("/tools").await;

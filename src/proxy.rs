@@ -5,14 +5,11 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::json;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::app::AppState;
-use crate::config::ToolConfig;
 
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
@@ -45,7 +42,8 @@ pub async fn proxy_handler(
     let upstream_url = format!("{}/{}", tool.upstream.trim_end_matches('/'), path);
     let method = req.method().clone();
     let headers = req.headers().clone();
-    let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+    let body_limit = usize::try_from(tool.body_limit_bytes).unwrap_or(usize::MAX);
+    let body_bytes = match axum::body::to_bytes(req.into_body(), body_limit).await {
         Ok(b) => b,
         Err(_) => {
             return (
@@ -56,7 +54,7 @@ pub async fn proxy_handler(
         }
     };
 
-    let client = build_client(tool, &config);
+    let client = state.client_pool.get_or_build(tool, &config);
     let mut upstream_req = client.request(method, &upstream_url);
 
     // Forward headers, stripping auth-related ones
@@ -88,12 +86,29 @@ pub async fn proxy_handler(
                 StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let mut response_headers = HeaderMap::new();
             for (name, value) in resp.headers() {
+                // Skip hop-by-hop headers that are bound to the upstream
+                // connection's transport framing — the body is rebuilt as
+                // an axum stream below, so axum/hyper sets these afresh.
+                let lower = name.as_str().to_ascii_lowercase();
+                if lower == "transfer-encoding"
+                    || lower == "content-length"
+                    || lower == "connection"
+                    || lower == "keep-alive"
+                    || lower == "proxy-connection"
+                    || lower == "upgrade"
+                    || lower == "te"
+                    || lower == "trailer"
+                {
+                    continue;
+                }
                 if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
                     response_headers.insert(name.clone(), v);
                 }
             }
-            let body = resp.bytes().await.unwrap_or_default();
-            let mut response = Response::new(Body::from(body));
+            // Stream the upstream body to the agent rather than buffering
+            // (R-N6: ≤100ms first-byte added latency). T1.2 closes T1.1.
+            let body = Body::from_stream(resp.bytes_stream());
+            let mut response = Response::new(body);
             *response.status_mut() = status;
             *response.headers_mut() = response_headers;
             response
@@ -114,17 +129,4 @@ pub async fn proxy_handler(
             }
         }
     }
-}
-
-fn build_client(tool: &ToolConfig, config: &crate::config::AppConfig) -> Client {
-    let mut builder = Client::builder().timeout(Duration::from_secs(tool.timeout_seconds));
-
-    if tool.cloud
-        && let Some(proxy_url) = &config.egress_proxy
-        && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
-    {
-        builder = builder.proxy(proxy);
-    }
-
-    builder.build().unwrap_or_else(|_| Client::new())
 }

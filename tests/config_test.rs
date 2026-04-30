@@ -1,7 +1,10 @@
-use agent_locksmith::config::AppConfig;
+use agent_locksmith::config::{EgressMode, parse_config_str};
 
 #[test]
 fn test_parse_minimal_config() {
+    // Uses the legacy `cloud: true` field, which T1.6 translates to
+    // `egress: proxied` via the deprecation registry. Asserts the
+    // translation result, not the legacy field.
     let yaml = r#"
 listen:
   host: "127.0.0.1"
@@ -16,12 +19,12 @@ tools:
       value: "Bearer test-token-123"
     timeout_seconds: 30
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     assert_eq!(config.listen.port, 9200);
     assert_eq!(config.tools.len(), 1);
     assert_eq!(config.tools[0].name, "github");
     assert_eq!(config.tools[0].upstream, "https://api.github.com");
-    assert!(config.tools[0].cloud);
+    assert_eq!(config.tools[0].egress, EgressMode::Proxied);
 }
 
 #[test]
@@ -32,7 +35,7 @@ listen:
   port: 9200
 tools: []
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     assert!(config.tools.is_empty());
 }
 
@@ -44,9 +47,8 @@ listen:
   port: 9200
 tools: []
 "#;
-    let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = parse_config_str(yaml).unwrap();
     assert!(config.egress_proxy.is_none());
     assert!(config.inbound_auth.is_none());
-    assert!(config.telemetry.is_none());
     assert!(config.logging.is_none());
 }

@@ -13,8 +13,10 @@ path = "src/main.rs"
 [dependencies]
 arc-swap = "1"
 axum = "0.8"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 http-body-util = "0.1"
+getrandom = "0.3"
 hyper = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 secrecy = { version = "0.10", features = ["serde"] }
@@ -29,5 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 [dev-dependencies]
 axum-test = "19"
+bytes = "1"
+futures-util = "0.3"
 tokio-test = "0.4"
 wiremock = "0.6"
