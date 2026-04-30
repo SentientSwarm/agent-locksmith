@@ -20,11 +20,11 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
-use crate::app::build_app_with_shared_config;
+use crate::app::{build_app_with_audit, build_app_with_shared_config};
 use crate::auth_v2::{BearerAuthenticator, OperatorAuthenticator};
 use crate::config::AppConfig;
 use crate::migrations;
-use crate::repo::{AgentRepository, BootstrapTokenRepository};
+use crate::repo::{AgentRepository, AuditRepository, BootstrapTokenRepository};
 use crate::shutdown::ShutdownCoordinator;
 
 #[derive(Debug, thiserror::Error)]
@@ -71,15 +71,22 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     let shared_config: Arc<ArcSwap<AppConfig>> = Arc::new(ArcSwap::from_pointee(config));
 
     // Admin substrate (DB + auth + service) — built before listener
-    // binding so a misconfig fails fast.
-    let admin_state = if admin_enabled {
-        Some(build_admin_substrate(shared_config.clone()).await?)
+    // binding so a misconfig fails fast. The same pool feeds the audit
+    // repository handed to the agent router, so proxy writes share one
+    // SQLite connection pool with admin reads.
+    let (admin_state, audit_for_proxy) = if admin_enabled {
+        let setup = build_admin_substrate(shared_config.clone()).await?;
+        (Some(setup.uds_state), Some(setup.audit))
     } else {
-        None
+        (None, None)
     };
 
     // Agent listener.
-    let agent_router = build_app_with_shared_config(shared_config);
+    let agent_router = if let Some(audit) = audit_for_proxy {
+        build_app_with_audit(shared_config, Some(audit))
+    } else {
+        build_app_with_shared_config(shared_config)
+    };
     let listener = TcpListener::bind(addr).await?;
     info!("agent listener bound on {addr}");
     let agent_shutdown = coord.shutdown_signal();
@@ -127,7 +134,15 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     }
 }
 
-async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<UdsState, DaemonError> {
+/// Bundle of the admin substrate that the daemon runtime hands out:
+/// the UDS router state plus a clone of the AuditRepository so the
+/// proxy hot path can write to the same audit table.
+struct AdminSetup {
+    uds_state: UdsState,
+    audit: AuditRepository,
+}
+
+async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
         .database
@@ -151,7 +166,8 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<UdsSta
     info!(database = %db_path.display(), "database opened and migrated");
 
     let agents = AgentRepository::new(pool.clone());
-    let bootstrap = BootstrapTokenRepository::new(pool);
+    let bootstrap = BootstrapTokenRepository::new(pool.clone());
+    let audit = AuditRepository::new(pool);
 
     let agent_auth = BearerAuthenticator::new(agents.clone())
         .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?;
@@ -161,10 +177,13 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<UdsSta
 
     let admin = AdminService::new(agents, bootstrap, config);
 
-    Ok(UdsState {
-        admin: Arc::new(admin),
-        agent_auth: Arc::new(agent_auth),
-        operator_auth: Arc::new(operator_auth),
+    Ok(AdminSetup {
+        uds_state: UdsState {
+            admin: Arc::new(admin),
+            agent_auth: Arc::new(agent_auth),
+            operator_auth: Arc::new(operator_auth),
+        },
+        audit,
     })
 }
 

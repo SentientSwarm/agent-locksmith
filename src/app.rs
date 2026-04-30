@@ -11,11 +11,16 @@ use crate::auth;
 use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
 use crate::proxy;
+use crate::repo::AuditRepository;
 
 pub struct AppState {
     pub config: Arc<ArcSwap<AppConfig>>,
     pub started_at: Instant,
     pub client_pool: ClientPool,
+    /// Audit sink (T3.1). `None` for M0/M1 deployments without admin
+    /// substrate; the proxy hot path then skips audit writes entirely
+    /// rather than fail.
+    pub audit: Option<AuditRepository>,
 }
 
 pub fn build_app(config: AppConfig) -> Router {
@@ -26,10 +31,20 @@ pub fn build_app(config: AppConfig) -> Router {
 /// runtime calls this so the agent listener and the AdminService observe
 /// the same `ArcSwap<AppConfig>` (single source of truth for hot reload).
 pub fn build_app_with_shared_config(config: Arc<ArcSwap<AppConfig>>) -> Router {
+    build_app_with_audit(config, None)
+}
+
+/// Build the agent router with an optional audit sink. M3 calls this so
+/// the proxy hot path emits one audit row per request.
+pub fn build_app_with_audit(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+) -> Router {
     let state = Arc::new(AppState {
         config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
+        audit,
     });
 
     Router::new()
