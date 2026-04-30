@@ -65,6 +65,39 @@ impl BootstrapTokenRepository {
         Ok((public_id, secret))
     }
 
+    /// Look up the scope of a bootstrap token without consuming it.
+    /// Returns InvalidCredential if the token is unknown, used, or
+    /// revoked. Used by AdminService.register_agent to discover the
+    /// allowlist before creating the agent (so we can apply the right
+    /// policy without burning the token before knowing if the agent
+    /// name conflicts).
+    pub async fn preview_scope(&self, public_id: &str) -> Result<BootstrapScope, RepoError> {
+        let row = sqlx::query_as::<_, PreviewRow>(
+            "SELECT scope, expires_at, used_at, revoked_at \
+             FROM bootstrap_tokens WHERE public_id = ?",
+        )
+        .bind(public_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(PreviewRow {
+            scope: scope_json,
+            expires_at,
+            used_at,
+            revoked_at,
+        }) = row
+        else {
+            return Err(RepoError::InvalidCredential);
+        };
+        if used_at.is_some() || revoked_at.is_some() {
+            return Err(RepoError::InvalidCredential);
+        }
+        let now = unix_now();
+        if expires_at.is_some_and(|e| e < now) {
+            return Err(RepoError::InvalidCredential);
+        }
+        Ok(serde_json::from_str(&scope_json)?)
+    }
+
     pub async fn list(&self) -> Result<Vec<BootstrapTokenRecord>, RepoError> {
         let rows = sqlx::query_as::<_, BootstrapRow>(
             "SELECT id, public_id, scope, created_by, created_at, expires_at, used_at, \
@@ -154,6 +187,14 @@ impl BootstrapTokenRepository {
         }
         Ok(scope)
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct PreviewRow {
+    scope: String,
+    expires_at: Option<i64>,
+    used_at: Option<i64>,
+    revoked_at: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]

@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod app;
 pub mod argon2_helper;
 pub mod auth;
