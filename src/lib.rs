@@ -5,6 +5,7 @@ pub mod auth;
 pub mod auth_v2;
 pub mod client_pool;
 pub mod config;
+pub mod daemon;
 pub mod deprecation;
 pub mod migrations;
 pub mod proxy;

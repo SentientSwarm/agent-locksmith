@@ -8,5 +8,6 @@
 
 pub mod service;
 pub mod uds;
+pub mod uds_client;
 
 pub use service::{AdminError, AdminService, RegisterInput, RegisterOutput};

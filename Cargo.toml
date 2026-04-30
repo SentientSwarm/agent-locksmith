@@ -7,8 +7,12 @@ license = "MIT"
 repository = "https://github.com/SentientSwarm/agent-locksmith"
 
 [[bin]]
-name = "locksmith"
+name = "locksmithd"
 path = "src/main.rs"
+
+[[bin]]
+name = "locksmith"
+path = "src/cli/main.rs"
 
 [dependencies]
 arc-swap = "1"
@@ -16,10 +20,12 @@ argon2 = "0.5"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 http-body-util = "0.1"
 getrandom = "0.3"
 hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -35,7 +41,6 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 [dev-dependencies]
 axum-test = "19"
-bytes = "1"
 futures-util = "0.3"
 tempfile = "3"
 tokio-test = "0.4"
