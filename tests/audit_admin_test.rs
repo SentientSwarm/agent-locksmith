@@ -52,6 +52,7 @@ fn op() -> OperatorIdentity {
     OperatorIdentity {
         name: "alice".into(),
         scope: None,
+        auth_method: None,
     }
 }
 

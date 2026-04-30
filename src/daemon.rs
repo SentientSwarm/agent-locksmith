@@ -213,29 +213,63 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         // Build the HTTPS task only when explicitly enabled. The block
         // present-but-disabled path is a no-op (off-by-default contract).
         let snapshot = shared_config.load();
-        let https = snapshot
-            .listen
-            .admin_https
-            .as_ref()
-            .filter(|c| c.enabled)
-            .map(|c| {
+        let https = match snapshot.listen.admin_https.as_ref().filter(|c| c.enabled) {
+            None => None,
+            Some(c) => {
                 let host: std::net::IpAddr = c.host.parse().unwrap_or([127, 0, 0, 1].into());
                 let addr = SocketAddr::new(host, c.port);
                 let cert = c.cert_path.clone();
                 let key = c.key_path.clone();
+                let auth_mode = c.auth_mode;
                 let https_shutdown = coord.shutdown_signal();
-                let https_state = state.clone();
-                tokio::spawn(async move {
-                    crate::admin::https::bind_and_serve(
-                        addr,
-                        &cert,
-                        &key,
-                        https_state,
-                        https_shutdown,
-                    )
-                    .await
-                })
-            });
+                let https_state_base = state.clone();
+
+                match auth_mode {
+                    crate::config::AuthMode::Bearer => Some(tokio::spawn(async move {
+                        crate::admin::https::bind_and_serve(
+                            addr,
+                            &cert,
+                            &key,
+                            https_state_base,
+                            https_shutdown,
+                        )
+                        .await
+                    })),
+                    crate::config::AuthMode::Mtls | crate::config::AuthMode::Both => {
+                        let mtls_cfg = c.mtls.as_ref().ok_or_else(|| {
+                            DaemonError::AdminConfig(format!(
+                                "admin_https.auth_mode={auth_mode:?} requires admin_https.mtls.ca_bundle_path"
+                            ))
+                        })?;
+                        let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
+                        let validator = std::sync::Arc::new(
+                            crate::mtls::MtlsValidator::new(&ca_pem).map_err(|e| {
+                                DaemonError::AdminConfig(format!(
+                                    "admin_https.mtls.ca_bundle_path: {e}"
+                                ))
+                            })?,
+                        );
+                        let mut https_state = https_state_base;
+                        https_state.operator_mtls = Some(crate::admin::uds::OperatorMtlsContext {
+                            auth_mode,
+                            validator,
+                        });
+                        Some(tokio::spawn(async move {
+                            crate::admin::https::bind_and_serve_mtls(
+                                addr,
+                                &cert,
+                                &key,
+                                &ca_pem,
+                                auth_mode,
+                                https_state,
+                                https_shutdown,
+                            )
+                            .await
+                        }))
+                    }
+                }
+            }
+        };
         drop(snapshot);
         (Some(uds), https)
     } else {
@@ -422,6 +456,7 @@ async fn build_admin_substrate(
             admin: Arc::new(admin),
             agent_auth: Arc::new(agent_auth),
             operator_auth: Arc::new(operator_auth),
+            operator_mtls: None,
         },
         audit,
     })

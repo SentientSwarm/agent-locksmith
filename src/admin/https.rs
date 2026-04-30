@@ -103,3 +103,34 @@ pub async fn bind_and_serve(
     }
     result
 }
+
+/// mTLS-terminated admin HTTPS listener (#83 / T6.7 wire-side closure).
+///
+/// `state.operator_mtls` MUST be `Some(_)` matching `auth_mode`; the
+/// operator middleware reads the peer cert from per-request extensions
+/// stamped by the underlying tokio-rustls accept loop. Delegates the
+/// accept loop to `agent_listener::bind_and_serve_mtls` so the wire
+/// shape (PeerCertDer extension, ConnBuilder, service_fn) stays
+/// identical between agent and admin paths.
+pub async fn bind_and_serve_mtls(
+    addr: SocketAddr,
+    cert_path: &Path,
+    key_path: &Path,
+    ca_bundle_pem: &str,
+    auth_mode: crate::config::AuthMode,
+    state: UdsState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), std::io::Error> {
+    let app = super::uds::build_router(state);
+    info!(addr = %addr, mode = ?auth_mode, "admin HTTPS (mTLS) listener bound");
+    crate::agent_listener::bind_and_serve_mtls(
+        addr,
+        cert_path,
+        key_path,
+        ca_bundle_pem,
+        auth_mode,
+        app,
+        shutdown,
+    )
+    .await
+}

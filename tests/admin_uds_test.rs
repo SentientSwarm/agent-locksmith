@@ -71,6 +71,7 @@ tools: []
         admin,
         agent_auth,
         operator_auth,
+        operator_mtls: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);

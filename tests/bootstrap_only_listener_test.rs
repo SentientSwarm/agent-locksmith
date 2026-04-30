@@ -42,6 +42,7 @@ async fn register_via_bootstrap_token_succeeds() {
     let op = OperatorIdentity {
         name: "alice".into(),
         scope: None,
+        auth_method: None,
     };
     let minted = admin
         .mint_bootstrap_token(

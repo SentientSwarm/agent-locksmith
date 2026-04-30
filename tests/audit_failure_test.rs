@@ -206,6 +206,7 @@ tools: []
     let op = agent_locksmith::auth_v2::OperatorIdentity {
         name: "alice".into(),
         scope: None,
+        auth_method: None,
     };
     // Mint single-use bootstrap.
     let minted = admin

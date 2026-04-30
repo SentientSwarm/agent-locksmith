@@ -239,6 +239,23 @@ pub struct AdminHttpsConfig {
     pub port: u16,
     pub cert_path: PathBuf,
     pub key_path: PathBuf,
+    /// Operator-side authentication mode for the admin HTTPS listener
+    /// (#83 / T6.7 wire-side closure). Default `bearer` preserves M4
+    /// behavior. `mtls` requires an operator client cert at the TLS
+    /// handshake and rejects the bearer header. `both` accepts either.
+    #[serde(default)]
+    pub auth_mode: AuthMode,
+    /// Required when `auth_mode` is `mtls` or `both`. Names the CA
+    /// bundle that operator client certs must chain back to.
+    pub mtls: Option<AdminHttpsMtlsConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct AdminHttpsMtlsConfig {
+    /// PEM CA bundle for operator client certs. Mirrors the agent-side
+    /// `listen.mtls.ca_bundle_path` shape.
+    pub ca_bundle_path: PathBuf,
 }
 
 fn default_admin_https_host() -> String {
