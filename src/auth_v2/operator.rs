@@ -21,9 +21,11 @@
 
 use super::AuthError;
 use crate::argon2_helper;
+use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::token::{self, TokenNamespace};
 use secrecy::SecretString;
 use serde::Deserialize;
+use serde_json::json;
 use std::path::Path;
 use tokio::sync::RwLock;
 
@@ -53,6 +55,7 @@ pub struct OperatorsFile {
 pub struct OperatorAuthenticator {
     records: RwLock<Vec<OperatorRecord>>,
     decoy_hash: String,
+    audit: Option<AuditRepository>,
 }
 
 impl OperatorAuthenticator {
@@ -60,6 +63,12 @@ impl OperatorAuthenticator {
     /// parse → fail-fast (operator credentials are R-N10's recovery
     /// principal; missing or malformed → unrecoverable state).
     pub fn load(path: &Path) -> Result<Self, AuthError> {
+        Self::load_with_audit(path, None)
+    }
+
+    /// Load operators and attach an audit sink that captures every
+    /// failed authentication as event_class=security (T3.4 / INF-13).
+    pub fn load_with_audit(path: &Path, audit: Option<AuditRepository>) -> Result<Self, AuthError> {
         let text = std::fs::read_to_string(path).map_err(|e| {
             AuthError::Backend(format!("read operators file {}: {e}", path.display()))
         })?;
@@ -72,7 +81,27 @@ impl OperatorAuthenticator {
         Ok(Self {
             records: RwLock::new(parsed.operators),
             decoy_hash,
+            audit,
         })
+    }
+
+    async fn audit_failure(&self, operator_name: Option<&str>, reason: &'static str) {
+        let Some(repo) = &self.audit else {
+            return;
+        };
+        let event = AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "operator_auth_failure".to_string(),
+            operator_name: operator_name.map(str::to_string),
+            decision: Decision::Denied,
+            auth_method: Some("bearer".to_string()),
+            details: Some(json!({ "reason": reason })),
+            ..AuditEvent::default()
+        };
+        if let Err(e) = repo.record(&event).await {
+            tracing::warn!(error = %e, "operator auth audit write failed");
+        }
     }
 
     /// Authenticate the credential carried in `Authorization: Bearer …`.
@@ -85,10 +114,12 @@ impl OperatorAuthenticator {
             Err(_) => {
                 let dummy = SecretString::from("dummy".to_string());
                 let _ = argon2_helper::verify(&self.decoy_hash, &dummy);
+                self.audit_failure(None, "malformed_token").await;
                 return Err(AuthError::InvalidCredential);
             }
         };
         if !matches!(ns, TokenNamespace::Operator) {
+            self.audit_failure(None, "wrong_namespace").await;
             return Err(AuthError::InvalidCredential);
         }
 
@@ -97,6 +128,8 @@ impl OperatorAuthenticator {
         let Some(record) = record else {
             let dummy = SecretString::from("dummy".to_string());
             let _ = argon2_helper::verify(&self.decoy_hash, &dummy);
+            drop(records);
+            self.audit_failure(None, "unknown_public_id").await;
             return Err(AuthError::InvalidCredential);
         };
 
@@ -106,8 +139,20 @@ impl OperatorAuthenticator {
                 name: record.name.clone(),
                 scope: record.scope.clone(),
             }),
-            Ok(false) => Err(AuthError::InvalidCredential),
+            Ok(false) => {
+                let name = record.name.clone();
+                drop(records);
+                self.audit_failure(Some(&name), "secret_mismatch").await;
+                Err(AuthError::InvalidCredential)
+            }
             Err(e) => Err(AuthError::Backend(e.to_string())),
         }
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

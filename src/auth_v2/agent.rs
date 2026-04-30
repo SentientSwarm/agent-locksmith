@@ -16,10 +16,12 @@
 
 use super::AuthError;
 use crate::argon2_helper;
+use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::repo::{AgentRepository, RepoError};
 use crate::token;
 use async_trait::async_trait;
 use secrecy::SecretString;
+use serde_json::json;
 
 /// The resolved identity of an authenticated agent.
 #[derive(Debug, Clone)]
@@ -44,10 +46,23 @@ pub struct BearerAuthenticator {
     /// argon2 hash of a fixed dummy secret. Used by the decoy-verify
     /// path on public_id miss to keep timing similar.
     decoy_hash: String,
+    /// Optional audit sink (T3.4 / INF-13). When set, every failed
+    /// authentication emits an event_class=security row.
+    audit: Option<AuditRepository>,
 }
 
 impl BearerAuthenticator {
     pub fn new(repo: AgentRepository) -> Result<Self, AuthError> {
+        Self::with_audit(repo, None)
+    }
+
+    /// Construct a BearerAuthenticator that emits security audit rows
+    /// on every failed authentication. The daemon runtime calls this
+    /// when admin substrate is enabled.
+    pub fn with_audit(
+        repo: AgentRepository,
+        audit: Option<AuditRepository>,
+    ) -> Result<Self, AuthError> {
         // Pre-compute the decoy hash once at construction. This costs
         // ~5ms on first call but every authenticate() pays only the
         // verify, not the hash.
@@ -56,7 +71,30 @@ impl BearerAuthenticator {
         );
         let decoy_hash =
             argon2_helper::hash(&decoy_secret).map_err(|e| AuthError::Backend(e.to_string()))?;
-        Ok(Self { repo, decoy_hash })
+        Ok(Self {
+            repo,
+            decoy_hash,
+            audit,
+        })
+    }
+
+    async fn audit_failure(&self, public_id: Option<&str>, reason: &'static str) {
+        let Some(repo) = &self.audit else {
+            return;
+        };
+        let event = AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "auth_failure".to_string(),
+            agent_public_id: public_id.map(str::to_string),
+            decision: Decision::Denied,
+            auth_method: Some("bearer".to_string()),
+            details: Some(json!({ "reason": reason })),
+            ..AuditEvent::default()
+        };
+        if let Err(e) = repo.record(&event).await {
+            tracing::warn!(error = %e, "auth audit write failed");
+        }
     }
 
     /// Walk the agents table looking for `public_id`; if found, verify
@@ -81,6 +119,7 @@ impl BearerAuthenticator {
             // time as the success path. We discard the result — the
             // identity didn't exist.
             let _ = argon2_helper::verify(&self.decoy_hash, secret);
+            self.audit_failure(None, "unknown_public_id").await;
             return Err(AuthError::InvalidCredential);
         };
 
@@ -94,6 +133,7 @@ impl BearerAuthenticator {
                 // Still verify so the secret-vs-public_id timing leak is
                 // closed for expired-but-correctly-secreted tokens too.
                 let _ = argon2_helper::verify(&record.secret_hash, secret);
+                self.audit_failure(Some(&record.public_id), "expired").await;
                 return Err(AuthError::Expired);
             }
         }
@@ -101,7 +141,11 @@ impl BearerAuthenticator {
         // Constant-time secret verify.
         match argon2_helper::verify(&record.secret_hash, secret) {
             Ok(true) => {}
-            Ok(false) => return Err(AuthError::InvalidCredential),
+            Ok(false) => {
+                self.audit_failure(Some(&record.public_id), "secret_mismatch")
+                    .await;
+                return Err(AuthError::InvalidCredential);
+            }
             Err(e) => return Err(AuthError::Backend(e.to_string())),
         }
 
@@ -131,13 +175,23 @@ impl AgentAuthenticator for BearerAuthenticator {
                 // unknown-public_id path.
                 let dummy_secret = SecretString::from("dummy".to_string());
                 let _ = argon2_helper::verify(&self.decoy_hash, &dummy_secret);
+                self.audit_failure(None, "malformed_token").await;
                 return Err(AuthError::InvalidCredential);
             }
         };
         if !matches!(ns, token::TokenNamespace::Agent) {
+            self.audit_failure(Some(public_id.as_str()), "wrong_namespace")
+                .await;
             return Err(AuthError::InvalidCredential);
         }
         let secret_str = SecretString::from(secret.expose().to_string());
         self.resolve(public_id.as_str(), &secret_str).await
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

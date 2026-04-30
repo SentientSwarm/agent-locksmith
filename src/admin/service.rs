@@ -4,8 +4,8 @@
 use crate::auth_v2::{AgentIdentity, OperatorIdentity};
 use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::repo::{
-    AgentRecord, AgentRepository, BootstrapScope, BootstrapTokenRecord, BootstrapTokenRepository,
-    RepoError,
+    AgentRecord, AgentRepository, BootstrapScope, BootstrapStatus, BootstrapTokenRecord,
+    BootstrapTokenRepository, RepoError,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -184,6 +184,14 @@ impl AdminService {
     /// is NOT consumed (INF-10). Returns the cleartext agent token —
     /// returned exactly once per R-N4.
     pub async fn register_agent(&self, input: RegisterInput) -> Result<RegisterOutput, AdminError> {
+        // Pre-extract bootstrap public_id so we can emit a security
+        // audit row on reuse (T3.4 / INF-13). Parse failures are also a
+        // security event but we don't have a token id for them.
+        let bootstrap_public_id = crate::token::parse(input.bootstrap_token.expose_secret())
+            .ok()
+            .filter(|(ns, _, _)| matches!(ns, crate::token::TokenNamespace::Bootstrap))
+            .map(|(_, pid, _)| pid.as_str().to_string());
+
         let result = self.register_agent_inner(input).await;
         match &result {
             Ok(out) => {
@@ -199,12 +207,27 @@ impl AdminService {
                 .await;
             }
             Err(e) => {
+                // Distinguish bootstrap_reuse_attempt (security) from a
+                // generic register failure (operator class). INF-13.
+                let mut event_class = EventClass::Operator;
+                let mut event_name = "agent_register".to_string();
+                if matches!(e, AdminError::InvalidBootstrap)
+                    && let Some(pid) = bootstrap_public_id.as_deref()
+                    && let Ok(status) = self.bootstrap.diagnose(pid).await
+                    && matches!(status, BootstrapStatus::Used | BootstrapStatus::Revoked)
+                {
+                    event_class = EventClass::Security;
+                    event_name = "bootstrap_reuse_attempt".to_string();
+                }
                 self.audit(AuditEvent {
                     ts_ms: now_ms(),
-                    event_class: EventClass::Operator,
-                    event: "agent_register".into(),
+                    event_class,
+                    event: event_name,
                     decision: Decision::Denied,
-                    details: Some(json!({ "error": e.to_string() })),
+                    details: Some(json!({
+                        "error": e.to_string(),
+                        "bootstrap_public_id": bootstrap_public_id,
+                    })),
                     ..AuditEvent::default()
                 })
                 .await;

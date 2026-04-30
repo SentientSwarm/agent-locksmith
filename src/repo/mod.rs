@@ -7,4 +7,6 @@ pub mod bootstrap;
 
 pub use agent::{AgentRecord, AgentRepository, RepoError};
 pub use audit::{AuditEvent, AuditFilter, AuditPage, AuditRepository, Decision, EventClass};
-pub use bootstrap::{BootstrapScope, BootstrapTokenRecord, BootstrapTokenRepository};
+pub use bootstrap::{
+    BootstrapScope, BootstrapStatus, BootstrapTokenRecord, BootstrapTokenRepository,
+};

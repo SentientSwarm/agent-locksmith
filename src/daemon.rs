@@ -169,9 +169,9 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminS
     let bootstrap = BootstrapTokenRepository::new(pool.clone());
     let audit = AuditRepository::new(pool);
 
-    let agent_auth = BearerAuthenticator::new(agents.clone())
+    let agent_auth = BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone()))
         .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?;
-    let operator_auth = OperatorAuthenticator::load(&ops_path)
+    let operator_auth = OperatorAuthenticator::load_with_audit(&ops_path, Some(audit.clone()))
         .map_err(|e| DaemonError::OperatorCreds(e.to_string()))?;
     info!(operator_credentials = %ops_path.display(), "operator authenticator loaded");
 

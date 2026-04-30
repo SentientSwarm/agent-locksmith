@@ -7,6 +7,19 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+/// Diagnostic state returned by `BootstrapTokenRepository::diagnose`.
+/// Distinct from the consume() error variant so the audit-on-failure
+/// path can pick the right event class without leaking timing info to
+/// the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapStatus {
+    Active,
+    Used,
+    Revoked,
+    Expired,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapScope {
     pub tool_allowlist: Option<Vec<String>>,
@@ -63,6 +76,40 @@ impl BootstrapTokenRepository {
         .execute(&self.pool)
         .await?;
         Ok((public_id, secret))
+    }
+
+    /// Diagnose a bootstrap token's status without exposing its secret.
+    /// Used by the audit-on-failure path (T3.4 / INF-13) so callers can
+    /// distinguish "unknown" from "already consumed" — the latter is a
+    /// reuse attempt and warrants a security audit row.
+    pub async fn diagnose(&self, public_id: &str) -> Result<BootstrapStatus, RepoError> {
+        let row = sqlx::query_as::<_, PreviewRow>(
+            "SELECT scope, expires_at, used_at, revoked_at \
+             FROM bootstrap_tokens WHERE public_id = ?",
+        )
+        .bind(public_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(PreviewRow {
+            scope: _,
+            expires_at,
+            used_at,
+            revoked_at,
+        }) = row
+        else {
+            return Ok(BootstrapStatus::Unknown);
+        };
+        if revoked_at.is_some() {
+            return Ok(BootstrapStatus::Revoked);
+        }
+        if used_at.is_some() {
+            return Ok(BootstrapStatus::Used);
+        }
+        let now = unix_now();
+        if expires_at.is_some_and(|e| e < now) {
+            return Ok(BootstrapStatus::Expired);
+        }
+        Ok(BootstrapStatus::Active)
     }
 
     /// Look up the scope of a bootstrap token without consuming it.
