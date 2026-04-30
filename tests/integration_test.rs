@@ -42,11 +42,14 @@ tools:
     let app = build_app(config);
     let server = TestServer::new(app);
 
-    // 1. Health works without auth
+    // 1. Liveness works without auth (health alias preserved for M0)
+    let resp: TestResponse = server.get("/livez").await;
+    resp.assert_status_ok();
+    let live: serde_json::Value = resp.json();
+    assert_eq!(live["status"], "live");
+
     let resp: TestResponse = server.get("/health").await;
     resp.assert_status_ok();
-    let health: serde_json::Value = resp.json();
-    assert_eq!(health["tools"][0], "tavily");
 
     // 2. Discovery requires auth
     let resp: TestResponse = server.get("/tools").await;

@@ -1,4 +1,6 @@
 use arc_swap::ArcSwap;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::{Json, Router, extract::State, middleware, routing};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -24,7 +26,14 @@ pub fn build_app(config: AppConfig) -> Router {
     });
 
     Router::new()
-        .route("/health", routing::get(health_handler))
+        // k8s-style health endpoints (INF-3 / Q-18). Unauthenticated by
+        // design — orchestrators should not need credentials to probe the
+        // process. /health is preserved as an alias to /livez for
+        // backward compatibility with M0 deployments.
+        .route("/livez", routing::get(livez_handler))
+        .route("/health", routing::get(livez_handler))
+        .route("/readyz", routing::get(readyz_handler))
+        .route("/version", routing::get(version_handler))
         .route("/tools", routing::get(tools_handler))
         .route(
             "/api/{tool_name}/{*path}",
@@ -38,19 +47,60 @@ pub fn build_app(config: AppConfig) -> Router {
         .with_state(state)
 }
 
-async fn health_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+/// Liveness: process is up. Returns 200 unless the process is so broken it
+/// cannot serve a fixed response. INF-3.
+async fn livez_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(json!({
+        "status": "live",
+        "uptime_seconds": state.started_at.elapsed().as_secs(),
+    }))
+}
+
+/// Readiness: process is ready to serve traffic. Returns 200 only when all
+/// tools that declare an `auth` block have a resolved credential
+/// (non-empty value). Tools without auth declarations are always ready.
+/// In M2, this also checks DB reachability.
+///
+/// "Required backend" semantics (per INF-3 / Q-18 / A-4): in M1, all tools
+/// are considered required. M2 introduces per-tool `on_secret_failure:
+/// degraded` to opt out of the readiness check.
+async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.load();
-    let tool_names: Vec<String> = config
-        .active_tools()
+    let unconfigured: Vec<&str> = config
+        .tools
         .iter()
-        .map(|t| t.name.clone())
+        .filter(|t| match &t.auth {
+            Some(auth) => secrecy::ExposeSecret::expose_secret(&auth.value).is_empty(),
+            None => false,
+        })
+        .map(|t| t.name.as_str())
         .collect();
 
+    if !unconfigured.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "not_ready",
+                "reason": "tool_credentials_unresolved",
+                "tools": unconfigured,
+            })),
+        )
+            .into_response();
+    }
+
     Json(json!({
-        "status": "ok",
+        "status": "ready",
         "uptime_seconds": state.started_at.elapsed().as_secs(),
-        "tools": tool_names,
+    }))
+    .into_response()
+}
+
+/// Build metadata. Unauthenticated; useful for incident response and
+/// debugging. INF-3.
+async fn version_handler() -> Json<Value> {
+    Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "name": env!("CARGO_PKG_NAME"),
     }))
 }
 

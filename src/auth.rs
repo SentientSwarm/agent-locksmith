@@ -16,8 +16,11 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    // Skip auth for /health (load balancer probes)
-    if req.uri().path() == "/health" {
+    // Skip auth for unauthenticated probes / metadata endpoints (INF-3).
+    // /health is preserved as an alias to /livez for backward compat with
+    // M0 deployments.
+    let path = req.uri().path();
+    if matches!(path, "/livez" | "/readyz" | "/version" | "/health") {
         return next.run(req).await;
     }
 
