@@ -141,6 +141,11 @@ pub struct AdminService {
     bootstrap: BootstrapTokenRepository,
     config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
     audit: Option<AuditRepository>,
+    /// Resolved-credentials snapshot (M5). Used by tool listings to
+    /// report `credential_present` against the runtime resolution
+    /// state, not just the structural config. When `None`, fall back
+    /// to `SecretRef::looks_present` (M2/M3 backward-compat).
+    resolved_creds: Option<std::sync::Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
 }
 
 impl AdminService {
@@ -166,7 +171,41 @@ impl AdminService {
             bootstrap,
             config,
             audit,
+            resolved_creds: None,
         }
+    }
+
+    /// Full-power constructor: M5 daemon path supplies a resolved
+    /// credentials snapshot so tool listings reflect the live
+    /// resolution state.
+    pub fn with_audit_and_creds(
+        agents: AgentRepository,
+        bootstrap: BootstrapTokenRepository,
+        config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
+        audit: Option<AuditRepository>,
+        resolved_creds: std::sync::Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>,
+    ) -> Self {
+        Self {
+            agents,
+            bootstrap,
+            config,
+            audit,
+            resolved_creds: Some(resolved_creds),
+        }
+    }
+
+    /// Returns true iff the named tool has a resolved credential. Used
+    /// by `list_tools_for_*` to populate `credential_present`. Falls
+    /// back to `SecretRef::looks_present` when no resolved-creds
+    /// snapshot is wired (M2/M3 backward-compat).
+    fn credential_present(&self, tool: &crate::config::ToolConfig) -> bool {
+        let Some(auth) = &tool.auth else {
+            return false;
+        };
+        if let Some(resolved) = &self.resolved_creds {
+            return resolved.load().contains_key(&tool.name);
+        }
+        auth.value.looks_present()
     }
 
     /// Best-effort audit write. Errors are logged and swallowed (INF-26).
@@ -383,8 +422,7 @@ impl AdminService {
                     crate::config::EgressMode::Direct => "direct".into(),
                     crate::config::EgressMode::Proxied => "proxied".into(),
                 },
-                credential_present: matches!(&t.auth, Some(a) if !a.value.expose_secret().is_empty())
-                    || t.auth.is_none(),
+                credential_present: self.credential_present(t) || t.auth.is_none(),
             })
             .collect();
         Ok(tools)
@@ -645,8 +683,7 @@ impl AdminService {
                     crate::config::EgressMode::Direct => "direct".into(),
                     crate::config::EgressMode::Proxied => "proxied".into(),
                 },
-                credential_present: matches!(&t.auth, Some(a) if !a.value.expose_secret().is_empty())
-                    || t.auth.is_none(),
+                credential_present: self.credential_present(t) || t.auth.is_none(),
             })
             .collect())
     }

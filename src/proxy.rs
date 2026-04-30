@@ -5,7 +5,6 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use secrecy::ExposeSecret;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
@@ -109,9 +108,19 @@ pub async fn proxy_handler(
         upstream_req = upstream_req.header(name, value);
     }
 
-    // Inject configured credentials
+    // Inject configured credentials. Reads from the resolved-creds
+    // snapshot (M5 / T5.1) — daemon resolves SecretRefs once at
+    // startup, proxy never touches the raw SecretRef on the hot path.
     if let Some(auth) = &tool.auth {
-        upstream_req = upstream_req.header(&auth.header, auth.value.expose_secret());
+        let resolved = state.resolved_creds.load();
+        if let Some(value) = resolved.get(&tool.name) {
+            upstream_req =
+                upstream_req.header(&auth.header, secrecy::ExposeSecret::expose_secret(value));
+        } else {
+            // Tool declared auth but no credential resolved — degraded
+            // mode. Fall through without injection; upstream returns 401
+            // and we record the proxy-side audit row as before.
+        }
     }
 
     if !body_bytes.is_empty() {
