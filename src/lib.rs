@@ -3,6 +3,7 @@ pub mod auth;
 pub mod client_pool;
 pub mod config;
 pub mod deprecation;
+pub mod migrations;
 pub mod proxy;
 pub mod shutdown;
 pub mod telemetry;
