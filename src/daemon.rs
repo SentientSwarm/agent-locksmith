@@ -20,7 +20,6 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
-use crate::app::build_app_with_audit_and_creds;
 use crate::audit_sink::{JsonlSink, JsonlSinkConfig};
 use crate::auth_v2::{BearerAuthenticator, OperatorAuthenticator};
 use crate::config::AppConfig;
@@ -109,22 +108,96 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
     });
 
-    // Agent listener. Clone the shared config because the admin HTTPS
-    // wiring below needs a snapshot of `listen.admin_https` and the
-    // builder takes ownership.
-    let agent_router = build_app_with_audit_and_creds(
+    // Agent listener. Switch on auth_mode (post-v2 / #67):
+    // - Bearer (default): plain TCP + axum (M0..M6 behavior).
+    // - Mtls / Both: TLS-terminated TCP that verifies client certs at
+    //   the handshake and stamps the peer cert into per-request
+    //   extensions for the agent-auth middleware.
+    let auth_mode = shared_config.load().listen.auth_mode;
+    let mtls_authenticator: Option<Arc<crate::mtls::MtlsAuthenticator>> = match auth_mode {
+        crate::config::AuthMode::Bearer => None,
+        _ => {
+            let snap = shared_config.load();
+            let mtls_cfg = snap.listen.mtls.as_ref().cloned().ok_or_else(|| {
+                DaemonError::AdminConfig(
+                    "auth_mode mtls/both requires `listen.mtls` config block".into(),
+                )
+            })?;
+            drop(snap);
+            let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path).map_err(|e| {
+                DaemonError::AdminConfig(format!(
+                    "read mtls.ca_bundle_path {}: {e}",
+                    mtls_cfg.ca_bundle_path.display()
+                ))
+            })?;
+            let validator = Arc::new(
+                crate::mtls::MtlsValidator::new(&ca_pem)
+                    .map_err(|e| DaemonError::AdminConfig(format!("mtls validator: {e}")))?,
+            );
+            // Reuse the AgentRepository from the admin substrate when
+            // available; fall back to a fresh open against the same DB.
+            let pool = if let Some(db_cfg) = shared_config.load().database.as_ref().cloned() {
+                migrations::open_and_migrate(&db_cfg.path).await?
+            } else {
+                return Err(DaemonError::AdminConfig(
+                    "auth_mode mtls/both requires `database.path`".into(),
+                ));
+            };
+            let agents = AgentRepository::new(pool);
+            Some(Arc::new(crate::mtls::MtlsAuthenticator::with_audit(
+                validator,
+                agents,
+                audit_for_proxy.clone(),
+            )))
+        }
+    };
+
+    let agent_router = crate::app::build_app_full(
         shared_config.clone(),
         audit_for_proxy,
         resolved_creds.clone(),
+        mtls_authenticator,
     );
-    let listener = TcpListener::bind(addr).await?;
-    info!("agent listener bound on {addr}");
     let agent_shutdown = coord.shutdown_signal();
-    let agent_task = tokio::spawn(async move {
-        axum::serve(listener, agent_router)
-            .with_graceful_shutdown(agent_shutdown)
-            .await
-    });
+    let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
+        crate::config::AuthMode::Bearer => {
+            let listener = TcpListener::bind(addr).await?;
+            info!("agent listener bound on {addr} (bearer)");
+            tokio::spawn(async move {
+                axum::serve(listener, agent_router)
+                    .with_graceful_shutdown(agent_shutdown)
+                    .await
+            })
+        }
+        _ => {
+            let snap = shared_config.load();
+            let mtls_cfg = snap.listen.mtls.as_ref().cloned().expect("checked above");
+            drop(snap);
+            let server_cert_path = mtls_cfg.server_cert_path.ok_or_else(|| {
+                DaemonError::AdminConfig(
+                    "auth_mode mtls/both requires `mtls.server_cert_path`".into(),
+                )
+            })?;
+            let server_key_path = mtls_cfg.server_key_path.ok_or_else(|| {
+                DaemonError::AdminConfig(
+                    "auth_mode mtls/both requires `mtls.server_key_path`".into(),
+                )
+            })?;
+            let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
+            tokio::spawn(async move {
+                crate::agent_listener::bind_and_serve_mtls(
+                    addr,
+                    &server_cert_path,
+                    &server_key_path,
+                    &ca_pem,
+                    auth_mode,
+                    agent_router,
+                    agent_shutdown,
+                )
+                .await
+            })
+        }
+    };
 
     // Admin UDS listener (when configured).
     // Admin HTTPS listener piggybacks on the same UdsState — same handlers,

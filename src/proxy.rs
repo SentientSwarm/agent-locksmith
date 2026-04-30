@@ -22,6 +22,17 @@ pub async fn proxy_handler(
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
     let config = state.config.load();
+    // Resolve auth_method + agent identity for audit (#67 / T6.10).
+    // The auth middleware stamps `AuthenticatedAs` and (under mTLS)
+    // the resolved `AgentIdentity` into request extensions.
+    let auth_method_str = match req.extensions().get::<crate::auth::AuthenticatedAs>() {
+        Some(crate::auth::AuthenticatedAs::Mtls) => "mtls",
+        _ => "bearer",
+    };
+    let agent_public_id: Option<String> = req
+        .extensions()
+        .get::<crate::auth_v2::AgentIdentity>()
+        .map(|id| id.public_id.clone());
 
     // Find the tool
     let tool = match config
@@ -43,7 +54,8 @@ pub async fn proxy_handler(
                     status: Some(404),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Denied,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
+                    agent_public_id: agent_public_id.clone(),
                     ..AuditEvent::default()
                 },
             )
@@ -81,7 +93,8 @@ pub async fn proxy_handler(
                     status: Some(400),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Error,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
+                    agent_public_id: agent_public_id.clone(),
                     ..AuditEvent::default()
                 },
             )
@@ -181,7 +194,7 @@ pub async fn proxy_handler(
                             status: Some(502),
                             latency_ms: Some(started.elapsed().as_millis() as u64),
                             decision: Decision::Denied,
-                            auth_method: Some("bearer".to_string()),
+                            auth_method: Some(auth_method_str.to_string()),
                             details: Some(json!({
                                 "observed_content_type": upstream_content_type,
                             })),
@@ -217,6 +230,8 @@ pub async fn proxy_handler(
                         response_headers,
                         resp,
                         started,
+                        auth_method_str,
+                        agent_public_id.clone(),
                     )
                     .await;
                 }
@@ -240,7 +255,8 @@ pub async fn proxy_handler(
                     status: Some(upstream_status),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
+                    agent_public_id: agent_public_id.clone(),
                     ..AuditEvent::default()
                 },
             )
@@ -266,7 +282,7 @@ pub async fn proxy_handler(
                             path: Some(path_for_truncate),
                             status: Some(upstream_status),
                             decision: Decision::Denied,
-                            auth_method: Some("bearer".to_string()),
+                            auth_method: Some(auth_method_str.to_string()),
                             details: Some(json!({
                                 "observed_bytes": observed,
                                 "cap_bytes": cap,
@@ -312,7 +328,8 @@ pub async fn proxy_handler(
                     status: Some(status.as_u16()),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Error,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
+                    agent_public_id: agent_public_id.clone(),
                     ..AuditEvent::default()
                 },
             )
@@ -365,6 +382,8 @@ async fn apply_buffered_response_controls(
     response_headers: HeaderMap,
     resp: reqwest::Response,
     started: Instant,
+    auth_method_str: &str,
+    agent_public_id: Option<String>,
 ) -> Response {
     let body_bytes = match resp.bytes().await {
         Ok(b) => b.to_vec(),
@@ -382,7 +401,7 @@ async fn apply_buffered_response_controls(
                     status: Some(502),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Error,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
                     details: Some(json!({"error": e.to_string()})),
                     ..AuditEvent::default()
                 },
@@ -410,7 +429,7 @@ async fn apply_buffered_response_controls(
                     status: Some(502),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Denied,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
                     details: Some(json!({
                         "observed_bytes": observed,
                         "cap_bytes": cap,
@@ -442,7 +461,7 @@ async fn apply_buffered_response_controls(
                     status: Some(502),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Denied,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
                     details: Some(json!({"observed_content_type": observed})),
                     ..AuditEvent::default()
                 },
@@ -471,7 +490,7 @@ async fn apply_buffered_response_controls(
                         status: Some(upstream_status),
                         latency_ms: Some(started.elapsed().as_millis() as u64),
                         decision: Decision::Allowed,
-                        auth_method: Some("bearer".to_string()),
+                        auth_method: Some(auth_method_str.to_string()),
                         details: Some(json!({
                             "pattern_id": rec.pattern_id,
                             "matches": rec.matches,
@@ -501,7 +520,8 @@ async fn apply_buffered_response_controls(
                     status: Some(upstream_status),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision,
-                    auth_method: Some("bearer".to_string()),
+                    auth_method: Some(auth_method_str.to_string()),
+                    agent_public_id: agent_public_id.clone(),
                     ..AuditEvent::default()
                 },
             )

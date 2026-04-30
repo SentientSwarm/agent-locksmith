@@ -31,7 +31,7 @@ pub struct AppConfig {
     pub audit: Option<AuditConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     pub path: PathBuf,
@@ -179,8 +179,18 @@ pub enum AuthMode {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct MtlsConfig {
-    /// PEM CA bundle. Every leaf cert must chain back to one of these.
+    /// PEM CA bundle. Every client leaf cert must chain back to one of
+    /// these. Required when `auth_mode` is `mtls` or `both`.
     pub ca_bundle_path: PathBuf,
+    /// PEM server certificate the agent listener presents at the TLS
+    /// handshake. Required when `auth_mode` is `mtls` or `both`. Daemon
+    /// fail-fasts if missing or unreadable (same contract as
+    /// `admin_https.cert_path` per T4.2).
+    #[serde(default)]
+    pub server_cert_path: Option<PathBuf>,
+    /// PEM (PKCS#8 or RSA) private key matching `server_cert_path`.
+    #[serde(default)]
+    pub server_key_path: Option<PathBuf>,
     /// Optional CRL URL (T6.3). When set the daemon refreshes the CRL
     /// in the background at `crl_refresh_interval_seconds`.
     #[serde(default)]
