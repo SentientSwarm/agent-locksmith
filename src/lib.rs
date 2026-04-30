@@ -11,6 +11,7 @@ pub mod deprecation;
 pub mod migrations;
 pub mod proxy;
 pub mod repo;
+pub mod secret;
 pub mod shutdown;
 pub mod telemetry;
 pub mod token;

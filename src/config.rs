@@ -1,10 +1,11 @@
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::Deserialize;
 use std::env;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::deprecation::{DeprecationDisposition, DeprecationRegistry, default_registry};
+use crate::secret::SecretRef;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -262,17 +263,40 @@ fn default_body_limit() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct ToolAuthConfig {
     pub header: String,
-    pub value: SecretString,
+    /// Credential reference (M5). Accepts both the legacy plain-string
+    /// form (`value: "Bearer ${TOKEN}"`) and the typed forms (`value:
+    /// { from_env: { var: ... } }`, `from_file_sealed`, etc.). See
+    /// `crate::secret::SecretRef` for the deserialization contract.
+    pub value: SecretRef,
 }
 
 impl AppConfig {
-    /// Return tools that are active (have valid credentials or no auth required).
-    /// Tools with an auth block but empty value are considered unconfigured.
+    /// Return tools that are *structurally* active — auth is None, or
+    /// auth.value carries something that looks present. Used for
+    /// listings and config audits where we don't have access to the
+    /// runtime resolved-credentials map. The runtime authority is
+    /// `active_tools_against`.
     pub fn active_tools(&self) -> Vec<&ToolConfig> {
         self.tools
             .iter()
             .filter(|t| match &t.auth {
-                Some(auth) => !auth.value.expose_secret().is_empty(),
+                Some(auth) => auth.value.looks_present(),
+                None => true,
+            })
+            .collect()
+    }
+
+    /// Return tools that are active given a resolved-credentials map.
+    /// Tools with declared auth must have a non-empty entry in
+    /// `resolved`. Tools without auth declarations are always active.
+    pub fn active_tools_against<'a>(
+        &'a self,
+        resolved: &std::collections::HashMap<String, SecretString>,
+    ) -> Vec<&'a ToolConfig> {
+        self.tools
+            .iter()
+            .filter(|t| match &t.auth {
+                Some(_) => resolved.contains_key(&t.name),
                 None => true,
             })
             .collect()

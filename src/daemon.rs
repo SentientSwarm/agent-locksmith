@@ -20,12 +20,13 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
-use crate::app::{build_app_with_audit, build_app_with_shared_config};
+use crate::app::build_app_with_audit_and_creds;
 use crate::audit_sink::{JsonlSink, JsonlSinkConfig};
 use crate::auth_v2::{BearerAuthenticator, OperatorAuthenticator};
 use crate::config::AppConfig;
 use crate::migrations;
 use crate::repo::{AgentRepository, AuditRepository, BootstrapTokenRepository};
+use crate::secret::{FileSealedBackend, ResolvedCreds, SecretResolver, resolve_tool_creds};
 use crate::shutdown::ShutdownCoordinator;
 
 #[derive(Debug, thiserror::Error)]
@@ -75,8 +76,19 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // binding so a misconfig fails fast. The same pool feeds the audit
     // repository handed to the agent router, so proxy writes share one
     // SQLite connection pool with admin reads.
+    // Resolve tool credentials at startup (M5 / T5.1). The resolver
+    // includes FileSealedBackend so tools using `from_file_sealed:`
+    // get their credentials read from systemd-creds-decrypted files.
+    // Vault and AWS variants surface NotImplemented per T5.3.
+    let resolver = SecretResolver::with_file_sealed(FileSealedBackend::new());
+    let resolved_map = {
+        let snapshot = shared_config.load();
+        resolve_tool_creds(&snapshot, &resolver).await
+    };
+    let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
+
     let (admin_state, audit_for_proxy, audit_for_sweeper) = if admin_enabled {
-        let setup = build_admin_substrate(shared_config.clone()).await?;
+        let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
@@ -100,11 +112,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // Agent listener. Clone the shared config because the admin HTTPS
     // wiring below needs a snapshot of `listen.admin_https` and the
     // builder takes ownership.
-    let agent_router = if let Some(audit) = audit_for_proxy {
-        build_app_with_audit(shared_config.clone(), Some(audit))
-    } else {
-        build_app_with_shared_config(shared_config.clone())
-    };
+    let agent_router = build_app_with_audit_and_creds(
+        shared_config.clone(),
+        audit_for_proxy,
+        resolved_creds.clone(),
+    );
     let listener = TcpListener::bind(addr).await?;
     info!("agent listener bound on {addr}");
     let agent_shutdown = coord.shutdown_signal();
@@ -261,7 +273,10 @@ struct AdminSetup {
     audit: AuditRepository,
 }
 
-async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminSetup, DaemonError> {
+async fn build_admin_substrate(
+    config: Arc<ArcSwap<AppConfig>>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
         .database
@@ -321,7 +336,13 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminS
         .map_err(|e| DaemonError::OperatorCreds(e.to_string()))?;
     info!(operator_credentials = %ops_path.display(), "operator authenticator loaded");
 
-    let admin = AdminService::with_audit(agents, bootstrap, config, Some(audit.clone()));
+    let admin = AdminService::with_audit_and_creds(
+        agents,
+        bootstrap,
+        config,
+        Some(audit.clone()),
+        resolved_creds,
+    );
 
     Ok(AdminSetup {
         uds_state: UdsState {

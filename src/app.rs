@@ -12,6 +12,7 @@ use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
 use crate::proxy;
 use crate::repo::AuditRepository;
+use crate::secret::{ResolvedCreds, resolve_tool_creds_sync_env_only};
 
 pub struct AppState {
     pub config: Arc<ArcSwap<AppConfig>>,
@@ -21,6 +22,13 @@ pub struct AppState {
     /// substrate; the proxy hot path then skips audit writes entirely
     /// rather than fail.
     pub audit: Option<AuditRepository>,
+    /// Resolved credential map (M5 / T5.1). Populated at startup by
+    /// the daemon (`secret::resolve_tool_creds`) or by the eager
+    /// sync helper used in test paths
+    /// (`secret::resolve_tool_creds_sync_env_only`). The proxy hot
+    /// path reads from this map; tools whose credentials are absent
+    /// are inactive (degraded per INF-4).
+    pub resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
 }
 
 pub fn build_app(config: AppConfig) -> Router {
@@ -35,16 +43,34 @@ pub fn build_app_with_shared_config(config: Arc<ArcSwap<AppConfig>>) -> Router {
 }
 
 /// Build the agent router with an optional audit sink. M3 calls this so
-/// the proxy hot path emits one audit row per request.
+/// the proxy hot path emits one audit row per request. Eager-resolves
+/// `tool.auth.value` SecretRefs synchronously (env + legacy paths only) —
+/// daemon callers that need sealed/Vault/AWS go through
+/// `build_app_with_audit_and_creds`.
 pub fn build_app_with_audit(
     config: Arc<ArcSwap<AppConfig>>,
     audit: Option<AuditRepository>,
+) -> Router {
+    let snapshot = config.load();
+    let resolved = resolve_tool_creds_sync_env_only(&snapshot);
+    drop(snapshot);
+    build_app_with_audit_and_creds(config, audit, Arc::new(ArcSwap::from_pointee(resolved)))
+}
+
+/// Full-power constructor used by the daemon: caller supplies an
+/// already-resolved credentials map (typically built via the async
+/// `secret::resolve_tool_creds` so sealed/Vault/AWS paths work).
+pub fn build_app_with_audit_and_creds(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
 ) -> Router {
     let state = Arc::new(AppState {
         config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
         audit,
+        resolved_creds,
     });
 
     Router::new()
@@ -88,11 +114,12 @@ async fn livez_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
 /// degraded` to opt out of the readiness check.
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config.load();
+    let resolved = state.resolved_creds.load();
     let unconfigured: Vec<&str> = config
         .tools
         .iter()
         .filter(|t| match &t.auth {
-            Some(auth) => secrecy::ExposeSecret::expose_secret(&auth.value).is_empty(),
+            Some(_) => !resolved.contains_key(&t.name),
             None => false,
         })
         .map(|t| t.name.as_str())
@@ -128,8 +155,9 @@ async fn version_handler() -> Json<Value> {
 
 async fn tools_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
     let config = state.config.load();
+    let resolved = state.resolved_creds.load();
     let tools: Vec<Value> = config
-        .active_tools()
+        .active_tools_against(&resolved)
         .iter()
         .map(|t| {
             json!({
