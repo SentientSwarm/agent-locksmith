@@ -48,6 +48,20 @@ async fn wal_mode_is_active_on_pool_connections() {
 }
 
 #[tokio::test]
+async fn wal_autocheckpoint_set_by_after_connect_hook() {
+    // wal_autocheckpoint is a per-connection PRAGMA that sqlx does not
+    // expose as a typed setting; the MigrationRunner applies it via
+    // its after_connect hook. This test verifies the hook actually ran.
+    let (_dir, pool) = fresh_db().await;
+    let row = sqlx::query("PRAGMA wal_autocheckpoint")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let pages: i64 = row.get(0);
+    assert_eq!(pages, 1000, "wal_autocheckpoint should be 1000 (INF-21)");
+}
+
+#[tokio::test]
 async fn foreign_keys_enabled() {
     let (_dir, pool) = fresh_db().await;
     let row = sqlx::query("PRAGMA foreign_keys")
