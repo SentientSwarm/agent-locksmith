@@ -8,14 +8,19 @@ use axum::{
 use secrecy::ExposeSecret;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::app::AppState;
+use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
     Path((tool_name, path)): Path<(String, String)>,
     req: Request<Body>,
 ) -> Response {
+    let started = Instant::now();
+    let method = req.method().clone();
+    let request_path = req.uri().path().to_string();
     let config = state.config.load();
 
     // Find the tool
@@ -26,6 +31,22 @@ pub async fn proxy_handler(
     {
         Some(t) => t,
         None => {
+            audit_record(
+                &state.audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "tool_not_found".to_string(),
+                    tool: Some(tool_name.clone()),
+                    method: Some(method.as_str().to_string()),
+                    path: Some(request_path.clone()),
+                    status: Some(404),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Denied,
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({
@@ -40,12 +61,29 @@ pub async fn proxy_handler(
     };
 
     let upstream_url = format!("{}/{}", tool.upstream.trim_end_matches('/'), path);
-    let method = req.method().clone();
+    let upstream_host = url_host(&tool.upstream);
     let headers = req.headers().clone();
     let body_limit = usize::try_from(tool.body_limit_bytes).unwrap_or(usize::MAX);
     let body_bytes = match axum::body::to_bytes(req.into_body(), body_limit).await {
         Ok(b) => b,
         Err(_) => {
+            audit_record(
+                &state.audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "request_body_read_error".to_string(),
+                    tool: Some(tool_name.clone()),
+                    upstream_host: upstream_host.clone(),
+                    method: Some(method.as_str().to_string()),
+                    path: Some(request_path.clone()),
+                    status: Some(400),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Error,
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": {"message": "Failed to read request body", "type": "bad_request"}})),
@@ -55,7 +93,7 @@ pub async fn proxy_handler(
     };
 
     let client = state.client_pool.get_or_build(tool, &config);
-    let mut upstream_req = client.request(method, &upstream_url);
+    let mut upstream_req = client.request(method.clone(), &upstream_url);
 
     // Forward headers, stripping auth-related ones
     let auth_header_name = tool.auth.as_ref().map(|a| a.header.to_lowercase());
@@ -82,8 +120,8 @@ pub async fn proxy_handler(
 
     match upstream_req.send().await {
         Ok(resp) => {
-            let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let upstream_status = resp.status().as_u16();
+            let status = StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
             let mut response_headers = HeaderMap::new();
             for (name, value) in resp.headers() {
                 // Skip hop-by-hop headers that are bound to the upstream
@@ -105,6 +143,28 @@ pub async fn proxy_handler(
                     response_headers.insert(name.clone(), v);
                 }
             }
+            let decision = if upstream_status >= 500 {
+                Decision::Error
+            } else {
+                Decision::Allowed
+            };
+            audit_record(
+                &state.audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: "proxy_request".to_string(),
+                    tool: Some(tool_name.clone()),
+                    upstream_host: upstream_host.clone(),
+                    method: Some(method.as_str().to_string()),
+                    path: Some(request_path.clone()),
+                    status: Some(upstream_status),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision,
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
             // Stream the upstream body to the agent rather than buffering
             // (R-N6: ≤100ms first-byte added latency). T1.2 closes T1.1.
             let body = Body::from_stream(resp.bytes_stream());
@@ -114,19 +174,67 @@ pub async fn proxy_handler(
             response
         }
         Err(e) => {
-            if e.is_timeout() {
-                (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(json!({"error": {"message": "Upstream timeout", "type": "timeout"}})),
-                )
-                    .into_response()
+            let (status, kind) = if e.is_timeout() {
+                (StatusCode::GATEWAY_TIMEOUT, "timeout")
             } else {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({"error": {"message": "Upstream error", "type": "upstream_error"}})),
-                )
-                    .into_response()
-            }
+                (StatusCode::BAD_GATEWAY, "upstream_error")
+            };
+            audit_record(
+                &state.audit,
+                AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Proxy,
+                    event: kind.to_string(),
+                    tool: Some(tool_name.clone()),
+                    upstream_host,
+                    method: Some(method.as_str().to_string()),
+                    path: Some(request_path.clone()),
+                    status: Some(status.as_u16()),
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    decision: Decision::Error,
+                    ..AuditEvent::default()
+                },
+            )
+            .await;
+            (
+                status,
+                Json(json!({"error": {"message": match kind {
+                    "timeout" => "Upstream timeout",
+                    _ => "Upstream error",
+                }, "type": kind}})),
+            )
+                .into_response()
         }
+    }
+}
+
+/// Best-effort audit write. Errors are logged and swallowed — audit must
+/// never block proxy traffic (INF-26).
+async fn audit_record(audit: &Option<AuditRepository>, event: AuditEvent) {
+    let Some(repo) = audit else {
+        return;
+    };
+    if let Err(e) = repo.record(&event).await {
+        tracing::warn!(error = %e, event = %event.event, "audit write failed");
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn url_host(url: &str) -> Option<String> {
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host = stripped.split(['/', ':']).next().unwrap_or("");
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
     }
 }

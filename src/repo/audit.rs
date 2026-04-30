@@ -2,9 +2,11 @@
 //! M3 wires writes from ProxyEngine and AdminService.
 
 use super::agent::RepoError;
+use crate::audit_sink::JsonlSink;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -101,11 +103,21 @@ impl Default for AuditPage {
 #[derive(Clone)]
 pub struct AuditRepository {
     pool: SqlitePool,
+    /// Optional JSONL mirror sink (T3.3). When set, every successful
+    /// SQL insert also appends one line. Mirrors columns 1:1.
+    sink: Option<Arc<JsonlSink>>,
 }
 
 impl AuditRepository {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self { pool, sink: None }
+    }
+
+    /// Attach a JSONL sink that mirrors every successful insert. The
+    /// sink is shared across cloned `AuditRepository` handles via Arc.
+    pub fn with_sink(mut self, sink: Arc<JsonlSink>) -> Self {
+        self.sink = Some(sink);
+        self
     }
 
     /// Synchronous insert per INF-26. Audit failures are logged but do
@@ -142,7 +154,25 @@ impl AuditRepository {
         .bind(details_json)
         .execute(&self.pool)
         .await?;
+        // JSONL mirror — best-effort, errors logged + swallowed inside
+        // the sink so audit insertion can't ever fail mid-mirror.
+        if let Some(sink) = &self.sink {
+            sink.append(event).await;
+        }
         Ok(())
+    }
+
+    /// Delete audit rows whose timestamp is strictly older than
+    /// `cutoff_ms`. Returns the number of rows removed. Bounded
+    /// scope — only the `audit` table is touched (T3.5 verification
+    /// gate). Idempotent — running twice with no new rows in between
+    /// is a no-op (the second call deletes 0 rows).
+    pub async fn sweep_older_than(&self, cutoff_ms: i64) -> Result<u64, RepoError> {
+        let res = sqlx::query("DELETE FROM audit WHERE ts < ?")
+            .bind(cutoff_ms)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
     }
 
     pub async fn query(

@@ -20,11 +20,12 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
-use crate::app::build_app_with_shared_config;
+use crate::app::{build_app_with_audit, build_app_with_shared_config};
+use crate::audit_sink::{JsonlSink, JsonlSinkConfig};
 use crate::auth_v2::{BearerAuthenticator, OperatorAuthenticator};
 use crate::config::AppConfig;
 use crate::migrations;
-use crate::repo::{AgentRepository, BootstrapTokenRepository};
+use crate::repo::{AgentRepository, AuditRepository, BootstrapTokenRepository};
 use crate::shutdown::ShutdownCoordinator;
 
 #[derive(Debug, thiserror::Error)]
@@ -71,15 +72,37 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     let shared_config: Arc<ArcSwap<AppConfig>> = Arc::new(ArcSwap::from_pointee(config));
 
     // Admin substrate (DB + auth + service) — built before listener
-    // binding so a misconfig fails fast.
-    let admin_state = if admin_enabled {
-        Some(build_admin_substrate(shared_config.clone()).await?)
+    // binding so a misconfig fails fast. The same pool feeds the audit
+    // repository handed to the agent router, so proxy writes share one
+    // SQLite connection pool with admin reads.
+    let (admin_state, audit_for_proxy, audit_for_sweeper) = if admin_enabled {
+        let setup = build_admin_substrate(shared_config.clone()).await?;
+        (
+            Some(setup.uds_state),
+            Some(setup.audit.clone()),
+            Some(setup.audit),
+        )
     } else {
-        None
+        (None, None, None)
     };
 
+    // Audit retention sweeper (T3.5). Runs only when admin substrate is
+    // up — otherwise there's no audit to sweep. Defaults to
+    // 90 days / hourly when `audit:` is absent from config.
+    let sweeper_task = audit_for_sweeper.map(|audit| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot.audit.as_ref().cloned().unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
+    });
+
     // Agent listener.
-    let agent_router = build_app_with_shared_config(shared_config);
+    let agent_router = if let Some(audit) = audit_for_proxy {
+        build_app_with_audit(shared_config, Some(audit))
+    } else {
+        build_app_with_shared_config(shared_config)
+    };
     let listener = TcpListener::bind(addr).await?;
     info!("agent listener bound on {addr}");
     let agent_shutdown = coord.shutdown_signal();
@@ -101,12 +124,19 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
 
     let drain = async {
-        if let Some(admin) = admin_task {
+        let (a, b) = if let Some(admin) = admin_task {
             let (a, b) = tokio::join!(agent_task, admin);
             (Some(a), Some(b))
         } else {
             (Some(agent_task.await), None)
+        };
+        // Sweeper exits on its own when the shutdown signal fires; we
+        // join it here so a slow tick can finish cleanly within the
+        // drain window. Errors are logged but never poisoned shutdown.
+        if let Some(s) = sweeper_task {
+            let _ = s.await;
         }
+        (a, b)
     };
 
     match coord.drain_or_timeout(drain).await {
@@ -127,7 +157,63 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     }
 }
 
-async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<UdsState, DaemonError> {
+/// Periodically sweep audit rows older than `now - retention_days`.
+/// Exits cleanly when the shutdown future resolves.
+///
+/// Verification gate (T3.5):
+/// - Cutoff is `now_ms - retention_days * MS_PER_DAY` — single integer
+///   path, no floats.
+/// - SELECT-then-DELETE is unnecessary; the bounded `DELETE WHERE ts <
+///   ?` only touches the audit table.
+/// - tokio::select between `tick()` and the shutdown future ensures we
+///   never start a fresh DELETE after shutdown was signalled; we
+///   complete the in-flight one and exit.
+async fn audit_retention_sweeper(
+    audit: AuditRepository,
+    cfg: crate::config::AuditConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const MS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    // We want immediate first sweep on startup so freshly-rotated
+    // databases drop ancient rows on boot.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("audit sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let cutoff = now_ms() - i64::from(cfg.retention_days) * MS_PER_DAY;
+                match audit.sweep_older_than(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "audit retention sweep deleted rows"),
+                    Err(e) => warn!(error = %e, "audit retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Bundle of the admin substrate that the daemon runtime hands out:
+/// the UDS router state plus a clone of the AuditRepository so the
+/// proxy hot path can write to the same audit table.
+struct AdminSetup {
+    uds_state: UdsState,
+    audit: AuditRepository,
+}
+
+async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
         .database
@@ -151,20 +237,51 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<UdsSta
     info!(database = %db_path.display(), "database opened and migrated");
 
     let agents = AgentRepository::new(pool.clone());
-    let bootstrap = BootstrapTokenRepository::new(pool);
+    let bootstrap = BootstrapTokenRepository::new(pool.clone());
+    let mut audit = AuditRepository::new(pool);
 
-    let agent_auth = BearerAuthenticator::new(agents.clone())
+    // JSONL mirror sink — optional, opens at startup so misconfig
+    // (unwritable path) surfaces here rather than at first audit
+    // insert. Wraps in Arc so cloned AuditRepository handles share it.
+    let snapshot = config.load();
+    if let Some(audit_cfg) = snapshot.audit.as_ref()
+        && let Some(jsonl_path) = audit_cfg.jsonl_path.as_ref()
+    {
+        let sink_cfg = JsonlSinkConfig {
+            path: jsonl_path.clone(),
+            max_bytes: audit_cfg.jsonl_max_bytes,
+            keep_files: audit_cfg.jsonl_keep_files,
+        };
+        match JsonlSink::new(sink_cfg) {
+            Ok(sink) => {
+                info!(path = %jsonl_path.display(), "audit JSONL sink opened");
+                audit = audit.with_sink(std::sync::Arc::new(sink));
+            }
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "audit jsonl sink {}: {e}",
+                    jsonl_path.display()
+                )));
+            }
+        }
+    }
+    drop(snapshot);
+
+    let agent_auth = BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone()))
         .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?;
-    let operator_auth = OperatorAuthenticator::load(&ops_path)
+    let operator_auth = OperatorAuthenticator::load_with_audit(&ops_path, Some(audit.clone()))
         .map_err(|e| DaemonError::OperatorCreds(e.to_string()))?;
     info!(operator_credentials = %ops_path.display(), "operator authenticator loaded");
 
-    let admin = AdminService::new(agents, bootstrap, config);
+    let admin = AdminService::with_audit(agents, bootstrap, config, Some(audit.clone()));
 
-    Ok(UdsState {
-        admin: Arc::new(admin),
-        agent_auth: Arc::new(agent_auth),
-        operator_auth: Arc::new(operator_auth),
+    Ok(AdminSetup {
+        uds_state: UdsState {
+            admin: Arc::new(admin),
+            agent_auth: Arc::new(agent_auth),
+            operator_auth: Arc::new(operator_auth),
+        },
+        audit,
     })
 }
 

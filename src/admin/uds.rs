@@ -67,6 +67,7 @@ pub fn build_router(state: UdsState) -> Router {
             post(op_revoke_bootstrap),
         )
         .route("/tools", get(op_list_tools))
+        .route("/audit", get(op_query_audit))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             operator_auth_middleware,
@@ -393,6 +394,97 @@ async fn op_list_tools(
 ) -> Response {
     match state.admin.list_tools_for_operator(&op).await {
         Ok(tools) => (StatusCode::OK, Json(json!({ "tools": tools }))).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct AuditQueryParams {
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    agent: Option<String>,
+    tool: Option<String>,
+    event_class: Option<String>,
+    decision: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+async fn op_query_audit(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Query(q): Query<AuditQueryParams>,
+) -> Response {
+    use crate::repo::audit::{AuditFilter, AuditPage, Decision, EventClass};
+
+    let event_class = match q.event_class.as_deref() {
+        Some("proxy") => Some(EventClass::Proxy),
+        Some("operator") => Some(EventClass::Operator),
+        Some("security") => Some(EventClass::Security),
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": { "code": "invalid_event_class", "message": format!("unknown event_class: {other}") }
+                })),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let decision = match q.decision.as_deref() {
+        Some("allowed") => Some(Decision::Allowed),
+        Some("denied") => Some(Decision::Denied),
+        Some("error") => Some(Decision::Error),
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": { "code": "invalid_decision", "message": format!("unknown decision: {other}") }
+                })),
+            )
+                .into_response();
+        }
+        None => None,
+    };
+    let filter = AuditFilter {
+        since_ms: q.since_ms,
+        until_ms: q.until_ms,
+        agent_public_id: q.agent,
+        tool: q.tool,
+        event_class,
+        decision,
+    };
+    let page = AuditPage {
+        limit: q.limit.unwrap_or(100),
+        offset: q.offset.unwrap_or(0),
+    };
+    match state.admin.query_audit(&op, filter, page).await {
+        Ok(rows) => {
+            let rows: Vec<_> = rows
+                .into_iter()
+                .map(|e| {
+                    json!({
+                        "ts_ms": e.ts_ms,
+                        "event_class": e.event_class.as_str(),
+                        "event": e.event,
+                        "agent_public_id": e.agent_public_id,
+                        "operator_name": e.operator_name,
+                        "tool": e.tool,
+                        "upstream_host": e.upstream_host,
+                        "method": e.method,
+                        "path": e.path,
+                        "status": e.status,
+                        "latency_ms": e.latency_ms,
+                        "decision": e.decision.as_str(),
+                        "auth_method": e.auth_method,
+                        "origin_ip": e.origin_ip,
+                        "details": e.details,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "events": rows }))).into_response()
+        }
         Err(e) => admin_err_response(e),
     }
 }

@@ -2,13 +2,17 @@
 //! C-12 (SPEC §4.2.14). Verification gate per §6.4.1.
 
 use crate::auth_v2::{AgentIdentity, OperatorIdentity};
+use crate::repo::audit::{
+    AuditEvent, AuditFilter, AuditPage, AuditRepository, Decision, EventClass,
+};
 use crate::repo::{
-    AgentRecord, AgentRepository, BootstrapScope, BootstrapTokenRecord, BootstrapTokenRepository,
-    RepoError,
+    AgentRecord, AgentRepository, BootstrapScope, BootstrapStatus, BootstrapTokenRecord,
+    BootstrapTokenRepository, RepoError,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
+use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdminError {
@@ -136,6 +140,7 @@ pub struct AdminService {
     agents: AgentRepository,
     bootstrap: BootstrapTokenRepository,
     config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
+    audit: Option<AuditRepository>,
 }
 
 impl AdminService {
@@ -144,10 +149,33 @@ impl AdminService {
         bootstrap: BootstrapTokenRepository,
         config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
     ) -> Self {
+        Self::with_audit(agents, bootstrap, config, None)
+    }
+
+    /// Construct an AdminService that records each state-mutating call
+    /// to `audit`. Used by the daemon runtime; tests use this when they
+    /// want to inspect emitted audit rows.
+    pub fn with_audit(
+        agents: AgentRepository,
+        bootstrap: BootstrapTokenRepository,
+        config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
+        audit: Option<AuditRepository>,
+    ) -> Self {
         Self {
             agents,
             bootstrap,
             config,
+            audit,
+        }
+    }
+
+    /// Best-effort audit write. Errors are logged and swallowed (INF-26).
+    async fn audit(&self, event: AuditEvent) {
+        let Some(repo) = &self.audit else {
+            return;
+        };
+        if let Err(e) = repo.record(&event).await {
+            tracing::warn!(error = %e, event = %event.event, "admin audit write failed");
         }
     }
 
@@ -158,7 +186,62 @@ impl AdminService {
     /// is NOT consumed (INF-10). Returns the cleartext agent token —
     /// returned exactly once per R-N4.
     pub async fn register_agent(&self, input: RegisterInput) -> Result<RegisterOutput, AdminError> {
-        // Parse the bootstrap token to extract its public_id.
+        // Pre-extract bootstrap public_id so we can emit a security
+        // audit row on reuse (T3.4 / INF-13). Parse failures are also a
+        // security event but we don't have a token id for them.
+        let bootstrap_public_id = crate::token::parse(input.bootstrap_token.expose_secret())
+            .ok()
+            .filter(|(ns, _, _)| matches!(ns, crate::token::TokenNamespace::Bootstrap))
+            .map(|(_, pid, _)| pid.as_str().to_string());
+
+        let result = self.register_agent_inner(input).await;
+        match &result {
+            Ok(out) => {
+                self.audit(AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Operator,
+                    event: "agent_register".into(),
+                    agent_public_id: Some(out.public_id.clone()),
+                    decision: Decision::Allowed,
+                    details: Some(json!({ "via": "bootstrap" })),
+                    ..AuditEvent::default()
+                })
+                .await;
+            }
+            Err(e) => {
+                // Distinguish bootstrap_reuse_attempt (security) from a
+                // generic register failure (operator class). INF-13.
+                let mut event_class = EventClass::Operator;
+                let mut event_name = "agent_register".to_string();
+                if matches!(e, AdminError::InvalidBootstrap)
+                    && let Some(pid) = bootstrap_public_id.as_deref()
+                    && let Ok(status) = self.bootstrap.diagnose(pid).await
+                    && matches!(status, BootstrapStatus::Used | BootstrapStatus::Revoked)
+                {
+                    event_class = EventClass::Security;
+                    event_name = "bootstrap_reuse_attempt".to_string();
+                }
+                self.audit(AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class,
+                    event: event_name,
+                    decision: Decision::Denied,
+                    details: Some(json!({
+                        "error": e.to_string(),
+                        "bootstrap_public_id": bootstrap_public_id,
+                    })),
+                    ..AuditEvent::default()
+                })
+                .await;
+            }
+        }
+        result
+    }
+
+    async fn register_agent_inner(
+        &self,
+        input: RegisterInput,
+    ) -> Result<RegisterOutput, AdminError> {
         let raw = input.bootstrap_token.expose_secret();
         let (ns, public_id, secret) =
             crate::token::parse(raw).map_err(|_| AdminError::InvalidBootstrap)?;
@@ -166,15 +249,10 @@ impl AdminService {
             return Err(AdminError::InvalidBootstrap);
         }
 
-        // Pre-fetch the bootstrap scope so we know what allowlist to
-        // apply on the agent without consuming the token yet (INF-10:
-        // bootstrap NOT consumed if agent name conflicts).
         let scope_preview = self.bootstrap.preview_scope(public_id.as_str()).await?;
         let allowlist_owned = scope_preview.tool_allowlist.clone();
         let allowlist_slice = allowlist_owned.as_deref();
 
-        // Now create the agent. If this fails (name conflict), the
-        // bootstrap stays unused.
         let (agent_pid, agent_secret) = self
             .agents
             .create(
@@ -192,16 +270,12 @@ impl AdminService {
             .await?
             .ok_or(AdminError::AgentNotFound)?;
 
-        // Now consume the bootstrap (also verifies the secret).
         let secret_str = SecretString::from(secret.expose().to_string());
         let consumed = self
             .bootstrap
             .consume(public_id.as_str(), &secret_str, agent.id)
             .await;
         if let Err(e) = consumed {
-            // Bootstrap consume failed AFTER agent create succeeded —
-            // roll back the agent so the operator can retry without a
-            // dangling registration.
             let _ = self.agents.revoke(&agent_pid).await;
             return Err(e.into());
         }
@@ -230,7 +304,28 @@ impl AdminService {
         agent: &AgentIdentity,
         current_secret: &SecretString,
     ) -> Result<RotateOutput, AdminError> {
-        let new_secret = self.agents.rotate(&agent.public_id, current_secret).await?;
+        let result = self.agents.rotate(&agent.public_id, current_secret).await;
+        let event = match &result {
+            Ok(_) => AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "agent_rotate".into(),
+                agent_public_id: Some(agent.public_id.clone()),
+                decision: Decision::Allowed,
+                ..AuditEvent::default()
+            },
+            Err(e) => AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "agent_rotate".into(),
+                agent_public_id: Some(agent.public_id.clone()),
+                decision: Decision::Denied,
+                details: Some(json!({ "error": e.to_string() })),
+                ..AuditEvent::default()
+            },
+        };
+        self.audit(event).await;
+        let new_secret = result?;
         Ok(RotateOutput {
             public_id: agent.public_id.clone(),
             token: format!("lk_{}.{}", agent.public_id, new_secret.expose_secret()),
@@ -238,7 +333,27 @@ impl AdminService {
     }
 
     pub async fn deregister_agent(&self, agent: &AgentIdentity) -> Result<(), AdminError> {
-        self.agents.revoke(&agent.public_id).await?;
+        // Self-revocation changes the agent's trust posture → Security
+        // class per T3.11 review.
+        let result = self.agents.revoke(&agent.public_id).await;
+        self.audit(AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "agent_deregister".into(),
+            agent_public_id: Some(agent.public_id.clone()),
+            decision: if result.is_ok() {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            },
+            details: result
+                .as_ref()
+                .err()
+                .map(|e| json!({ "error": e.to_string() })),
+            ..AuditEvent::default()
+        })
+        .await;
+        result?;
         Ok(())
     }
 
@@ -305,12 +420,12 @@ impl AdminService {
 
     pub async fn create_agent_as_operator(
         &self,
-        _op: &OperatorIdentity,
+        op: &OperatorIdentity,
         input: CreateAgentInput,
     ) -> Result<RegisterOutput, AdminError> {
         let allowlist_slice = input.allowlist.as_deref();
         let denylist_slice = input.denylist.as_deref();
-        let (pid, secret) = self
+        let result = self
             .agents
             .create(
                 &input.name,
@@ -320,7 +435,34 @@ impl AdminService {
                 input.metadata.as_ref(),
                 input.expires_at,
             )
-            .await?;
+            .await;
+        match &result {
+            Ok((pid, _)) => {
+                self.audit(AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Operator,
+                    event: "agent_create".into(),
+                    operator_name: Some(op.name.clone()),
+                    agent_public_id: Some(pid.clone()),
+                    decision: Decision::Allowed,
+                    ..AuditEvent::default()
+                })
+                .await;
+            }
+            Err(e) => {
+                self.audit(AuditEvent {
+                    ts_ms: now_ms(),
+                    event_class: EventClass::Operator,
+                    event: "agent_create".into(),
+                    operator_name: Some(op.name.clone()),
+                    decision: Decision::Denied,
+                    details: Some(json!({ "error": e.to_string(), "name": input.name })),
+                    ..AuditEvent::default()
+                })
+                .await;
+            }
+        }
+        let (pid, secret) = result?;
         Ok(RegisterOutput {
             public_id: pid.clone(),
             token: format!("lk_{}.{}", pid, secret.expose_secret()),
@@ -330,11 +472,12 @@ impl AdminService {
 
     pub async fn modify_agent(
         &self,
-        _op: &OperatorIdentity,
+        op: &OperatorIdentity,
         public_id: &str,
         input: ModifyAgentInput,
     ) -> Result<(), AdminError> {
-        self.agents
+        let result = self
+            .agents
             .update_policy(
                 public_id,
                 input.allowlist,
@@ -342,16 +485,56 @@ impl AdminService {
                 input.metadata,
                 input.expires_at,
             )
-            .await?;
+            .await;
+        self.audit(AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Operator,
+            event: "agent_modify".into(),
+            operator_name: Some(op.name.clone()),
+            agent_public_id: Some(public_id.to_string()),
+            decision: if result.is_ok() {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            },
+            details: result
+                .as_ref()
+                .err()
+                .map(|e| json!({ "error": e.to_string() })),
+            ..AuditEvent::default()
+        })
+        .await;
+        result?;
         Ok(())
     }
 
     pub async fn revoke_agent(
         &self,
-        _op: &OperatorIdentity,
+        op: &OperatorIdentity,
         public_id: &str,
     ) -> Result<(), AdminError> {
-        self.agents.revoke(public_id).await?;
+        // Operator-driven revocation is a security-affecting event per
+        // T3.11 review (changes the agent's trust posture).
+        let result = self.agents.revoke(public_id).await;
+        self.audit(AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "agent_revoke".into(),
+            operator_name: Some(op.name.clone()),
+            agent_public_id: Some(public_id.to_string()),
+            decision: if result.is_ok() {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            },
+            details: result
+                .as_ref()
+                .err()
+                .map(|e| json!({ "error": e.to_string() })),
+            ..AuditEvent::default()
+        })
+        .await;
+        result?;
         Ok(())
     }
 
@@ -365,7 +548,29 @@ impl AdminService {
             expires_at: input.expires_at,
             single_use: input.single_use,
         };
-        let (pid, secret) = self.bootstrap.mint(scope.clone(), &op.name).await?;
+        let result = self.bootstrap.mint(scope.clone(), &op.name).await;
+        let event = match &result {
+            Ok((pid, _)) => AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "bootstrap_mint".into(),
+                operator_name: Some(op.name.clone()),
+                decision: Decision::Allowed,
+                details: Some(json!({ "bootstrap_public_id": pid, "scope": &scope })),
+                ..AuditEvent::default()
+            },
+            Err(e) => AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "bootstrap_mint".into(),
+                operator_name: Some(op.name.clone()),
+                decision: Decision::Denied,
+                details: Some(json!({ "error": e.to_string() })),
+                ..AuditEvent::default()
+            },
+        };
+        self.audit(event).await;
+        let (pid, secret) = result?;
         Ok(MintBootstrapOutput {
             public_id: pid.clone(),
             token: format!("lkbt_{}.{}", pid, secret.expose_secret()),
@@ -382,11 +587,47 @@ impl AdminService {
 
     pub async fn revoke_bootstrap_token(
         &self,
-        _op: &OperatorIdentity,
+        op: &OperatorIdentity,
         public_id: &str,
     ) -> Result<(), AdminError> {
-        self.bootstrap.revoke(public_id).await?;
+        // Bootstrap revocation invalidates outstanding registration
+        // capacity → Security class per T3.11 review.
+        let result = self.bootstrap.revoke(public_id).await;
+        self.audit(AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "bootstrap_revoke".into(),
+            operator_name: Some(op.name.clone()),
+            decision: if result.is_ok() {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            },
+            details: Some(json!({
+                "bootstrap_public_id": public_id,
+                "error": result.as_ref().err().map(|e| e.to_string()),
+            })),
+            ..AuditEvent::default()
+        })
+        .await;
+        result?;
         Ok(())
+    }
+
+    /// Query the audit log. Operator-only (T3.6 / R-F7). Returns
+    /// `AdminError::Backend("audit_disabled")` when the daemon was
+    /// configured without an audit sink — operators get a clear signal
+    /// rather than an empty result.
+    pub async fn query_audit(
+        &self,
+        _op: &OperatorIdentity,
+        filter: AuditFilter,
+        page: AuditPage,
+    ) -> Result<Vec<AuditEvent>, AdminError> {
+        let Some(audit) = &self.audit else {
+            return Err(AdminError::Backend("audit_disabled".into()));
+        };
+        Ok(audit.query(&filter, page).await?)
     }
 
     pub async fn list_tools_for_operator(
@@ -409,4 +650,11 @@ impl AdminService {
             })
             .collect())
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

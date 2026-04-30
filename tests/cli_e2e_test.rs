@@ -227,6 +227,115 @@ fn missing_op_token_exits_with_auth_code() {
     assert_eq!(out.status.code(), Some(3), "exit code 3 = auth missing");
 }
 
+#[test]
+fn audit_query_returns_operator_events() {
+    let f = start_daemon();
+
+    // Generate one operator event (agent register).
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "agent",
+        "register",
+        "--name",
+        "audited-agent",
+    ]);
+    run(cmd)
+        .status
+        .success()
+        .then_some(())
+        .expect("register ok");
+
+    // Query the audit table — must surface the agent_create row.
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "audit",
+        "query",
+        "--event-class",
+        "operator",
+    ]);
+    let out = run(cmd);
+    assert!(out.status.success(), "audit query exits 0");
+    let body: Value = serde_json::from_slice(&out.stdout).expect("json output");
+    let rows = body.as_array().expect("array of audit rows");
+    assert!(
+        rows.iter().any(|r| r["event"] == "agent_create"),
+        "agent_create row visible via audit query"
+    );
+}
+
+#[test]
+fn audit_query_filters_by_decision() {
+    let f = start_daemon();
+    // Trigger a Denied row by attempting to register a duplicate name.
+    for _ in 0..2 {
+        let mut cmd = cli(&f.socket_path);
+        cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+            "agent",
+            "register",
+            "--name",
+            "dup-agent",
+        ]);
+        let _ = cmd.output();
+    }
+
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "audit",
+        "query",
+        "--decision",
+        "denied",
+    ]);
+    let out = run(cmd);
+    assert!(out.status.success());
+    let body: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = body.as_array().unwrap();
+    assert!(
+        !rows.is_empty(),
+        "at least one Denied row from the duplicate register"
+    );
+    for r in rows {
+        assert_eq!(r["decision"], "denied");
+    }
+}
+
+#[test]
+fn audit_query_requires_operator_token() {
+    let f = start_daemon();
+    let mut cmd = cli(&f.socket_path);
+    cmd.args(["audit", "query"]);
+    let out = cmd.output().unwrap();
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(3), "no op token => exit 3");
+}
+
+#[test]
+fn export_agents_yaml_excludes_token_material() {
+    let f = start_daemon();
+    // Create one agent so the export has something to emit.
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire)
+        .args(["agent", "register", "--name", "exporter"]);
+    let _ = run(cmd);
+
+    let mut cmd = Command::new(LOCKSMITH);
+    cmd.arg("--socket")
+        .arg(&f.socket_path)
+        .env("LOCKSMITH_OP_TOKEN", &f.op_token_wire)
+        .args(["export", "agents", "--format", "yaml"]);
+    let out = run(cmd);
+    assert!(out.status.success(), "export agents exits 0");
+    let body = String::from_utf8_lossy(&out.stdout);
+    assert!(body.contains("exporter"), "agent name present in export");
+    assert!(
+        !body.contains("token"),
+        "no `token` field in export per R-F14: {body}"
+    );
+    assert!(
+        !body.contains("secret"),
+        "no `secret` material in export per R-F14: {body}"
+    );
+}
+
 #[allow(dead_code)]
 fn write(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
