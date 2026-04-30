@@ -13,14 +13,21 @@ use crate::config::AppConfig;
 use crate::proxy;
 
 pub struct AppState {
-    pub config: ArcSwap<AppConfig>,
+    pub config: Arc<ArcSwap<AppConfig>>,
     pub started_at: Instant,
     pub client_pool: ClientPool,
 }
 
 pub fn build_app(config: AppConfig) -> Router {
+    build_app_with_shared_config(Arc::new(ArcSwap::from_pointee(config)))
+}
+
+/// Build the agent router using a shared config snapshot. M2's daemon
+/// runtime calls this so the agent listener and the AdminService observe
+/// the same `ArcSwap<AppConfig>` (single source of truth for hot reload).
+pub fn build_app_with_shared_config(config: Arc<ArcSwap<AppConfig>>) -> Router {
     let state = Arc::new(AppState {
-        config: ArcSwap::from_pointee(config),
+        config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
     });

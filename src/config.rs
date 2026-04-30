@@ -1,7 +1,7 @@
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::deprecation::{DeprecationDisposition, DeprecationRegistry, default_registry};
@@ -17,6 +17,20 @@ pub struct AppConfig {
     pub shutdown: ShutdownConfig,
     #[serde(default)]
     pub tools: Vec<ToolConfig>,
+    /// Path to the operator credentials YAML file (M2). Required iff
+    /// `listen.admin_socket` is set; main.rs validates the pairing at
+    /// startup. Cleartext operator tokens are NOT here — only argon2 hashes
+    /// and metadata.
+    pub operator_credentials_path: Option<PathBuf>,
+    /// SQLite database location (M2). Required iff `listen.admin_socket`
+    /// is set; main.rs validates the pairing at startup.
+    pub database: Option<DatabaseConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +59,16 @@ pub struct ListenConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Optional admin Unix-domain-socket listener (M2). When present the
+    /// daemon binds the admin router (C-2) at this path with mode 0660.
+    /// Absent ⇒ M0/M1 backward-compat behavior (TCP listener only).
+    pub admin_socket: Option<AdminSocketConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminSocketConfig {
+    pub path: PathBuf,
 }
 
 fn default_host() -> String {

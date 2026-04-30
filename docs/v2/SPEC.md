@@ -1704,12 +1704,10 @@ Operator (CLI)         C-2 UDS         C-7 OpAuth      C-12 AdminService    C-10
 
 #### 4.6.2 DDL — `migrations/0001_init.sql` (M2)
 
+**Note on PRAGMAs:** the WAL-mode PRAGMAs (INF-21) are applied per-connection by the MigrationRunner (`src/migrations.rs`) via `SqliteConnectOptions` (journal_mode, synchronous, foreign_keys, busy_timeout) and an `after_connect` hook (wal_autocheckpoint). They are intentionally **not** inlined in the migration file because sqlx wraps each migration in a transaction and PRAGMAs like `synchronous` cannot be changed inside a transaction. This was discovered during T2.3 implementation; recording here so future readers don't reintroduce the inline PRAGMAs.
+
 ```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA wal_autocheckpoint = 1000;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
+-- PRAGMAs applied by the MigrationRunner at connection open; see note above.
 
 CREATE TABLE agents (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2300,12 +2298,16 @@ The annotated `operators.yaml`:
 
 operators:
   - name: "alice"
-    # argon2id hash of the operator's cleartext token.
-    # Generate with: locksmith bench hash-operator-token
+    # public_id is the URL-safe-base64 16-byte id half of the operator's
+    # token (`lkop_<public_id>.<secret>`). Authenticator looks up by
+    # public_id, then constant-time verifies the secret against
+    # token_hash. Generate the pair with: locksmith bench mint-operator
+    public_id: "ABCdefGHIjkLMNopQRstuv"
     token_hash: "$argon2id$v=19$m=4096,t=3,p=1$..."
     scope: null   # reserved for future fine-grained operator roles (D-6)
 
   - name: "ansible"
+    public_id: "..."
     token_hash: "$argon2id$v=19$m=4096,t=3,p=1$..."
 ```
 

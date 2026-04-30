@@ -1,0 +1,403 @@
+//! Admin Unix domain socket listener (T2.13).
+//! C-2 (SPEC §4.2.4). Mode 0660, owner+group `locksmith` (configurable).
+//! Two routers: /admin/agent/* (agent-self-service) and /admin/operator/*
+//! (cross-cutting).
+
+use crate::admin::AdminService;
+use crate::admin::service::AdminError;
+use crate::auth_v2::{
+    AgentAuthenticator, AuthError, BearerAuthenticator, OperatorAuthenticator, OperatorIdentity,
+};
+use axum::extract::{Extension, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::{any, get, post};
+use axum::{Router, body::Body};
+use serde::Deserialize;
+use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path as FsPath;
+use std::sync::Arc;
+use tokio::net::UnixListener;
+use tracing::{info, warn};
+
+#[derive(Clone)]
+pub struct UdsState {
+    pub admin: Arc<AdminService>,
+    pub agent_auth: Arc<BearerAuthenticator>,
+    pub operator_auth: Arc<OperatorAuthenticator>,
+}
+
+/// Build the admin router. Public for testing — production wiring uses
+/// `bind_and_serve` below.
+pub fn build_router(state: UdsState) -> Router {
+    // Agent self-service routes that DO require an agent token.
+    let agent_authed_routes = Router::new()
+        .route("/status", get(handle_status))
+        .route("/rotate", post(handle_rotate))
+        .route("/deregister", post(handle_deregister))
+        .route("/tools", get(handle_agent_tools))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            agent_auth_middleware,
+        ));
+
+    // /register is bootstrap-token-authed *inside* the handler (D-10);
+    // no agent-auth middleware applies. Sits in its own router so it
+    // doesn't inherit the agent-auth layer above.
+    let agent_register_routes = Router::new().route("/register", any(handle_register));
+
+    let agent_routes = Router::new()
+        .merge(agent_authed_routes)
+        .merge(agent_register_routes);
+
+    let operator_routes = Router::new()
+        .route("/agents", get(op_list_agents).post(op_create_agent))
+        .route(
+            "/agents/{public_id}",
+            get(op_get_agent).patch(op_modify_agent),
+        )
+        .route("/agents/{public_id}/revoke", post(op_revoke_agent))
+        .route(
+            "/bootstrap_tokens",
+            get(op_list_bootstrap).post(op_mint_bootstrap),
+        )
+        .route(
+            "/bootstrap_tokens/{public_id}/revoke",
+            post(op_revoke_bootstrap),
+        )
+        .route("/tools", get(op_list_tools))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            operator_auth_middleware,
+        ));
+
+    Router::new()
+        .nest("/admin/agent", agent_routes)
+        .nest("/admin/operator", operator_routes)
+        .with_state(state)
+}
+
+/// Bind a Unix domain socket at `path` with mode `0o660` and serve the
+/// admin router. Removes a stale socket file from a previous unclean
+/// shutdown if found.
+pub async fn bind_and_serve(
+    path: &FsPath,
+    state: UdsState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), std::io::Error> {
+    if path.exists() {
+        // Sanity check: it's a socket, no process is bound (best-effort).
+        let meta = std::fs::metadata(path)?;
+        if std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type()) {
+            std::fs::remove_file(path)?;
+            warn!(path = %path.display(), "removed stale admin socket from prior run");
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let listener = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    info!(socket = %path.display(), "admin UDS listener bound");
+
+    let app = build_router(state);
+    let make_service = app.into_make_service();
+    axum::serve(listener, make_service)
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
+// ─── Middleware ────────────────────────────────────────────────────
+
+async fn agent_auth_middleware(
+    State(state): State<UdsState>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let header = match req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(h) => h.to_string(),
+        None => return error_response(AuthError::MissingCredential),
+    };
+    match state.agent_auth.authenticate_bearer(&header).await {
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(e) => error_response(e),
+    }
+}
+
+async fn operator_auth_middleware(
+    State(state): State<UdsState>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let header = match req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(h) => h.to_string(),
+        None => return error_response(AuthError::MissingCredential),
+    };
+    match state.operator_auth.authenticate_bearer(&header).await {
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(e) => error_response(e),
+    }
+}
+
+fn error_response(e: AuthError) -> Response {
+    let body = json!({
+        "error": {
+            "code": e.code(),
+            "message": e.to_string(),
+        }
+    });
+    let status = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(body)).into_response()
+}
+
+fn admin_err_response(e: AdminError) -> Response {
+    let (status, code) = match &e {
+        AdminError::InvalidBootstrap => (StatusCode::UNAUTHORIZED, "invalid_credential"),
+        AdminError::AgentNameConflict => (StatusCode::CONFLICT, "agent_name_conflict"),
+        AdminError::RotationInProgress => (StatusCode::CONFLICT, "rotation_in_progress"),
+        AdminError::AgentNotFound => (StatusCode::NOT_FOUND, "agent_not_found"),
+        AdminError::NotAuthorized => (StatusCode::FORBIDDEN, "forbidden"),
+        AdminError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backend_error"),
+    };
+    (
+        status,
+        Json(json!({
+            "error": { "code": code, "message": e.to_string() }
+        })),
+    )
+        .into_response()
+}
+
+// ─── Agent handlers ────────────────────────────────────────────────
+
+async fn handle_register(
+    State(state): State<UdsState>,
+    Json(input): Json<crate::admin::service::RegisterInput>,
+) -> Response {
+    match state.admin.register_agent(input).await {
+        Ok(out) => (StatusCode::OK, Json(out)).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn handle_status(
+    State(state): State<UdsState>,
+    Extension(agent): Extension<crate::auth_v2::AgentIdentity>,
+) -> Response {
+    match state.admin.get_agent_status(&agent).await {
+        Ok(out) => (StatusCode::OK, Json(out)).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct RotateInput {
+    current_secret: String,
+}
+
+async fn handle_rotate(
+    State(state): State<UdsState>,
+    Extension(agent): Extension<crate::auth_v2::AgentIdentity>,
+    Json(input): Json<RotateInput>,
+) -> Response {
+    let secret = secrecy::SecretString::from(input.current_secret);
+    match state.admin.rotate_agent(&agent, &secret).await {
+        Ok(out) => (StatusCode::OK, Json(out)).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn handle_deregister(
+    State(state): State<UdsState>,
+    Extension(agent): Extension<crate::auth_v2::AgentIdentity>,
+) -> Response {
+    match state.admin.deregister_agent(&agent).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn handle_agent_tools(
+    State(state): State<UdsState>,
+    Extension(agent): Extension<crate::auth_v2::AgentIdentity>,
+) -> Response {
+    match state.admin.list_tools_for_agent(&agent).await {
+        Ok(tools) => (StatusCode::OK, Json(json!({ "tools": tools }))).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+// ─── Operator handlers ─────────────────────────────────────────────
+
+#[derive(Deserialize, Default)]
+struct ListAgentsQuery {
+    #[serde(default)]
+    include_revoked: bool,
+}
+
+async fn op_list_agents(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Query(q): Query<ListAgentsQuery>,
+) -> Response {
+    match state.admin.list_agents(&op, q.include_revoked).await {
+        Ok(agents) => {
+            let agents: Vec<_> = agents
+                .into_iter()
+                .map(|a| {
+                    json!({
+                        "public_id": a.public_id,
+                        "name": a.name,
+                        "description": a.description,
+                        "tool_allowlist": a.tool_allowlist,
+                        "tool_denylist": a.tool_denylist,
+                        "registered_at": a.registered_at,
+                        "last_used_at": a.last_used_at,
+                        "expires_at": a.expires_at,
+                        "revoked_at": a.revoked_at,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "agents": agents }))).into_response()
+        }
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_get_agent(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.admin.get_agent(&op, &id).await {
+        Ok(a) => (
+            StatusCode::OK,
+            Json(json!({
+                "public_id": a.public_id,
+                "name": a.name,
+                "description": a.description,
+                "tool_allowlist": a.tool_allowlist,
+                "tool_denylist": a.tool_denylist,
+                "registered_at": a.registered_at,
+                "last_used_at": a.last_used_at,
+                "expires_at": a.expires_at,
+                "revoked_at": a.revoked_at,
+            })),
+        )
+            .into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_create_agent(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Json(input): Json<crate::admin::service::CreateAgentInput>,
+) -> Response {
+    match state.admin.create_agent_as_operator(&op, input).await {
+        Ok(out) => (StatusCode::OK, Json(out)).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_modify_agent(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+    Json(input): Json<crate::admin::service::ModifyAgentInput>,
+) -> Response {
+    match state.admin.modify_agent(&op, &id, input).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_revoke_agent(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.admin.revoke_agent(&op, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_mint_bootstrap(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Json(input): Json<crate::admin::service::MintBootstrapInput>,
+) -> Response {
+    match state.admin.mint_bootstrap_token(&op, input).await {
+        Ok(out) => (StatusCode::OK, Json(out)).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_list_bootstrap(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+) -> Response {
+    match state.admin.list_bootstrap_tokens(&op).await {
+        Ok(tokens) => {
+            let tokens: Vec<_> = tokens
+                .into_iter()
+                .map(|t| {
+                    json!({
+                        "public_id": t.public_id,
+                        "scope": t.scope,
+                        "created_by": t.created_by,
+                        "created_at": t.created_at,
+                        "expires_at": t.expires_at,
+                        "used_at": t.used_at,
+                        "used_by_agent_id": t.used_by_agent_id,
+                        "revoked_at": t.revoked_at,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "tokens": tokens }))).into_response()
+        }
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_revoke_bootstrap(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.admin.revoke_bootstrap_token(&op, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+async fn op_list_tools(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+) -> Response {
+    match state.admin.list_tools_for_operator(&op).await {
+        Ok(tools) => (StatusCode::OK, Json(json!({ "tools": tools }))).into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+// Avoid an unused-import warning in clippy when only headers are needed
+// elsewhere — keep the import explicit for future expansion.
+#[allow(dead_code)]
+fn _unused(_h: &HeaderMap, _b: &Body) {}

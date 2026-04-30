@@ -1,9 +1,15 @@
+pub mod admin;
 pub mod app;
+pub mod argon2_helper;
 pub mod auth;
+pub mod auth_v2;
 pub mod client_pool;
 pub mod config;
+pub mod daemon;
 pub mod deprecation;
+pub mod migrations;
 pub mod proxy;
+pub mod repo;
 pub mod shutdown;
 pub mod telemetry;
 pub mod token;

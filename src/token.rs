@@ -25,18 +25,24 @@ use secrecy::{ExposeSecret, SecretString};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenNamespace {
     Agent,
+    Operator,
+    Bootstrap,
 }
 
 impl TokenNamespace {
     pub fn prefix(&self) -> &'static str {
         match self {
             TokenNamespace::Agent => "lk",
+            TokenNamespace::Operator => "lkop",
+            TokenNamespace::Bootstrap => "lkbt",
         }
     }
 
     fn from_prefix(s: &str) -> Option<Self> {
         match s {
             "lk" => Some(TokenNamespace::Agent),
+            "lkop" => Some(TokenNamespace::Operator),
+            "lkbt" => Some(TokenNamespace::Bootstrap),
             _ => None,
         }
     }
