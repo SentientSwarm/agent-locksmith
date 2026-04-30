@@ -333,10 +333,12 @@ impl AdminService {
     }
 
     pub async fn deregister_agent(&self, agent: &AgentIdentity) -> Result<(), AdminError> {
+        // Self-revocation changes the agent's trust posture → Security
+        // class per T3.11 review.
         let result = self.agents.revoke(&agent.public_id).await;
         self.audit(AuditEvent {
             ts_ms: now_ms(),
-            event_class: EventClass::Operator,
+            event_class: EventClass::Security,
             event: "agent_deregister".into(),
             agent_public_id: Some(agent.public_id.clone()),
             decision: if result.is_ok() {
@@ -511,10 +513,12 @@ impl AdminService {
         op: &OperatorIdentity,
         public_id: &str,
     ) -> Result<(), AdminError> {
+        // Operator-driven revocation is a security-affecting event per
+        // T3.11 review (changes the agent's trust posture).
         let result = self.agents.revoke(public_id).await;
         self.audit(AuditEvent {
             ts_ms: now_ms(),
-            event_class: EventClass::Operator,
+            event_class: EventClass::Security,
             event: "agent_revoke".into(),
             operator_name: Some(op.name.clone()),
             agent_public_id: Some(public_id.to_string()),
@@ -586,10 +590,12 @@ impl AdminService {
         op: &OperatorIdentity,
         public_id: &str,
     ) -> Result<(), AdminError> {
+        // Bootstrap revocation invalidates outstanding registration
+        // capacity → Security class per T3.11 review.
         let result = self.bootstrap.revoke(public_id).await;
         self.audit(AuditEvent {
             ts_ms: now_ms(),
-            event_class: EventClass::Operator,
+            event_class: EventClass::Security,
             event: "bootstrap_revoke".into(),
             operator_name: Some(op.name.clone()),
             decision: if result.is_ok() {

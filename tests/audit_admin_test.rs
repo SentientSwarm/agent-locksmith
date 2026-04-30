@@ -114,11 +114,13 @@ async fn revoke_agent_emits_audit_row() {
         .await
         .unwrap();
 
+    // T3.11 review: agent_revoke is event_class=security (revocation
+    // changes the agent's trust posture).
     let rows = f
         .audit
         .query(
             &AuditFilter {
-                event_class: Some(EventClass::Operator),
+                event_class: Some(EventClass::Security),
                 ..AuditFilter::default()
             },
             AuditPage::default(),
@@ -126,7 +128,7 @@ async fn revoke_agent_emits_audit_row() {
         .await
         .unwrap();
     let revoke_row = rows.iter().find(|r| r.event == "agent_revoke");
-    let row = revoke_row.expect("agent_revoke audit row exists");
+    let row = revoke_row.expect("agent_revoke audit row exists in Security class");
     assert_eq!(row.operator_name.as_deref(), Some("alice"));
     assert_eq!(
         row.agent_public_id.as_deref(),
