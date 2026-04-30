@@ -96,21 +96,121 @@ locksmith export agents --format yaml > agents.yaml
 
 ---
 
-## 3. What's left for M3.x and M4
+## 3. What's left to ship v1.0.0
 
-### M3.x carry-overs
+Roughly half of v2 by task count remains. Four milestones (M4..M7), plus M2.x / M3.x carry-overs that can land any time.
 
-| Task | Why deferred |
-|------|--------------|
-| T3.7 audit tail | Streaming follow needs SSE wiring. Not blocking M4. |
-| T3.9 bench | A-2 / INF-26 verification; can land any time pre-v1.0. |
-| T3.10 conditional async fallback | Only if T3.9 trips. |
+### Milestone walk to v1.0.0
 
-### M4 — Admin HTTPS surface
+| Milestone | Version | Tasks | Goal | Verification gates |
+|-----------|---------|-------|------|--------------------|
+| **M4** | v0.5.0 | T4.1–T4.6 (~6) | Admin HTTPS for remote management. Reuses AdminService; same handlers as UDS. | — (low risk) |
+| **M5** | v0.6.0 | T5.1–T5.5 (~5) | Keys-at-rest hardening: file-sealed `SecretBackend`, systemd hardening directives, threat-model doc. Vault + AWS land as trait stubs only. | — |
+| **M6** | v0.7.0 | T6.1–T6.11 (~11; biggest) | mTLS for agents + operators. CRL fetcher, local emergency blocklist, bootstrap-only listener (C-4), `auth_mode: bearer | mtls | both`. | **T6.2 + T6.5** (MtlsValidator + MtlsAuthenticator), **T6.7** (operator mTLS) |
+| **M7** | v1.0.0 | T7.1–T7.4 (~4) | Per-tool response controls: max_size_bytes, content_type_allowlist, regex redaction. Streaming preserved (only total-size cap applies). | — |
 
-SPEC §6.2 T4.*. Same admin operations available over TLS for remote management. Adds `listen.admin_https` block and a separate Tower service that reuses AdminService.
+### M4 — Admin HTTPS (next session)
 
-Dependencies: M3. Audit is the discoverable surface that makes a remotely-managed daemon valuable.
+**Goal:** Operators run all CLI operations remotely via `--admin-url https://locksmith.example.com:9201`. Same handlers as the UDS, bindable to a separate listener, off-by-default.
+
+| Task | Summary |
+|------|---------|
+| T4.1 | Server-side rustls deps (`rustls-pemfile`, `tokio-rustls` or `axum-server`'s rustls feature) |
+| T4.2 | Cert/key loading + fail-fast on missing/bad PEM |
+| T4.3 | Admin HTTPS listener; reuse C-12 AdminService and the C-2 handler functions |
+| T4.4 | CLI auto-detect: `LOCKSMITH_ADMIN_URL` env or `--admin-url` flag; fall back to UDS |
+| T4.5 | Bootstrap-token register works over HTTPS regardless of `auth_mode` (D-10) |
+| T4.6 | Cert-rotation listener-shape carve-out (cert/key paths require restart) |
+
+**Acceptance:** Identical results between UDS and HTTPS for every admin operation.
+
+**Config additions to anticipate:**
+```yaml
+listen:
+  admin_https:
+    enabled: false          # off by default
+    host: "127.0.0.1"
+    port: 9201
+    cert_path: "/etc/locksmith/tls/server.crt"
+    key_path: "/etc/locksmith/tls/server.key"
+```
+
+### M5 — Keys-at-rest
+
+**Goal:** No upstream credentials in env or operator-readable config. systemd unit ships hardened.
+
+| Task | Summary |
+|------|---------|
+| T5.1 | `FileSealedBackend`: read sealed file, decrypt via systemd-creds (or configured key), zeroize on drop |
+| T5.2 | `dist/systemd/locksmith.service.template` with `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, dedicated `locksmith` user |
+| T5.3 | `VaultBackend` + `AwsSecretsManagerBackend` *trait stubs* only (signatures + rustdoc; not registered in dispatch) |
+| T5.4 | `docs/v2/threat-model.md`: what at-rest hardening protects against; what it doesn't (process memory, kernel exploits, root) |
+| T5.5 | Worked openclaw-hardened example at `dist/examples/sealed-secrets/` |
+
+### M6 — mTLS (likely 2 sessions)
+
+**Goal:** Cryptographic identity for agents AND operators. Two-session split recommended:
+
+**Session A — Agent-side mTLS (T6.1–T6.5 + gate):**
+- T6.1 deps (`x509-parser`; `rcgen` dev-dep for test cert minting)
+- T6.2 **MtlsValidator gate** — chain validation against CA bundle, expiration, identity extraction (CN / SAN_DNS / SAN_URI)
+- T6.3 CRL fetcher (periodic background task; metrics: `mtls_crl_refresh_failures_total`, `mtls_crl_age_seconds`)
+- T6.4 Local emergency blocklist with hot reload
+- T6.5 **MtlsAuthenticator gate** — implements `AgentAuthenticator`; maps cert identity to agent via `AgentRepository.get_by_cert_identity`
+
+**Session B — auth_mode + operator mTLS + tooling (T6.6–T6.11 + gate):**
+- T6.6 `auth_mode: bearer | mtls | both`; `both` tries mTLS first, falls back to bearer
+- T6.7 **Operator mTLS gate** — admin HTTPS accepts operator client certs; operators.yaml gains optional `cert_identity` field (D-9)
+- T6.8 Bootstrap-only listener (C-4): single endpoint `POST /admin/agent/register`
+- T6.9 `locksmith mtls revoke <serial>`, `locksmith mtls list-blocklist`, `locksmith mtls crl-status`
+- T6.10 Audit `auth_method` field on every authenticated request (`bearer` / `mtls` / `bootstrap` / `operator`)
+- T6.11 Worked smallstep + step-ca example at `dist/examples/smallstep/`
+
+### M7 — Response controls (final milestone)
+
+**Goal:** Per-tool max_size_bytes, content_type_allowlist, regex redaction. Streaming first-byte latency must stay ≤100ms (R-N6).
+
+| Task | Summary |
+|------|---------|
+| T7.1 | `tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }` |
+| T7.2 | `ResponseControls.apply` for non-streaming (read body, check content-type, apply redaction) |
+| T7.3 | Streaming wrapper: byte-counter `Stream` adapter that emits truncation marker on cap-exceeded |
+| T7.4 | Audit events: `response_redaction` (with hash of match, NOT cleartext) and `response_size_exceeded` |
+
+**Regression check:** rerun M1 streaming tests with response controls enabled.
+
+### Carry-overs (deferred; can land any time)
+
+**M2.x:**
+| Task | Notes |
+|------|-------|
+| T2.11 RateLimiter | Issue #24. Defensive; nginx/Caddy in front works as a stopgap. |
+| T2.17 typed `SecretRef` | Schema evolution. Field-scoped `${VAR}` works today. |
+| T2.18 field-scoped `${VAR}` | M0 textual expander handles dominant case. |
+| T2.19 `SecretBackend` trait + `EnvBackend` | Env backend works implicitly; trait formalization is M5 territory. |
+| T2.20 hot reload + listener-shape carve-out | M0 ArcSwap is in place; full reload logic is here. |
+| T2.21 startup-check sequencing (INF-2) | Daemon already fail-fast on the path that matters. |
+| T2.27 `locksmith config reload/show` | Useful but not critical for M4. |
+| T2.28/T2.29 bench subcommands | A-1 verification; useful, not blocking. |
+
+**M3.x:**
+| Task | Notes |
+|------|-------|
+| T3.7 `locksmith audit tail` | Streaming follow; needs SSE endpoint. |
+| T3.9 audit-write bench | A-2 / INF-26 validation; **must run before v1.0.0 cut**. |
+| T3.10 conditional async-batched | Only if T3.9 trips the >5ms p95 trigger. |
+
+### Pre-v1.0.0 closure checklist
+
+- [ ] All four remaining milestones merged.
+- [ ] M3 audit-write bench (T3.9) executed; report attached to closure issue.
+- [ ] If trigger tripped, T3.10 async-batched landed.
+- [ ] All verification gates closed with self-review (T6.2, T6.5, T6.7).
+- [ ] Threat model (`docs/v2/threat-model.md`) reviewed and merged.
+- [ ] Per-milestone runbooks (m4-remote-management, m5-sealed-secrets, m6-mtls-{onboarding,migration,revocation}, m7-response-controls) shipped.
+- [ ] §7 changelog v1.0.0 entry written.
+
+**Rough estimate: 5–7 working sessions of similar density to land v1.0.0.**
 
 ---
 
@@ -213,40 +313,51 @@ Stale `GITHUB_TOKEN` env overrides keyring auth. Always invoke as `env -u GITHUB
 
 ---
 
-## 6. Resuming for M3.x or M4
+## 6. Resuming the next session
 
 ```bash
 git fetch
 git checkout develop
 git pull
 
+# Sanity check current state (160/160, clean lint).
 cargo test --tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Branch off develop for M4.
+# Branch off develop for M4 (recommended next).
 git checkout -b m4/admin-https
 ```
 
-Workflow that has held through M1 + M2 + M3:
+Workflow that has held through M1 + M2 + M3 (and should keep holding):
 
-- TDD per task (`superpowers:test-driven-development`): failing test first.
-- Verification gates with self-review before merge: closed T2.4, T2.9, T2.12, T3.3.
-- Conventional commits with milestone in subject and `Closes #N` in body.
-- Issues filed proactively (one per §6.2 task) with milestone/component/layer/kind/risk + per-requirement labels.
-- No PRs required — direct merge to `develop`. `gh issue close` manually since auto-close only fires on merges to default branch.
+- **TDD per task** (`superpowers:test-driven-development`): failing test first; do not write production code without a failing test that justifies it.
+- **Verification gates self-reviewed before merge**: closed so far T2.4 (schema), T2.9 (AgentAuthenticator), T2.12 (AdminService), T3.3 (retention). Coming: T6.2 + T6.5 (mTLS validator + authenticator), T6.7 (operator mTLS).
+- **Conventional commits** with the milestone in the subject and `Closes #N` in the body. `Closes` only auto-closes on merges to default branch (which is `main`); since we merge to `develop`, manually `gh issue close` after each merge.
+- **Issues filed proactively** (one per §6.2 task) with labels: `milestone:M{N}`, `component:*`, `layer:*`, `kind:*`, `risk:*`, plus per-requirement labels (`R-F12`, `UC-6`, `INF-25`).
+- **No PRs required** for this project — direct merge to `develop` is the standing instruction.
+- **Per-milestone close-out:** branch → tasks → tests/lint → commit/push → close issues → merge `--no-ff` to `develop` → bump version → tag `v0.{milestone+1}.0` → refresh this handoff. M2 and M3 closure followed this exactly.
 
 ---
 
 ## 7. What success looks like for the next session
 
-If continuing M3.x: T3.7 audit tail (streaming follow) + T3.9 bench. Both small, both round out M3 before M4.
+**Recommended target: M4 (admin HTTPS).** Six tasks, no verification gate, ~1 session. Closes the remote-management hole so that operators of openclaw-hardened deployments stop needing host-shell access.
 
-If jumping to M4 (admin HTTPS):
-1. Add `listen.admin_https` config block (host, port, cert_path, key_path).
-2. Reuse the existing `admin/uds.rs::build_router` with TLS termination.
-3. Cross-transport invariant: HTTPS surface and UDS surface return identical responses for identical requests.
-4. M4 acceptance contract: `locksmith --remote https://...` works (CLI gains a `--remote` flag for the HTTPS path).
+Concrete acceptance for the next session:
+1. `listen.admin_https` config block parses (host, port, cert_path, key_path, `enabled: false` default).
+2. `locksmithd` binds the HTTPS listener when enabled and rejects unknown TLS PEM at startup (fail-fast).
+3. `locksmith --admin-url https://...` reaches the same handlers as the UDS path — assertion: identical JSON responses for `agent list`, `agent register`, `audit query`, `bootstrap mint`.
+4. Bootstrap-token register works over HTTPS regardless of `auth_mode` (D-10 invariant).
+5. Cert/key paths require restart (listener-shape carve-out, T4.6).
+6. `tests/admin_https_test.rs` + `tests/admin_https_off_by_default_test.rs` both pass.
+7. End of session: merge → `v0.5.0` → tag.
+
+If you go for M4 + an M3.x carry-over, **T3.9 (audit-write bench)** is the highest-value follow-up — it formally validates A-2 / INF-26 and is a pre-v1.0.0 closure-checklist item.
+
+After M4: M5 keys-at-rest, then M6 mTLS (the biggest milestone — likely two sessions split at the T6.5 / T6.7 gate boundary), then M7 response controls = v1.0.0.
+
+The path to v1.0.0 from here is concrete and fits in 5–7 sessions of similar density to the M2 + M3 sessions.
 
 ---
 
