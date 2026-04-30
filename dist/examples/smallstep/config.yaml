@@ -1,0 +1,54 @@
+# Worked example daemon config (T6.11) for an mTLS deployment using
+# smallstep / step-ca. Sealed-secrets pattern from M5 still applies for
+# upstream credentials.
+
+listen:
+  host: "0.0.0.0"
+  port: 9200
+  auth_mode: both                                       # M6 / T6.6 — accept mTLS, fall back to bearer
+  mtls:
+    ca_bundle_path: "/etc/locksmith/agents-ca.crt"
+    crl_url: "https://step-ca.example.com/crl"
+    crl_refresh_interval_seconds: 600
+    blocklist_path: "/etc/locksmith/blocklist"
+    blocklist_reload_interval_seconds: 30
+
+  admin_socket:
+    path: "/run/locksmith/admin.sock"
+
+  admin_https:
+    enabled: true
+    host: "0.0.0.0"
+    port: 9201
+    cert_path: "/etc/locksmith/tls/server.crt"
+    key_path: "/etc/locksmith/tls/server.key"
+
+  bootstrap_only:                                       # M6 / T6.8
+    enabled: true
+    host: "0.0.0.0"
+    port: 9202
+    cert_path: "/etc/locksmith/tls/bootstrap.crt"
+    key_path: "/etc/locksmith/tls/bootstrap.key"
+
+shutdown:
+  drain_window_seconds: 30
+
+operator_credentials_path: "/etc/locksmith/operators.yaml"
+
+database:
+  path: "/var/lib/locksmith/locksmith.db"
+
+audit:
+  retention_days: 90
+  jsonl_path: "/var/log/locksmith/audit.jsonl"
+
+tools:
+  - name: "openai"
+    description: "OpenAI Chat Completions"
+    upstream: "https://api.openai.com"
+    egress: proxied
+    auth:
+      header: "authorization"
+      value:
+        from_file_sealed:
+          path: "/run/credentials/locksmith/openai_token"
