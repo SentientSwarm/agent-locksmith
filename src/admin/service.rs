@@ -2,7 +2,9 @@
 //! C-12 (SPEC §4.2.14). Verification gate per §6.4.1.
 
 use crate::auth_v2::{AgentIdentity, OperatorIdentity};
-use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
+use crate::repo::audit::{
+    AuditEvent, AuditFilter, AuditPage, AuditRepository, Decision, EventClass,
+};
 use crate::repo::{
     AgentRecord, AgentRepository, BootstrapScope, BootstrapStatus, BootstrapTokenRecord,
     BootstrapTokenRepository, RepoError,
@@ -604,6 +606,22 @@ impl AdminService {
         .await;
         result?;
         Ok(())
+    }
+
+    /// Query the audit log. Operator-only (T3.6 / R-F7). Returns
+    /// `AdminError::Backend("audit_disabled")` when the daemon was
+    /// configured without an audit sink — operators get a clear signal
+    /// rather than an empty result.
+    pub async fn query_audit(
+        &self,
+        _op: &OperatorIdentity,
+        filter: AuditFilter,
+        page: AuditPage,
+    ) -> Result<Vec<AuditEvent>, AdminError> {
+        let Some(audit) = &self.audit else {
+            return Err(AdminError::Backend("audit_disabled".into()));
+        };
+        Ok(audit.query(&filter, page).await?)
     }
 
     pub async fn list_tools_for_operator(

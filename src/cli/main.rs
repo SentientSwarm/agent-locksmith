@@ -15,7 +15,7 @@ mod client;
 mod commands;
 mod output;
 
-use commands::{agent, bootstrap, self_svc, tool};
+use commands::{agent, audit, bootstrap, self_svc, tool};
 use output::Format;
 
 /// Default admin socket location. Operators can override with --socket
@@ -55,6 +55,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: tool::ToolCmd,
     },
+    /// Audit log queries (operator).
+    Audit {
+        #[command(subcommand)]
+        cmd: audit::AuditCmd,
+    },
     /// Self-service: show your agent status.
     Status,
     /// Self-service: rotate your agent token.
@@ -75,6 +80,7 @@ async fn main() -> ExitCode {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
+        Cmd::Audit { cmd } => audit::run(&client, cli.format, cmd).await,
         Cmd::Status => self_svc::status(&client, cli.format).await,
         Cmd::Rotate { current_secret } => {
             self_svc::rotate(&client, cli.format, current_secret).await

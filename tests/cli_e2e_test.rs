@@ -227,6 +227,87 @@ fn missing_op_token_exits_with_auth_code() {
     assert_eq!(out.status.code(), Some(3), "exit code 3 = auth missing");
 }
 
+#[test]
+fn audit_query_returns_operator_events() {
+    let f = start_daemon();
+
+    // Generate one operator event (agent register).
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "agent",
+        "register",
+        "--name",
+        "audited-agent",
+    ]);
+    run(cmd)
+        .status
+        .success()
+        .then_some(())
+        .expect("register ok");
+
+    // Query the audit table — must surface the agent_create row.
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "audit",
+        "query",
+        "--event-class",
+        "operator",
+    ]);
+    let out = run(cmd);
+    assert!(out.status.success(), "audit query exits 0");
+    let body: Value = serde_json::from_slice(&out.stdout).expect("json output");
+    let rows = body.as_array().expect("array of audit rows");
+    assert!(
+        rows.iter().any(|r| r["event"] == "agent_create"),
+        "agent_create row visible via audit query"
+    );
+}
+
+#[test]
+fn audit_query_filters_by_decision() {
+    let f = start_daemon();
+    // Trigger a Denied row by attempting to register a duplicate name.
+    for _ in 0..2 {
+        let mut cmd = cli(&f.socket_path);
+        cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+            "agent",
+            "register",
+            "--name",
+            "dup-agent",
+        ]);
+        let _ = cmd.output();
+    }
+
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "audit",
+        "query",
+        "--decision",
+        "denied",
+    ]);
+    let out = run(cmd);
+    assert!(out.status.success());
+    let body: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = body.as_array().unwrap();
+    assert!(
+        !rows.is_empty(),
+        "at least one Denied row from the duplicate register"
+    );
+    for r in rows {
+        assert_eq!(r["decision"], "denied");
+    }
+}
+
+#[test]
+fn audit_query_requires_operator_token() {
+    let f = start_daemon();
+    let mut cmd = cli(&f.socket_path);
+    cmd.args(["audit", "query"]);
+    let out = cmd.output().unwrap();
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(3), "no op token => exit 3");
+}
+
 #[allow(dead_code)]
 fn write(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
