@@ -5,9 +5,12 @@
 
 use crate::admin::AdminService;
 use crate::admin::service::AdminError;
+use crate::agent_listener::PeerCertDer;
 use crate::auth_v2::{
     AgentAuthenticator, AuthError, BearerAuthenticator, OperatorAuthenticator, OperatorIdentity,
 };
+use crate::config::AuthMode;
+use crate::mtls::MtlsValidator;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
@@ -21,11 +24,25 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::{info, warn};
 
+/// Per-listener mTLS context for the operator router (#83). When `None`
+/// on a `UdsState`, the operator middleware enforces bearer-only auth
+/// (M0..M5 default — UDS path always uses this). When `Some`, the
+/// listener is admin HTTPS in mtls/both mode and the middleware extracts
+/// the peer cert injected by `agent_listener::bind_and_serve_mtls`.
+#[derive(Clone)]
+pub struct OperatorMtlsContext {
+    pub auth_mode: AuthMode,
+    pub validator: Arc<MtlsValidator>,
+}
+
 #[derive(Clone)]
 pub struct UdsState {
     pub admin: Arc<AdminService>,
     pub agent_auth: Arc<BearerAuthenticator>,
     pub operator_auth: Arc<OperatorAuthenticator>,
+    /// `None` ⇒ bearer-only operator path (UDS always; HTTPS in M4
+    /// `auth_mode=bearer` mode). `Some(ctx)` ⇒ admin HTTPS with mTLS.
+    pub operator_mtls: Option<OperatorMtlsContext>,
 }
 
 /// Build the admin router. Public for testing — production wiring uses
@@ -58,6 +75,10 @@ pub fn build_router(state: UdsState) -> Router {
             get(op_get_agent).patch(op_modify_agent),
         )
         .route("/agents/{public_id}/revoke", post(op_revoke_agent))
+        .route(
+            "/agents/{public_id}/cert_identity",
+            axum::routing::patch(op_set_agent_cert_identity),
+        )
         .route(
             "/bootstrap_tokens",
             get(op_list_bootstrap).post(op_mint_bootstrap),
@@ -138,6 +159,39 @@ async fn operator_auth_middleware(
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    // mTLS-bound operator path (#83 / T6.7 wire-side closure). Active
+    // only when the listener was wired with an mtls context; the UDS
+    // path leaves this as None and falls through to bearer-only.
+    if let Some(mtls) = state.operator_mtls.clone() {
+        let peer = req.extensions().get::<PeerCertDer>().cloned();
+        let cert_der = peer.as_ref().and_then(|p| p.0.clone());
+        match (mtls.auth_mode, cert_der) {
+            (AuthMode::Mtls, None) => return error_response(AuthError::MissingCredential),
+            (AuthMode::Mtls, Some(der)) | (AuthMode::Both, Some(der)) => {
+                let identity = match mtls.validator.validate(&der) {
+                    Ok(id) => id,
+                    Err(_) => return error_response(AuthError::InvalidCredential),
+                };
+                match state
+                    .operator_auth
+                    .authenticate_cert_identity(&identity.value)
+                    .await
+                {
+                    Ok(op) => {
+                        req.extensions_mut().insert(op);
+                        return next.run(req).await;
+                    }
+                    Err(e) => return error_response(e),
+                }
+            }
+            // Both + no cert ⇒ fall through to bearer.
+            (AuthMode::Both, None) => {}
+            // Bearer is the listener-shape default; treated identically
+            // to "no operator_mtls context" — fall through.
+            (AuthMode::Bearer, _) => {}
+        }
+    }
+
     let header = match req
         .headers()
         .get("authorization")
@@ -271,6 +325,7 @@ async fn op_list_agents(
                         "last_used_at": a.last_used_at,
                         "expires_at": a.expires_at,
                         "revoked_at": a.revoked_at,
+                        "cert_identity": a.cert_identity,
                     })
                 })
                 .collect();
@@ -298,6 +353,7 @@ async fn op_get_agent(
                 "last_used_at": a.last_used_at,
                 "expires_at": a.expires_at,
                 "revoked_at": a.revoked_at,
+                "cert_identity": a.cert_identity,
             })),
         )
             .into_response(),
@@ -334,6 +390,29 @@ async fn op_revoke_agent(
     Path(id): Path<String>,
 ) -> Response {
     match state.admin.revoke_agent(&op, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetCertIdentityInput {
+    /// `Some(s)` ⇒ bind cert_identity to `s`; `None` ⇒ clear (#79).
+    #[serde(default)]
+    cert_identity: Option<String>,
+}
+
+async fn op_set_agent_cert_identity(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+    Json(input): Json<SetCertIdentityInput>,
+) -> Response {
+    match state
+        .admin
+        .set_agent_cert_identity(&op, &id, input.cert_identity)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_err_response(e),
     }

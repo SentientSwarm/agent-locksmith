@@ -53,6 +53,19 @@ pub enum AgentCmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Bind (or clear) an agent's mTLS cert_identity (#79). Replaces
+    /// the M6 onboarding-runbook SQL workaround.
+    SetCertIdentity {
+        /// Agent public_id.
+        id: String,
+        /// Cert identity to bind (CN, SAN_DNS, or SAN_URI string).
+        /// Required unless `--clear` is set.
+        #[arg(required_unless_present = "clear")]
+        cert_identity: Option<String>,
+        /// Clear the existing cert_identity binding.
+        #[arg(long, conflicts_with = "cert_identity")]
+        clear: bool,
+    },
 }
 
 pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<(), CliError> {
@@ -128,6 +141,30 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                     &format!("/admin/operator/agents/{id}/revoke"),
                     Auth::Operator(&token),
                     None,
+                )
+                .await?;
+        }
+        AgentCmd::SetCertIdentity {
+            id,
+            cert_identity,
+            clear,
+        } => {
+            // clap's `required_unless_present`/`conflicts_with` pin the
+            // cert_identity-vs-`--clear` invariant at parse time. We
+            // also accept the project-wide "-" sentinel for clear
+            // (matches `--allowlist -` from `agent modify`).
+            let cleared = clear || cert_identity.as_deref() == Some("-");
+            let body = if cleared {
+                json!({ "cert_identity": Value::Null })
+            } else {
+                json!({ "cert_identity": cert_identity })
+            };
+            client
+                .unit(
+                    "PATCH",
+                    &format!("/admin/operator/agents/{id}/cert_identity"),
+                    Auth::Operator(&token),
+                    Some(&body),
                 )
                 .await?;
         }

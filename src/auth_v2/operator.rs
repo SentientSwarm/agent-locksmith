@@ -34,6 +34,13 @@ pub struct OperatorIdentity {
     pub name: String,
     /// Reserved for future fine-grained operator roles (D-6).
     pub scope: Option<serde_json::Value>,
+    /// Transport-level auth method that produced this identity (#83).
+    /// `None` ⇒ legacy bearer / unspecified — admin-service audit auto-
+    /// fill stamps the canonical `"operator"` label for those rows.
+    /// `Some("mtls")` ⇒ cert-authed via `authenticate_cert_identity`;
+    /// admin audit emits `auth_method = "mtls"` matching the proxy hot
+    /// path's transport-level convention (T6.10).
+    pub auth_method: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -145,6 +152,7 @@ impl OperatorAuthenticator {
             Ok(true) => Ok(OperatorIdentity {
                 name: record.name.clone(),
                 scope: record.scope.clone(),
+                auth_method: None,
             }),
             Ok(false) => {
                 let name = record.name.clone();
@@ -176,6 +184,7 @@ impl OperatorAuthenticator {
             return Ok(OperatorIdentity {
                 name: record.name.clone(),
                 scope: record.scope.clone(),
+                auth_method: Some("mtls"),
             });
         }
         drop(records);

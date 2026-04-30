@@ -208,6 +208,20 @@ impl AdminService {
         auth.value.looks_present()
     }
 
+    /// Operator-context audit. Stamps `operator_name` from `op` (when
+    /// not already set) and records the transport-level auth method:
+    /// `op.auth_method` if Some (e.g. `"mtls"` from #83's cert path),
+    /// otherwise the canonical `"operator"` label preserved from M2.
+    async fn audit_for_operator(&self, op: &OperatorIdentity, mut event: AuditEvent) {
+        if event.operator_name.is_none() {
+            event.operator_name = Some(op.name.clone());
+        }
+        if event.auth_method.is_none() {
+            event.auth_method = Some(op.auth_method.unwrap_or("operator").to_string());
+        }
+        self.audit(event).await;
+    }
+
     /// Best-effort audit write. Errors are logged and swallowed (INF-26).
     /// Auto-fills `auth_method` (T6.10) based on whose context the event
     /// carries — operator_name → "operator", agent_public_id only →
@@ -496,27 +510,31 @@ impl AdminService {
             .await;
         match &result {
             Ok((pid, _)) => {
-                self.audit(AuditEvent {
-                    ts_ms: now_ms(),
-                    event_class: EventClass::Operator,
-                    event: "agent_create".into(),
-                    operator_name: Some(op.name.clone()),
-                    agent_public_id: Some(pid.clone()),
-                    decision: Decision::Allowed,
-                    ..AuditEvent::default()
-                })
+                self.audit_for_operator(
+                    op,
+                    AuditEvent {
+                        ts_ms: now_ms(),
+                        event_class: EventClass::Operator,
+                        event: "agent_create".into(),
+                        agent_public_id: Some(pid.clone()),
+                        decision: Decision::Allowed,
+                        ..AuditEvent::default()
+                    },
+                )
                 .await;
             }
             Err(e) => {
-                self.audit(AuditEvent {
-                    ts_ms: now_ms(),
-                    event_class: EventClass::Operator,
-                    event: "agent_create".into(),
-                    operator_name: Some(op.name.clone()),
-                    decision: Decision::Denied,
-                    details: Some(json!({ "error": e.to_string(), "name": input.name })),
-                    ..AuditEvent::default()
-                })
+                self.audit_for_operator(
+                    op,
+                    AuditEvent {
+                        ts_ms: now_ms(),
+                        event_class: EventClass::Operator,
+                        event: "agent_create".into(),
+                        decision: Decision::Denied,
+                        details: Some(json!({ "error": e.to_string(), "name": input.name })),
+                        ..AuditEvent::default()
+                    },
+                )
                 .await;
             }
         }
@@ -544,23 +562,64 @@ impl AdminService {
                 input.expires_at,
             )
             .await;
-        self.audit(AuditEvent {
-            ts_ms: now_ms(),
-            event_class: EventClass::Operator,
-            event: "agent_modify".into(),
-            operator_name: Some(op.name.clone()),
-            agent_public_id: Some(public_id.to_string()),
-            decision: if result.is_ok() {
-                Decision::Allowed
-            } else {
-                Decision::Denied
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "agent_modify".into(),
+                agent_public_id: Some(public_id.to_string()),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: result
+                    .as_ref()
+                    .err()
+                    .map(|e| json!({ "error": e.to_string() })),
+                ..AuditEvent::default()
             },
-            details: result
-                .as_ref()
-                .err()
-                .map(|e| json!({ "error": e.to_string() })),
-            ..AuditEvent::default()
-        })
+        )
+        .await;
+        result?;
+        Ok(())
+    }
+
+    /// Bind (or clear) an agent's mTLS cert identity (#79). Wraps the
+    /// repository helper that already exists from M6 / T6.7. Audited as
+    /// an Operator-class event regardless of decision; the cert binding
+    /// is not security-class on its own — revoke is the lever that
+    /// changes trust posture.
+    pub async fn set_agent_cert_identity(
+        &self,
+        op: &OperatorIdentity,
+        public_id: &str,
+        cert_identity: Option<String>,
+    ) -> Result<(), AdminError> {
+        let result = self
+            .agents
+            .set_cert_identity(public_id, cert_identity.as_deref())
+            .await;
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "agent_set_cert_identity".into(),
+                agent_public_id: Some(public_id.to_string()),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: Some(json!({
+                    "cert_identity": cert_identity,
+                    "error": result.as_ref().err().map(|e| e.to_string()),
+                })),
+                ..AuditEvent::default()
+            },
+        )
         .await;
         result?;
         Ok(())
@@ -574,23 +633,25 @@ impl AdminService {
         // Operator-driven revocation is a security-affecting event per
         // T3.11 review (changes the agent's trust posture).
         let result = self.agents.revoke(public_id).await;
-        self.audit(AuditEvent {
-            ts_ms: now_ms(),
-            event_class: EventClass::Security,
-            event: "agent_revoke".into(),
-            operator_name: Some(op.name.clone()),
-            agent_public_id: Some(public_id.to_string()),
-            decision: if result.is_ok() {
-                Decision::Allowed
-            } else {
-                Decision::Denied
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Security,
+                event: "agent_revoke".into(),
+                agent_public_id: Some(public_id.to_string()),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: result
+                    .as_ref()
+                    .err()
+                    .map(|e| json!({ "error": e.to_string() })),
+                ..AuditEvent::default()
             },
-            details: result
-                .as_ref()
-                .err()
-                .map(|e| json!({ "error": e.to_string() })),
-            ..AuditEvent::default()
-        })
+        )
         .await;
         result?;
         Ok(())
@@ -612,7 +673,6 @@ impl AdminService {
                 ts_ms: now_ms(),
                 event_class: EventClass::Operator,
                 event: "bootstrap_mint".into(),
-                operator_name: Some(op.name.clone()),
                 decision: Decision::Allowed,
                 details: Some(json!({ "bootstrap_public_id": pid, "scope": &scope })),
                 ..AuditEvent::default()
@@ -621,13 +681,12 @@ impl AdminService {
                 ts_ms: now_ms(),
                 event_class: EventClass::Operator,
                 event: "bootstrap_mint".into(),
-                operator_name: Some(op.name.clone()),
                 decision: Decision::Denied,
                 details: Some(json!({ "error": e.to_string() })),
                 ..AuditEvent::default()
             },
         };
-        self.audit(event).await;
+        self.audit_for_operator(op, event).await;
         let (pid, secret) = result?;
         Ok(MintBootstrapOutput {
             public_id: pid.clone(),
@@ -651,22 +710,24 @@ impl AdminService {
         // Bootstrap revocation invalidates outstanding registration
         // capacity → Security class per T3.11 review.
         let result = self.bootstrap.revoke(public_id).await;
-        self.audit(AuditEvent {
-            ts_ms: now_ms(),
-            event_class: EventClass::Security,
-            event: "bootstrap_revoke".into(),
-            operator_name: Some(op.name.clone()),
-            decision: if result.is_ok() {
-                Decision::Allowed
-            } else {
-                Decision::Denied
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Security,
+                event: "bootstrap_revoke".into(),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: Some(json!({
+                    "bootstrap_public_id": public_id,
+                    "error": result.as_ref().err().map(|e| e.to_string()),
+                })),
+                ..AuditEvent::default()
             },
-            details: Some(json!({
-                "bootstrap_public_id": public_id,
-                "error": result.as_ref().err().map(|e| e.to_string()),
-            })),
-            ..AuditEvent::default()
-        })
+        )
         .await;
         result?;
         Ok(())
