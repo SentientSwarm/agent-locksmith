@@ -175,7 +175,7 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminS
         .map_err(|e| DaemonError::OperatorCreds(e.to_string()))?;
     info!(operator_credentials = %ops_path.display(), "operator authenticator loaded");
 
-    let admin = AdminService::new(agents, bootstrap, config);
+    let admin = AdminService::with_audit(agents, bootstrap, config, Some(audit.clone()));
 
     Ok(AdminSetup {
         uds_state: UdsState {
