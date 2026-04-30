@@ -523,31 +523,44 @@ Workflow that has held through M1 + M2 + M3 + M4 + M5 (and should keep holding):
 
 ## 7. What success looks like for the next session
 
-v2 is feature-complete. Pick a post-v2 enhancement track aligned with deployment needs.
+**Recommended target: pair #83 (admin-HTTPS mTLS) with #79 (CLI agent set-cert-identity wrapper).** Both close M6 runbook TODOs; both are operator-ergonomics improvements that make mTLS deployments fully usable without SQL or curl workarounds. Single session; merge → tag `v1.2.0`.
 
-### 7.1 Recommended: v0.7.x agent-listener mTLS bind path
+### 7.1 #83 — admin-HTTPS client-cert acceptance (T6.7 wire-side closure)
 
-**Why this is the top recommendation:** M6 already landed validator + authenticator + CRL + blocklist + audit threading + operator cert resolution + bootstrap-only listener. The remaining piece is plumbing — without it, `auth_mode: mtls` is config-honored but agent-listener-side cert verification doesn't fire. Operators planning mTLS rollout need this.
+**Why this is the top recommendation:** v1.1.0 (#67) activated mTLS on the agent listener but left the admin HTTPS listener bearer-only. M6 / T6.7 already landed `OperatorAuthenticator::authenticate_cert_identity` for resolution, but the admin HTTPS listener never actually receives a client cert. After this lands, mTLS is end-to-end across all Locksmith surfaces.
 
-Concrete acceptance:
-1. Daemon switches the agent listener bind from plain TCP to `axum_server::bind_rustls` when `listen.auth_mode` is `Mtls` or `Both`.
-2. rustls `ServerConfig` configured with `WebPkiClientVerifier` against `mtls.ca_bundle_path`. Under `Both`, client cert is optional; under `Mtls`, required.
-3. Peer cert DER injected into the request via an axum extractor that reads from rustls's `ConnectionInfo` (or equivalent in axum-server 0.7).
-4. Middleware switches on `auth_mode`: under `Mtls`, call `MtlsAuthenticator::authenticate_cert`; under `Both`, try mTLS first then fall back to bearer.
-5. `tests/mtls_listener_e2e_test.rs` mints a CA + agent cert with rcgen, spins up the daemon with `auth_mode: mtls`, makes a real reqwest request with the client cert, asserts the proxy injected the agent's resolved credential and the audit row records `auth_method: mtls`.
-6. End of session: merge → `v0.7.1` → tag.
+Concrete acceptance for #83:
+1. `listen.admin_https` config gains optional `auth_mode: bearer | mtls | both` (default `bearer` to preserve M4 behavior). Optional `mtls: { ca_bundle_path }` block on `admin_https` mirrors the agent listener's `listen.mtls` shape.
+2. `src/admin/https.rs` switches its bind path on `admin_https.auth_mode`. Manual `tokio-rustls` accept loop when mtls/both — pattern is **identical to v1.1.0's `src/agent_listener.rs`**, so reuse the scaffolding (TlsAcceptor + WebPkiClientVerifier + `hyper-util` conn::auto + `service_fn` extension stamper).
+3. `PeerCertDer` extension (already defined in `src/agent_listener.rs`) is reused — same per-request shape.
+4. New admin-side middleware: under `Mtls`, requires a peer cert and calls `OperatorAuthenticator::authenticate_cert_identity` against the cert's CN/SAN_DNS/SAN_URI. Under `Both`, falls back to bearer when no cert. Resolved `OperatorIdentity` stamped into request extensions so admin handlers see an authenticated operator the same way the bearer path does.
+5. Bootstrap-only register endpoint (`POST /admin/agent/register`) per D-10 stays open regardless of `auth_mode` — bootstrap tokens are the credential.
+6. `tests/admin_https_mtls_e2e_test.rs` mints CA + server cert + operator client cert via rcgen; spins up daemon with `admin_https.auth_mode=mtls`; reqwest mTLS request hits `/admin/operator/agents`; asserts 200 + audit row records `auth_method=mtls` and `operator_name` matches the cert-identity-bound entry.
 
-### 7.2 Alternative: T3.9 audit-write bench
+### 7.2 #79 — CLI `agent set-cert-identity` wrapper (small, ~30 min)
 
-Pre-v1.0.0-checklist item kept open because it validates A-2 / INF-26 ("~1000 sustained writes/sec on commodity SSD"). One session of criterion-based bench harness landing on `tests/benches/audit_write_bench.rs` plus a result summary committed to the audit-bench closure issue. Tag `v1.0.1` if the trigger doesn't fire; if it does, T3.10 (conditional async-batched) is the natural follow-up.
+`AgentRepository::set_cert_identity` already exists from M6. The CLI wrapper closes the M6 onboarding-runbook TODO that currently tells operators to update the column via SQL.
 
-### 7.3 Alternative: T2.20 hot-reload of non-listener config
+Concrete acceptance for #79:
+1. New `agent::AgentCmd::SetCertIdentity { id: String, cert_identity: Option<String> }` subcommand. Passing `--clear` or `cert_identity = "-"` clears the value; otherwise sets it.
+2. New admin endpoint `PATCH /admin/operator/agents/{public_id}/cert_identity` accepting `{ cert_identity: Option<String> }` — operator-authed.
+3. Test: subprocess CLI roundtrip — register agent → set cert_identity → query → assert; clear → assert None.
+4. Update `docs/v2/runbooks/m6-mtls-onboarding.md` §4 to use the CLI command instead of the SQL workaround.
 
-ArcSwap is already in place. The work is structural: define what's reload-safe (tools, audit retention, response controls) vs listener-shape (admin_socket, admin_https, mtls, bootstrap_only — restart-only). One session.
+### 7.3 Session shape
 
----
+Branch `post-v2/admin-https-mtls-and-set-cert-identity` off `develop`. TDD per task: failing E2E test for #83 first, then #79's CLI subprocess test. Both should fit comfortably in one session given the scaffolding from #67 and the existing `set_cert_identity` repo helper.
 
-The path forward is operator-driven from here. v2's exit criteria are met; pick the highest-value enhancement based on deployment posture.
+End of session: merge `--no-ff` → bump `v1.2.0` → tag → close #83 + #79 → refresh handoff.
+
+### 7.4 Alternatives if blocked
+
+| Track | Issue | Why pick this instead |
+|-------|-------|----------------------|
+| **T2.20 hot reload** | #70 | Bigger operational lift; gates #76 + makes #81 properly responsive. ~1 session. |
+| **OnePasswordBackend** | #80 | Pragmatic; operators on 1Password get the live path. Pattern follows existing M5 stubs. ~1 session. |
+| **#81 Pipelock egress design pass** | #81 | Half-session writeup; needs sign-off before impl. The trust-domain comment on the issue clarifies the auth question. |
+| **#82 D-18 inspector design pass** | #82 | Half-session writeup; UDS + SO_PEERCRED is the default per the trust-domain comment. |
 
 ---
 
