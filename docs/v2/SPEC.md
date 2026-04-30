@@ -2298,12 +2298,16 @@ The annotated `operators.yaml`:
 
 operators:
   - name: "alice"
-    # argon2id hash of the operator's cleartext token.
-    # Generate with: locksmith bench hash-operator-token
+    # public_id is the URL-safe-base64 16-byte id half of the operator's
+    # token (`lkop_<public_id>.<secret>`). Authenticator looks up by
+    # public_id, then constant-time verifies the secret against
+    # token_hash. Generate the pair with: locksmith bench mint-operator
+    public_id: "ABCdefGHIjkLMNopQRstuv"
     token_hash: "$argon2id$v=19$m=4096,t=3,p=1$..."
     scope: null   # reserved for future fine-grained operator roles (D-6)
 
   - name: "ansible"
+    public_id: "..."
     token_hash: "$argon2id$v=19$m=4096,t=3,p=1$..."
 ```
 

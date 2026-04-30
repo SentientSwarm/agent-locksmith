@@ -42,7 +42,7 @@ impl BootstrapTokenRepository {
         scope: BootstrapScope,
         created_by: &str,
     ) -> Result<(String, SecretString), RepoError> {
-        let token = StructuredToken::generate(TokenNamespace::Agent); // M2 uses lk_; namespace prefix evolution is in M6
+        let token = StructuredToken::generate(TokenNamespace::Bootstrap);
         let secret_hash =
             argon2_helper::hash(&SecretString::from(token.secret.expose().to_string()))?;
         let scope_json = serde_json::to_string(&scope)?;

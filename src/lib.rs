@@ -1,6 +1,7 @@
 pub mod app;
 pub mod argon2_helper;
 pub mod auth;
+pub mod auth_v2;
 pub mod client_pool;
 pub mod config;
 pub mod deprecation;
