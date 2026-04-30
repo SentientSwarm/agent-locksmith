@@ -308,6 +308,34 @@ fn audit_query_requires_operator_token() {
     assert_eq!(out.status.code(), Some(3), "no op token => exit 3");
 }
 
+#[test]
+fn export_agents_yaml_excludes_token_material() {
+    let f = start_daemon();
+    // Create one agent so the export has something to emit.
+    let mut cmd = cli(&f.socket_path);
+    cmd.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire)
+        .args(["agent", "register", "--name", "exporter"]);
+    let _ = run(cmd);
+
+    let mut cmd = Command::new(LOCKSMITH);
+    cmd.arg("--socket")
+        .arg(&f.socket_path)
+        .env("LOCKSMITH_OP_TOKEN", &f.op_token_wire)
+        .args(["export", "agents", "--format", "yaml"]);
+    let out = run(cmd);
+    assert!(out.status.success(), "export agents exits 0");
+    let body = String::from_utf8_lossy(&out.stdout);
+    assert!(body.contains("exporter"), "agent name present in export");
+    assert!(
+        !body.contains("token"),
+        "no `token` field in export per R-F14: {body}"
+    );
+    assert!(
+        !body.contains("secret"),
+        "no `secret` material in export per R-F14: {body}"
+    );
+}
+
 #[allow(dead_code)]
 fn write(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
