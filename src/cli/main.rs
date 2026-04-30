@@ -26,9 +26,24 @@ const DEFAULT_SOCKET: &str = "/var/run/locksmith/admin.sock";
 #[command(name = "locksmith", about = "Agent Locksmith CLI", version)]
 struct Cli {
     /// Path to the admin UDS. Falls back to LOCKSMITH_SOCKET, then the
-    /// system default.
+    /// system default. Ignored when `--admin-url` (or
+    /// `LOCKSMITH_ADMIN_URL`) is set.
     #[arg(long, global = true, env = "LOCKSMITH_SOCKET", default_value = DEFAULT_SOCKET)]
     socket: PathBuf,
+
+    /// Admin HTTPS URL (e.g. `https://locksmith.example.com:9201`).
+    /// When set, the CLI talks to the daemon over the M4 admin HTTPS
+    /// listener instead of the local UDS. Falls back to
+    /// `LOCKSMITH_ADMIN_URL` if the flag is omitted.
+    #[arg(long, global = true, env = "LOCKSMITH_ADMIN_URL")]
+    admin_url: Option<String>,
+
+    /// Path to a PEM CA bundle used to verify the admin HTTPS endpoint.
+    /// Required when the daemon presents a self-signed or private-CA
+    /// certificate (smallstep, openclaw-hardened, etc.). Honored only
+    /// when `--admin-url` is set.
+    #[arg(long, global = true, env = "LOCKSMITH_CA_BUNDLE")]
+    ca_bundle: Option<PathBuf>,
 
     /// Output format (where applicable).
     #[arg(long, global = true, value_enum, default_value_t = Format::Table)]
@@ -79,7 +94,17 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    let client = client::CliClient::new(&cli.socket);
+    let client = match client::CliClient::from_options(
+        &cli.socket,
+        cli.admin_url.as_deref(),
+        cli.ca_bundle.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(e.exit_code());
+        }
+    };
 
     let res = match cli.cmd {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
