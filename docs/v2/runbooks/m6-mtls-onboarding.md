@@ -73,10 +73,16 @@ curl -X POST https://locksmith.example.com:9202/admin/agent/register \
     -d "$(jq -n --arg t "$TOKEN" '{bootstrap_token: $t, name: "agent-7"}')"
 ```
 
-Then bind the cert_identity to the new agent. v0.7.0 exposes this at the repository layer (`AgentRepository::set_cert_identity`); a CLI wrapper lands in v0.7.x. For now operators script around the admin HTTPS API or run the SQL directly:
+Then bind the cert_identity to the new agent (#79):
 
-```sql
-UPDATE agents SET cert_identity = 'agent-7' WHERE public_id = '<public_id>';
+```bash
+locksmith agent set-cert-identity <public_id> agent-7
+```
+
+Inspect the binding via `locksmith agent get <public_id>` — the response carries the `cert_identity` field. To clear a binding (rotation, decommission, or operator error), pass `--clear`:
+
+```bash
+locksmith agent set-cert-identity <public_id> --clear
 ```
 
 ---

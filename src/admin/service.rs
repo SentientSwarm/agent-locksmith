@@ -586,6 +586,45 @@ impl AdminService {
         Ok(())
     }
 
+    /// Bind (or clear) an agent's mTLS cert identity (#79). Wraps the
+    /// repository helper that already exists from M6 / T6.7. Audited as
+    /// an Operator-class event regardless of decision; the cert binding
+    /// is not security-class on its own — revoke is the lever that
+    /// changes trust posture.
+    pub async fn set_agent_cert_identity(
+        &self,
+        op: &OperatorIdentity,
+        public_id: &str,
+        cert_identity: Option<String>,
+    ) -> Result<(), AdminError> {
+        let result = self
+            .agents
+            .set_cert_identity(public_id, cert_identity.as_deref())
+            .await;
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Operator,
+                event: "agent_set_cert_identity".into(),
+                agent_public_id: Some(public_id.to_string()),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: Some(json!({
+                    "cert_identity": cert_identity,
+                    "error": result.as_ref().err().map(|e| e.to_string()),
+                })),
+                ..AuditEvent::default()
+            },
+        )
+        .await;
+        result?;
+        Ok(())
+    }
+
     pub async fn revoke_agent(
         &self,
         op: &OperatorIdentity,

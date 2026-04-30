@@ -76,6 +76,10 @@ pub fn build_router(state: UdsState) -> Router {
         )
         .route("/agents/{public_id}/revoke", post(op_revoke_agent))
         .route(
+            "/agents/{public_id}/cert_identity",
+            axum::routing::patch(op_set_agent_cert_identity),
+        )
+        .route(
             "/bootstrap_tokens",
             get(op_list_bootstrap).post(op_mint_bootstrap),
         )
@@ -321,6 +325,7 @@ async fn op_list_agents(
                         "last_used_at": a.last_used_at,
                         "expires_at": a.expires_at,
                         "revoked_at": a.revoked_at,
+                        "cert_identity": a.cert_identity,
                     })
                 })
                 .collect();
@@ -348,6 +353,7 @@ async fn op_get_agent(
                 "last_used_at": a.last_used_at,
                 "expires_at": a.expires_at,
                 "revoked_at": a.revoked_at,
+                "cert_identity": a.cert_identity,
             })),
         )
             .into_response(),
@@ -384,6 +390,29 @@ async fn op_revoke_agent(
     Path(id): Path<String>,
 ) -> Response {
     match state.admin.revoke_agent(&op, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetCertIdentityInput {
+    /// `Some(s)` ⇒ bind cert_identity to `s`; `None` ⇒ clear (#79).
+    #[serde(default)]
+    cert_identity: Option<String>,
+}
+
+async fn op_set_agent_cert_identity(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(id): Path<String>,
+    Json(input): Json<SetCertIdentityInput>,
+) -> Response {
+    match state
+        .admin
+        .set_agent_cert_identity(&op, &id, input.cert_identity)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => admin_err_response(e),
     }
