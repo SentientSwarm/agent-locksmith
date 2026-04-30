@@ -124,6 +124,82 @@ pub struct ListenConfig {
     /// fields under this block are listener-shape (R-N5 carve-out): a
     /// change to host/port/cert_path/key_path requires a daemon restart.
     pub admin_https: Option<AdminHttpsConfig>,
+    /// Agent-listener authentication mode (M6 / T6.6). Default `bearer`
+    /// preserves M0..M5 behavior. `mtls` requires a valid client cert
+    /// AND no bearer header. `both` tries mTLS first; on missing-cert
+    /// falls back to bearer. See `docs/v2/runbooks/m6-mtls-migration.md`
+    /// for the rolling-migration recipe.
+    #[serde(default)]
+    pub auth_mode: AuthMode,
+    /// mTLS configuration for the agent listener (M6). Required when
+    /// `auth_mode` is `mtls` or `both`; ignored otherwise.
+    pub mtls: Option<MtlsConfig>,
+    /// Optional bootstrap-only listener (M6 / T6.8 / C-4). Off by
+    /// default. When enabled, exposes a TLS-terminated TCP endpoint
+    /// that accepts only `POST /admin/agent/register` for onboarding
+    /// agents in mtls-only deployments.
+    pub bootstrap_only: Option<BootstrapOnlyConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapOnlyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_bootstrap_host")]
+    pub host: String,
+    #[serde(default = "default_bootstrap_port")]
+    pub port: u16,
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
+}
+
+fn default_bootstrap_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_bootstrap_port() -> u16 {
+    9202
+}
+
+/// Agent-listener authentication mode (T6.6).
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    /// Bearer token in `Authorization: Bearer ...`. M0..M5 default.
+    #[default]
+    Bearer,
+    /// Client cert presented at TLS handshake; bearer header is rejected.
+    Mtls,
+    /// Both supported. Listener tries mTLS first; if no client cert is
+    /// presented, falls back to bearer.
+    Both,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MtlsConfig {
+    /// PEM CA bundle. Every leaf cert must chain back to one of these.
+    pub ca_bundle_path: PathBuf,
+    /// Optional CRL URL (T6.3). When set the daemon refreshes the CRL
+    /// in the background at `crl_refresh_interval_seconds`.
+    #[serde(default)]
+    pub crl_url: Option<String>,
+    #[serde(default = "default_crl_refresh_interval_seconds")]
+    pub crl_refresh_interval_seconds: u64,
+    /// Optional emergency blocklist file (T6.4). One hex serial per line.
+    #[serde(default)]
+    pub blocklist_path: Option<PathBuf>,
+    #[serde(default = "default_blocklist_reload_interval_seconds")]
+    pub blocklist_reload_interval_seconds: u64,
+}
+
+fn default_crl_refresh_interval_seconds() -> u64 {
+    3600
+}
+
+fn default_blocklist_reload_interval_seconds() -> u64 {
+    30
 }
 
 #[derive(Debug, Deserialize)]
