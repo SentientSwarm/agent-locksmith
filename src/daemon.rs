@@ -21,6 +21,7 @@ use tracing::{info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
 use crate::app::{build_app_with_audit, build_app_with_shared_config};
+use crate::audit_sink::{JsonlSink, JsonlSinkConfig};
 use crate::auth_v2::{BearerAuthenticator, OperatorAuthenticator};
 use crate::config::AppConfig;
 use crate::migrations;
@@ -237,7 +238,34 @@ async fn build_admin_substrate(config: Arc<ArcSwap<AppConfig>>) -> Result<AdminS
 
     let agents = AgentRepository::new(pool.clone());
     let bootstrap = BootstrapTokenRepository::new(pool.clone());
-    let audit = AuditRepository::new(pool);
+    let mut audit = AuditRepository::new(pool);
+
+    // JSONL mirror sink — optional, opens at startup so misconfig
+    // (unwritable path) surfaces here rather than at first audit
+    // insert. Wraps in Arc so cloned AuditRepository handles share it.
+    let snapshot = config.load();
+    if let Some(audit_cfg) = snapshot.audit.as_ref()
+        && let Some(jsonl_path) = audit_cfg.jsonl_path.as_ref()
+    {
+        let sink_cfg = JsonlSinkConfig {
+            path: jsonl_path.clone(),
+            max_bytes: audit_cfg.jsonl_max_bytes,
+            keep_files: audit_cfg.jsonl_keep_files,
+        };
+        match JsonlSink::new(sink_cfg) {
+            Ok(sink) => {
+                info!(path = %jsonl_path.display(), "audit JSONL sink opened");
+                audit = audit.with_sink(std::sync::Arc::new(sink));
+            }
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "audit jsonl sink {}: {e}",
+                    jsonl_path.display()
+                )));
+            }
+        }
+    }
+    drop(snapshot);
 
     let agent_auth = BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone()))
         .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?;

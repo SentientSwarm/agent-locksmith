@@ -46,6 +46,17 @@ pub struct AuditConfig {
     /// Sweep cadence in seconds. Default 3600 (hourly).
     #[serde(default = "default_audit_sweep_interval_seconds")]
     pub sweep_interval_seconds: u64,
+    /// Optional JSONL mirror — when set, every successful SQL audit
+    /// insert is also appended to this path (PRD §14.1 #6).
+    #[serde(default)]
+    pub jsonl_path: Option<PathBuf>,
+    /// Cap on a single rotated JSONL file's size in bytes. Default
+    /// 100 MiB. Only consulted when `jsonl_path` is set.
+    #[serde(default = "default_jsonl_max_bytes")]
+    pub jsonl_max_bytes: u64,
+    /// Number of rotated JSONL files to keep. Default 14.
+    #[serde(default = "default_jsonl_keep_files")]
+    pub jsonl_keep_files: usize,
 }
 
 impl Default for AuditConfig {
@@ -53,6 +64,9 @@ impl Default for AuditConfig {
         Self {
             retention_days: default_audit_retention_days(),
             sweep_interval_seconds: default_audit_sweep_interval_seconds(),
+            jsonl_path: None,
+            jsonl_max_bytes: default_jsonl_max_bytes(),
+            jsonl_keep_files: default_jsonl_keep_files(),
         }
     }
 }
@@ -63,6 +77,14 @@ fn default_audit_retention_days() -> u32 {
 
 fn default_audit_sweep_interval_seconds() -> u64 {
     3600
+}
+
+fn default_jsonl_max_bytes() -> u64 {
+    100 * 1024 * 1024
+}
+
+fn default_jsonl_keep_files() -> usize {
+    14
 }
 
 #[derive(Debug, Deserialize)]
