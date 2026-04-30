@@ -42,6 +42,7 @@ pub async fn proxy_handler(
                     status: Some(404),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Denied,
+                    auth_method: Some("bearer".to_string()),
                     ..AuditEvent::default()
                 },
             )
@@ -79,6 +80,7 @@ pub async fn proxy_handler(
                     status: Some(400),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Error,
+                    auth_method: Some("bearer".to_string()),
                     ..AuditEvent::default()
                 },
             )
@@ -170,6 +172,7 @@ pub async fn proxy_handler(
                     status: Some(upstream_status),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision,
+                    auth_method: Some("bearer".to_string()),
                     ..AuditEvent::default()
                 },
             )
@@ -201,6 +204,7 @@ pub async fn proxy_handler(
                     status: Some(status.as_u16()),
                     latency_ms: Some(started.elapsed().as_millis() as u64),
                     decision: Decision::Error,
+                    auth_method: Some("bearer".to_string()),
                     ..AuditEvent::default()
                 },
             )

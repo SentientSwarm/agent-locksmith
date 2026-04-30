@@ -44,6 +44,13 @@ pub struct OperatorRecord {
     pub token_hash: String,
     #[serde(default)]
     pub scope: Option<serde_json::Value>,
+    /// Cert identity for mTLS-authenticated operators (M6 / T6.7 / D-9).
+    /// When set, an operator can authenticate by presenting a client
+    /// cert whose extracted identity matches this value. The bearer
+    /// path remains available; both shapes resolve to the same
+    /// `OperatorIdentity`.
+    #[serde(default)]
+    pub cert_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,6 +153,54 @@ impl OperatorAuthenticator {
                 Err(AuthError::InvalidCredential)
             }
             Err(e) => Err(AuthError::Backend(e.to_string())),
+        }
+    }
+
+    /// Authenticate by an mTLS-extracted cert identity (T6.7 / D-9).
+    /// Returns the matching `OperatorIdentity` or `InvalidCredential`
+    /// when no operator declares this identity. The cert chain itself
+    /// must already be validated by `MtlsValidator` before this call —
+    /// we trust the identity string the caller passes.
+    ///
+    /// Audit: a miss emits `operator_auth_failure` with reason
+    /// `unknown_cert_identity` and `auth_method=mtls`.
+    pub async fn authenticate_cert_identity(
+        &self,
+        cert_identity: &str,
+    ) -> Result<OperatorIdentity, AuthError> {
+        let records = self.records.read().await;
+        let hit = records
+            .iter()
+            .find(|r| r.cert_identity.as_deref() == Some(cert_identity));
+        if let Some(record) = hit {
+            return Ok(OperatorIdentity {
+                name: record.name.clone(),
+                scope: record.scope.clone(),
+            });
+        }
+        drop(records);
+        self.audit_cert_identity_failure(cert_identity).await;
+        Err(AuthError::InvalidCredential)
+    }
+
+    async fn audit_cert_identity_failure(&self, cert_identity: &str) {
+        let Some(repo) = &self.audit else {
+            return;
+        };
+        let event = AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "operator_auth_failure".to_string(),
+            decision: Decision::Denied,
+            auth_method: Some("mtls".to_string()),
+            details: Some(json!({
+                "reason": "unknown_cert_identity",
+                "cert_identity": cert_identity,
+            })),
+            ..AuditEvent::default()
+        };
+        if let Err(e) = repo.record(&event).await {
+            tracing::warn!(error = %e, "operator cert-identity audit write failed");
         }
     }
 }

@@ -184,6 +184,26 @@ impl AgentRepository {
         rows.into_iter().map(|r| r.into_record()).collect()
     }
 
+    /// Set or clear the agent's cert_identity (M6 / T6.5). Used by
+    /// `locksmith agent register --cert-identity ...` and the M6
+    /// migration tooling. Operators bind a freshly-issued cert to an
+    /// existing agent without rotating its bearer secret.
+    pub async fn set_cert_identity(
+        &self,
+        public_id: &str,
+        cert_identity: Option<&str>,
+    ) -> Result<(), RepoError> {
+        let res = sqlx::query("UPDATE agents SET cert_identity = ? WHERE public_id = ?")
+            .bind(cert_identity)
+            .bind(public_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(RepoError::AgentNotFound);
+        }
+        Ok(())
+    }
+
     /// Soft-delete via `revoked_at = now`. Idempotent — re-revoking a
     /// revoked agent updates `revoked_at` to the latest call's timestamp;
     /// callers who care about first-revoke ordering should check before.

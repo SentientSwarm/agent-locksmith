@@ -209,10 +209,30 @@ impl AdminService {
     }
 
     /// Best-effort audit write. Errors are logged and swallowed (INF-26).
-    async fn audit(&self, event: AuditEvent) {
+    /// Auto-fills `auth_method` (T6.10) based on whose context the event
+    /// carries — operator_name → "operator", agent_public_id only →
+    /// "agent" (self-service / bootstrap-register, where the
+    /// bootstrap_token is the credential, not a long-lived agent token).
+    /// Callers that already set auth_method are left alone.
+    async fn audit(&self, mut event: AuditEvent) {
         let Some(repo) = &self.audit else {
             return;
         };
+        if event.auth_method.is_none() {
+            event.auth_method = Some(
+                if event.operator_name.is_some() {
+                    "operator"
+                } else if event.event == "agent_register" {
+                    // bootstrap-token register is the only agent-side
+                    // path with no AgentIdentity context. Per D-10 it
+                    // stands on its own as a distinct auth method.
+                    "bootstrap"
+                } else {
+                    "agent"
+                }
+                .to_string(),
+            );
+        }
         if let Err(e) = repo.record(&event).await {
             tracing::warn!(error = %e, event = %event.event, "admin audit write failed");
         }

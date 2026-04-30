@@ -15,7 +15,7 @@ mod client;
 mod commands;
 mod output;
 
-use commands::{agent, audit, bootstrap, export, self_svc, tool};
+use commands::{agent, audit, bootstrap, export, mtls, self_svc, tool};
 use output::Format;
 
 /// Default admin socket location. Operators can override with --socket
@@ -80,6 +80,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: export::ExportCmd,
     },
+    /// mTLS-related operations (M6).
+    Mtls {
+        #[command(subcommand)]
+        cmd: mtls::MtlsCmd,
+    },
     /// Self-service: show your agent status.
     Status,
     /// Self-service: rotate your agent token.
@@ -112,6 +117,7 @@ async fn main() -> ExitCode {
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Audit { cmd } => audit::run(&client, cli.format, cmd).await,
         Cmd::Export { cmd } => export::run(&client, cli.format, cmd).await,
+        Cmd::Mtls { cmd } => mtls::run(cli.format, cmd).await,
         Cmd::Status => self_svc::status(&client, cli.format).await,
         Cmd::Rotate { current_secret } => {
             self_svc::rotate(&client, cli.format, current_secret).await

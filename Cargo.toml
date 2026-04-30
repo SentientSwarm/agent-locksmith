@@ -40,11 +40,15 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+x509-parser = "0.16"
+pem = "3"
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "ring"] }
 
 [dev-dependencies]
 axum-test = "19"
 futures-util = "0.3"
 rcgen = "0.13"
 tempfile = "3"
+time = { version = "0.3", features = ["macros"] }
 tokio-test = "0.4"
 wiremock = "0.6"
