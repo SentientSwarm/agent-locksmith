@@ -6,3 +6,4 @@ pub mod deprecation;
 pub mod proxy;
 pub mod shutdown;
 pub mod telemetry;
+pub mod token;
