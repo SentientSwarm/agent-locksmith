@@ -116,7 +116,7 @@ impl AuditRepository {
         let details_json = event
             .details
             .as_ref()
-            .map(|j| serde_json::to_string(j))
+            .map(serde_json::to_string)
             .transpose()?;
         sqlx::query(
             "INSERT INTO audit \

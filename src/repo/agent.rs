@@ -78,15 +78,15 @@ impl AgentRepository {
         let secret_hash =
             argon2_helper::hash(&SecretString::from(token.secret.expose().to_string()))?;
         let allowlist_json = allowlist
-            .map(|v| serde_json::to_string(v))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(RepoError::Json)?;
         let denylist_json = denylist
-            .map(|v| serde_json::to_string(v))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(RepoError::Json)?;
         let metadata_str = metadata
-            .map(|m| serde_json::to_string(m))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(RepoError::Json)?;
         let now = unix_now();

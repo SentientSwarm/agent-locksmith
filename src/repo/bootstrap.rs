@@ -100,14 +100,21 @@ impl BootstrapTokenRepository {
         secret: &SecretString,
         agent_id: i64,
     ) -> Result<BootstrapScope, RepoError> {
-        let row: Option<(String, String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        let row = sqlx::query_as::<_, ConsumeRow>(
             "SELECT secret_hash, scope, expires_at, used_at, revoked_at \
              FROM bootstrap_tokens WHERE public_id = ?",
         )
         .bind(public_id)
         .fetch_optional(&self.pool)
         .await?;
-        let Some((secret_hash, scope_json, expires_at, used_at, revoked_at)) = row else {
+        let Some(ConsumeRow {
+            secret_hash,
+            scope: scope_json,
+            expires_at,
+            used_at,
+            revoked_at,
+        }) = row
+        else {
             return Err(RepoError::InvalidCredential);
         };
         if used_at.is_some() || revoked_at.is_some() {
@@ -147,6 +154,15 @@ impl BootstrapTokenRepository {
         }
         Ok(scope)
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ConsumeRow {
+    secret_hash: String,
+    scope: String,
+    expires_at: Option<i64>,
+    used_at: Option<i64>,
+    revoked_at: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
