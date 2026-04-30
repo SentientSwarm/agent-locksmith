@@ -1,7 +1,7 @@
 # Handoff — Agent Locksmith v2 Implementation
 
 **Last updated:** 2026-04-30
-**Default working branch:** `develop` (M7 merged via `m7/response-controls`) — **v2 feature-complete**
+**Default working branch:** `develop` (post-v1.0.0 enhancements merged: #67 mTLS bind + #68 audit bench) — **Tagged v1.1.0**
 
 This document is the cold-start context for the next session. Read top to bottom before touching code.
 
@@ -12,7 +12,7 @@ This document is the cold-start context for the next session. Read top to bottom
 | Branch | State | What's there |
 |--------|-------|--------------|
 | `main` | Stable | M0 implementation. CI passes. |
-| `develop` | **v2 feature-complete** | M0 + M1 + M2 + M3 + M4 + M5 + M6 + M7. Tagged **v1.0.0**. **Default working branch.** |
+| `develop` | **v1.1.0** | M0..M7 + post-v1.0.0 #67 (agent-listener mTLS bind path activated) + #68 (audit-write bench validated A-2 / INF-26). Tagged **v1.1.0**. **Default working branch.** |
 | `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest`, `m6/mtls-agent-side`, `m7/response-controls` | Merged | Kept for archaeology. |
 
 ### What's merged into `develop`
@@ -25,10 +25,11 @@ This document is the cold-start context for the next session. Read top to bottom
 - **M5** (T2.17, T2.19, T5.1–T5.5): keys-at-rest hardening with file-sealed credentials.
 - **M6** (T6.1–T6.11): mTLS — validator, CRL fetcher, blocklist, authenticator, bootstrap-only listener, operator cert mapping, CLI mtls subcommands, smallstep example, 3 mTLS runbooks.
 - **M7** (T7.1–T7.4): per-tool response controls — max_size_bytes, content_type_allowlist, regex redaction with cleartext-never-in-audit hashing.
+- **post-v1.0.0**: #67 agent-listener mTLS bind path (activates M6 validator/authenticator on the wire); #68 audit-write bench (validates A-2 / INF-26 with ~33× headroom; T3.10 stays deferred).
 
-### Test + lint state at v1.0.0
+### Test + lint state at v1.1.0
 
-- `cargo test --tests`: **250 / 250 pass** across 47 test binaries.
+- `cargo test --tests`: **251 / 251 pass** across 48 test binaries.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --check`: clean.
 
@@ -253,15 +254,18 @@ All seven planned milestones are merged. v1.0.0 is tagged. The remaining work is
 | ~~M6~~ | ~~v0.7.0~~ | ~~mTLS (validator/CRL/blocklist/authenticator/bootstrap-only listener/operator cert)~~ ✅ Closed |
 | ~~M7~~ | ~~v1.0.0~~ | ~~Response controls~~ ✅ Closed |
 
-### Post-v2 enhancement track (priority-ordered)
+### Post-v1.0.0 enhancement track (priority-ordered)
 
-The v0.7.x agent-listener mTLS bind path is the highest-value follow-up because it activates the M6 cert-validation infrastructure that already exists.
+Two HIGH-priority items closed in v1.1.0 (#67 mTLS bind path + #68 audit bench). Remaining tracks below.
 
 | Track | Priority | Estimated session count | Notes |
 |-------|----------|-------------------------|-------|
-| **v0.7.x agent-listener mTLS bind** | High (when mTLS is a deployment requirement) | 1 | Validator + authenticator already landed in v0.7.0. The remaining piece is the rustls server config + peer-cert extractor + middleware switch on auth_mode. |
-| **T3.9 audit-write bench** | High before recommending production scale-up | 1 | Validates A-2 / INF-26 (~1000 sustained writes/sec on commodity SSD). Pre-v1.0.0 closure-checklist item. |
-| **T2.20 hot reload of non-listener config** | Medium | 1 | M0 ArcSwap is in place. Listener-shape config (M4 admin_https, M5 sealed paths, M6 cert paths) requires restart per the listener-shape carve-out — that stays. Tools, audit, retention can hot-reload. |
+| ~~v0.7.x agent-listener mTLS bind~~ | ~~High~~ | ~~1~~ | ✅ Closed in v1.1.0 (#67). |
+| ~~T3.9 audit-write bench~~ | ~~High~~ | ~~1~~ | ✅ Closed in v1.1.0 (#68); INF-26 trigger not tripped. |
+| **T2.20 hot reload of non-listener config** | Medium | 1 | M0 ArcSwap is in place. Listener-shape config (M4 admin_https, M5 sealed paths, M6 cert paths) requires restart per the listener-shape carve-out — that stays. Tools, audit, retention, response_controls can hot-reload. |
+| **#80 Live OnePasswordBackend** | Medium | 1 | M5 stub-style impl alongside #71 / #72. Operator-side `op read` + `from_file_sealed` already shippable via M5 runbook §3.1. |
+| **#81 Locksmith ↔ Pipelock egress coordination** | Medium (design-track first) | 1 design + 1 impl | D-16. Locksmith publishes upstream inventory via `/admin/operator/upstreams` (HTTP) and/or `/run/locksmith/upstreams.json` (file watch). |
+| **#82 D-18 inspector sidecar (LlamaFirewall)** | Medium (design-track first) | 1 design + 1 impl | Streaming-aware Unix-socket protocol; per-tool inspector config; pass/drop/modify verdicts; audit events. |
 | **Live Vault / AWS Secrets Manager backends** | Medium | 1–2 | Stubs landed in M5/T5.3 with rustdoc on the implementer's contract. Live impls are post-v2. |
 | **D-18 LlamaFirewall composition** | Low (depends on consumer demand) | 1 | Streaming-aware classifier integration; M7 redaction is regex-only by design. |
 | **T2.11 RateLimiter** | Low (nginx/Caddy in front works as stopgap) | 1 | Issue #24. Defensive; M2.x carry-over. |
@@ -492,7 +496,7 @@ git fetch
 git checkout develop
 git pull
 
-# Sanity check current state (250/250, clean lint).
+# Sanity check current state (251/251, clean lint).
 cargo test --tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
