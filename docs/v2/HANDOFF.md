@@ -1,7 +1,7 @@
 # Handoff — Agent Locksmith v2 Implementation
 
 **Last updated:** 2026-04-30
-**Default working branch:** `develop` (M5 merged via `m5/keys-at-rest`)
+**Default working branch:** `develop` (M6 merged via `m6/mtls-agent-side`)
 
 This document is the cold-start context for the next session. Read top to bottom before touching code.
 
@@ -12,8 +12,8 @@ This document is the cold-start context for the next session. Read top to bottom
 | Branch | State | What's there |
 |--------|-------|--------------|
 | `main` | Stable | M0 implementation. CI passes. |
-| `develop` | M5 closure | M0 + M1 + M2 + M3 + M4 + M5. Sealed credentials, hardened systemd unit, threat model. **Default working branch.** Tagged **v0.6.0**. |
-| `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest` | Merged | Kept for archaeology. |
+| `develop` | M6 closure | M0 + M1 + M2 + M3 + M4 + M5 + M6. mTLS validator + CRL + blocklist + authenticator + bootstrap-only listener + operator cert mapping. **Default working branch.** Tagged **v0.7.0**. |
+| `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest`, `m6/mtls-agent-side` | Merged | Kept for archaeology. |
 
 ### What's merged into `develop`
 
@@ -23,12 +23,29 @@ This document is the cold-start context for the next session. Read top to bottom
 - **M3** (T3.1–T3.6, T3.8, T3.11): governance audit log.
 - **M4** (T4.1–T4.6): admin HTTPS listener for remote management.
 - **M5** (T2.17, T2.19, T5.1–T5.5): keys-at-rest hardening with file-sealed credentials.
+- **M6** (T6.1–T6.11): mTLS — validator, CRL fetcher, blocklist, authenticator, bootstrap-only listener, operator cert mapping, CLI mtls subcommands, smallstep example, 3 mTLS runbooks.
 
-### Test + lint state at M5 closure
+### Test + lint state at M6 closure
 
-- `cargo test --tests`: **193 / 193 pass** across 36 test binaries.
+- `cargo test --tests`: **224 / 224 pass** across 41 test binaries.
 - `cargo clippy --all-targets -- -D warnings`: clean.
 - `cargo fmt --check`: clean.
+
+### M6 task progress (per SPEC §6.2)
+
+| Task | Status | Notes |
+|------|--------|-------|
+| T6.1 — deps | ✅ | x509-parser, pem, rustls-webpki, time (dev). |
+| T6.2 GATE — MtlsValidator | ✅ | webpki chain + identity extraction (CN→SAN_DNS→SAN_URI). 8 tests. |
+| T6.3 — CRL fetcher | ✅ | CrlStore + apply_pem + refresh_once. Stale-but-up. 4 tests. |
+| T6.4 — local blocklist | ✅ | File-backed; mtime-driven reload. 3 tests. |
+| T6.5 GATE — MtlsAuthenticator | ✅ | Implements `authenticate_cert(der)`; revoked agents filtered. 4 tests. |
+| T6.6 — auth_mode | ✅ | Bearer/Mtls/Both config + 4 parse tests. **Bind-path wiring deferred to v0.7.x** (see §3 below). |
+| T6.7 GATE — operator mTLS | ✅ | OperatorRecord.cert_identity + authenticate_cert_identity. 3 tests. |
+| T6.8 — bootstrap-only listener | ✅ | C-4 single-endpoint TLS listener. 2 tests. |
+| T6.9 — `locksmith mtls` CLI | ✅ | revoke / list-blocklist / crl-status. Subprocess test. |
+| T6.10 — auth_method audit | ✅ | Auto-fill in AdminService.audit + proxy hot path. 2 tests. |
+| T6.11 — smallstep example + 3 runbooks | ✅ | dist/examples/smallstep/ + onboarding/migration/revocation runbooks. |
 
 ### M5 task progress (per SPEC §6.2)
 
@@ -53,11 +70,61 @@ This document is the cold-start context for the next session. Read top to bottom
 | T2.12 AdminService | Closed in M2 |
 | T3.3 retention worker | Closed in M3 |
 
-M4 + M5 had no verification gates (low-risk per SPEC §6.2). Coming gates: **T6.2** + **T6.5** (mTLS validator + authenticator), **T6.7** (operator mTLS).
+M4 + M5 had no verification gates (low-risk per SPEC §6.2). M6 closed three gates this session: T6.2 (MtlsValidator), T6.5 (MtlsAuthenticator), T6.7 (operator mTLS).
+
+**Remaining gates: none.** M7 has no verification gate per SPEC §6.2.
 
 ---
 
-## 2. M5 acceptance demo
+## 2. M6 acceptance demo
+
+Smallstep deployment per `dist/examples/smallstep/README.md`. Fast version:
+
+```bash
+# Provision agent CA bundle
+sudo install -m 0644 -o locksmith -g locksmith \
+    agents-ca.crt /etc/locksmith/agents-ca.crt
+
+# Daemon config (auth_mode=both during migration; mtls once fleet rotates)
+cat >> /etc/locksmith/config.yaml <<EOF
+listen:
+  auth_mode: both
+  mtls:
+    ca_bundle_path: "/etc/locksmith/agents-ca.crt"
+    crl_url: "https://step-ca.example.com/crl"
+    crl_refresh_interval_seconds: 600
+    blocklist_path: "/etc/locksmith/blocklist"
+  bootstrap_only:
+    enabled: true
+    host: "0.0.0.0"
+    port: 9202
+    cert_path: "/etc/locksmith/tls/bootstrap.crt"
+    key_path: "/etc/locksmith/tls/bootstrap.key"
+EOF
+sudo systemctl restart locksmith
+
+# Onboard an agent through the bootstrap-only listener (no operator creds needed)
+TOKEN=$(locksmith bootstrap mint --single-use --format json | jq -r .token)
+curl -X POST https://locksmith.example.com:9202/admin/agent/register \
+    --cacert /etc/locksmith/agents-ca.crt \
+    -H 'content-type: application/json' \
+    -d "$(jq -n --arg t "$TOKEN" '{bootstrap_token: $t, name: "agent-7"}')"
+
+# Bind cert_identity (via the AgentRepository helper; CLI wrapper lands v0.7.x)
+# UPDATE agents SET cert_identity = 'agent-7' WHERE public_id = '<public_id>';
+
+# Emergency revoke a serial (effective within 30s — blocklist watcher)
+sudo locksmith mtls revoke <SERIAL_HEX> \
+    --blocklist-path /etc/locksmith/blocklist \
+    --reason "incident 2026-04-30"
+
+# Verify mtls auth_method appears in audit
+locksmith audit query --event-class security --limit 5 --format json
+```
+
+Full operational guide: `docs/v2/runbooks/m6-mtls-onboarding.md`. Migration recipe: `docs/v2/runbooks/m6-mtls-migration.md`. Incident response: `docs/v2/runbooks/m6-mtls-revocation.md`.
+
+## 2.1 M5 acceptance demo (kept for reference)
 
 The M5 contract — *"operator can deploy with the file-sealed backend and have no upstream credential present in env vars or in any operator-readable config"* — is met. Full walk-through is in `dist/examples/sealed-secrets/README.md`.
 
@@ -139,7 +206,7 @@ locksmith --socket /var/run/locksmith/admin.sock agent list
 
 ## 3. What's left to ship v1.0.0
 
-Two milestones remain (M6, M7), plus M2.x / M3.x carry-overs that can land any time.
+One milestone remains (M7), plus the v0.7.x agent-listener bind-path follow-up and M2.x / M3.x carry-overs.
 
 ### Milestone walk to v1.0.0
 
@@ -147,29 +214,32 @@ Two milestones remain (M6, M7), plus M2.x / M3.x carry-overs that can land any t
 |-----------|---------|-------|------|--------------------|
 | ~~M4~~ | ~~v0.5.0~~ | ~~T4.1–T4.6~~ | ~~Admin HTTPS for remote management.~~ | ~~—~~ ✅ Closed |
 | ~~M5~~ | ~~v0.6.0~~ | ~~T2.17 + T2.19 + T5.1–T5.5~~ | ~~Keys-at-rest hardening.~~ | ~~—~~ ✅ Closed |
-| **M6** | v0.7.0 | T6.1–T6.11 (~11; biggest) | mTLS for agents + operators. CRL fetcher, local emergency blocklist, bootstrap-only listener (C-4), `auth_mode: bearer | mtls | both`. | **T6.2 + T6.5** (MtlsValidator + MtlsAuthenticator), **T6.7** (operator mTLS) |
+| ~~M6~~ | ~~v0.7.0~~ | ~~T6.1–T6.11~~ | ~~mTLS support.~~ | ~~T6.2, T6.5, T6.7~~ ✅ All closed |
 | **M7** | v1.0.0 | T7.1–T7.4 (~4) | Per-tool response controls: max_size_bytes, content_type_allowlist, regex redaction. Streaming preserved (only total-size cap applies). | — |
 
-### M6 — mTLS (next session — likely 2 sessions)
+### v0.7.x — agent-listener mTLS bind path (deferred from M6)
 
-**Goal:** Cryptographic identity for agents AND operators. Two-session split recommended at the T6.5 / T6.7 gate boundary.
+Validator + authenticator + CRL + blocklist + audit threading + bootstrap-only listener + operator cert mapping all landed in v0.7.0 as production-ready code with full test coverage. The remaining piece is the agent-listener TLS bind that requires client certs at the handshake:
 
-**Session A — Agent-side mTLS (T6.1–T6.5 + gate):**
-- T6.1 deps (`x509-parser`; `rcgen` already present as dev-dep from M4)
-- T6.2 **MtlsValidator gate** — chain validation against CA bundle, expiration, identity extraction (CN / SAN_DNS / SAN_URI)
-- T6.3 CRL fetcher (periodic background task; metrics: `mtls_crl_refresh_failures_total`, `mtls_crl_age_seconds`)
-- T6.4 Local emergency blocklist with hot reload
-- T6.5 **MtlsAuthenticator gate** — implements `AgentAuthenticator`; maps cert identity to agent via `AgentRepository.get_by_cert_identity`
+- Replace the agent listener's plain TCP bind with `axum_server::bind_rustls` when `auth_mode` is `mtls` or `both`.
+- Configure the rustls `ServerConfig` with a `ClientCertVerifier` (rustls's `WebPkiClientVerifier::builder` against the `mtls.ca_bundle_path`).
+- Inject the peer cert DER into the request via an axum extractor that reads from rustls's connection state.
+- Middleware switches on `auth_mode` to call `MtlsAuthenticator::authenticate_cert` (with bearer fallback under `both`).
 
-**Session B — auth_mode + operator mTLS + tooling (T6.6–T6.11 + gate):**
-- T6.6 `auth_mode: bearer | mtls | both`; `both` tries mTLS first, falls back to bearer
-- T6.7 **Operator mTLS gate** — admin HTTPS accepts operator client certs; operators.yaml gains optional `cert_identity` field (D-9)
-- T6.8 Bootstrap-only listener (C-4): single endpoint `POST /admin/agent/register`
-- T6.9 `locksmith mtls revoke <serial>`, `locksmith mtls list-blocklist`, `locksmith mtls crl-status`
-- T6.10 Audit `auth_method` field on every authenticated request (`bearer` / `mtls` / `bootstrap` / `operator`)
-- T6.11 Worked smallstep + step-ca example at `dist/examples/smallstep/`
+This is ~1 focused session; no new gates. Recommend landing it as `m6.1/agent-listener-mtls` before starting M7 if mTLS is a release-blocker for the user's deployment, or after M7 if not.
 
-**Schema change anticipated (M6):** `agents.cert_identity` column for the M6.5 lookup. Plan for a second forward-only migration `migrations/0002_mtls.sql`. The schema change touches the M2 spine — **review the M2 schema-gate notes in SPEC §6.4.1 before writing the migration.**
+### M7 — Response controls (next session — final milestone)
+
+**Goal:** Per-tool max_size_bytes, content_type_allowlist, regex redaction. Streaming first-byte latency must stay ≤100ms (R-N6).
+
+| Task | Summary |
+|------|---------|
+| T7.1 | `tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }` |
+| T7.2 | `ResponseControls.apply` for non-streaming (read body, check content-type, apply redaction) |
+| T7.3 | Streaming wrapper: byte-counter `Stream` adapter that emits truncation marker on cap-exceeded |
+| T7.4 | Audit events: `response_redaction` (with hash of match, NOT cleartext) and `response_size_exceeded` |
+
+**Acceptance criterion:** rerun M1 streaming tests with response controls enabled — first-byte latency must still be ≤100ms.
 
 
 ### M7 — Response controls (final milestone)
@@ -210,18 +280,20 @@ Two milestones remain (M6, M7), plus M2.x / M3.x carry-overs that can land any t
 
 - [x] M4 (admin HTTPS) merged. ✅
 - [x] M5 (keys-at-rest) merged. ✅
-- [ ] M6 (mTLS) merged.
+- [x] M6 (mTLS) merged. ✅
 - [ ] M7 (response controls) merged.
+- [ ] v0.7.x — agent-listener mTLS bind path (T6.6 wiring follow-up).
 - [ ] M3 audit-write bench (T3.9) executed; report attached to closure issue.
 - [ ] If trigger tripped, T3.10 async-batched landed.
-- [ ] All verification gates closed with self-review (T6.2, T6.5, T6.7).
+- [x] All verification gates closed with self-review (T6.2, T6.5, T6.7). ✅
 - [x] Threat model (`docs/v2/threat-model.md`) reviewed and merged. ✅
 - [x] M4 runbook (`docs/v2/runbooks/m4-remote-management.md`) shipped. ✅
 - [x] M5 runbook (`docs/v2/runbooks/m5-sealed-secrets.md`) shipped. ✅
-- [ ] Per-milestone runbooks (m6-mtls-{onboarding,migration,revocation}, m7-response-controls) shipped.
+- [x] M6 runbooks (`m6-mtls-onboarding.md`, `m6-mtls-migration.md`, `m6-mtls-revocation.md`) shipped. ✅
+- [ ] M7 runbook (`docs/v2/runbooks/m7-response-controls.md`) shipped.
 - [ ] §7 changelog v1.0.0 entry written.
 
-**Rough estimate: 3–4 working sessions of similar density to land v1.0.0** (was 4–6 before M5).
+**Rough estimate: 1–2 working sessions of similar density to land v1.0.0** (was 3–4 before M6).
 
 ---
 
@@ -375,6 +447,10 @@ Stale `GITHUB_TOKEN` env overrides keyring auth. Always invoke as `env -u GITHUB
 | Threat model | `docs/v2/threat-model.md` |
 | Sealed-secrets worked example | `dist/examples/sealed-secrets/README.md` |
 | Hardened systemd template | `dist/systemd/locksmith.service.template` |
+| M6 onboarding | `docs/v2/runbooks/m6-mtls-onboarding.md` |
+| M6 migration recipe | `docs/v2/runbooks/m6-mtls-migration.md` |
+| M6 revocation playbook | `docs/v2/runbooks/m6-mtls-revocation.md` |
+| smallstep / step-ca example | `dist/examples/smallstep/README.md` |
 
 ---
 
@@ -385,14 +461,16 @@ git fetch
 git checkout develop
 git pull
 
-# Sanity check current state (193/193, clean lint).
+# Sanity check current state (224/224, clean lint).
 cargo test --tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Branch off develop for M6 — likely two sessions; first one stops at the
-# T6.5 verification gate.
-git checkout -b m6/mtls-agent-side
+# Branch off develop for M7 — final milestone, no verification gate.
+git checkout -b m7/response-controls
+
+# OR — close the M6 follow-up first if mTLS is a release blocker:
+# git checkout -b m6.1/agent-listener-mtls
 ```
 
 Workflow that has held through M1 + M2 + M3 + M4 + M5 (and should keep holding):
@@ -408,25 +486,29 @@ Workflow that has held through M1 + M2 + M3 + M4 + M5 (and should keep holding):
 
 ## 7. What success looks like for the next session
 
-**Recommended target: M6 Session A (agent-side mTLS — T6.1 through T6.5 + the T6.5 verification gate).** Five tasks ending at a verification gate; ~1 session.
+**Recommended target: M7 (per-tool response controls — final milestone).** Four tasks, no verification gate. ~1 session.
 
-The big idea: agents present a client cert at the TLS handshake; Locksmith validates the cert against a configured CA bundle, checks the CRL, checks the local emergency blocklist, extracts the identity (CN / SAN_DNS / SAN_URI), and maps that identity to an agent record in the DB. `auth_method=mtls` audit follows in Session B.
+The big idea: operators bound the response surface per-tool. A misbehaving upstream that streams an unbounded body, returns the wrong content-type, or leaks a secret in the response can be capped/rejected/redacted before the agent sees it. Streaming flows from M1 must stay intact: only total-size cap applies, and first-byte latency must remain ≤100ms (R-N6).
 
-Concrete acceptance for Session A:
-1. New schema migration `migrations/0002_mtls.sql` adds `agents.cert_identity TEXT NULL` with a unique index. **Re-read SPEC §6.4.1 schema-gate notes before writing the DDL.**
-2. `AgentRepository.get_by_cert_identity(&str) -> Option<AgentRecord>` lookup added.
-3. `MtlsValidator` (T6.2) — chain validation against CA bundle, expiration, identity extraction. **Verification gate**: full review of cert parsing + identity extraction + edge cases (multiple SAN entries, CN fallback, expired-but-not-yet, malformed cert).
-4. CRL fetcher (T6.3): periodic background task; metrics `mtls_crl_refresh_failures_total` + `mtls_crl_age_seconds`; stale CRL still validates per SPEC §6.2.
-5. Local emergency blocklist (T6.4): file at `mtls.blocklist_path`, one serial per line, hot reload on file change.
-6. `MtlsAuthenticator` (T6.5) — implements `AgentAuthenticator`; calls `MtlsValidator` then `AgentRepository.get_by_cert_identity`. **Verification gate**: full review of the auth flow (per SPEC §6.4.1).
-7. `tests/mtls_validator_test.rs` + `tests/mtls_authenticator_test.rs` cover happy + sad paths using `rcgen`-minted fixtures.
-8. End of session: branch stays open (do NOT merge yet — Session B closes the milestone). Land Session A's work on `m6/mtls-agent-side`. Refresh handoff to point at Session B.
+Concrete acceptance for the next session:
+1. `tools[].response: { max_size_bytes, content_type_allowlist, redaction_patterns }` parses (T7.1).
+2. `ResponseControls.apply` for non-streaming responses: read body subject to `max_size_bytes`; reject content-types not in allowlist; apply regex `redaction_patterns` (T7.2).
+3. Streaming wrapper: a `Stream` adapter that counts bytes and emits a truncation marker on cap-exceeded; integrated into the proxy streaming path (T7.3).
+4. Audit events: `response_redaction` (with `pattern_id` + `matches` count + hashed-match identifier — NEVER cleartext) and `response_size_exceeded` (T7.4).
+5. Regression: rerun M1 streaming tests (`tests/streaming_passthrough_test.rs`) with response controls enabled on the test tool. First-byte latency still ≤100ms.
+6. `tests/response_controls_size_test.rs`, `tests/response_controls_content_type_test.rs`, `tests/response_controls_redaction_test.rs` cover the three control modes.
+7. `docs/v2/runbooks/m7-response-controls.md` shipped.
+8. End of session: merge → `v1.0.0` → tag.
 
-If there's slack between gates, **T3.9 (audit-write bench)** is the highest-value follow-up — it formally validates A-2 / INF-26 and is the pre-v1.0.0 closure-checklist gate that's most independent of M6 work.
+**Alternative target if mTLS is a release blocker:** the v0.7.x agent-listener bind path. Validator/authenticator already landed; this session wires the rustls server config + peer-cert extractor + middleware switch on `auth_mode`. ~1 session, no new gates.
 
-After M6 Session A → M6 Session B (auth_mode + operator mTLS + tooling, T6.6–T6.11 + T6.7 gate), then M7 response controls = v1.0.0.
+**v1.0.0 closure tasks** (do AFTER M7 lands):
+- §7 changelog entry summarizing v0.2.0 → v1.0.0.
+- Pre-v1.0.0 closure checklist sweep (see §3 above).
+- M3 audit-write bench (T3.9) execution; report → closure issue.
+- Optional: T3.10 async-batched if T3.9 trips the >5ms p95 trigger.
 
-The path to v1.0.0 from here fits in 3–4 sessions of similar density.
+The path to v1.0.0 from here fits in 1–2 sessions of similar density. M7 is the last milestone; everything after is closure-checklist housekeeping.
 
 ---
 
