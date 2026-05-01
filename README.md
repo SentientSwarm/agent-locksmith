@@ -196,7 +196,11 @@ For Ansible-based deployment, see the `roles/locksmith/` role in [openclaw-deplo
 | **M3** | MCP server bridging | Planned |
 | **M4** | A2A agent forwarding | Planned |
 
-See [SPEC.md](SPEC.md) for detailed milestone specifications.
+v2 (M1–M7) is feature-complete on `develop` (tagged v1.1.0). The
+authoritative design lives under [`docs/v2/`](docs/v2/) — start with
+`PRD.md`, `SPEC.md`, and `HANDOFF.md`. The top-level `SPEC.md` is the
+deprecated M0-era "Secure Agent Proxy" document and is retained only for
+historical reference.
 
 ## Development
 
