@@ -22,17 +22,58 @@ pub async fn proxy_handler(
     let method = req.method().clone();
     let request_path = req.uri().path().to_string();
     let config = state.config.load();
-    // Resolve auth_method + agent identity for audit (#67 / T6.10).
-    // The auth middleware stamps `AuthenticatedAs` and (under mTLS)
-    // the resolved `AgentIdentity` into request extensions.
+    // Resolve auth_method + agent identity for audit (#67 / T6.10 / M9).
+    // The auth middleware stamps `AuthenticatedAs` and (under per-agent
+    // bearer or mTLS) the resolved `AgentIdentity` into request extensions.
     let auth_method_str = match req.extensions().get::<crate::auth::AuthenticatedAs>() {
         Some(crate::auth::AuthenticatedAs::Mtls) => "mtls",
         _ => "bearer",
     };
-    let agent_public_id: Option<String> = req
+    let agent_identity = req
         .extensions()
         .get::<crate::auth_v2::AgentIdentity>()
-        .map(|id| id.public_id.clone());
+        .cloned();
+    let agent_public_id: Option<String> = agent_identity.as_ref().map(|id| id.public_id.clone());
+
+    // M9 ACL gate. When the request carries an AgentIdentity (per-agent
+    // bearer or mTLS), enforce the agent's tool_allowlist /
+    // tool_denylist before reaching the tool resolver. Identity-less
+    // requests reach this code only in M0/M1 deployments without admin
+    // substrate (preserved for back-compat).
+    if let Some(identity) = agent_identity.as_ref()
+        && let Err(reason) = check_tool_acl(identity, &tool_name)
+    {
+        audit_record(
+            &state.audit,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Security,
+                event: "authz_denied".to_string(),
+                tool: Some(tool_name.clone()),
+                method: Some(method.as_str().to_string()),
+                path: Some(request_path.clone()),
+                status: Some(403),
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                decision: Decision::Denied,
+                auth_method: Some(auth_method_str.to_string()),
+                agent_public_id: agent_public_id.clone(),
+                details: Some(json!({ "reason": reason })),
+                ..AuditEvent::default()
+            },
+        )
+        .await;
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "message": "tool access denied",
+                    "type": "authz_error",
+                    "code": "tool_not_allowed",
+                }
+            })),
+        )
+            .into_response();
+    }
 
     // Find the tool
     let tool = match config
@@ -550,6 +591,27 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// M9 / B1 ACL check. Both lists optional. Allowlist `Some([...])`
+/// → tool must be IN the list. Denylist `Some([...])` → tool must NOT
+/// be in the list. If both are set and a tool appears in both, deny
+/// wins (deny is always explicit). Both `None` → unrestricted.
+fn check_tool_acl(
+    identity: &crate::auth_v2::AgentIdentity,
+    tool_name: &str,
+) -> Result<(), &'static str> {
+    if let Some(deny) = identity.tool_denylist.as_ref()
+        && deny.iter().any(|t| t == tool_name)
+    {
+        return Err("in_denylist");
+    }
+    if let Some(allow) = identity.tool_allowlist.as_ref()
+        && !allow.iter().any(|t| t == tool_name)
+    {
+        return Err("not_in_allowlist");
+    }
+    Ok(())
 }
 
 fn url_host(url: &str) -> Option<String> {
