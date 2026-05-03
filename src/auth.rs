@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::agent_listener::PeerCertDer;
 use crate::app::AppState;
+use crate::auth_v2::AuthError;
 use crate::config::AuthMode;
 
 /// Recorded on the request extension to tell downstream code (proxy
@@ -86,9 +87,35 @@ pub async fn auth_middleware(
         // Both: fall through to bearer path.
     }
 
-    // M0 shared-bearer path. Per-agent bearer auth on the proxy hot
-    // path is a separate carry-over (audit_proxy_test.rs notes this);
-    // M2's admin substrate uses BearerAuthenticator on the admin UDS.
+    // M9 / B1: per-agent bearer authentication when the admin substrate
+    // is enabled (BearerAuthenticator wired by daemon.rs). On success
+    // we stamp `AuthenticatedAs::Bearer` AND the resolved `AgentIdentity`
+    // into request extensions so `proxy::proxy_handler` can enforce
+    // tool ACL and emit `agent_public_id` audit rows.
+    if let Some(authn) = state.bearer_authenticator.as_ref() {
+        let header = match req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+        {
+            Some(h) => h.to_string(),
+            None => return auth_error_response(&AuthError::MissingCredential),
+        };
+        return match authn.authenticate_bearer(&header).await {
+            Ok(identity) => {
+                req.extensions_mut().insert(AuthenticatedAs::Bearer);
+                req.extensions_mut().insert(identity);
+                next.run(req).await
+            }
+            Err(e) => auth_error_response(&e),
+        };
+    }
+
+    // M0/M1 shared-bearer fallback. Preserves pre-v2 behavior for
+    // deployments that haven't enabled the admin substrate
+    // (`listen.admin_socket` + `database.path`). When the admin
+    // substrate IS enabled, the branch above handles the request and
+    // this fallback is unreachable.
     let config = state.config.load();
     let auth_config = match &config.inbound_auth {
         Some(auth) if auth.mode == "bearer" => auth,
@@ -120,4 +147,26 @@ pub async fn auth_middleware(
         )
             .into_response(),
     }
+}
+
+/// Render an `AuthError` as a uniform §4.7.9 error envelope. Maps the
+/// variant's `status()` (401 / 429 / 500) and `code()` into the wire
+/// JSON; for `RateLimited`, also sets the `Retry-After` header.
+fn auth_error_response(err: &AuthError) -> Response {
+    let status = StatusCode::from_u16(err.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json!({
+        "error": {
+            "message": err.to_string(),
+            "type": "auth_error",
+            "code": err.code(),
+        }
+    });
+    let mut resp = (status, Json(body)).into_response();
+    if let AuthError::RateLimited { retry_after } = err
+        && let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.as_secs().to_string())
+    {
+        resp.headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, v);
+    }
+    resp
 }

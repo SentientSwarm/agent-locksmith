@@ -86,15 +86,22 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
 
-    let (admin_state, audit_for_proxy, audit_for_sweeper) = if admin_enabled {
+    let (admin_state, audit_for_proxy, audit_for_sweeper, bearer_authenticator) = if admin_enabled
+    {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
             Some(setup.audit),
+            // M9: thread the BearerAuthenticator into the agent listener so
+            // `auth_middleware` enforces per-agent bearer authentication on
+            // every request. The same Arc is also held by `uds_state.agent_auth`
+            // so admin self-service operations and the proxy hot path share
+            // one authenticator (and one audit fanout).
+            Some(setup.bearer_authenticator),
         )
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -157,6 +164,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         audit_for_proxy,
         resolved_creds.clone(),
         mtls_authenticator,
+        bearer_authenticator,
     );
     let agent_shutdown = coord.shutdown_signal();
     let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
@@ -373,11 +381,14 @@ fn now_ms() -> i64 {
 }
 
 /// Bundle of the admin substrate that the daemon runtime hands out:
-/// the UDS router state plus a clone of the AuditRepository so the
-/// proxy hot path can write to the same audit table.
+/// the UDS router state, a clone of the AuditRepository so the proxy
+/// hot path can write to the same audit table, and a clone of the
+/// BearerAuthenticator (M9) so `auth_middleware` can enforce per-agent
+/// bearer authentication on the agent listener.
 struct AdminSetup {
     uds_state: UdsState,
     audit: AuditRepository,
+    bearer_authenticator: Arc<dyn crate::auth_v2::AgentAuthenticator>,
 }
 
 async fn build_admin_substrate(
@@ -437,8 +448,15 @@ async fn build_admin_substrate(
     }
     drop(snapshot);
 
-    let agent_auth = BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone()))
-        .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?;
+    // Construct once as a concrete Arc so UdsState (which holds the
+    // concrete type) and the agent listener (which takes the trait
+    // object via AppState) share the same authenticator and the same
+    // audit fanout. The concrete Arc unsizes to `Arc<dyn ...>` for the
+    // trait-object bind below.
+    let agent_auth: Arc<BearerAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone()))
+            .map_err(|e| DaemonError::AdminConfig(format!("agent auth: {e}")))?,
+    );
     let operator_auth = OperatorAuthenticator::load_with_audit(&ops_path, Some(audit.clone()))
         .map_err(|e| DaemonError::OperatorCreds(e.to_string()))?;
     info!(operator_credentials = %ops_path.display(), "operator authenticator loaded");
@@ -451,14 +469,17 @@ async fn build_admin_substrate(
         resolved_creds,
     );
 
+    let bearer_authenticator: Arc<dyn crate::auth_v2::AgentAuthenticator> = agent_auth.clone();
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
-            agent_auth: Arc::new(agent_auth),
+            agent_auth,
             operator_auth: Arc::new(operator_auth),
             operator_mtls: None,
         },
         audit,
+        bearer_authenticator,
     })
 }
 

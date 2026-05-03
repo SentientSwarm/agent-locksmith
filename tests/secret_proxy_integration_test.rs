@@ -10,7 +10,10 @@
 //!    the resolved credential reached the hot path).
 
 use agent_locksmith::config::parse_config_str;
+use agent_locksmith::migrations::open_and_migrate;
+use agent_locksmith::repo::AgentRepository;
 use agent_locksmith::{argon2_helper, daemon, token};
+use secrecy::ExposeSecret;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -38,6 +41,21 @@ fn write_operators_yaml(p: &std::path::Path) {
         ),
     )
     .unwrap();
+}
+
+/// Pre-register an agent in the database before the daemon opens it.
+/// M9: admin substrate enabled implies per-agent bearer auth on the
+/// proxy hot path, so daemon-driven tests need a real lk_ token to
+/// reach `/api/...` endpoints. Allowlist `None` means "all tools."
+async fn pre_register_agent(db: &std::path::Path, name: &str) -> String {
+    let pool = open_and_migrate(db).await.expect("migrate");
+    let agents = AgentRepository::new(pool.clone());
+    let (pid, secret) = agents
+        .create(name, None, None, None, None, None)
+        .await
+        .expect("agent insert");
+    pool.close().await;
+    format!("Bearer lk_{pid}.{}", secret.expose_secret())
 }
 
 #[tokio::test]
@@ -93,6 +111,11 @@ tools:
         upstream = mock.uri(),
         sealed = sealed_path.display(),
     );
+    // M9: admin substrate is enabled (admin_socket + database), so the
+    // agent listener requires a per-agent bearer token. Pre-register
+    // before the daemon opens the DB.
+    let agent_bearer = pre_register_agent(&db, "ping-agent").await;
+
     let cfg = parse_config_str(&yaml).expect("config parses");
     let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
 
@@ -106,8 +129,14 @@ tools:
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // Make a proxy request — wiremock asserts the header on its end.
-    let resp = reqwest::get(format!("http://127.0.0.1:{agent_port}/api/ping/v1/ping"))
+    // Make a proxy request — wiremock asserts the upstream header on
+    // its end. The agent-side `Authorization` carries the per-agent
+    // bearer token; locksmith strips it and re-injects the resolved
+    // sealed credential before forwarding.
+    let resp = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{agent_port}/api/ping/v1/ping"))
+        .header("authorization", &agent_bearer)
+        .send()
         .await
         .expect("proxy request reaches daemon");
     assert!(
@@ -168,6 +197,11 @@ tools:
         db = db.display(),
         path = absent_sealed.display(),
     );
+    // M9: admin substrate is enabled, so even discovery (`/tools`) is
+    // gated by per-agent bearer auth. Pre-register before the daemon
+    // opens the DB.
+    let agent_bearer = pre_register_agent(&db, "discovery-agent").await;
+
     let cfg = parse_config_str(&yaml).expect("config parses");
     let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
 
@@ -183,7 +217,10 @@ tools:
 
     // /tools must include the `open` tool (no auth) but NOT `broken`
     // (credential failed to resolve).
-    let body: serde_json::Value = reqwest::get(format!("http://127.0.0.1:{agent_port}/tools"))
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{agent_port}/tools"))
+        .header("authorization", &agent_bearer)
+        .send()
         .await
         .unwrap()
         .json()
