@@ -614,6 +614,57 @@ fn check_tool_acl(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth_v2::AgentIdentity;
+
+    fn ident(allow: Option<&[&str]>, deny: Option<&[&str]>) -> AgentIdentity {
+        AgentIdentity {
+            public_id: "test-pid".into(),
+            name: "test".into(),
+            tool_allowlist: allow.map(|s| s.iter().map(|t| t.to_string()).collect()),
+            tool_denylist: deny.map(|s| s.iter().map(|t| t.to_string()).collect()),
+        }
+    }
+
+    // TS-14 cross-coverage: the ACL gate is auth-method-agnostic. Identity
+    // constructed by the mTLS authenticator (post-v2 / #67) flows through
+    // the same `check_tool_acl` as bearer-derived identity.
+    #[test]
+    fn check_tool_acl_allows_when_no_lists() {
+        assert!(check_tool_acl(&ident(None, None), "anything").is_ok());
+    }
+
+    #[test]
+    fn check_tool_acl_enforces_allowlist_membership() {
+        let id = ident(Some(&["github", "tavily"]), None);
+        assert!(check_tool_acl(&id, "github").is_ok());
+        assert_eq!(
+            check_tool_acl(&id, "anthropic"),
+            Err("not_in_allowlist")
+        );
+    }
+
+    #[test]
+    fn check_tool_acl_enforces_denylist_exclusion() {
+        let id = ident(None, Some(&["dangerous"]));
+        assert!(check_tool_acl(&id, "safe").is_ok());
+        assert_eq!(check_tool_acl(&id, "dangerous"), Err("in_denylist"));
+    }
+
+    #[test]
+    fn check_tool_acl_denylist_wins_when_both_overlap() {
+        let id = ident(Some(&["x", "y"]), Some(&["x"]));
+        assert_eq!(
+            check_tool_acl(&id, "x"),
+            Err("in_denylist"),
+            "explicit deny must win over allowlist membership"
+        );
+        assert!(check_tool_acl(&id, "y").is_ok(), "non-overlapping allow still works");
+    }
+}
+
 fn url_host(url: &str) -> Option<String> {
     let stripped = url
         .strip_prefix("https://")

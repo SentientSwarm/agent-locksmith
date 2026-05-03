@@ -471,6 +471,55 @@ async fn ts11_expired_agent_rejected() {
     );
 }
 
+// TS-12: M0/M1 deployment regression. When `bearer_authenticator` is
+// None (no admin substrate), the legacy `inbound_auth.token` shared
+// bearer path stays in force unchanged. AC-1.
+#[tokio::test]
+async fn ts12_m0_inbound_auth_token_path_still_works_without_bearer_authenticator() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+
+    // M0-shape config: no admin_socket, no database. inbound_auth.token
+    // is the only credential gate.
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+inbound_auth:
+  mode: "bearer"
+  token: "shared-secret-m0"
+tools:
+  - name: "things"
+    description: "Things service"
+    upstream: "{}"
+    timeouts:
+      request_seconds: 5
+      idle_seconds: 5
+"#,
+        mock.uri()
+    );
+    let config = parse_config_str(&yaml).unwrap();
+    let resolved = resolve_tool_creds_sync_env_only(&config);
+    let shared = Arc::new(ArcSwap::from_pointee(config));
+    // Build the router with bearer_authenticator=None — the M9 branch
+    // stays dormant and the M0 fallback handles the request.
+    let app = build_app_full(
+        shared,
+        None,
+        Arc::new(ArcSwap::from_pointee(resolved)),
+        None,
+        None,
+    );
+    let server = TestServer::new(app);
+
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", "Bearer shared-secret-m0")
+        .await;
+    resp.assert_status_ok();
+}
+
 // TS-5: Tool listed in BOTH allowlist and denylist → 403 (denylist wins).
 // AC-4. Denial is always explicit; conflicting policy resolves to deny.
 #[tokio::test]

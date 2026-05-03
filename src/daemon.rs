@@ -60,6 +60,21 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         }
     }
 
+    // M9 / v2.0.0: warn once when an operator carries `inbound_auth.token`
+    // forward into a deployment with the admin substrate enabled. The
+    // shared bearer is silently ignored on the agent listener; per-agent
+    // bearer takes precedence.
+    let inbound_auth_token_set = config
+        .inbound_auth
+        .as_ref()
+        .and_then(|a| a.token.as_ref())
+        .is_some();
+    crate::deprecation::emit_inbound_auth_token_runtime_deprecation(
+        &crate::deprecation::default_registry(),
+        admin_enabled,
+        inbound_auth_token_set,
+    );
+
     let addr = SocketAddr::new(
         config.listen.host.parse().unwrap_or([127, 0, 0, 1].into()),
         config.listen.port,
