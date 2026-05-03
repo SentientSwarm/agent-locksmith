@@ -42,6 +42,9 @@ pub async fn auth_middleware(
 
     // mTLS branches (post-v2 / #67). Under `Mtls` we require a peer
     // cert; under `Both` we try mTLS first and fall back to bearer.
+    // All error responses route through `auth_error_response` so the
+    // wire envelope matches §4.7.9 (status + `code` field) for both
+    // bearer and mTLS paths uniformly (M9).
     if matches!(auth_mode, AuthMode::Mtls | AuthMode::Both) {
         let peer = req.extensions().get::<PeerCertDer>().cloned();
         let has_cert = peer.as_ref().is_some_and(|p| p.0.is_some());
@@ -52,11 +55,7 @@ pub async fn auth_middleware(
                     "auth_mode={:?} but no mtls_authenticator wired in AppState",
                     auth_mode
                 );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": {"message": "mtls_misconfigured", "type": "auth_error"}})),
-                )
-                    .into_response();
+                return auth_error_response(&AuthError::Backend("mtls_misconfigured".into()));
             };
             return match authn.authenticate_cert(&cert).await {
                 Ok(identity) => {
@@ -64,25 +63,14 @@ pub async fn auth_middleware(
                     req.extensions_mut().insert(identity);
                     next.run(req).await
                 }
-                Err(_) => (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": {"message": "Unauthorized", "type": "auth_error"}})),
-                )
-                    .into_response(),
+                Err(e) => auth_error_response(&e),
             };
         }
         if matches!(auth_mode, AuthMode::Mtls) {
-            // Strict mode requires a client cert.
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": {
-                        "message": "client certificate required",
-                        "type": "auth_error",
-                    }
-                })),
-            )
-                .into_response();
+            // Strict mode requires a client cert. Render through the
+            // §4.7.9 envelope using `MissingCredential` (no presented
+            // cert is the equivalent of a missing bearer header).
+            return auth_error_response(&AuthError::MissingCredential);
         }
         // Both: fall through to bearer path.
     }
@@ -92,23 +80,8 @@ pub async fn auth_middleware(
     // we stamp `AuthenticatedAs::Bearer` AND the resolved `AgentIdentity`
     // into request extensions so `proxy::proxy_handler` can enforce
     // tool ACL and emit `agent_public_id` audit rows.
-    if let Some(authn) = state.bearer_authenticator.as_ref() {
-        let header = match req
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-        {
-            Some(h) => h.to_string(),
-            None => return auth_error_response(&AuthError::MissingCredential),
-        };
-        return match authn.authenticate_bearer(&header).await {
-            Ok(identity) => {
-                req.extensions_mut().insert(AuthenticatedAs::Bearer);
-                req.extensions_mut().insert(identity);
-                next.run(req).await
-            }
-            Err(e) => auth_error_response(&e),
-        };
+    if let Some(authn) = state.agent_auth.as_ref() {
+        return run_bearer_branch(authn.as_ref(), req, next).await;
     }
 
     // M0/M1 shared-bearer fallback. Preserves pre-v2 behavior for
@@ -146,6 +119,34 @@ pub async fn auth_middleware(
             Json(json!({"error": {"message": "Unauthorized", "type": "auth_error"}})),
         )
             .into_response(),
+    }
+}
+
+/// Per-agent bearer branch (M9). Always routes through the authenticator
+/// — including missing or unparseable headers — so the authenticator owns
+/// audit emission for every failure mode (missing/malformed/unknown/
+/// expired/wrong-secret). The empty string fallback maps non-ASCII or
+/// absent `Authorization` headers onto the same `missing_credential`
+/// audit path as a fully-absent header, so probe traffic stays visible
+/// in the security log regardless of how the client malformed the request.
+async fn run_bearer_branch(
+    authn: &dyn crate::auth_v2::AgentAuthenticator,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let header = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    match authn.authenticate_bearer(&header).await {
+        Ok(identity) => {
+            req.extensions_mut().insert(AuthenticatedAs::Bearer);
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(e) => auth_error_response(&e),
     }
 }
 

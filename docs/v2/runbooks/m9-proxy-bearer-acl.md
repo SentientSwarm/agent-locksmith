@@ -50,13 +50,15 @@ The CLI then expects `LOCKSMITH_OP_TOKEN=lkop_<public_id>.<secret>` in its envir
 LOCKSMITH_OP_TOKEN=$(./scripts/decrypt-creds.sh operator_token) \
   locksmith agent register \
     --name "hermes-mini-m1" \
-    --tool-allowlist "lmstudio,lf-scan,tavily,github"
+    --allowlist "lmstudio,lf-scan,tavily,github"
 
 # Output includes the wire token: lk_<public_id>.<secret>
 # Distribute it to the agent host (e.g. ~/.hermes/locksmith.token, mode 0600).
 ```
 
 The site repos `layer8-proxy-site` and `hermes-site` automate this via `register-agents.sh` driven by an `agents.yaml` manifest.
+
+> ⚠️ **Empty allowlist denies all tools.** `--allowlist ""` (or `--allowlist -` on `agent modify`) is treated as "no tools permitted" — every `/api/<tool>/...` request returns 403 `tool_not_allowed`. To grant unrestricted access, omit the `--allowlist` flag entirely.
 
 ### 4. Configure agents to send the bearer
 
@@ -112,25 +114,33 @@ Removing the block is a one-line cleanup; it's silently ignored, so requests wil
 All M9 events live in the existing `audit` SQLite table (and JSONL mirror if configured). Use the locksmith CLI or `sqlite3` directly.
 
 ```bash
-# Every authentication failure (BearerAuthenticator) — by reason
-locksmith audit list \
+# Every security audit row in the last hour — filter client-side by event.
+SINCE_MS=$(( $(date +%s) * 1000 - 3600 * 1000 ))
+
+# Authentication failures (BearerAuthenticator) by reason
+locksmith --format json audit query \
   --event-class security \
-  --event auth_failure \
-  --since 1h \
-  --format json | jq '.[] | {ts:.ts_ms, reason: .details.reason, agent: .agent_public_id}'
+  --since-ms "$SINCE_MS" \
+| jq '.[] | select(.event == "auth_failure")
+            | {ts:.ts_ms, reason: .details.reason, agent: .agent_public_id}'
 
 # Reason values: missing_credential, malformed_token, wrong_namespace,
 #                unknown_public_id, secret_mismatch, expired
 
-# Every ACL deny (proxy_handler) — by reason and tool
-locksmith audit list \
+# ACL denies (proxy_handler) by reason and tool
+locksmith --format json audit query \
   --event-class security \
-  --event authz_denied \
-  --since 1h \
-  --format json | jq '.[] | {ts:.ts_ms, agent: .agent_public_id, tool: .tool, reason: .details.reason}'
+  --since-ms "$SINCE_MS" \
+| jq '.[] | select(.event == "authz_denied")
+            | {ts:.ts_ms, agent: .agent_public_id, tool: .tool, reason: .details.reason}'
 
 # Reason values: not_in_allowlist, in_denylist
 ```
+
+Notes:
+- `audit query` is the subcommand (no `audit list`). Filter by `event` client-side via `jq` because the daemon's `/admin/operator/audit` endpoint groups by `event_class`, not the finer-grained `event` string.
+- `--since-ms` takes Unix milliseconds, not relative durations.
+- `authz_denied` rows do not carry `upstream_host` (the gate runs before tool resolution), so joins on `upstream_host` won't surface ACL denies.
 
 ## Troubleshooting
 
@@ -140,7 +150,7 @@ locksmith audit list \
 
 **Symptom:** specific agent's requests return 403 on a tool you expected to work.
 **Cause:** the agent's `tool_allowlist` doesn't include that tool, or `tool_denylist` does.
-**Fix:** `locksmith agent show --name <name>` to inspect; `locksmith agent set-acl --name <name> --tool-allowlist "..."` (or use `register-agents.sh` after editing `agents.yaml`).
+**Fix:** `locksmith agent get <public_id_or_name>` to inspect; `locksmith agent modify <public_id> --allowlist "lmstudio,lf-scan,..."` to replace the allowlist, or `--allowlist -` to clear it (unrestricted). The denylist is independent: `--denylist a,b` to set, `--denylist -` to clear. `register-agents.sh` after editing `agents.yaml` is the operator-facing equivalent.
 
 **Symptom:** startup warns about `inbound_auth.token` even though I removed it.
 **Cause:** there's a stale `inbound_auth:` block (with `mode: bearer` but no `token:`). The deprecation gate checks `token` specifically; `mode` alone is ignored.
@@ -148,7 +158,7 @@ locksmith audit list \
 
 **Symptom:** mTLS deployment now returns 403 on a tool the agent's cert was authorized for.
 **Cause:** mTLS already mapped the cert to an `AgentIdentity` in v1.x, but v2.0.0 now enforces that identity's `tool_allowlist` / `tool_denylist`. The agent's row in the admin DB has restrictive lists.
-**Fix:** update the agent's ACL via `locksmith agent set-acl`, or set both lists to `null` to restore unrestricted access.
+**Fix:** update the agent's ACL via `locksmith agent modify <public_id> --allowlist - --denylist -` to clear both lists (unrestricted), or set them explicitly with `--allowlist a,b,c` / `--denylist x,y`.
 
 ## Wire envelope reference
 

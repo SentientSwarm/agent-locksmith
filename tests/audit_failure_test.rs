@@ -83,22 +83,37 @@ async fn malformed_agent_token_emits_security_audit_row() {
 }
 
 #[tokio::test]
-async fn missing_authorization_header_emits_no_row() {
-    // MissingCredential is not a security event — agents may probe
-    // unauthenticated endpoints. Only credentials that fail validation
-    // emit audit rows. (If a deployment wants to log every probe, that's
-    // an access-log concern, not an audit one.)
+async fn missing_authorization_header_emits_security_audit_row() {
+    // M9 (B1): unauthenticated probes ARE a security signal — operators
+    // need them visible in the audit stream to detect scan traffic.
+    // BearerAuthenticator emits an `auth_failure` row with
+    // `details.reason = "missing_credential"` whenever the header is
+    // absent, doesn't start with `Bearer `, or contains non-ASCII bytes
+    // (the auth middleware passes "" for those cases).
     let f = auth_fixture().await;
     let err = f.bearer.authenticate_bearer("").await.expect_err("missing");
-    let _ = err;
+    assert!(matches!(
+        err,
+        agent_locksmith::auth_v2::AuthError::MissingCredential
+    ));
     let rows = f
         .audit
         .query(&AuditFilter::default(), AuditPage::default())
         .await
         .unwrap();
+    assert_eq!(rows.len(), 1, "missing-credential is a security event in M9");
+    let row = &rows[0];
+    assert_eq!(row.event, "auth_failure");
+    assert_eq!(
+        row.details
+            .as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str()),
+        Some("missing_credential"),
+    );
     assert!(
-        rows.is_empty(),
-        "missing-credential is not a security event"
+        row.agent_public_id.is_none(),
+        "no public_id resolvable from a missing/unparseable header"
     );
 }
 

@@ -45,13 +45,16 @@ pub struct AppState {
     /// Agent-auth middleware consults this when a peer cert is present
     /// in the request extensions.
     pub mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
-    /// Per-agent bearer authenticator (M9 / B1). Populated by the
-    /// daemon when the admin substrate is active (both `listen.admin_socket`
-    /// and `database.path` are configured); absent under M0/M1 deployments
-    /// without the substrate. When present, `auth_middleware` uses it on
-    /// every request; when absent, the M0 shared-bearer fallback preserves
-    /// pre-v2 behavior.
-    pub bearer_authenticator: Option<Arc<dyn AgentAuthenticator>>,
+    /// Per-agent authenticator for the bearer path (M9 / B1). Named to
+    /// match the existing `UdsState.agent_auth` field — the same `Arc`
+    /// is shared across both consumers so admin self-service ops and
+    /// the proxy hot path use one authenticator and one audit fanout.
+    /// Populated by the daemon when the admin substrate is active (both
+    /// `listen.admin_socket` and `database.path` configured); absent
+    /// under M0/M1 deployments without the substrate. When present,
+    /// `auth_middleware` uses it on every request; when absent, the M0
+    /// shared-bearer fallback preserves pre-v2 behavior.
+    pub agent_auth: Option<Arc<dyn AgentAuthenticator>>,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -118,7 +121,7 @@ pub fn build_app_with_audit_and_creds(
 /// Full-power constructor (post-v2 / #67 + M9): supplies all M0..M7
 /// state plus the optional MtlsAuthenticator (#67) and the optional
 /// BearerAuthenticator (M9). Used by the daemon. M0/M1 deployments
-/// without admin substrate pass `None` for `bearer_authenticator`,
+/// without admin substrate pass `None` for `agent_auth`,
 /// which preserves the M0 shared-bearer middleware path; deployments
 /// with admin substrate enabled pass `Some(...)` so `auth_middleware`
 /// enforces per-agent bearer authentication on every request.
@@ -127,7 +130,7 @@ pub fn build_app_full(
     audit: Option<AuditRepository>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
     mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
-    bearer_authenticator: Option<Arc<dyn AgentAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -140,7 +143,7 @@ pub fn build_app_full(
         resolved_creds,
         response_controls,
         mtls_authenticator,
-        bearer_authenticator,
+        agent_auth,
     });
 
     Router::new()

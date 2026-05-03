@@ -43,36 +43,17 @@ pub async fn proxy_handler(
     if let Some(identity) = agent_identity.as_ref()
         && let Err(reason) = check_tool_acl(identity, &tool_name)
     {
-        audit_record(
+        return record_authz_denied(
             &state.audit,
-            AuditEvent {
-                ts_ms: now_ms(),
-                event_class: EventClass::Security,
-                event: "authz_denied".to_string(),
-                tool: Some(tool_name.clone()),
-                method: Some(method.as_str().to_string()),
-                path: Some(request_path.clone()),
-                status: Some(403),
-                latency_ms: Some(started.elapsed().as_millis() as u64),
-                decision: Decision::Denied,
-                auth_method: Some(auth_method_str.to_string()),
-                agent_public_id: agent_public_id.clone(),
-                details: Some(json!({ "reason": reason })),
-                ..AuditEvent::default()
-            },
+            &tool_name,
+            method.as_str(),
+            &request_path,
+            started,
+            auth_method_str,
+            &agent_public_id,
+            reason,
         )
         .await;
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": {
-                    "message": "tool access denied",
-                    "type": "authz_error",
-                    "code": "tool_not_allowed",
-                }
-            })),
-        )
-            .into_response();
     }
 
     // Find the tool
@@ -593,6 +574,53 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// M9 / B1: emit a `security/authz_denied` audit row and return the
+/// generic 403 wire response with the §4.7.9 envelope. Centralises the
+/// deny-side audit + response so the proxy hot path stays readable.
+/// `reason` is `"in_denylist"` or `"not_in_allowlist"` per `check_tool_acl`.
+#[allow(clippy::too_many_arguments)]
+async fn record_authz_denied(
+    audit: &Option<AuditRepository>,
+    tool_name: &str,
+    method_str: &str,
+    request_path: &str,
+    started: Instant,
+    auth_method_str: &str,
+    agent_public_id: &Option<String>,
+    reason: &'static str,
+) -> Response {
+    audit_record(
+        audit,
+        AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "authz_denied".to_string(),
+            tool: Some(tool_name.to_string()),
+            method: Some(method_str.to_string()),
+            path: Some(request_path.to_string()),
+            status: Some(403),
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            decision: Decision::Denied,
+            auth_method: Some(auth_method_str.to_string()),
+            agent_public_id: agent_public_id.clone(),
+            details: Some(json!({ "reason": reason })),
+            ..AuditEvent::default()
+        },
+    )
+    .await;
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": {
+                "message": "tool access denied",
+                "type": "authz_error",
+                "code": "tool_not_allowed",
+            }
+        })),
+    )
+        .into_response()
+}
+
 /// M9 / B1 ACL check. Both lists optional. Allowlist `Some([...])`
 /// → tool must be IN the list. Denylist `Some([...])` → tool must NOT
 /// be in the list. If both are set and a tool appears in both, deny
@@ -675,5 +703,22 @@ mod tests {
             check_tool_acl(&id, "y").is_ok(),
             "non-overlapping allow still works"
         );
+    }
+
+    // M9 footgun guard: an allowlist of `Some(vec![])` is "no tools
+    // permitted" — every request 403s. The runbook calls this out so
+    // operators don't pass `--allowlist ""` expecting "unrestricted".
+    #[test]
+    fn check_tool_acl_empty_allowlist_denies_all() {
+        let id = ident(Some(&[]), None);
+        assert_eq!(check_tool_acl(&id, "anything"), Err("not_in_allowlist"));
+        assert_eq!(check_tool_acl(&id, ""), Err("not_in_allowlist"));
+    }
+
+    // Symmetric edge: empty denylist is a no-op (no tool is in it).
+    #[test]
+    fn check_tool_acl_empty_denylist_is_noop() {
+        let id = ident(None, Some(&[]));
+        assert!(check_tool_acl(&id, "anything").is_ok());
     }
 }

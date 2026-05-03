@@ -14,7 +14,7 @@
 
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::repo::AgentRepository;
-use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository};
+use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository, Decision, EventClass};
 use agent_locksmith::{argon2_helper, daemon, migrations, token};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, KeyUsagePurpose,
@@ -246,4 +246,178 @@ tools:
     // Permission tidy.
     std::fs::set_permissions(&server_key_path, std::fs::Permissions::from_mode(0o600)).ok();
     unsafe { std::env::remove_var("AGENT_LISTENER_MTLS_TEST_KEY") };
+}
+
+// TS-14 (M9): mTLS-derived AgentIdentity flows through the same ACL gate
+// as bearer-derived identity. This is the cross-coverage e2e the SPEC's
+// §6.2 #M9 testing table promises — the unit test on `check_tool_acl`
+// verifies the function is auth-method-agnostic, but only this test
+// proves the mTLS code path actually surfaces the identity to the
+// `proxy_handler` ACL gate.
+#[tokio::test]
+async fn ts14_mtls_identity_acl_gate_denies_in_denylist() {
+    let dir = TempDir::new().unwrap();
+    let pki = mint_pki("127.0.0.1", "agent-mtls-deny");
+
+    let ca_path = dir.path().join("ca.pem");
+    let server_cert_path = dir.path().join("server.crt");
+    let server_key_path = dir.path().join("server.key");
+    std::fs::write(&ca_path, &pki.ca_pem).unwrap();
+    std::fs::write(&server_cert_path, &pki.server_cert_pem).unwrap();
+    std::fs::write(&server_key_path, &pki.server_key_pem).unwrap();
+
+    let sock = dir.path().join("admin.sock");
+    let ops_path = dir.path().join("operators.yaml");
+    let db_path = dir.path().join("locksmith.db");
+    write_operators_yaml(&ops_path);
+
+    // Pre-register the agent with a denylist that includes the tool we
+    // will request. The mTLS handshake will resolve the agent identity
+    // (via cert_identity binding) and the proxy ACL gate must then 403.
+    let pool = migrations::open_and_migrate(&db_path).await.unwrap();
+    let repo = AgentRepository::new(pool.clone());
+    let (public_id, _secret) = repo
+        .create(
+            "agent-mtls-deny",
+            None,
+            None,
+            Some(&["ping".to_string()]), // denylist
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    repo.set_cert_identity(&public_id, Some("agent-mtls-deny"))
+        .await
+        .unwrap();
+    let audit = AuditRepository::new(pool);
+    drop(repo);
+
+    // Mock upstream (must NEVER be hit — the ACL gate stops the request
+    // before tool resolution).
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("should-not-reach"))
+        .mount(&mock)
+        .await;
+
+    let agent_port = pick_port();
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: {agent_port}
+  admin_socket:
+    path: "{sock}"
+  auth_mode: mtls
+  mtls:
+    ca_bundle_path: "{ca}"
+    server_cert_path: "{server_cert}"
+    server_key_path: "{server_key}"
+shutdown:
+  drain_window_seconds: 5
+operator_credentials_path: "{ops}"
+database:
+  path: "{db}"
+tools:
+  - name: "ping"
+    description: "ping service"
+    upstream: "{upstream}"
+"#,
+        sock = sock.display(),
+        ca = ca_path.display(),
+        server_cert = server_cert_path.display(),
+        server_key = server_key_path.display(),
+        ops = ops_path.display(),
+        db = db_path.display(),
+        upstream = mock.uri(),
+    );
+    let cfg = parse_config_str(&yaml).expect("config parses");
+    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::net::TcpStream::connect(("127.0.0.1", agent_port)).is_err() {
+        if std::time::Instant::now() > deadline {
+            panic!("agent listener never bound on port {agent_port}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let ca = reqwest::Certificate::from_pem(pki.ca_pem.as_bytes()).unwrap();
+    let identity_pem = format!("{}{}", pki.agent_cert_pem, pki.agent_key_pem);
+    let identity = reqwest::Identity::from_pem(identity_pem.as_bytes()).unwrap();
+    let client = reqwest::Client::builder()
+        .add_root_certificate(ca)
+        .identity(identity)
+        .build()
+        .unwrap();
+
+    let url = format!("https://127.0.0.1:{agent_port}/api/ping/v1/ping");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .expect("request reaches daemon");
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "denylist match must produce 403; got {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.expect("error body parses");
+    assert_eq!(body["error"]["type"], "authz_error");
+    assert_eq!(body["error"]["code"], "tool_not_allowed");
+
+    // Confirm the upstream was never reached — the ACL gate runs before
+    // tool resolution / outbound dispatch.
+    let upstream_received = mock.received_requests().await.unwrap_or_default();
+    assert!(
+        upstream_received.is_empty(),
+        "ACL deny must short-circuit before any upstream call; got {} hits",
+        upstream_received.len()
+    );
+
+    // Audit row records the deny with mtls auth_method and the cert-bound
+    // agent_public_id.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let rows = audit
+        .query(&AuditFilter::default(), AuditPage::default())
+        .await
+        .unwrap();
+    let deny_row = rows
+        .iter()
+        .find(|r| r.event_class == EventClass::Security && r.event == "authz_denied")
+        .expect("authz_denied audit row exists");
+    assert_eq!(deny_row.decision, Decision::Denied);
+    assert_eq!(deny_row.status, Some(403));
+    assert_eq!(deny_row.tool.as_deref(), Some("ping"));
+    assert_eq!(
+        deny_row.auth_method.as_deref(),
+        Some("mtls"),
+        "M9 ACL gate records the mTLS auth_method"
+    );
+    assert_eq!(
+        deny_row.agent_public_id.as_deref(),
+        Some(public_id.as_str()),
+        "agent_public_id matches the cert-identity-bound agent"
+    );
+    assert_eq!(
+        deny_row
+            .details
+            .as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str()),
+        Some("in_denylist"),
+        "deny reason recorded"
+    );
+
+    coord.trigger();
+    timeout(Duration::from_secs(6), handle)
+        .await
+        .expect("daemon exits within 6s")
+        .expect("join ok")
+        .expect("daemon Ok(())");
+
+    std::fs::set_permissions(&server_key_path, std::fs::Permissions::from_mode(0o600)).ok();
 }

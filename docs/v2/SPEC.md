@@ -3513,9 +3513,9 @@ T-shirt sizes are advisory and live in the separate `docs/v2/PLAN.md` artifact (
 
 | # | Task | Component | Layer | Size | Deps |
 |---|------|-----------|-------|------|------|
-| T9.1 | `AppState.bearer_authenticator: Option<Arc<dyn AgentAuthenticator>>` + `build_app_full` 5th parameter | C-2 | router | S | M2 |
-| T9.2 | `daemon::AdminSetup` exposes `bearer_authenticator: Arc<dyn AgentAuthenticator>` (cloned from the same Arc held by `UdsState.agent_auth`); threaded into `build_app_full` | C-2 | runtime | S | T9.1 |
-| T9.3 | `auth_middleware` bearer branch: when `bearer_authenticator` is `Some`, authenticate via trait, stamp `AuthenticatedAs::Bearer` + `AgentIdentity` into extensions, render errors via `auth_error_response` (§4.7.9 envelope incl. `Retry-After` for `RateLimited`) | C-2 | router | M | T9.1 |
+| T9.1 | `AppState.agent_auth: Option<Arc<dyn AgentAuthenticator>>` + `build_app_full` 5th parameter (named to match `UdsState.agent_auth`) | C-2 | router | S | M2 |
+| T9.2 | `daemon::AdminSetup` exposes `agent_auth: Arc<dyn AgentAuthenticator>` (cloned from the same Arc held by `UdsState.agent_auth`); threaded into `build_app_full` | C-2 | runtime | S | T9.1 |
+| T9.3 | `auth_middleware` bearer branch: when `agent_auth` is `Some`, route every request through the trait (including missing/unparseable headers — the authenticator owns audit emission for `reason=missing_credential`), stamp `AuthenticatedAs::Bearer` + `AgentIdentity` into extensions on success, render errors via `auth_error_response` (§4.7.9 envelope incl. `Retry-After` for `RateLimited`) | C-2 | router | M | T9.1 |
 | T9.4 | `proxy::check_tool_acl(&AgentIdentity, &str)` + ACL gate in `proxy_handler` (denylist beats allowlist; both lists optional; both-None ⇒ unrestricted) emitting `event_class=security event=authz_denied` | C-13, C-10 | service | M | M2, M3 |
 | T9.5 | `DeprecationRegistry` entry for `inbound_auth.token` (since `2.0.0`, `Disposition::Deprecated`) + runtime helper `emit_inbound_auth_token_runtime_deprecation()` invoked from `daemon::run` when admin substrate is active AND `inbound_auth.token` is set | C-cross | runtime | S | T9.1 |
 
@@ -3528,7 +3528,7 @@ T-shirt sizes are advisory and live in the separate `docs/v2/PLAN.md` artifact (
 | Unit | `src/auth.rs` `auth_error_response` | TS-16 `RateLimited`→429+`Retry-After`; missing/expired/backend variants render correct status+code |
 | Unit | `tests/deprecation_test.rs` | TS-13 default registry includes `inbound_auth.token`; runtime helper one-shots only when both conditions hold |
 | Regression | `tests/secret_proxy_integration_test.rs` | M5 sealed creds still reach hot path; agent pre-registered before daemon opens DB so per-agent bearer can authenticate |
-| Regression | `tests/agent_listener_mtls_e2e_test.rs` | mTLS path unchanged; M9 ACL gate cross-coverage with bearer (TS-14) |
+| Integration | `tests/agent_listener_mtls_e2e_test.rs` | mTLS path unchanged; TS-14 cross-coverage proves the mTLS-derived AgentIdentity flows through the same `proxy_handler` ACL gate as bearer-derived identity (denylist hit on a cert-bound agent → 403 + `event_class=security event=authz_denied auth_method=mtls`, upstream never reached) |
 
 ##### Documentation
 

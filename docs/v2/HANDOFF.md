@@ -31,7 +31,7 @@ This document is the cold-start context for the next session. Read top to bottom
 
 ### What's pending in `feature/m9-proxy-bearer-acl` (B1 closure → v2.0.0)
 
-- **M9 / B1 carry-over closed.** The `BearerAuthenticator` constructed in M2 is now wired into the agent listener (`AppState.bearer_authenticator`), and `proxy_handler` enforces the per-agent `tool_allowlist` / `tool_denylist` recorded in the M2 admin DB. See SPEC §6.2 #M9.
+- **M9 / B1 carry-over closed.** The `BearerAuthenticator` constructed in M2 is now wired into the agent listener (`AppState.agent_auth`, sharing one Arc with `UdsState.agent_auth`), and `proxy_handler` enforces the per-agent `tool_allowlist` / `tool_denylist` recorded in the M2 admin DB. See SPEC §6.2 #M9.
 - **Behavior flip when admin substrate is enabled.** `auth_mode: bearer` keeps its name but its semantics shift from "permissive when `inbound_auth.token` unset" to "per-agent bearer required." Operators upgrading from M0/M1 must register agents (`bootstrap-operator.py` + `register-agents.sh`) before requests will succeed. M0/M1 deployments without admin substrate are unchanged. See `docs/v2/runbooks/m9-proxy-bearer-acl.md`.
 - **`inbound_auth.token` deprecation.** Carrying a shared bearer forward into a deployment with admin substrate enabled emits a one-shot startup warning; the shared bearer is silently ignored. Tracked via the existing `DeprecationRegistry` (`src/deprecation.rs`).
 - **Wire shape.** New audit `event` string `authz_denied` (class `security`); new error envelope variant `tool_not_allowed` (403); 401 envelope canonicalised to §4.7.9 with `code` field across all `AuthError` variants.

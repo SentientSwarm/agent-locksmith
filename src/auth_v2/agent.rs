@@ -165,9 +165,18 @@ impl BearerAuthenticator {
 #[async_trait]
 impl AgentAuthenticator for BearerAuthenticator {
     async fn authenticate_bearer(&self, header: &str) -> Result<AgentIdentity, AuthError> {
-        let raw = header
-            .strip_prefix("Bearer ")
-            .ok_or(AuthError::MissingCredential)?;
+        let raw = match header.strip_prefix("Bearer ") {
+            Some(r) => r,
+            None => {
+                // M9: audit unauthenticated/wrong-scheme probes too.
+                // The wire response stays uniform per §4.7.9 (status
+                // 401, code=invalid_credential), but the security
+                // audit captures the distinction (`reason=missing_credential`)
+                // so operators can detect probe traffic.
+                self.audit_failure(None, "missing_credential").await;
+                return Err(AuthError::MissingCredential);
+            }
+        };
         let (ns, public_id, secret) = match token::parse(raw) {
             Ok(parts) => parts,
             Err(_) => {

@@ -3,7 +3,7 @@
 //!
 //! Companion to `audit_proxy_test.rs` (which exercises the M0/M1
 //! shared-bearer path with no per-agent identity). These tests build
-//! the agent router via `build_app_full(.., bearer_authenticator)` so
+//! the agent router via `build_app_full(.., agent_auth)` so
 //! `auth_middleware` consults the BearerAuthenticator on every request
 //! and `proxy_handler` enforces the agent's ACL before reaching upstream.
 
@@ -62,7 +62,7 @@ tools:
 fn build_test_server(
     yaml: &str,
     audit: AuditRepository,
-    bearer_authenticator: Arc<dyn AgentAuthenticator>,
+    agent_auth: Arc<dyn AgentAuthenticator>,
 ) -> TestServer {
     let config = parse_config_str(yaml).unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&config);
@@ -72,7 +72,7 @@ fn build_test_server(
         Some(audit),
         Arc::new(ArcSwap::from_pointee(resolved)),
         None, // mtls_authenticator
-        Some(bearer_authenticator),
+        Some(agent_auth),
     );
     TestServer::new(app)
 }
@@ -296,12 +296,14 @@ fn assert_unauthorized_envelope(resp: &axum_test::TestResponse, expected_code: &
     );
 }
 
-// TS-6: Missing Authorization header → 401, code=invalid_credential. AC-3.
-// `MissingCredential` maps to the same uniform shape as InvalidCredential
-// per §4.7.9 / Q-8 so attackers can't distinguish "no header" from
-// "wrong creds" externally.
+// TS-6: Missing Authorization header → 401, code=invalid_credential,
+// audit reason=missing_credential. AC-3.
+//
+// The wire envelope keeps the uniform §4.7.9 shape per Q-8 (attackers
+// can't distinguish "no header" from "wrong creds"), but the security
+// audit captures the distinction so operators can detect probe traffic.
 #[tokio::test]
-async fn ts6_missing_authorization_returns_401() {
+async fn ts6_missing_authorization_returns_401_and_audits() {
     let mock = MockServer::start().await;
     mount_things(&mock).await;
     let fx = fixture().await;
@@ -312,6 +314,51 @@ async fn ts6_missing_authorization_returns_401() {
 
     let resp = server.get("/api/things/v1/things/42").await;
     assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("missing_credential")),
+        "expected an auth_failure row with reason=missing_credential; got {rows:?}"
+    );
+}
+
+// TS-6b: Authorization header present but contains non-ASCII bytes (or any
+// otherwise-unparseable scheme) → 401 + audit reason=missing_credential.
+// Falls under "missing or unparseable header" in §4.7.9 — same wire and
+// audit shape as TS-6 so a probe with a junk header is just as visible.
+#[tokio::test]
+async fn ts6b_non_ascii_authorization_returns_401_and_audits() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    // axum_test forbids non-ASCII in `add_header`; use a non-Bearer scheme
+    // instead — same `to_str().ok().strip_prefix("Bearer ")` failure path.
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", "Basic dXNlcjpwYXNz")
+        .await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("missing_credential")),
+        "non-Bearer scheme must audit as missing_credential; got {rows:?}"
+    );
 }
 
 // TS-7: Operator-namespace token (lkop_…) on the agent listener → 401,
@@ -499,11 +546,11 @@ async fn ts11_expired_agent_rejected() {
     );
 }
 
-// TS-12: M0/M1 deployment regression. When `bearer_authenticator` is
+// TS-12: M0/M1 deployment regression. When `agent_auth` is
 // None (no admin substrate), the legacy `inbound_auth.token` shared
 // bearer path stays in force unchanged. AC-1.
 #[tokio::test]
-async fn ts12_m0_inbound_auth_token_path_still_works_without_bearer_authenticator() {
+async fn ts12_m0_inbound_auth_token_path_still_works_without_agent_auth() {
     let mock = MockServer::start().await;
     mount_things(&mock).await;
 
@@ -530,7 +577,7 @@ tools:
     let config = parse_config_str(&yaml).unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&config);
     let shared = Arc::new(ArcSwap::from_pointee(config));
-    // Build the router with bearer_authenticator=None — the M9 branch
+    // Build the router with agent_auth=None — the M9 branch
     // stays dormant and the M0 fallback handles the request.
     let app = build_app_full(
         shared,
