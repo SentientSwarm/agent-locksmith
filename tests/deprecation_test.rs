@@ -90,7 +90,10 @@ fn ts13_default_registry_includes_inbound_auth_token() {
         .lookup("inbound_auth.token")
         .expect("M9 entry registered");
     assert_eq!(entry.since_version, "2.0.0");
-    assert!(matches!(entry.disposition, DeprecationDisposition::Deprecated));
+    assert!(matches!(
+        entry.disposition,
+        DeprecationDisposition::Deprecated
+    ));
 }
 
 #[test]

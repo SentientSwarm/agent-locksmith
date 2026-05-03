@@ -614,6 +614,19 @@ fn check_tool_acl(
     Ok(())
 }
 
+fn url_host(url: &str) -> Option<String> {
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host = stripped.split(['/', ':']).next().unwrap_or("");
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,10 +653,7 @@ mod tests {
     fn check_tool_acl_enforces_allowlist_membership() {
         let id = ident(Some(&["github", "tavily"]), None);
         assert!(check_tool_acl(&id, "github").is_ok());
-        assert_eq!(
-            check_tool_acl(&id, "anthropic"),
-            Err("not_in_allowlist")
-        );
+        assert_eq!(check_tool_acl(&id, "anthropic"), Err("not_in_allowlist"));
     }
 
     #[test]
@@ -661,19 +671,9 @@ mod tests {
             Err("in_denylist"),
             "explicit deny must win over allowlist membership"
         );
-        assert!(check_tool_acl(&id, "y").is_ok(), "non-overlapping allow still works");
-    }
-}
-
-fn url_host(url: &str) -> Option<String> {
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-    let host = stripped.split(['/', ':']).next().unwrap_or("");
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
+        assert!(
+            check_tool_acl(&id, "y").is_ok(),
+            "non-overlapping allow still works"
+        );
     }
 }

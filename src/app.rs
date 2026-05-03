@@ -46,10 +46,10 @@ pub struct AppState {
     /// in the request extensions.
     pub mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
     /// Per-agent bearer authenticator (M9 / B1). Populated by the
-    /// daemon when the admin substrate is active (`listen.admin_socket`
-    /// + `database.path`); absent under M0/M1 deployments without the
-    /// substrate. When present, `auth_middleware` uses it on every
-    /// request; when absent, the M0 shared-bearer fallback preserves
+    /// daemon when the admin substrate is active (both `listen.admin_socket`
+    /// and `database.path` are configured); absent under M0/M1 deployments
+    /// without the substrate. When present, `auth_middleware` uses it on
+    /// every request; when absent, the M0 shared-bearer fallback preserves
     /// pre-v2 behavior.
     pub bearer_authenticator: Option<Arc<dyn AgentAuthenticator>>,
 }

@@ -101,8 +101,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
 
-    let (admin_state, audit_for_proxy, audit_for_sweeper, bearer_authenticator) = if admin_enabled
-    {
+    let (admin_state, audit_for_proxy, audit_for_sweeper, bearer_authenticator) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
             Some(setup.uds_state),

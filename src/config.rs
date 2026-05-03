@@ -298,18 +298,13 @@ fn default_log_level() -> String {
 /// (LAN-bound services typically). `proxied`: route through the configured
 /// `egress_proxy` HTTP CONNECT proxy (typically Pipelock for internet-bound
 /// traffic, D-16).
-#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum EgressMode {
+    /// Preserves M0 default (`cloud: false` ⇒ no proxy).
+    #[default]
     Direct,
     Proxied,
-}
-
-impl Default for EgressMode {
-    fn default() -> Self {
-        // Preserves M0 default (`cloud: false` ⇒ no proxy).
-        Self::Direct
-    }
 }
 
 #[derive(Debug, Deserialize)]

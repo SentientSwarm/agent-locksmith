@@ -3496,6 +3496,53 @@ T-shirt sizes are advisory and live in the separate `docs/v2/PLAN.md` artifact (
 | Rustdoc on ResponseControls | Developers | Public-API |
 | §7 changelog v1.0.0 entry | All | v2 complete |
 
+#### M9 — Per-agent bearer enforcement on the proxy hot path (B1 closure)
+
+**Goal:** Close the carry-over flagged in `src/auth.rs` (M0 shared-bearer comment) and `tests/audit_proxy_test.rs` (M3.x reference). The `BearerAuthenticator` constructed in `daemon::build_admin_substrate` was wired into the admin UDS in M2 but never reached the agent listener, so the per-tool `tool_allowlist` / `tool_denylist` recorded against each agent in the M2 admin DB was inert on `/api/<tool>/...` requests. M9 finishes the wiring and adds the ACL gate.
+
+**Dependencies:** M2 (BearerAuthenticator + AgentRepository + admin substrate), M3 (AuditRepository + AuditEvent + EventClass::Security).
+
+**Exit criteria:**
+- Admin substrate enabled (`listen.admin_socket` + `database.path`) ⇒ every `/api/...` request must carry a valid `lk_<public_id>.<secret>` token; missing or invalid auth returns 401 with the §4.7.9 error envelope (`code: invalid_credential | revoked | expired | rate_limited | backend_error`).
+- The authenticated `AgentIdentity` is stamped into request extensions and consumed by `proxy_handler` to enforce the agent's `tool_allowlist` / `tool_denylist` before reaching upstream. ACL miss returns 403 with `code: tool_not_allowed`; an audit row of class `security` event `authz_denied` records the deny reason (`not_in_allowlist` or `in_denylist`).
+- `agent_public_id` populated on every audit row that originated from an authenticated request (proxy_request, security/authz_denied, security/auth_failure).
+- Admin substrate **not** enabled ⇒ M0/M1 `inbound_auth.token` shared-bearer fallback preserved unchanged (regression covered by `audit_proxy_test.rs` and `auth_test.rs`).
+- Operators carrying `inbound_auth.token` forward into a deployment with admin substrate enabled get a one-shot startup deprecation warning (the shared bearer is silently ignored in favor of per-agent bearer).
+
+##### Tasks
+
+| # | Task | Component | Layer | Size | Deps |
+|---|------|-----------|-------|------|------|
+| T9.1 | `AppState.bearer_authenticator: Option<Arc<dyn AgentAuthenticator>>` + `build_app_full` 5th parameter | C-2 | router | S | M2 |
+| T9.2 | `daemon::AdminSetup` exposes `bearer_authenticator: Arc<dyn AgentAuthenticator>` (cloned from the same Arc held by `UdsState.agent_auth`); threaded into `build_app_full` | C-2 | runtime | S | T9.1 |
+| T9.3 | `auth_middleware` bearer branch: when `bearer_authenticator` is `Some`, authenticate via trait, stamp `AuthenticatedAs::Bearer` + `AgentIdentity` into extensions, render errors via `auth_error_response` (§4.7.9 envelope incl. `Retry-After` for `RateLimited`) | C-2 | router | M | T9.1 |
+| T9.4 | `proxy::check_tool_acl(&AgentIdentity, &str)` + ACL gate in `proxy_handler` (denylist beats allowlist; both lists optional; both-None ⇒ unrestricted) emitting `event_class=security event=authz_denied` | C-13, C-10 | service | M | M2, M3 |
+| T9.5 | `DeprecationRegistry` entry for `inbound_auth.token` (since `2.0.0`, `Disposition::Deprecated`) + runtime helper `emit_inbound_auth_token_runtime_deprecation()` invoked from `daemon::run` when admin substrate is active AND `inbound_auth.token` is set | C-cross | runtime | S | T9.1 |
+
+##### Testing
+
+| Test type | Scope | Key scenarios |
+|-----------|-------|---------------|
+| Integration | `tests/proxy_acl_test.rs` | TS-1 valid+allowlist→200 with audit identity; TS-2 not in allowlist→403; TS-3 in denylist→403; TS-4 no lists→200; TS-5 both lists overlap→403 (denylist wins); TS-6..TS-11 auth-failure paths (missing/wrong-namespace/malformed/unknown public_id/wrong secret/expired); TS-12 M0 fallback regression |
+| Unit | `src/proxy.rs` `check_tool_acl` | allow/deny/both/neither (auth-method-agnostic — same gate covers mTLS) |
+| Unit | `src/auth.rs` `auth_error_response` | TS-16 `RateLimited`→429+`Retry-After`; missing/expired/backend variants render correct status+code |
+| Unit | `tests/deprecation_test.rs` | TS-13 default registry includes `inbound_auth.token`; runtime helper one-shots only when both conditions hold |
+| Regression | `tests/secret_proxy_integration_test.rs` | M5 sealed creds still reach hot path; agent pre-registered before daemon opens DB so per-agent bearer can authenticate |
+| Regression | `tests/agent_listener_mtls_e2e_test.rs` | mTLS path unchanged; M9 ACL gate cross-coverage with bearer (TS-14) |
+
+##### Documentation
+
+| Artifact | Audience | Content |
+|----------|----------|---------|
+| `docs/v2/runbooks/m9-proxy-bearer-acl.md` | Operators | M0/M1 → v2.0.0 migration recipe (bootstrap-operator + register-agents); how to set per-tool allowlist/denylist; `inbound_auth.token` deprecation; troubleshooting 401/403 audit grep recipes |
+| `docs/v2/HANDOFF.md` §B1 closure | All | Carry-over closed; agent-locksmith tagged v2.0.0 (breaking) |
+| §7 changelog v2.0.0 entry | All | Behavior flip when admin substrate enabled |
+
+##### Wire shape additions
+
+- New audit `event` strings (no new `EventClass`): `authz_denied` (security class).
+- New `auth_error_response` error envelope shape per §4.7.9 (already specified — M9 just makes the bearer middleware emit it consistently).
+
 ### 6.3 Risk-Ordered Delivery Sequence
 
 The PRD's M1..M7 ordering is risk-driven. The rationale:

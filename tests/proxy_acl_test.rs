@@ -117,7 +117,9 @@ async fn mount_things(mock: &MockServer) {
 }
 
 /// Convenience: filter audit rows down to the M9 ACL deny class.
-async fn authz_denied_rows(audit: &AuditRepository) -> Vec<agent_locksmith::repo::audit::AuditEvent> {
+async fn authz_denied_rows(
+    audit: &AuditRepository,
+) -> Vec<agent_locksmith::repo::audit::AuditEvent> {
     audit
         .query(&AuditFilter::default(), AuditPage::default())
         .await
@@ -134,8 +136,14 @@ async fn ts1_valid_token_in_allowlist_returns_200_with_audit_identity() {
     let mock = MockServer::start().await;
     mount_things(&mock).await;
     let fx = fixture().await;
-    let (server, fx, header) =
-        server_with_acl(fx, &mock.uri(), "agent-allow", Some(vec!["things".into()]), None).await;
+    let (server, fx, header) = server_with_acl(
+        fx,
+        &mock.uri(),
+        "agent-allow",
+        Some(vec!["things".into()]),
+        None,
+    )
+    .await;
 
     let resp = server
         .get("/api/things/v1/things/42")
@@ -248,8 +256,7 @@ async fn ts4_no_acl_allows_request() {
     let mock = MockServer::start().await;
     mount_things(&mock).await;
     let fx = fixture().await;
-    let (server, _fx, header) =
-        server_with_acl(fx, &mock.uri(), "agent-open", None, None).await;
+    let (server, _fx, header) = server_with_acl(fx, &mock.uri(), "agent-open", None, None).await;
 
     let resp = server
         .get("/api/things/v1/things/42")
@@ -262,7 +269,9 @@ async fn ts4_no_acl_allows_request() {
 /// emits these on every failed auth path; the wire response is the
 /// same uniform 401 (per §4.7.9 / Q-8) but `details.reason` tells us
 /// which path triggered.
-async fn auth_failure_rows(audit: &AuditRepository) -> Vec<agent_locksmith::repo::audit::AuditEvent> {
+async fn auth_failure_rows(
+    audit: &AuditRepository,
+) -> Vec<agent_locksmith::repo::audit::AuditEvent> {
     audit
         .query(&AuditFilter::default(), AuditPage::default())
         .await
@@ -272,10 +281,7 @@ async fn auth_failure_rows(audit: &AuditRepository) -> Vec<agent_locksmith::repo
         .collect()
 }
 
-fn assert_unauthorized_envelope(
-    resp: &axum_test::TestResponse,
-    expected_code: &str,
-) {
+fn assert_unauthorized_envelope(resp: &axum_test::TestResponse, expected_code: &str) {
     resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
     let body: serde_json::Value = resp.json();
     assert_eq!(
@@ -320,17 +326,23 @@ async fn ts7_operator_namespace_token_rejected() {
     );
     let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
 
-    let op_token =
-        agent_locksmith::token::StructuredToken::generate(agent_locksmith::token::TokenNamespace::Operator);
+    let op_token = agent_locksmith::token::StructuredToken::generate(
+        agent_locksmith::token::TokenNamespace::Operator,
+    );
     let resp = server
         .get("/api/things/v1/things/42")
-        .add_header("Authorization", format!("Bearer {}", op_token.wire_format()))
+        .add_header(
+            "Authorization",
+            format!("Bearer {}", op_token.wire_format()),
+        )
         .await;
     assert_unauthorized_envelope(&resp, "invalid_credential");
 
     let rows = auth_failure_rows(&fx.audit).await;
     assert!(
-        rows.iter().any(|r| r.details.as_ref()
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
             .and_then(|d| d.get("reason"))
             .and_then(|r| r.as_str())
             == Some("wrong_namespace")),
@@ -357,7 +369,9 @@ async fn ts8_malformed_token_rejected() {
 
     let rows = auth_failure_rows(&fx.audit).await;
     assert!(
-        rows.iter().any(|r| r.details.as_ref()
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
             .and_then(|d| d.get("reason"))
             .and_then(|r| r.as_str())
             == Some("malformed_token")),
@@ -379,8 +393,9 @@ async fn ts9_unknown_public_id_rejected() {
     );
     let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
 
-    let bogus =
-        agent_locksmith::token::StructuredToken::generate(agent_locksmith::token::TokenNamespace::Agent);
+    let bogus = agent_locksmith::token::StructuredToken::generate(
+        agent_locksmith::token::TokenNamespace::Agent,
+    );
     let resp = server
         .get("/api/things/v1/things/42")
         .add_header("Authorization", format!("Bearer {}", bogus.wire_format()))
@@ -389,7 +404,9 @@ async fn ts9_unknown_public_id_rejected() {
 
     let rows = auth_failure_rows(&fx.audit).await;
     assert!(
-        rows.iter().any(|r| r.details.as_ref()
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
             .and_then(|d| d.get("reason"))
             .and_then(|r| r.as_str())
             == Some("unknown_public_id")),
@@ -428,7 +445,9 @@ async fn ts10_wrong_secret_rejected() {
 
     let rows = auth_failure_rows(&fx.audit).await;
     assert!(
-        rows.iter().any(|r| r.details.as_ref()
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
             .and_then(|d| d.get("reason"))
             .and_then(|r| r.as_str())
             == Some("secret_mismatch")),
@@ -447,7 +466,14 @@ async fn ts11_expired_agent_rejected() {
     let past_unix_secs = 1_000_000_000_i64; // 2001 — definitely expired
     let (pid, secret) = fx
         .agents
-        .create("agent-expired", None, None, None, None, Some(past_unix_secs))
+        .create(
+            "agent-expired",
+            None,
+            None,
+            None,
+            None,
+            Some(past_unix_secs),
+        )
         .await
         .unwrap();
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
@@ -463,7 +489,9 @@ async fn ts11_expired_agent_rejected() {
 
     let rows = auth_failure_rows(&fx.audit).await;
     assert!(
-        rows.iter().any(|r| r.details.as_ref()
+        rows.iter().any(|r| r
+            .details
+            .as_ref()
             .and_then(|d| d.get("reason"))
             .and_then(|r| r.as_str())
             == Some("expired")),

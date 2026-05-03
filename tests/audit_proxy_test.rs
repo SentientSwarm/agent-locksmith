@@ -1,9 +1,12 @@
 //! T3.1 — proxy hot path emits one audit row per request.
 //!
 //! Covers R-F7 + INF-19. The proxy_handler must record an AuditEvent
-//! into the AuditRepository for every request it dispatches. M0/M1
-//! shared-bearer auth means agent_public_id is None for now; M3.x
-//! lands per-agent identity on the proxy and populates that column.
+//! into the AuditRepository for every request it dispatches. This file
+//! exercises the M0/M1 shared-bearer code path explicitly (built via
+//! `build_app_with_audit`, which passes `bearer_authenticator: None`
+//! to `build_app_full`) so `agent_public_id` is None on these rows by
+//! design. Per-agent identity on the proxy is wired by M9 / B1 — see
+//! `tests/proxy_acl_test.rs` for the populated-`agent_public_id` flow.
 
 use agent_locksmith::app::build_app_with_audit;
 use agent_locksmith::config::parse_config_str;
@@ -81,7 +84,8 @@ tools:
     );
     assert!(
         row.agent_public_id.is_none(),
-        "M0/M1 shared-bearer: agent_public_id is None pending M3.x"
+        "M0/M1 shared-bearer path: agent_public_id is None by construction. \
+         The per-agent populated case is covered by tests/proxy_acl_test.rs (M9)."
     );
 }
 
