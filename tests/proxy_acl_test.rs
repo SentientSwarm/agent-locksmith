@@ -258,6 +258,219 @@ async fn ts4_no_acl_allows_request() {
     resp.assert_status_ok();
 }
 
+/// Pull all `auth_failure` security audit rows. BearerAuthenticator
+/// emits these on every failed auth path; the wire response is the
+/// same uniform 401 (per §4.7.9 / Q-8) but `details.reason` tells us
+/// which path triggered.
+async fn auth_failure_rows(audit: &AuditRepository) -> Vec<agent_locksmith::repo::audit::AuditEvent> {
+    audit
+        .query(&AuditFilter::default(), AuditPage::default())
+        .await
+        .expect("query ok")
+        .into_iter()
+        .filter(|r| r.event_class == EventClass::Security && r.event == "auth_failure")
+        .collect()
+}
+
+fn assert_unauthorized_envelope(
+    resp: &axum_test::TestResponse,
+    expected_code: &str,
+) {
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(
+        body["error"]["type"].as_str(),
+        Some("auth_error"),
+        "body: {body}"
+    );
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some(expected_code),
+        "body: {body}"
+    );
+}
+
+// TS-6: Missing Authorization header → 401, code=invalid_credential. AC-3.
+// `MissingCredential` maps to the same uniform shape as InvalidCredential
+// per §4.7.9 / Q-8 so attackers can't distinguish "no header" from
+// "wrong creds" externally.
+#[tokio::test]
+async fn ts6_missing_authorization_returns_401() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    let resp = server.get("/api/things/v1/things/42").await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+}
+
+// TS-7: Operator-namespace token (lkop_…) on the agent listener → 401,
+// audit reason=wrong_namespace. AC-3.
+#[tokio::test]
+async fn ts7_operator_namespace_token_rejected() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    let op_token =
+        agent_locksmith::token::StructuredToken::generate(agent_locksmith::token::TokenNamespace::Operator);
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", format!("Bearer {}", op_token.wire_format()))
+        .await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r.details.as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("wrong_namespace")),
+        "expected an auth_failure row with reason=wrong_namespace; got {rows:?}"
+    );
+}
+
+// TS-8: Malformed token (no `.` separator) → 401, audit reason=malformed_token. AC-3.
+#[tokio::test]
+async fn ts8_malformed_token_rejected() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", "Bearer lk_no_dot_separator")
+        .await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r.details.as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("malformed_token")),
+        "expected reason=malformed_token; got {rows:?}"
+    );
+}
+
+// TS-9: Unknown public_id (well-formed token, never stored) → 401,
+// audit reason=unknown_public_id. AC-3. The decoy-verify path in
+// BearerAuthenticator keeps timing similar to TS-10; verifying that
+// closure quantitatively belongs to auth_v2_test (unit), not here.
+#[tokio::test]
+async fn ts9_unknown_public_id_rejected() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    let bogus =
+        agent_locksmith::token::StructuredToken::generate(agent_locksmith::token::TokenNamespace::Agent);
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", format!("Bearer {}", bogus.wire_format()))
+        .await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r.details.as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("unknown_public_id")),
+        "expected reason=unknown_public_id; got {rows:?}"
+    );
+}
+
+// TS-10: Wrong secret on a known public_id → 401, audit reason=secret_mismatch. AC-3.
+#[tokio::test]
+async fn ts10_wrong_secret_rejected() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    // Mint an agent so the public_id exists; then craft a token that
+    // reuses the public_id but a different secret.
+    let (pid, _real_secret) = fx
+        .agents
+        .create("agent-mismatched", None, None, None, None, None)
+        .await
+        .unwrap();
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let bogus_secret = agent_locksmith::token::StructuredToken::generate(
+        agent_locksmith::token::TokenNamespace::Agent,
+    );
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header(
+            "Authorization",
+            format!("Bearer lk_{pid}.{}", bogus_secret.secret.expose()),
+        )
+        .await;
+    assert_unauthorized_envelope(&resp, "invalid_credential");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r.details.as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("secret_mismatch")),
+        "expected reason=secret_mismatch; got {rows:?}"
+    );
+}
+
+// TS-11: Expired agent record → 401 even with the correct secret,
+// audit reason=expired. AC-3. AuthError::Expired maps code=expired.
+#[tokio::test]
+async fn ts11_expired_agent_rejected() {
+    let mock = MockServer::start().await;
+    mount_things(&mock).await;
+    let fx = fixture().await;
+    // Insert with expires_at in the past.
+    let past_unix_secs = 1_000_000_000_i64; // 2001 — definitely expired
+    let (pid, secret) = fx
+        .agents
+        .create("agent-expired", None, None, None, None, Some(past_unix_secs))
+        .await
+        .unwrap();
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+
+    let resp = server
+        .get("/api/things/v1/things/42")
+        .add_header("Authorization", bearer_header(&pid, &secret))
+        .await;
+    assert_unauthorized_envelope(&resp, "expired");
+
+    let rows = auth_failure_rows(&fx.audit).await;
+    assert!(
+        rows.iter().any(|r| r.details.as_ref()
+            .and_then(|d| d.get("reason"))
+            .and_then(|r| r.as_str())
+            == Some("expired")),
+        "expected reason=expired; got {rows:?}"
+    );
+}
+
 // TS-5: Tool listed in BOTH allowlist and denylist → 403 (denylist wins).
 // AC-4. Denial is always explicit; conflicting policy resolves to deny.
 #[tokio::test]
