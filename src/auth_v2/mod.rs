@@ -19,6 +19,10 @@ pub mod operator;
 pub use agent::{AgentAuthenticator, AgentIdentity, BearerAuthenticator};
 pub use operator::{OperatorAuthenticator, OperatorIdentity};
 
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde_json::json;
 use std::time::Duration;
 
 /// Authentication errors. Each variant maps to a specific HTTP response
@@ -43,9 +47,17 @@ pub enum AuthError {
     /// Per-IP or per-target rate limit hit. 429 with `Retry-After`.
     #[error("rate limited")]
     RateLimited { retry_after: Duration },
-    /// Underlying repository / IO failure. 500.
+    /// Underlying repository / IO failure. 500. The inner string is for
+    /// log/tracing only — the wire renders a generic `"internal error"`
+    /// message to avoid leaking operational discriminators.
     #[error("backend: {0}")]
     Backend(String),
+    /// mTLS-specific misconfiguration on the daemon side (e.g. auth_mode
+    /// requires mTLS but the authenticator wasn't wired). 500. Like
+    /// `Backend`, the wire renders a generic message; the discriminating
+    /// detail is logged at `tracing::error!` only.
+    #[error("internal error")]
+    MtlsMisconfigured,
 }
 
 impl AuthError {
@@ -57,7 +69,7 @@ impl AuthError {
             | AuthError::Revoked
             | AuthError::Expired => 401,
             AuthError::RateLimited { .. } => 429,
-            AuthError::Backend(_) => 500,
+            AuthError::Backend(_) | AuthError::MtlsMisconfigured => 500,
         }
     }
 
@@ -70,6 +82,105 @@ impl AuthError {
             AuthError::Expired => "expired",
             AuthError::RateLimited { .. } => "rate_limited",
             AuthError::Backend(_) => "backend_error",
+            AuthError::MtlsMisconfigured => "internal_error",
         }
+    }
+}
+
+/// Render an `AuthError` as a uniform §4.7.9 error envelope. Maps the
+/// variant's `status()` and `code()` into the wire JSON; for
+/// `RateLimited`, also sets the `Retry-After` header.
+///
+/// Co-located with `AuthError` so all "how does this variant render to
+/// the wire" logic lives in one file. Used by both the bearer and mTLS
+/// branches of `auth::auth_middleware`.
+pub(crate) fn auth_error_response(err: &AuthError) -> Response {
+    let status = StatusCode::from_u16(err.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json!({
+        "error": {
+            "message": err.to_string(),
+            "type": "auth_error",
+            "code": err.code(),
+        }
+    });
+    let mut resp = (status, Json(body)).into_response();
+    if let AuthError::RateLimited { retry_after } = err
+        && let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.as_secs().to_string())
+    {
+        resp.headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, v);
+    }
+    resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn body_json(resp: Response) -> serde_json::Value {
+        let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_error_response_missing_credential_is_401() {
+        let resp = auth_error_response(&AuthError::MissingCredential);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["type"], "auth_error");
+        assert_eq!(body["error"]["code"], "invalid_credential");
+    }
+
+    #[tokio::test]
+    async fn auth_error_response_expired_is_401_with_expired_code() {
+        let resp = auth_error_response(&AuthError::Expired);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "expired");
+    }
+
+    // TS-16: forward-compat — RateLimited renders 429 with Retry-After
+    // header. No current authenticator emits this, but the M9 helper
+    // honors the contract so future RateLimiter (WEM-235) work doesn't
+    // need to retouch the wire shape.
+    #[tokio::test]
+    async fn ts16_rate_limited_renders_429_with_retry_after_header() {
+        let resp = auth_error_response(&AuthError::RateLimited {
+            retry_after: Duration::from_secs(7),
+        });
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = resp
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok());
+        assert_eq!(retry_after, Some("7"));
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "rate_limited");
+    }
+
+    #[tokio::test]
+    async fn auth_error_response_backend_renders_500_with_backend_code() {
+        let resp = auth_error_response(&AuthError::Backend("internals".into()));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "backend_error");
+    }
+
+    // M9 (#6 from verify-iter-2): MtlsMisconfigured maps to a generic
+    // wire envelope (`code: internal_error`, message: "internal error")
+    // so daemon misconfig discriminators are not leaked through 500s.
+    // The discriminating string is logged at `tracing::error!` only
+    // (see auth.rs auth_middleware).
+    #[tokio::test]
+    async fn auth_error_response_mtls_misconfigured_renders_generic_500() {
+        let resp = auth_error_response(&AuthError::MtlsMisconfigured);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "internal_error");
+        assert_eq!(
+            body["error"]["message"], "internal error",
+            "wire message must be generic — no operational discriminator"
+        );
     }
 }

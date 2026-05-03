@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::agent_listener::PeerCertDer;
 use crate::app::AppState;
-use crate::auth_v2::AuthError;
+use crate::auth_v2::{AuthError, auth_error_response};
 use crate::config::AuthMode;
 
 /// Recorded on the request extension to tell downstream code (proxy
@@ -55,7 +55,7 @@ pub async fn auth_middleware(
                     "auth_mode={:?} but no mtls_authenticator wired in AppState",
                     auth_mode
                 );
-                return auth_error_response(&AuthError::Backend("mtls_misconfigured".into()));
+                return auth_error_response(&AuthError::MtlsMisconfigured);
             };
             return match authn.authenticate_cert(&cert).await {
                 Ok(identity) => {
@@ -150,80 +150,3 @@ async fn run_bearer_branch(
     }
 }
 
-/// Render an `AuthError` as a uniform §4.7.9 error envelope. Maps the
-/// variant's `status()` (401 / 429 / 500) and `code()` into the wire
-/// JSON; for `RateLimited`, also sets the `Retry-After` header.
-pub(crate) fn auth_error_response(err: &AuthError) -> Response {
-    let status = StatusCode::from_u16(err.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = json!({
-        "error": {
-            "message": err.to_string(),
-            "type": "auth_error",
-            "code": err.code(),
-        }
-    });
-    let mut resp = (status, Json(body)).into_response();
-    if let AuthError::RateLimited { retry_after } = err
-        && let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.as_secs().to_string())
-    {
-        resp.headers_mut()
-            .insert(axum::http::header::RETRY_AFTER, v);
-    }
-    resp
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::body::to_bytes;
-    use std::time::Duration;
-
-    async fn body_json(resp: Response) -> serde_json::Value {
-        let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
-        serde_json::from_slice(&bytes).unwrap()
-    }
-
-    #[tokio::test]
-    async fn auth_error_response_missing_credential_is_401() {
-        let resp = auth_error_response(&AuthError::MissingCredential);
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let body = body_json(resp).await;
-        assert_eq!(body["error"]["type"], "auth_error");
-        assert_eq!(body["error"]["code"], "invalid_credential");
-    }
-
-    #[tokio::test]
-    async fn auth_error_response_expired_is_401_with_expired_code() {
-        let resp = auth_error_response(&AuthError::Expired);
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let body = body_json(resp).await;
-        assert_eq!(body["error"]["code"], "expired");
-    }
-
-    // TS-16: forward-compat — RateLimited renders 429 with Retry-After
-    // header. No current authenticator emits this, but the M9 helper
-    // honors the contract so future RateLimiter (WEM-235) work doesn't
-    // need to retouch the wire shape.
-    #[tokio::test]
-    async fn ts16_rate_limited_renders_429_with_retry_after_header() {
-        let resp = auth_error_response(&AuthError::RateLimited {
-            retry_after: Duration::from_secs(7),
-        });
-        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = resp
-            .headers()
-            .get(axum::http::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok());
-        assert_eq!(retry_after, Some("7"));
-        let body = body_json(resp).await;
-        assert_eq!(body["error"]["code"], "rate_limited");
-    }
-
-    #[tokio::test]
-    async fn auth_error_response_backend_is_500_with_generic_message() {
-        let resp = auth_error_response(&AuthError::Backend("internals".into()));
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = body_json(resp).await;
-        assert_eq!(body["error"]["code"], "backend_error");
-    }
-}
