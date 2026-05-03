@@ -48,9 +48,13 @@ pub enum AuthError {
     #[error("rate limited")]
     RateLimited { retry_after: Duration },
     /// Underlying repository / IO failure. 500. The inner string is for
-    /// log/tracing only — the wire renders a generic `"internal error"`
-    /// message to avoid leaking operational discriminators.
-    #[error("backend: {0}")]
+    /// log/tracing only — the `Display` impl renders a generic
+    /// `"internal error"` message so callers that route the variant
+    /// through `auth_error_response` (which uses `to_string()` for the
+    /// wire body) do NOT leak operational discriminators (sqlx errors,
+    /// file paths, parse positions). To inspect the inner string,
+    /// match on the variant directly.
+    #[error("internal error")]
     Backend(String),
     /// mTLS-specific misconfiguration on the daemon side (e.g. auth_mode
     /// requires mTLS but the authenticator wasn't wired). 500. Like
@@ -159,12 +163,25 @@ mod tests {
         assert_eq!(body["error"]["code"], "rate_limited");
     }
 
+    // Backend renders 500 with `code: backend_error` (operator-distinguishable
+    // from MtlsMisconfigured) but a GENERIC `"internal error"` message
+    // — the inner discriminator (sqlx errors, file paths, parse
+    // positions) MUST NOT reach the wire, only `tracing::error!` logs.
     #[tokio::test]
-    async fn auth_error_response_backend_renders_500_with_backend_code() {
-        let resp = auth_error_response(&AuthError::Backend("internals".into()));
+    async fn auth_error_response_backend_renders_500_with_generic_message() {
+        let resp = auth_error_response(&AuthError::Backend("sqlx: table users not found".into()));
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = body_json(resp).await;
         assert_eq!(body["error"]["code"], "backend_error");
+        assert_eq!(
+            body["error"]["message"], "internal error",
+            "wire message must be generic — Backend's inner string is log-only"
+        );
+        let serialized = body.to_string();
+        assert!(
+            !serialized.contains("sqlx") && !serialized.contains("table users"),
+            "Backend's inner discriminator must not appear in wire body: {serialized}"
+        );
     }
 
     // M9 (#6 from verify-iter-2): MtlsMisconfigured maps to a generic
