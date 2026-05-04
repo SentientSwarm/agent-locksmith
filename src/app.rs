@@ -293,12 +293,23 @@ fn skill_response(body: String, cache_control: &'static str) -> Response {
     resp
 }
 
-async fn tools_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+async fn tools_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Json<Value> {
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
+    // M9: when an `AgentIdentity` is stamped (per-agent bearer or
+    // mTLS), filter the catalog by the agent's ACL so it never sees
+    // tools it can't call. Keeps `/tools` consistent with both the
+    // proxy hot path and `/agent/skill` — same ACL gate, same result.
+    // M0/M1 deployments without admin substrate have no identity
+    // stamped; they get the full active catalog as pre-M9.
+    let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
     let tools: Vec<Value> = config
         .active_tools_against(&resolved)
         .iter()
+        .filter(|t| identity.is_none_or(|id| id.allows_tool(&t.name).is_ok()))
         .map(|t| {
             json!({
                 "name": t.name,

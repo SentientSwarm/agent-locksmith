@@ -629,3 +629,127 @@ async fn ts5_denylist_wins_over_allowlist() {
         "denylist must win when both lists overlap"
     );
 }
+
+// TS-17 (M9 follow-up): /tools must filter by the calling agent's ACL
+// the same way /agent/skill and /api/<tool>/... do. Pre-fix, /tools
+// returned the full active catalog to any authenticated agent — info
+// disclosure (operational shape) and a UX inconsistency (the agent
+// could see tools it would 403 on). AC-4.
+#[tokio::test]
+async fn ts17_tools_endpoint_filters_by_agent_acl() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "alpha"
+    description: "Tool A"
+    upstream: "http://example.invalid"
+    timeouts: { request_seconds: 5, idle_seconds: 5 }
+  - name: "bravo"
+    description: "Tool B"
+    upstream: "http://example.invalid"
+    timeouts: { request_seconds: 5, idle_seconds: 5 }
+  - name: "charlie"
+    description: "Tool C"
+    upstream: "http://example.invalid"
+    timeouts: { request_seconds: 5, idle_seconds: 5 }
+"#;
+    let fx = fixture().await;
+    // Agent allowed to call alpha + bravo (NOT charlie).
+    let (pid, secret) = fx
+        .agents
+        .create(
+            "narrow-agent",
+            None,
+            Some(&["alpha".to_string(), "bravo".to_string()]),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(yaml, fx.audit.clone(), bearer);
+    let header = bearer_header(&pid, &secret);
+
+    let resp = server
+        .get("/tools")
+        .add_header("Authorization", header)
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().expect("name string"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["alpha", "bravo"],
+        "/tools must list ONLY allowlisted tools; got {names:?}"
+    );
+    assert!(
+        !names.contains(&"charlie"),
+        "tool not in allowlist must NOT appear in /tools catalog"
+    );
+}
+
+// Symmetric: an agent with a denylist must not see the denied tool in
+// /tools either.
+#[tokio::test]
+async fn ts17b_tools_endpoint_filters_by_denylist() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "safe"
+    description: "Safe tool"
+    upstream: "http://example.invalid"
+    timeouts: { request_seconds: 5, idle_seconds: 5 }
+  - name: "dangerous"
+    description: "Tool the agent must not see"
+    upstream: "http://example.invalid"
+    timeouts: { request_seconds: 5, idle_seconds: 5 }
+"#;
+    let fx = fixture().await;
+    let (pid, secret) = fx
+        .agents
+        .create(
+            "deny-agent",
+            None,
+            None,
+            Some(&["dangerous".to_string()]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
+        BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
+    );
+    let server = build_test_server(yaml, fx.audit.clone(), bearer);
+    let header = bearer_header(&pid, &secret);
+
+    let resp = server
+        .get("/tools")
+        .add_header("Authorization", header)
+        .await;
+    resp.assert_status_ok();
+    let body: serde_json::Value = resp.json();
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().expect("name string"))
+        .collect();
+    assert_eq!(names, vec!["safe"]);
+    assert!(
+        !names.contains(&"dangerous"),
+        "denylisted tool must NOT appear in /tools"
+    );
+}
