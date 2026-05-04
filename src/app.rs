@@ -155,15 +155,18 @@ pub fn build_app_full(
         .route("/health", routing::get(livez_handler))
         .route("/readyz", routing::get(readyz_handler))
         .route("/version", routing::get(version_handler))
-        // Agent skill (M9 / B1 follow-up). `/skill` is unauthenticated
-        // and returns the generic protocol description (no tool/model
-        // leak). `/agent/skill` is per-agent-bearer-authenticated and
-        // returns the personalized form (the agent's resolved tool
-        // catalog, ACL, audit-debug recipes). The auth middleware skips
-        // `/skill` (added to its allowlist) and gates `/agent/skill`
-        // with the same per-agent bearer that authorizes `/api/...`.
-        .route("/skill", routing::get(skill_unauthenticated_handler))
-        .route("/agent/skill", routing::get(skill_authenticated_handler))
+        // Agent skill (M9 / B1 follow-up). One auth-OPTIONAL route:
+        // - No `Authorization` header → generic form (no tool/model
+        //   leak). The auth middleware lets the request through
+        //   unauthenticated for /skill specifically.
+        // - Valid `Authorization: Bearer lk_...` → personalized form
+        //   (the agent's resolved tool catalog, ACL, audit-debug
+        //   recipes). The auth middleware runs the full bearer path,
+        //   stamps `AgentIdentity` into request extensions, and the
+        //   handler dispatches to the personalized renderer.
+        // - Invalid bearer → 401 (no silent downgrade — preserves the
+        //   §4.7.9 envelope contract).
+        .route("/skill", routing::get(skill_handler))
         .route("/tools", routing::get(tools_handler))
         .route(
             "/api/{tool_name}/{*path}",
@@ -235,45 +238,32 @@ async fn version_handler() -> Json<Value> {
     }))
 }
 
-/// Unauthenticated `/skill`. Returns the generic agentskills.io-shaped
-/// markdown — no tool/model leak. Tells the caller to re-fetch with a
-/// bearer for the personalized form. Cacheable (embedded at build
-/// time; same content per binary version).
-async fn skill_unauthenticated_handler() -> impl IntoResponse {
-    skill_response(
-        crate::skill::render_unauthenticated(),
-        "public, max-age=86400",
-    )
-}
-
-/// Authenticated `/agent/skill`. The auth middleware has already
-/// validated the bearer and stamped `AgentIdentity` into request
-/// extensions; if the extension is missing (which happens only in
-/// deployments without admin substrate, where the middleware lets
-/// requests through under M0 fallback semantics) we degrade to the
-/// generic form so the caller still gets useful documentation. The
-/// personalized form is NOT cacheable — operators can change an
-/// agent's ACL at any time via `locksmith agent modify`, and the
-/// response embeds operational detail callers shouldn't share.
-async fn skill_authenticated_handler(
+/// `/skill` — auth-optional. Dispatches to the personalized form when
+/// `AgentIdentity` is in request extensions (the auth middleware
+/// stamped it after validating a bearer); otherwise renders the
+/// generic form (no operational leak). Cache headers vary by form:
+/// generic is `public, max-age=86400` (embedded at build time, same
+/// per binary); personalized is `private, no-cache, no-store`
+/// (operators can change an agent's ACL at any time and the body
+/// embeds per-agent detail).
+async fn skill_handler(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    let body = match req.extensions().get::<crate::auth_v2::AgentIdentity>() {
+    match req.extensions().get::<crate::auth_v2::AgentIdentity>() {
         Some(identity) => {
             let config = state.config.load();
             let resolved = state.resolved_creds.load();
-            crate::skill::render_authenticated(identity, &config, &resolved)
+            skill_response(
+                crate::skill::render_authenticated(identity, &config, &resolved),
+                "private, no-cache, no-store",
+            )
         }
-        None => {
-            // M0/M1 deployment: no per-agent identity is stamped because
-            // the admin substrate isn't enabled. Return the generic
-            // form rather than an error — the caller authenticated as
-            // best they could.
-            crate::skill::render_unauthenticated()
-        }
-    };
-    skill_response(body, "private, no-cache, no-store")
+        None => skill_response(
+            crate::skill::render_unauthenticated(),
+            "public, max-age=86400",
+        ),
+    }
 }
 
 /// Common response shape for both `/skill` handlers: markdown body,

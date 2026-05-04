@@ -32,14 +32,20 @@ pub async fn auth_middleware(
 ) -> Response {
     // Skip auth for unauthenticated probes / metadata endpoints (INF-3).
     // /health is preserved as an alias to /livez for backward compat with
-    // M0 deployments. /skill returns the generic agent-facing skill
-    // document (M9 / B1 follow-up) — no operational detail; the
-    // personalized form lives at /agent/skill behind this middleware.
+    // M0 deployments.
     let path = req.uri().path();
-    if matches!(
-        path,
-        "/livez" | "/readyz" | "/version" | "/health" | "/skill"
-    ) {
+    if matches!(path, "/livez" | "/readyz" | "/version" | "/health") {
+        return next.run(req).await;
+    }
+
+    // /skill is auth-OPTIONAL (M9 / B1 follow-up). With no
+    // `Authorization` header the request passes through unauthenticated
+    // and the handler renders the generic (no-leak) form. With a header
+    // present we run the full auth path so a successful bearer stamps
+    // `AgentIdentity` (handler renders personalized) and a failure
+    // returns 401 (don't silently downgrade — that would let an
+    // attacker probe valid token formats by checking content variation).
+    if path == "/skill" && !req.headers().contains_key("authorization") {
         return next.run(req).await;
     }
 

@@ -110,23 +110,15 @@ async fn unauthenticated_skill_returns_generic_markdown() {
     );
 }
 
-// /agent/skill without auth → 401 (the same auth middleware that gates
-// /api/... and /tools).
+// /skill with a valid bearer returns the personalized form (single
+// auth-optional route — was previously /agent/skill, collapsed in the
+// M9 follow-up so the documented "GET /skill with your bearer" recipe
+// actually works).
 #[tokio::test]
-async fn authenticated_skill_without_bearer_returns_401() {
-    let (_dir, server, _bearer) = server_with_agent(Some(vec!["things".into()])).await;
-    let resp = server.get("/agent/skill").await;
-    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
-}
-
-// /agent/skill with a valid bearer returns the personalized form: the
-// generic template followed by the agent's name, public_id, ACL, and
-// the resolved tool catalog filtered by the allowlist.
-#[tokio::test]
-async fn authenticated_skill_returns_personalized_markdown() {
+async fn skill_with_valid_bearer_returns_personalized_markdown() {
     let (_dir, server, bearer) = server_with_agent(Some(vec!["things".into()])).await;
     let resp = server
-        .get("/agent/skill")
+        .get("/skill")
         .add_header("Authorization", bearer)
         .await;
     resp.assert_status_ok();
@@ -145,7 +137,7 @@ async fn authenticated_skill_returns_personalized_markdown() {
         .unwrap_or("");
     assert!(
         cache.contains("private") && cache.contains("no-cache"),
-        "auth /agent/skill must NOT be cacheable; got Cache-Control={cache}"
+        "personalized /skill must NOT be cacheable; got Cache-Control={cache}"
     );
 
     let body = resp.text();
@@ -166,14 +158,31 @@ async fn authenticated_skill_returns_personalized_markdown() {
     assert!(body.contains("locksmith audit query"));
 }
 
-// /agent/skill with a malformed bearer → 401, matching the auth
-// middleware contract.
+// /skill with a malformed/invalid bearer → 401. We don't silently
+// downgrade to the generic form: that would let an attacker probe
+// valid token formats by checking content variation.
 #[tokio::test]
-async fn authenticated_skill_with_malformed_bearer_returns_401() {
+async fn skill_with_invalid_bearer_returns_401() {
     let (_dir, server, _bearer) = server_with_agent(Some(vec!["things".into()])).await;
     let resp = server
-        .get("/agent/skill")
+        .get("/skill")
         .add_header("Authorization", "Bearer not_a_valid_token")
         .await;
     resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+    // §4.7.9 envelope (consistent with /api/... and /tools).
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["error"]["type"], "auth_error");
+    assert_eq!(body["error"]["code"], "invalid_credential");
+}
+
+// Sanity: /agent/skill is gone (the route was collapsed into auth-
+// optional /skill). Should 404, not silently fall through.
+#[tokio::test]
+async fn legacy_agent_skill_route_is_removed() {
+    let (_dir, server, bearer) = server_with_agent(Some(vec!["things".into()])).await;
+    let resp = server
+        .get("/agent/skill")
+        .add_header("Authorization", bearer)
+        .await;
+    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
 }

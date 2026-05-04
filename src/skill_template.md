@@ -46,9 +46,8 @@ calls. There is no separate auth scheme for this endpoint.
 
 | Path | Auth | Purpose |
 |------|------|---------|
-| `GET /skill` | none | This document (generic form). |
-| `GET /skill` (with `Authorization: Bearer ...`) | per-agent bearer | Personalized form (your tools, your ACL). |
-| `GET /tools` | per-agent bearer | JSON catalog of tools you may call. |
+| `GET /skill` | optional | This document. With no `Authorization` header, returns this generic form. With a valid `Authorization: Bearer lk_…`, returns the personalized form (your tools, your ACL, audit-debug recipes). With an invalid bearer, returns 401 — no silent downgrade. |
+| `GET /tools` | per-agent bearer | JSON catalog of tools you may call (filtered by your ACL). |
 | `ANY /api/<tool>/<upstream-path>` | per-agent bearer | Proxy to the upstream tool. Path after `<tool>` is forwarded verbatim. |
 | `GET /livez`, `/readyz`, `/version`, `/health` | none | Health and version probes. |
 
