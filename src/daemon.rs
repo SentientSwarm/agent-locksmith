@@ -326,7 +326,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         agent_res
     };
 
-    match coord.drain_or_timeout(drain).await {
+    // Wait for the shutdown signal first, THEN apply the drain timeout.
+    // The drain window is the post-signal grace period for in-flight
+    // requests to complete, not a cap on the daemon's serving lifetime
+    // (which was the pre-fix bug — see ShutdownCoordinator docs).
+    match coord.await_shutdown_then_drain(drain).await {
         Ok((agent_res, admin_res, https_res)) => {
             if let Some(Ok(Err(e))) = agent_res {
                 return Err(DaemonError::Server(format!("agent listener: {e}")));
