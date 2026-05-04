@@ -32,9 +32,14 @@ pub async fn auth_middleware(
 ) -> Response {
     // Skip auth for unauthenticated probes / metadata endpoints (INF-3).
     // /health is preserved as an alias to /livez for backward compat with
-    // M0 deployments.
+    // M0 deployments. /skill returns the generic agent-facing skill
+    // document (M9 / B1 follow-up) — no operational detail; the
+    // personalized form lives at /agent/skill behind this middleware.
     let path = req.uri().path();
-    if matches!(path, "/livez" | "/readyz" | "/version" | "/health") {
+    if matches!(
+        path,
+        "/livez" | "/readyz" | "/version" | "/health" | "/skill"
+    ) {
         return next.run(req).await;
     }
 
