@@ -1,8 +1,11 @@
 //! T1.5 — DeprecationRegistry behavior.
 //!
-//! Covers: R-F2, R-N5, INF-15, INF-24, Q-25.
+//! Covers: R-F2, R-N5, INF-15, INF-24, Q-25, M9 (TS-13).
 
-use agent_locksmith::deprecation::{DeprecationDisposition, DeprecationEntry, DeprecationRegistry};
+use agent_locksmith::deprecation::{
+    DeprecationDisposition, DeprecationEntry, DeprecationRegistry, default_registry,
+    emit_inbound_auth_token_runtime_deprecation,
+};
 
 fn registry_with_test_entries() -> DeprecationRegistry {
     DeprecationRegistry::new(vec![
@@ -75,6 +78,53 @@ fn test_removed_field_disposition_is_ignored() {
     let reg = registry_with_test_entries();
     let entry = reg.lookup("telemetry").unwrap();
     assert!(matches!(entry.disposition, DeprecationDisposition::Removed));
+}
+
+// TS-13 (M9): default registry includes the inbound_auth.token entry,
+// and the runtime emit helper one-shots through notice() only when
+// both admin substrate is enabled AND inbound_auth.token is set. AC-1.
+#[test]
+fn ts13_default_registry_includes_inbound_auth_token() {
+    let reg = default_registry();
+    let entry = reg
+        .lookup("inbound_auth.token")
+        .expect("M9 entry registered");
+    assert_eq!(entry.since_version, "2.0.0");
+    assert!(matches!(
+        entry.disposition,
+        DeprecationDisposition::Deprecated
+    ));
+}
+
+#[test]
+fn ts13_emit_helper_no_op_when_admin_disabled() {
+    let reg = default_registry();
+    // Admin disabled: even with inbound_auth.token set, no notice fires.
+    emit_inbound_auth_token_runtime_deprecation(&reg, false, true);
+    // First "real" call still fires.
+    let first = reg.notice("inbound_auth.token");
+    assert!(first, "no prior notice should have been recorded");
+}
+
+#[test]
+fn ts13_emit_helper_no_op_when_inbound_auth_unset() {
+    let reg = default_registry();
+    emit_inbound_auth_token_runtime_deprecation(&reg, true, false);
+    let first = reg.notice("inbound_auth.token");
+    assert!(first, "no prior notice should have been recorded");
+}
+
+#[test]
+fn ts13_emit_helper_one_shot_when_both_set() {
+    let reg = default_registry();
+    // Both admin enabled AND token set → first call fires.
+    emit_inbound_auth_token_runtime_deprecation(&reg, true, true);
+    // Subsequent calls are silenced (one-shot per registry).
+    let second = reg.notice("inbound_auth.token");
+    assert!(
+        !second,
+        "the runtime emit must consume the one-shot slot so we don't double-warn"
+    );
 }
 
 #[test]

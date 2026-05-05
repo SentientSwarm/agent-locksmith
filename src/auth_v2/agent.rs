@@ -32,6 +32,31 @@ pub struct AgentIdentity {
     pub tool_denylist: Option<Vec<String>>,
 }
 
+impl AgentIdentity {
+    /// M9 / B1 ACL check. Both lists optional. Allowlist `Some([...])`
+    /// → tool must be IN the list. Denylist `Some([...])` → tool must
+    /// NOT be in the list. If both are set and a tool appears in both,
+    /// deny wins (deny is always explicit). Both `None` → unrestricted.
+    ///
+    /// Auth-method-agnostic: bearer-derived (`BearerAuthenticator`) and
+    /// mTLS-derived (`MtlsAuthenticator`) identities both flow through
+    /// this gate. Returns `Err(reason)` with a stable string suitable
+    /// for the `details.reason` audit field.
+    pub fn allows_tool(&self, tool_name: &str) -> Result<(), &'static str> {
+        if let Some(deny) = self.tool_denylist.as_ref()
+            && deny.iter().any(|t| t == tool_name)
+        {
+            return Err("in_denylist");
+        }
+        if let Some(allow) = self.tool_allowlist.as_ref()
+            && !allow.iter().any(|t| t == tool_name)
+        {
+            return Err("not_in_allowlist");
+        }
+        Ok(())
+    }
+}
+
 /// Resolves a credential string to an `AgentIdentity`. The trait shape is
 /// chosen so that the M6 mTLS implementation drops in alongside the
 /// bearer impl without refactoring callers (D-7).
@@ -165,9 +190,18 @@ impl BearerAuthenticator {
 #[async_trait]
 impl AgentAuthenticator for BearerAuthenticator {
     async fn authenticate_bearer(&self, header: &str) -> Result<AgentIdentity, AuthError> {
-        let raw = header
-            .strip_prefix("Bearer ")
-            .ok_or(AuthError::MissingCredential)?;
+        let raw = match header.strip_prefix("Bearer ") {
+            Some(r) => r,
+            None => {
+                // M9: audit unauthenticated/wrong-scheme probes too.
+                // The wire response stays uniform per §4.7.9 (status
+                // 401, code=invalid_credential), but the security
+                // audit captures the distinction (`reason=missing_credential`)
+                // so operators can detect probe traffic.
+                self.audit_failure(None, "missing_credential").await;
+                return Err(AuthError::MissingCredential);
+            }
+        };
         let (ns, public_id, secret) = match token::parse(raw) {
             Ok(parts) => parts,
             Err(_) => {
@@ -194,4 +228,71 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn ident(allow: Option<&[&str]>, deny: Option<&[&str]>) -> AgentIdentity {
+        AgentIdentity {
+            public_id: "test-pid".into(),
+            name: "test".into(),
+            tool_allowlist: allow.map(|s| s.iter().map(|t| t.to_string()).collect()),
+            tool_denylist: deny.map(|s| s.iter().map(|t| t.to_string()).collect()),
+        }
+    }
+
+    // TS-14 cross-coverage: the ACL gate is auth-method-agnostic.
+    // Identity constructed by the mTLS authenticator (post-v2 / #67)
+    // flows through the same `allows_tool` as bearer-derived identity.
+    #[test]
+    fn allows_tool_when_no_lists() {
+        assert!(ident(None, None).allows_tool("anything").is_ok());
+    }
+
+    #[test]
+    fn allows_tool_enforces_allowlist_membership() {
+        let id = ident(Some(&["github", "tavily"]), None);
+        assert!(id.allows_tool("github").is_ok());
+        assert_eq!(id.allows_tool("anthropic"), Err("not_in_allowlist"));
+    }
+
+    #[test]
+    fn allows_tool_enforces_denylist_exclusion() {
+        let id = ident(None, Some(&["dangerous"]));
+        assert!(id.allows_tool("safe").is_ok());
+        assert_eq!(id.allows_tool("dangerous"), Err("in_denylist"));
+    }
+
+    #[test]
+    fn allows_tool_denylist_wins_when_both_overlap() {
+        let id = ident(Some(&["x", "y"]), Some(&["x"]));
+        assert_eq!(
+            id.allows_tool("x"),
+            Err("in_denylist"),
+            "explicit deny must win over allowlist membership"
+        );
+        assert!(
+            id.allows_tool("y").is_ok(),
+            "non-overlapping allow still works"
+        );
+    }
+
+    // M9 footgun guard: an allowlist of `Some(vec![])` is "no tools
+    // permitted" — every request 403s. The runbook calls this out so
+    // operators don't pass `--allowlist ""` expecting "unrestricted".
+    #[test]
+    fn allows_tool_empty_allowlist_denies_all() {
+        let id = ident(Some(&[]), None);
+        assert_eq!(id.allows_tool("anything"), Err("not_in_allowlist"));
+        assert_eq!(id.allows_tool(""), Err("not_in_allowlist"));
+    }
+
+    // Symmetric edge: empty denylist is a no-op.
+    #[test]
+    fn allows_tool_empty_denylist_is_noop() {
+        let id = ident(None, Some(&[]));
+        assert!(id.allows_tool("anything").is_ok());
+    }
 }

@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, extract::State, middleware, routing};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use std::time::Instant;
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
+use crate::auth_v2::AgentAuthenticator;
 use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
 use crate::mtls::MtlsAuthenticator;
@@ -44,6 +45,16 @@ pub struct AppState {
     /// Agent-auth middleware consults this when a peer cert is present
     /// in the request extensions.
     pub mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    /// Per-agent authenticator for the bearer path (M9 / B1). Named to
+    /// match the existing `UdsState.agent_auth` field — the same `Arc`
+    /// is shared across both consumers so admin self-service ops and
+    /// the proxy hot path use one authenticator and one audit fanout.
+    /// Populated by the daemon when the admin substrate is active (both
+    /// `listen.admin_socket` and `database.path` configured); absent
+    /// under M0/M1 deployments without the substrate. When present,
+    /// `auth_middleware` uses it on every request; when absent, the M0
+    /// shared-bearer fallback preserves pre-v2 behavior.
+    pub agent_auth: Option<Arc<dyn AgentAuthenticator>>,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -104,17 +115,22 @@ pub fn build_app_with_audit_and_creds(
     audit: Option<AuditRepository>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
 ) -> Router {
-    build_app_full(config, audit, resolved_creds, None)
+    build_app_full(config, audit, resolved_creds, None, None)
 }
 
-/// Full-power constructor (post-v2 / #67): supplies all M0..M7 state
-/// plus the optional MtlsAuthenticator. Used by the daemon when
-/// `auth_mode` is `mtls` or `both`.
+/// Full-power constructor (post-v2 / #67 + M9): supplies all M0..M7
+/// state plus the optional MtlsAuthenticator (#67) and the optional
+/// BearerAuthenticator (M9). Used by the daemon. M0/M1 deployments
+/// without admin substrate pass `None` for `agent_auth`,
+/// which preserves the M0 shared-bearer middleware path; deployments
+/// with admin substrate enabled pass `Some(...)` so `auth_middleware`
+/// enforces per-agent bearer authentication on every request.
 pub fn build_app_full(
     config: Arc<ArcSwap<AppConfig>>,
     audit: Option<AuditRepository>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
     mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -127,6 +143,7 @@ pub fn build_app_full(
         resolved_creds,
         response_controls,
         mtls_authenticator,
+        agent_auth,
     });
 
     Router::new()
@@ -138,6 +155,18 @@ pub fn build_app_full(
         .route("/health", routing::get(livez_handler))
         .route("/readyz", routing::get(readyz_handler))
         .route("/version", routing::get(version_handler))
+        // Agent skill (M9 / B1 follow-up). One auth-OPTIONAL route:
+        // - No `Authorization` header → generic form (no tool/model
+        //   leak). The auth middleware lets the request through
+        //   unauthenticated for /skill specifically.
+        // - Valid `Authorization: Bearer lk_...` → personalized form
+        //   (the agent's resolved tool catalog, ACL, audit-debug
+        //   recipes). The auth middleware runs the full bearer path,
+        //   stamps `AgentIdentity` into request extensions, and the
+        //   handler dispatches to the personalized renderer.
+        // - Invalid bearer → 401 (no silent downgrade — preserves the
+        //   §4.7.9 envelope contract).
+        .route("/skill", routing::get(skill_handler))
         .route("/tools", routing::get(tools_handler))
         .route(
             "/api/{tool_name}/{*path}",
@@ -209,12 +238,68 @@ async fn version_handler() -> Json<Value> {
     }))
 }
 
-async fn tools_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
+/// `/skill` — auth-optional. Dispatches to the personalized form when
+/// `AgentIdentity` is in request extensions (the auth middleware
+/// stamped it after validating a bearer); otherwise renders the
+/// generic form (no operational leak). Cache headers vary by form:
+/// generic is `public, max-age=86400` (embedded at build time, same
+/// per binary); personalized is `private, no-cache, no-store`
+/// (operators can change an agent's ACL at any time and the body
+/// embeds per-agent detail).
+async fn skill_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    match req.extensions().get::<crate::auth_v2::AgentIdentity>() {
+        Some(identity) => {
+            let config = state.config.load();
+            let resolved = state.resolved_creds.load();
+            skill_response(
+                crate::skill::render_authenticated(identity, &config, &resolved),
+                "private, no-cache, no-store",
+            )
+        }
+        None => skill_response(
+            crate::skill::render_unauthenticated(),
+            "public, max-age=86400",
+        ),
+    }
+}
+
+/// Common response shape for both `/skill` handlers: markdown body,
+/// `text/markdown; charset=utf-8` content type, caller-supplied
+/// `Cache-Control` (unauth → public/cacheable; auth → private/no-cache).
+fn skill_response(body: String, cache_control: &'static str) -> Response {
+    use axum::http::HeaderValue;
+    let mut resp = body.into_response();
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/markdown; charset=utf-8"),
+    );
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    resp
+}
+
+async fn tools_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Json<Value> {
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
+    // M9: when an `AgentIdentity` is stamped (per-agent bearer or
+    // mTLS), filter the catalog by the agent's ACL so it never sees
+    // tools it can't call. Keeps `/tools` consistent with both the
+    // proxy hot path and `/agent/skill` — same ACL gate, same result.
+    // M0/M1 deployments without admin substrate have no identity
+    // stamped; they get the full active catalog as pre-M9.
+    let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
     let tools: Vec<Value> = config
         .active_tools_against(&resolved)
         .iter()
+        .filter(|t| identity.is_none_or(|id| id.allows_tool(&t.name).is_ok()))
         .map(|t| {
             json!({
                 "name": t.name,

@@ -109,7 +109,47 @@ pub fn default_registry() -> DeprecationRegistry {
             since_version: "0.2.0",
             removal_target: Some("0.3.0"),
         },
+        // M9 / v2.0.0 — `inbound_auth.token` is silently ignored when
+        // the admin substrate is enabled (per-agent bearer authentication
+        // takes over). Operators upgrading from M0/M1 must register
+        // agents and use per-agent tokens.
+        DeprecationEntry {
+            field_path: "inbound_auth.token",
+            disposition: DeprecationDisposition::Deprecated,
+            since_version: "2.0.0",
+            removal_target: None,
+        },
     ])
+}
+
+/// Emit the M9 / v2.0.0 deprecation warning when `inbound_auth.token`
+/// is set on a deployment that has the admin substrate enabled. The
+/// shared bearer is silently ignored on the agent listener — per-agent
+/// bearer authentication takes precedence — and operators should drop
+/// the `inbound_auth` block to silence this warning. One-shot per
+/// process via the registry's `notice()` mechanism.
+pub fn emit_inbound_auth_token_runtime_deprecation(
+    registry: &DeprecationRegistry,
+    admin_substrate_enabled: bool,
+    inbound_auth_token_set: bool,
+) {
+    if !(admin_substrate_enabled && inbound_auth_token_set) {
+        return;
+    }
+    if !registry.notice("inbound_auth.token") {
+        return;
+    }
+    let entry = match registry.lookup("inbound_auth.token") {
+        Some(e) => e,
+        None => return,
+    };
+    tracing::warn!(
+        field = "inbound_auth.token",
+        since_version = entry.since_version,
+        "shared inbound_auth.token is ignored when the admin substrate is enabled — \
+         per-agent bearer authentication takes precedence. Remove the inbound_auth block \
+         to silence this warning. (M9 / v2.0.0)"
+    );
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 # Handoff — Agent Locksmith v2 Implementation
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-03
 **Default working branch:** `develop` (post-v1.0.0 enhancements merged: #67 mTLS bind + #68 audit bench) — **Tagged v1.1.0**
+**Active feature branch:** `feature/m9-proxy-bearer-acl` (B1 closure — per-agent bearer + ACL on proxy hot path; tagged **v2.0.0** breaking on merge)
 
 This document is the cold-start context for the next session. Read top to bottom before touching code.
 
@@ -12,7 +13,8 @@ This document is the cold-start context for the next session. Read top to bottom
 | Branch | State | What's there |
 |--------|-------|--------------|
 | `main` | Stable | M0 implementation. CI passes. |
-| `develop` | **v1.1.0** | M0..M7 + post-v1.0.0 #67 (agent-listener mTLS bind path activated) + #68 (audit-write bench validated A-2 / INF-26). Tagged **v1.1.0**. **Default working branch.** |
+| `develop` | **v1.1.0** | M0..M7 + post-v1.0.0 #67 (agent-listener mTLS bind path activated) + #68 (audit-write bench validated A-2 / INF-26). Tagged **v1.1.0**. |
+| `feature/m9-proxy-bearer-acl` | **In review (v2.0.0)** | M9 / B1 closure. Per-agent bearer enforcement on the proxy hot path; tool ACL gate; uniform §4.7.9 error envelope; `inbound_auth.token` deprecation when admin substrate is enabled. **Breaking change** — merge tags v2.0.0. |
 | `m3/audit-pipeline`, `m4/admin-https`, `m5/keys-at-rest`, `m6/mtls-agent-side`, `m7/response-controls` | Merged | Kept for archaeology. |
 
 ### What's merged into `develop`
@@ -26,6 +28,19 @@ This document is the cold-start context for the next session. Read top to bottom
 - **M6** (T6.1–T6.11): mTLS — validator, CRL fetcher, blocklist, authenticator, bootstrap-only listener, operator cert mapping, CLI mtls subcommands, smallstep example, 3 mTLS runbooks.
 - **M7** (T7.1–T7.4): per-tool response controls — max_size_bytes, content_type_allowlist, regex redaction with cleartext-never-in-audit hashing.
 - **post-v1.0.0**: #67 agent-listener mTLS bind path (activates M6 validator/authenticator on the wire); #68 audit-write bench (validates A-2 / INF-26 with ~33× headroom; T3.10 stays deferred).
+
+### What's pending in `feature/m9-proxy-bearer-acl` (B1 closure → v2.0.0)
+
+- **M9 / B1 carry-over closed.** The `BearerAuthenticator` constructed in M2 is now wired into the agent listener (`AppState.agent_auth`, sharing one Arc with `UdsState.agent_auth`), and `proxy_handler` enforces the per-agent `tool_allowlist` / `tool_denylist` recorded in the M2 admin DB. See SPEC §6.2 #M9.
+- **Behavior flip when admin substrate is enabled.** `auth_mode: bearer` keeps its name but its semantics shift from "permissive when `inbound_auth.token` unset" to "per-agent bearer required." Operators upgrading from M0/M1 must register agents (`bootstrap-operator.py` + `register-agents.sh`) before requests will succeed. M0/M1 deployments without admin substrate are unchanged. See `docs/v2/runbooks/m9-proxy-bearer-acl.md`.
+- **`inbound_auth.token` deprecation.** Carrying a shared bearer forward into a deployment with admin substrate enabled emits a one-shot startup warning; the shared bearer is silently ignored. Tracked via the existing `DeprecationRegistry` (`src/deprecation.rs`).
+- **Wire shape.** New audit `event` string `authz_denied` (class `security`); new error envelope variant `tool_not_allowed` (403); 401 envelope canonicalised to §4.7.9 with `code` field across all `AuthError` variants.
+
+### Test + lint state on `feature/m9-proxy-bearer-acl`
+
+- `cargo test --tests`: **264 / 264 pass** across 49 test binaries (251 baseline + new `proxy_acl_test.rs` + new lib unit tests + updated `secret_proxy_integration_test.rs` + updated `audit_proxy_test.rs` + new `deprecation_test.rs` cases).
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `cargo fmt --check`: clean.
 
 ### Test + lint state at v1.1.0
 

@@ -16,5 +16,6 @@ pub mod repo;
 pub mod response_controls;
 pub mod secret;
 pub mod shutdown;
+pub mod skill;
 pub mod telemetry;
 pub mod token;

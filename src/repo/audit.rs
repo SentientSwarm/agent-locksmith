@@ -8,9 +8,10 @@ use serde_json::Value as Json;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EventClass {
+    #[default]
     Proxy,
     Operator,
     Security,
@@ -26,9 +27,10 @@ impl EventClass {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
+    #[default]
     Allowed,
     Denied,
     Error,
@@ -61,18 +63,6 @@ pub struct AuditEvent {
     pub auth_method: Option<String>,
     pub origin_ip: Option<String>,
     pub details: Option<Json>,
-}
-
-impl Default for EventClass {
-    fn default() -> Self {
-        Self::Proxy
-    }
-}
-
-impl Default for Decision {
-    fn default() -> Self {
-        Self::Allowed
-    }
 }
 
 #[derive(Debug, Clone, Default)]
