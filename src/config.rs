@@ -1,5 +1,5 @@
 use secrecy::SecretString;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -298,7 +298,7 @@ fn default_log_level() -> String {
 /// (LAN-bound services typically). `proxied`: route through the configured
 /// `egress_proxy` HTTP CONNECT proxy (typically Pipelock for internet-bound
 /// traffic, D-16).
-#[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum EgressMode {
     /// Preserves M0 default (`cloud: false` ⇒ no proxy).
@@ -370,7 +370,7 @@ pub struct RedactionPatternConfig {
 /// `idle_seconds` is the per-read inactivity timeout — useful for streaming
 /// upstreams where the total duration is unbounded but inactivity should
 /// terminate the connection.
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolTimeouts {
     #[serde(default = "default_request_seconds")]

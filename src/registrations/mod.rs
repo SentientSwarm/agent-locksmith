@@ -17,10 +17,12 @@
 
 pub mod auth_spec;
 pub mod kind;
+pub mod repo;
 pub mod validators;
 
 pub use auth_spec::AuthSpec;
 pub use kind::Kind;
+pub use repo::{Registration, RegistrationRepository};
 pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name};
 
 /// Registration-layer errors. Wire-rendering happens in `api.rs` (E.3).
