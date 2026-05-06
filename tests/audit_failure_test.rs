@@ -101,7 +101,11 @@ async fn missing_authorization_header_emits_security_audit_row() {
         .query(&AuditFilter::default(), AuditPage::default())
         .await
         .unwrap();
-    assert_eq!(rows.len(), 1, "missing-credential is a security event in M9");
+    assert_eq!(
+        rows.len(),
+        1,
+        "missing-credential is a security event in M9"
+    );
     let row = &rows[0];
     assert_eq!(row.event, "auth_failure");
     assert_eq!(

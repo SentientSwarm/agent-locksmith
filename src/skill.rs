@@ -163,11 +163,7 @@ mod tests {
     use crate::auth_v2::AgentIdentity;
     use crate::config::parse_config_str;
 
-    fn ident_with(
-        name: &str,
-        allow: Option<&[&str]>,
-        deny: Option<&[&str]>,
-    ) -> AgentIdentity {
+    fn ident_with(name: &str, allow: Option<&[&str]>, deny: Option<&[&str]>) -> AgentIdentity {
         AgentIdentity {
             public_id: "TESTPID12345".into(),
             name: name.into(),

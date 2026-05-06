@@ -147,7 +147,10 @@ impl MtlsScaffold {
     /// cert_identity binding) doesn't race the daemon's startup.
     async fn open_repos(&self) -> (AgentRepository, AuditRepository) {
         let pool = migrations::open_and_migrate(&self.db_path).await.unwrap();
-        (AgentRepository::new(pool.clone()), AuditRepository::new(pool))
+        (
+            AgentRepository::new(pool.clone()),
+            AuditRepository::new(pool),
+        )
     }
 }
 
@@ -270,10 +273,7 @@ tools:
     let (coord, handle) = spawn_mtls_daemon(&yaml, scaffold.agent_port).await;
     let client = mtls_reqwest_client(&scaffold.pki);
 
-    let url = format!(
-        "https://127.0.0.1:{}/api/ping/v1/ping",
-        scaffold.agent_port
-    );
+    let url = format!("https://127.0.0.1:{}/api/ping/v1/ping", scaffold.agent_port);
     let resp = client
         .get(&url)
         .send()
@@ -390,10 +390,7 @@ tools:
     let (coord, handle) = spawn_mtls_daemon(&yaml, scaffold.agent_port).await;
     let client = mtls_reqwest_client(&scaffold.pki);
 
-    let url = format!(
-        "https://127.0.0.1:{}/api/ping/v1/ping",
-        scaffold.agent_port
-    );
+    let url = format!("https://127.0.0.1:{}/api/ping/v1/ping", scaffold.agent_port);
     let resp = client
         .get(&url)
         .send()

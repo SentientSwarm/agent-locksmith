@@ -538,8 +538,7 @@ async fn apply_buffered_response_controls(
             record_response_size_exceeded_buffered(audit, ctx, upstream_host, observed, cap).await
         }
         ApplyOutcome::ContentTypeDisallowed { observed } => {
-            record_response_content_type_disallowed(audit, ctx, upstream_host, Some(observed))
-                .await
+            record_response_content_type_disallowed(audit, ctx, upstream_host, Some(observed)).await
         }
         ApplyOutcome::Allowed { body, redactions } => {
             for rec in &redactions {
