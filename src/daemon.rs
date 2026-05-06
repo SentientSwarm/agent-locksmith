@@ -472,6 +472,26 @@ async fn build_admin_substrate(
         }
     }
 
+    // Phase E (transitional) — migrate pre-Phase-E `config.tools` YAML
+    // entries into the registrations table. Runs AFTER the seed loader
+    // so seed-catalog rows take precedence. Skips entries whose names
+    // are already in the table; skips auth shapes we can't translate
+    // (sealed-file / Vault / AWS) with a WARN log. Deprecated;
+    // removed in v0.3.
+    {
+        let snapshot = config.load();
+        if let Err(e) = crate::registrations::legacy_bootstrap::bootstrap_from_config_tools(
+            &registrations,
+            &snapshot,
+        )
+        .await
+        {
+            return Err(DaemonError::AdminConfig(format!(
+                "legacy config.tools bootstrap: {e}"
+            )));
+        }
+    }
+
     let mut audit = AuditRepository::new(pool);
 
     // JSONL mirror sink — optional, opens at startup so misconfig

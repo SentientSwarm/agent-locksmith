@@ -18,6 +18,7 @@
 pub mod api;
 pub mod auth_spec;
 pub mod kind;
+pub mod legacy_bootstrap;
 pub mod repo;
 pub mod seed_loader;
 pub mod validators;
