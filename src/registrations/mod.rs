@@ -15,6 +15,7 @@
 //! - `api`           — admin HTTP handlers.
 //! - `seed_loader`   — first-boot loader for `/etc/locksmith/seed/catalog.yaml`.
 
+pub mod api;
 pub mod auth_spec;
 pub mod kind;
 pub mod repo;
