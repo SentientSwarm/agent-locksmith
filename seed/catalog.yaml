@@ -25,7 +25,7 @@
 # DEFER and SKIP entries (~25 + ~10 categories) are listed there with
 # rationale; operators can register them via admin API today.
 
-version: "2.0.0"
+version: "2.1.0"
 
 entries:
   # ─── Models ─────────────────────────────────────────────────────────────
@@ -193,6 +193,127 @@ entries:
     metadata:
       capability: docs
       provider: wikipedia
+
+  # ─── OAuth-flow models (v2.1.0+) ────────────────────────────────────────
+  # All five entries below use OAuth (PKCE or device-code). Operator must
+  # set LOCKSMITH_OAUTH_SEALING_KEY at daemon startup to enable OAuth
+  # admin endpoints + proxy dispatch. After daemon boot, operator runs
+  # `locksmith oauth bootstrap <name> --refresh-token <...>` per registration.
+  #
+  # client_id values are public per OAuth specs. Token-endpoint URLs
+  # follow each provider's documented OAuth surface; operators on
+  # private deployments can override via `locksmith model put <name>
+  # --upstream ... --auth oauth_pkce=...`.
+
+  # OpenAI ChatGPT Plus / Pro / Teams plan via OAuth device-code.
+  # Replaces direct OPENAI_API_KEY for users who want their ChatGPT
+  # subscription entitlement instead of API billing.
+  - name: codex
+    kind: model
+    description: "OpenAI ChatGPT plan auth (codex CLI flow; device-code OAuth)"
+    upstream: "https://chatgpt.com/backend-api"
+    auth:
+      kind: oauth_device_code
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann"
+      scopes: ["openid", "email", "profile", "offline_access"]
+      device_url: "https://auth.openai.com/oauth/device/code"
+      token_url: "https://auth.openai.com/oauth/token"
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: openai
+      flow: oauth_device_code
+
+  # GitHub Copilot OAuth (device-code).
+  - name: copilot
+    kind: model
+    description: "GitHub Copilot (device-code OAuth)"
+    upstream: "https://api.githubcopilot.com"
+    auth:
+      kind: oauth_device_code
+      client_id: "Iv1.b507a08c87ecfe98"
+      scopes: ["read:user"]
+      device_url: "https://github.com/login/device/code"
+      token_url: "https://github.com/login/oauth/access_token"
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: github
+      flow: oauth_device_code
+
+  # Anthropic Console OAuth (PKCE redirect). Alternative to direct
+  # ANTHROPIC_API_KEY for users authenticating via console.anthropic.com.
+  - name: anthropic-oauth
+    kind: model
+    description: "Anthropic Console OAuth (PKCE redirect)"
+    upstream: "https://api.anthropic.com"
+    auth:
+      kind: oauth_pkce
+      client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+      redirect_uri: "http://127.0.0.1:54321/callback"
+      scopes: ["org:create_api_key", "user:profile"]
+      auth_url: "https://console.anthropic.com/oauth/authorize"
+      token_url: "https://console.anthropic.com/v1/oauth/token"
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: anthropic
+      flow: oauth_pkce
+
+  # Google Gemini CLI OAuth (PKCE).
+  - name: google-gemini-cli
+    kind: model
+    description: "Google Gemini CLI auth (PKCE OAuth)"
+    upstream: "https://generativelanguage.googleapis.com"
+    auth:
+      kind: oauth_pkce
+      client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+      redirect_uri: "http://127.0.0.1:54321/callback"
+      scopes: ["openid", "email", "profile"]
+      auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+      token_url: "https://oauth2.googleapis.com/token"
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: google
+      flow: oauth_pkce
+
+  # Alibaba Qwen CLI OAuth (device-code).
+  - name: qwen-cli
+    kind: model
+    description: "Alibaba Qwen CLI auth (device-code OAuth)"
+    upstream: "https://dashscope-intl.aliyuncs.com"
+    auth:
+      kind: oauth_device_code
+      client_id: "f0304373b74a44d2b584a3fb70ca9e56"
+      scopes: ["openid", "profile", "email"]
+      device_url: "https://chat.qwen.ai/api/v1/oauth2/device/code"
+      token_url: "https://chat.qwen.ai/api/v1/oauth2/token"
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: alibaba
+      flow: oauth_device_code
 
   # ─── Infra ──────────────────────────────────────────────────────────────
   # lf-scan is the layer8-proxy prompt/code scanner sidecar. Operator-only —

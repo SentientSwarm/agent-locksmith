@@ -1,48 +1,103 @@
 //! Authentication shape for a registration (wire + DB form).
 //!
-//! Locked at devloop `phase-e-catalog-substrate` Design phase.
+//! Locked at devloop `phase-e-catalog-substrate` Design phase. Extended at
+//! Phase F (OAuth — see ADR-0005).
 //!
-//! Three variants, internally tagged on `kind`:
+//! Five variants, internally tagged on `kind`:
 //!
-//!   `none`   — no auth header injection. **Required to be explicit** for `kind=tool`
-//!              (implicit absence is rejected at register-time, closing the "operator
-//!              forgot the API key" footgun). `kind=model` rejects this variant outright
-//!              (no model upstream is meaningfully authless at v2.0.0).
-//!   `header` — inject `<header>: <env-var-resolved-value>`. Used for `x-api-key`,
-//!              custom headers, internal middleware tokens.
-//!   `bearer` — inject `Authorization: Bearer <env-var-resolved-value>`. Sugar for the
-//!              common bearer-auth shape; the `Bearer ` prefix is supplied by the runtime
-//!              materializer, not stored in the env var.
+//!   `none`              — no auth header injection. Required to be explicit for
+//!                         `kind=tool` (implicit absence is rejected at register-time,
+//!                         closing the "operator forgot the API key" footgun).
+//!                         `kind=model` accepts `none` for LAN-local self-hosted
+//!                         inference (Ollama, LM Studio) but rejects implicit absence.
+//!   `header`            — inject `<header>: <env-var-resolved-value>`. Used for
+//!                         `x-api-key`, custom headers, internal middleware tokens.
+//!   `bearer`            — inject `Authorization: Bearer <env-var-resolved-value>`.
+//!                         The `Bearer ` prefix is supplied by the runtime materializer,
+//!                         not stored in the env var.
+//!   `oauth_pkce`        — OAuth 2.0 with PKCE (Proof Key for Code Exchange). First-time
+//!                         auth via browser redirect; subsequent calls use the cached
+//!                         access token (refreshed transparently by the daemon). See
+//!                         ADR-0005 D1.
+//!   `oauth_device_code` — OAuth 2.0 with device-code flow. First-time auth prints a
+//!                         user_code + verification URL, polls the token endpoint for
+//!                         completion. Used by codex / copilot / qwen-cli. See ADR-0005 D1.
 //!
-//! At v2.0.0 the wire/DB form carries env-var **names** only. Translation to
-//! [`crate::secret::SecretRef`] happens at materialize-time when the runtime
-//! catalog cache is built. This keeps Serialize trivial and avoids leaking
-//! resolved secret values through admin GET endpoints.
+//! Static-credential variants (`none` / `header` / `bearer`) carry env-var **names**
+//! only; translation to [`crate::secret::SecretRef`] happens at materialize-time.
+//! OAuth variants carry public client metadata only — no secrets in the wire/DB
+//! form. The actual refresh + access tokens live in the `oauth_sessions` table
+//! sealed via AES-GCM (ADR-0005 D2).
 //!
 //! Sealed-cred-on-disk (`from_file_sealed:`) and external backends (Vault,
 //! AWS Secrets Manager) remain accessible via the deprecated pre-Phase-E
-//! bootstrap-from-yaml path until v0.3 removes it. v0.2 will introduce a
-//! richer admin-side AuthSpec covering sealed at-rest creds.
+//! bootstrap-from-yaml path until v0.3 removes it.
 
 use crate::secret::SecretRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthSpec {
     None,
-    Header { header: String, env_var: String },
-    Bearer { env_var: String },
+    Header {
+        header: String,
+        env_var: String,
+    },
+    Bearer {
+        env_var: String,
+    },
+    /// OAuth 2.0 PKCE flow (RFC 7636). Used by anthropic-oauth,
+    /// google-gemini-cli. First-time auth opens a browser to `auth_url`
+    /// with a code-challenge; the operator-host loopback receives the
+    /// auth code; daemon exchanges it at `token_url` and seals the
+    /// refresh token in `oauth_sessions`.
+    OauthPkce {
+        client_id: String,
+        /// Loopback URI the daemon's bootstrap CLI listens on.
+        /// Conventionally `http://127.0.0.1:<port>/callback` with port
+        /// chosen at bootstrap time.
+        redirect_uri: String,
+        scopes: Vec<String>,
+        auth_url: String,
+        token_url: String,
+    },
+    /// OAuth 2.0 device-code flow (RFC 8628). Used by codex (ChatGPT
+    /// Plus), GitHub Copilot, qwen-cli. First-time auth prints a
+    /// user_code + verification URL; daemon polls `token_url` until the
+    /// user completes the auth in a browser elsewhere.
+    OauthDeviceCode {
+        client_id: String,
+        scopes: Vec<String>,
+        device_url: String,
+        token_url: String,
+    },
 }
 
 impl AuthSpec {
-    /// True iff this auth shape ever injects a header.
+    /// True iff this auth shape ever injects a header on a proxied
+    /// request. OAuth variants return `true` because the daemon
+    /// injects `Authorization: Bearer <access_token>` after refreshing
+    /// the token cache.
     pub fn injects_header(&self) -> bool {
         !matches!(self, AuthSpec::None)
     }
 
-    /// Translate to a runtime [`SecretRef`] for the credential resolver.
-    /// `None` returns `None`; both `Header` and `Bearer` produce
+    /// True iff this auth shape uses the OAuth flow (either PKCE or
+    /// device-code). The proxy hot path treats OAuth distinctly from
+    /// static-credential variants: it reads access tokens from the
+    /// `oauth_sessions` cache rather than the static `resolved_creds`
+    /// map, and triggers refresh-on-401-then-retry.
+    pub fn is_oauth(&self) -> bool {
+        matches!(
+            self,
+            AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. }
+        )
+    }
+
+    /// Translate to a runtime [`SecretRef`] for the static-credential
+    /// resolver. `None` and OAuth variants return `None` (they do not
+    /// resolve via env-var indirection); `Header` / `Bearer` produce
     /// `SecretRef::FromEnv` with the variant's `env_var`.
     ///
     /// The `Bearer ` prefix is NOT added here — the proxy-side header
@@ -51,7 +106,7 @@ impl AuthSpec {
     /// convention.
     pub fn to_secret_ref(&self) -> Option<SecretRef> {
         match self {
-            AuthSpec::None => None,
+            AuthSpec::None | AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => None,
             AuthSpec::Header { env_var, .. } | AuthSpec::Bearer { env_var } => {
                 Some(SecretRef::FromEnv {
                     var: env_var.clone(),
