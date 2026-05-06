@@ -276,4 +276,3 @@ async fn ts134b_disabled_hidden_from_discovery() {
     assert_eq!(names, vec!["tavily"]);
     assert!(!names.contains(&"github"));
 }
-
