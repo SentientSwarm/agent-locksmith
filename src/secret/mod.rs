@@ -74,6 +74,54 @@ pub async fn resolve_tool_creds(
     out
 }
 
+/// Phase E.6 — resolve env-var references in a registrations
+/// catalog into the same `ResolvedCreds` shape used by config.tools.
+/// Walks every entry; for `AuthSpec::Header { env_var, .. }` and
+/// `AuthSpec::Bearer { env_var }`, reads the env var and inserts under
+/// the registration's name. Empty values and missing vars are
+/// skipped (proxy hot path treats absence as "tool inactive" same
+/// as for config.tools). `AuthSpec::None` entries skip credential
+/// resolution entirely — the proxy path handles them via the
+/// AuthSpec dispatch.
+///
+/// v2.0.0 deliberately limits AuthSpec to env-var indirection. Sealed
+/// file / Vault / AWS richness lives only on `tool.auth.value`
+/// (config.tools) for now; v0.3 lifts that limitation.
+pub fn resolve_registration_creds_sync_env_only(
+    catalog: &crate::registrations::Catalog,
+) -> ResolvedCreds {
+    use crate::registrations::AuthSpec;
+    use crate::registrations::Kind;
+    let mut out = HashMap::new();
+    for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
+        for r in catalog.iter_enabled_by_kind(kind) {
+            let env_var = match &r.auth {
+                AuthSpec::None => continue,
+                AuthSpec::Header { env_var, .. } => env_var,
+                AuthSpec::Bearer { env_var } => env_var,
+            };
+            let Ok(value) = std::env::var(env_var) else {
+                warn!(
+                    name = %r.name,
+                    env_var = %env_var,
+                    "registration credential env var not set; tool will be inactive"
+                );
+                continue;
+            };
+            if value.is_empty() {
+                warn!(
+                    name = %r.name,
+                    env_var = %env_var,
+                    "registration credential env var is empty; tool will be inactive"
+                );
+                continue;
+            }
+            out.insert(r.name.clone(), SecretString::from(value));
+        }
+    }
+    out
+}
+
 /// Sync resolver for non-daemon code paths (test helpers,
 /// `build_app_with_audit` convenience). Only handles `LegacyString`
 /// and `FromEnv` variants — sealed / vault / aws are skipped silently

@@ -43,9 +43,8 @@ async fn server_with_agent(
         .create("skill-test-agent", None, allow_ref, None, None, None)
         .await
         .unwrap();
-    let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
-        BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap(),
-    );
+    let bearer: Arc<dyn AgentAuthenticator> =
+        Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let cfg = parse_config_str(YAML).unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&cfg);
     let shared = Arc::new(ArcSwap::from_pointee(cfg));
@@ -88,7 +87,10 @@ async fn unauthenticated_skill_returns_generic_markdown() {
     );
 
     let body = resp.text();
-    assert!(body.starts_with("---\n"), "agentskills.io frontmatter present");
+    assert!(
+        body.starts_with("---\n"),
+        "agentskills.io frontmatter present"
+    );
     assert!(body.contains("name: locksmith"));
     // Must NOT leak tool names from the active deployment.
     assert!(

@@ -101,7 +101,14 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
 
-    let (admin_state, audit_for_proxy, audit_for_sweeper, agent_auth) = if admin_enabled {
+    let (
+        admin_state,
+        audit_for_proxy,
+        audit_for_sweeper,
+        agent_auth,
+        registrations_for_app,
+        catalog_for_app,
+    ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
             Some(setup.uds_state),
@@ -114,9 +121,17 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             // the proxy hot path share one authenticator and one audit
             // fanout.
             Some(setup.agent_auth),
+            // Phase E.3: thread the registrations repo into the agent
+            // listener so `/tools` and `/models` discovery reads from
+            // the registrations table. Same Arc as `uds_state.registrations`.
+            Some(setup.registrations),
+            // Phase E.6: same Arc as `uds_state.catalog`. Admin writes
+            // refresh the catalog through that ref; the proxy hot path
+            // reads through this one.
+            Some(setup.catalog),
         )
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None, None)
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -174,13 +189,32 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         }
     };
 
-    let agent_router = crate::app::build_app_full(
-        shared_config.clone(),
-        audit_for_proxy,
-        resolved_creds.clone(),
-        mtls_authenticator,
-        agent_auth,
-    );
+    // Phase E.6 — when the admin substrate is wired, the catalog was
+    // built inside `build_admin_substrate` (after seed_loader + legacy
+    // bootstrap). Same Arc threaded through both surfaces so admin
+    // writes refresh in place and the proxy hot path observes the new
+    // state without a daemon restart. Pre-Phase-E test paths that
+    // skip the substrate get an empty catalog default from
+    // `build_app_full_with_registrations`.
+    let agent_router = match catalog_for_app {
+        Some(catalog) => crate::app::build_app_full_with_catalog(
+            shared_config.clone(),
+            audit_for_proxy,
+            resolved_creds.clone(),
+            mtls_authenticator,
+            agent_auth,
+            registrations_for_app,
+            catalog,
+        ),
+        None => crate::app::build_app_full_with_registrations(
+            shared_config.clone(),
+            audit_for_proxy,
+            resolved_creds.clone(),
+            mtls_authenticator,
+            agent_auth,
+            registrations_for_app,
+        ),
+    };
     let agent_shutdown = coord.shutdown_signal();
     let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
         crate::config::AuthMode::Bearer => {
@@ -410,6 +444,15 @@ struct AdminSetup {
     uds_state: UdsState,
     audit: AuditRepository,
     agent_auth: Arc<dyn crate::auth_v2::AgentAuthenticator>,
+    /// Phase E.3 — registrations repo wired through both UdsState (for
+    /// admin endpoints) and AppState (for /tools, /models discovery).
+    /// Same Arc passed to both consumers.
+    registrations: Arc<crate::registrations::RegistrationRepository>,
+    /// Phase E.6 — in-memory catalog cache built from the registrations
+    /// table after seed_loader + legacy_bootstrap. Same Arc shared
+    /// across UdsState (for admin-write invalidation) and AppState (for
+    /// proxy hot-path reads).
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
 }
 
 async fn build_admin_substrate(
@@ -440,6 +483,47 @@ async fn build_admin_substrate(
 
     let agents = AgentRepository::new(pool.clone());
     let bootstrap = BootstrapTokenRepository::new(pool.clone());
+    let registrations = Arc::new(crate::registrations::RegistrationRepository::new(
+        pool.clone(),
+    ));
+
+    // Phase E.7 — apply the seed catalog before the daemon starts
+    // serving traffic. Missing-file is non-fatal (deployments without
+    // a baked-in catalog start with an empty registrations table);
+    // parse / validation errors ABORT startup since a malformed
+    // catalog ships with the image.
+    if let Some(seed_path) = crate::registrations::seed_loader::seed_path_from_env() {
+        match crate::registrations::seed_loader::load_or_skip(&registrations, &seed_path).await {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "seed catalog load failed (path={}): {e}",
+                    seed_path.display()
+                )));
+            }
+        }
+    }
+
+    // Phase E (transitional) — migrate pre-Phase-E `config.tools` YAML
+    // entries into the registrations table. Runs AFTER the seed loader
+    // so seed-catalog rows take precedence. Skips entries whose names
+    // are already in the table; skips auth shapes we can't translate
+    // (sealed-file / Vault / AWS) with a WARN log. Deprecated;
+    // removed in v0.3.
+    {
+        let snapshot = config.load();
+        if let Err(e) = crate::registrations::legacy_bootstrap::bootstrap_from_config_tools(
+            &registrations,
+            &snapshot,
+        )
+        .await
+        {
+            return Err(DaemonError::AdminConfig(format!(
+                "legacy config.tools bootstrap: {e}"
+            )));
+        }
+    }
+
     let mut audit = AuditRepository::new(pool);
 
     // JSONL mirror sink — optional, opens at startup so misconfig
@@ -487,10 +571,28 @@ async fn build_admin_substrate(
         bootstrap,
         config,
         Some(audit.clone()),
-        resolved_creds,
+        resolved_creds.clone(),
     );
 
     let agent_auth_dyn: Arc<dyn crate::auth_v2::AgentAuthenticator> = bearer.clone();
+
+    // Phase E.6 — build the in-memory catalog from the registrations
+    // table now that seed_loader + legacy_bootstrap have populated it.
+    // Extend resolved_creds with env-var values referenced by AuthSpec
+    // entries (seed catalog rows that aren't in config.tools).
+    let cat = crate::registrations::Catalog::from_repo(registrations.as_ref())
+        .await
+        .map_err(|e| DaemonError::AdminConfig(format!("catalog load: {e}")))?;
+    let extra = crate::secret::resolve_registration_creds_sync_env_only(&cat);
+    if !extra.is_empty() {
+        let snap = resolved_creds.load();
+        let mut merged = (**snap).clone();
+        for (k, v) in extra {
+            merged.entry(k).or_insert(v);
+        }
+        resolved_creds.store(Arc::new(merged));
+    }
+    let catalog: Arc<ArcSwap<crate::registrations::Catalog>> = Arc::new(ArcSwap::from_pointee(cat));
 
     Ok(AdminSetup {
         uds_state: UdsState {
@@ -498,9 +600,14 @@ async fn build_admin_substrate(
             agent_auth: bearer,
             operator_auth: Arc::new(operator_auth),
             operator_mtls: None,
+            registrations: Some(registrations.clone()),
+            catalog: Some(catalog.clone()),
+            resolved_creds: Some(resolved_creds.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
+        registrations,
+        catalog,
     })
 }
 

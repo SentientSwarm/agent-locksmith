@@ -1,0 +1,215 @@
+# /etc/locksmith/seed/catalog.yaml
+#
+# Curated default registrations baked into the locksmith Docker image.
+# First-boot loads these into the `registrations` table with seed=1.
+# Operators provide credentials via .env and override fields via the
+# admin API (see locksmith {tool,model,infra} put). Operator-overridden
+# rows flip seed=0 and are preserved across image upgrades; operator-
+# disabled rows stay disabled across image upgrades (sticky disabled=1).
+#
+# Catalog version: bump on every change. The first-boot loader compares
+# this against registrations_meta.seed_version and applies the diff
+# idempotently:
+#   - new entries → INSERT with seed=1
+#   - changed seed=1 entries → UPDATE (preserves operator overrides
+#     identified by seed=0)
+#   - removed entries → NEVER deleted (operator suppresses via DELETE
+#     which sets disabled=1)
+#
+# Coverage: this set deliberately exercises all three kinds (model /
+# tool / infra) and all three auth shapes (none / header / bearer)
+# so the loader sees every code path.
+#
+# Authoritative classification rationale: see
+#   agents-stack/docs/plans/2026-05-06-v2.0.0-catalog-seed.md
+# DEFER and SKIP entries (~25 + ~10 categories) are listed there with
+# rationale; operators can register them via admin API today.
+
+version: "2.0.0"
+
+entries:
+  # ─── Models ─────────────────────────────────────────────────────────────
+  - name: anthropic
+    kind: model
+    description: "Anthropic Messages API"
+    upstream: "https://api.anthropic.com"
+    auth:
+      kind: header
+      header: x-api-key
+      env_var: ANTHROPIC_API_KEY
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: anthropic
+
+  - name: openai
+    kind: model
+    description: "OpenAI Responses + Chat Completions API"
+    upstream: "https://api.openai.com"
+    auth:
+      kind: bearer
+      env_var: OPENAI_API_KEY
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: openai
+
+  - name: openrouter
+    kind: model
+    description: "OpenRouter (multi-provider LLM gateway)"
+    upstream: "https://openrouter.ai/api"
+    auth:
+      kind: bearer
+      env_var: OPENROUTER_API_KEY
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: openrouter
+
+  - name: ai-gateway
+    kind: model
+    description: "Vercel AI Gateway"
+    upstream: "https://ai-gateway.vercel.sh/v1"
+    auth:
+      kind: bearer
+      env_var: AI_GATEWAY_API_KEY
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: vercel
+
+  # Ollama — LAN-typical local inference, authless by default. Override
+  # the upstream to your Ollama host:
+  #   locksmith model put ollama --upstream http://your-host:11434
+  - name: ollama
+    kind: model
+    description: "Ollama (LAN-typical local inference; authless by default)"
+    upstream: "http://ollama.lan:11434"
+    auth:
+      kind: none
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: ollama
+
+  # LM Studio — `host.docker.internal:1234` resolves to the Docker host
+  # on macOS / Docker Desktop. For LAN-hosted LM Studio:
+  #   locksmith model put lmstudio --upstream http://host:1234 \
+  #     --auth bearer=LM_STUDIO_API_KEY  # if Settings → Developer → API Key is set
+  - name: lmstudio
+    kind: model
+    description: "LM Studio (on-host inference; optional bearer auth)"
+    upstream: "http://host.docker.internal:1234"
+    auth:
+      kind: none
+    egress: proxied
+    timeouts:
+      request_seconds: 600
+      idle_seconds: 600
+    body_limit_bytes: 50000000
+    metadata:
+      modality: text
+      provider: lmstudio
+
+  # ─── Tools ──────────────────────────────────────────────────────────────
+  - name: tavily
+    kind: tool
+    description: "Tavily search API"
+    upstream: "https://api.tavily.com"
+    auth:
+      kind: bearer
+      env_var: TAVILY_API_KEY
+    egress: proxied
+    timeouts:
+      request_seconds: 60
+      idle_seconds: 60
+    body_limit_bytes: 5000000
+    metadata:
+      capability: search
+      provider: tavily
+
+  - name: github
+    kind: tool
+    description: "GitHub REST API v3"
+    upstream: "https://api.github.com"
+    auth:
+      kind: bearer
+      env_var: GITHUB_TOKEN
+    egress: proxied
+    timeouts:
+      request_seconds: 60
+      idle_seconds: 60
+    body_limit_bytes: 50000000
+    metadata:
+      capability: vcs
+      provider: github
+
+  - name: duckduckgo
+    kind: tool
+    description: "DuckDuckGo Instant Answer API (authless)"
+    upstream: "https://api.duckduckgo.com"
+    auth:
+      kind: none
+    egress: proxied
+    timeouts:
+      request_seconds: 30
+      idle_seconds: 30
+    body_limit_bytes: 5000000
+    metadata:
+      capability: search
+      provider: duckduckgo
+
+  - name: wikipedia
+    kind: tool
+    description: "Wikipedia REST API v1 (authless)"
+    upstream: "https://en.wikipedia.org"
+    auth:
+      kind: none
+    egress: proxied
+    timeouts:
+      request_seconds: 30
+      idle_seconds: 30
+    body_limit_bytes: 50000000
+    metadata:
+      capability: docs
+      provider: wikipedia
+
+  # ─── Infra ──────────────────────────────────────────────────────────────
+  # lf-scan is the layer8-proxy prompt/code scanner sidecar. Operator-only —
+  # the proxy itself calls it inline as middleware (post-v2.0.0), not agents.
+  - name: lf-scan
+    kind: infra
+    description: "Layer8 prompt/code scanner sidecar (operator-only)"
+    upstream: "http://lf-scan:8080"
+    auth:
+      kind: header
+      header: X-Internal-Token
+      env_var: LF_SCAN_INTERNAL_TOKEN
+    egress: direct
+    timeouts:
+      request_seconds: 30
+      idle_seconds: 30
+    body_limit_bytes: 50000000
+    metadata:
+      role: middleware
+      capability: prompt-scan

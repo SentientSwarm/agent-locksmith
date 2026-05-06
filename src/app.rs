@@ -55,6 +55,20 @@ pub struct AppState {
     /// `auth_middleware` uses it on every request; when absent, the M0
     /// shared-bearer fallback preserves pre-v2 behavior.
     pub agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    /// Phase E.3 — registrations repo for the public discovery
+    /// endpoints `/tools` and `/models`. Same Arc as
+    /// `UdsState.registrations` (shared across admin + discovery).
+    /// `None` for M0/M1 deployments without admin substrate; the
+    /// discovery handlers then fall back to the YAML-loaded
+    /// `config.tools` so existing M9 tests stay green.
+    pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    /// Phase E.6 — in-memory `Catalog` mirror of the registrations
+    /// table. Empty when registrations isn't wired (M0/M1 / M9 test
+    /// path). The proxy hot path looks up by name; the discovery
+    /// handlers can iterate by kind without round-tripping the DB.
+    /// Refreshed by admin handlers after upsert/delete/enable so
+    /// runtime state matches the DB without a daemon restart.
+    pub catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -132,6 +146,62 @@ pub fn build_app_full(
     mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
     agent_auth: Option<Arc<dyn AgentAuthenticator>>,
 ) -> Router {
+    build_app_full_with_registrations(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        None,
+    )
+}
+
+/// Phase E.3 entrypoint — extends `build_app_full` with the
+/// registrations repo so `/tools` and `/models` discovery endpoints
+/// read from the registrations table when wired. `None` preserves the
+/// M9 / pre-Phase-E behavior (discovery falls back to `config.tools`).
+///
+/// Phase E.6 added an in-memory `Catalog` cache; this entry point
+/// constructs an empty one so existing callers keep their signature.
+/// Daemon and integration tests that need a populated catalog use
+/// [`build_app_full_with_catalog`].
+pub fn build_app_full_with_registrations(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+) -> Router {
+    let catalog = Arc::new(ArcSwap::from_pointee(
+        crate::registrations::Catalog::default(),
+    ));
+    build_app_full_with_catalog(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+    )
+}
+
+/// Phase E.6 entrypoint — extends [`build_app_full_with_registrations`]
+/// with a pre-built `ArcSwap<Catalog>`. The daemon path calls this
+/// after the seed loader and legacy bootstrap have populated the
+/// registrations table; it loads the catalog from the repo, resolves
+/// AuthSpec env vars into `resolved_creds`, and passes both in.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_catalog(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     drop(snapshot);
@@ -144,6 +214,8 @@ pub fn build_app_full(
         response_controls,
         mtls_authenticator,
         agent_auth,
+        registrations,
+        catalog,
     });
 
     Router::new()
@@ -168,6 +240,7 @@ pub fn build_app_full(
         //   §4.7.9 envelope contract).
         .route("/skill", routing::get(skill_handler))
         .route("/tools", routing::get(tools_handler))
+        .route("/models", routing::get(models_handler))
         .route(
             "/api/{tool_name}/{*path}",
             routing::any(proxy::proxy_handler),
@@ -287,16 +360,52 @@ async fn tools_handler(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,
 ) -> Json<Value> {
+    let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
+    let tools = catalog_listing(&state, identity, crate::registrations::Kind::Tool).await;
+    Json(json!({ "tools": tools }))
+}
+
+async fn models_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Json<Value> {
+    let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
+    let models = catalog_listing(&state, identity, crate::registrations::Kind::Model).await;
+    Json(json!({ "models": models }))
+}
+
+/// Render a public discovery listing (used by `/tools` and `/models`).
+///
+/// When the registrations repo is wired (Phase E.3+), reads from the
+/// registrations table — kind-discriminated, ACL-filtered, drops
+/// `disabled=true` rows. When the repo is `None` (M0/M1 / M9 test
+/// path without admin substrate), falls back to the YAML-loaded
+/// `config.tools` for `/tools` and returns an empty array for
+/// `/models` (pre-Phase-E deployments had no model concept).
+async fn catalog_listing(
+    state: &Arc<AppState>,
+    identity: Option<&crate::auth_v2::AgentIdentity>,
+    kind: crate::registrations::Kind,
+) -> Vec<Value> {
+    if let Some(repo) = state.registrations.as_ref() {
+        match crate::registrations::api::list_public(repo.as_ref(), kind, identity).await {
+            Ok(items) => return items,
+            Err(e) => {
+                tracing::error!(error = ?e, "registrations list_public failed; returning empty");
+                return Vec::new();
+            }
+        }
+    }
+
+    // Fallback: pre-Phase-E behavior. Only honors `kind=tool` (config has
+    // no model concept). `kind=model` returns empty. ACL filter still
+    // applies via AgentIdentity::allows_tool.
+    if !matches!(kind, crate::registrations::Kind::Tool) {
+        return Vec::new();
+    }
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
-    // M9: when an `AgentIdentity` is stamped (per-agent bearer or
-    // mTLS), filter the catalog by the agent's ACL so it never sees
-    // tools it can't call. Keeps `/tools` consistent with both the
-    // proxy hot path and `/agent/skill` — same ACL gate, same result.
-    // M0/M1 deployments without admin substrate have no identity
-    // stamped; they get the full active catalog as pre-M9.
-    let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
-    let tools: Vec<Value> = config
+    config
         .active_tools_against(&resolved)
         .iter()
         .filter(|t| identity.is_none_or(|id| id.allows_tool(&t.name).is_ok()))
@@ -308,7 +417,5 @@ async fn tools_handler(
                 "description": t.description,
             })
         })
-        .collect();
-
-    Json(json!({ "tools": tools }))
+        .collect()
 }

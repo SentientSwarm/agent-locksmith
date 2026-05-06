@@ -141,10 +141,7 @@ impl ShutdownCoordinator {
     /// fired and the daemon force-exited. Long-running streaming LLM
     /// responses that took longer than `drain_window_seconds` were
     /// killed mid-stream.
-    pub async fn await_shutdown_then_drain<F>(
-        &self,
-        task: F,
-    ) -> Result<F::Output, DrainTimeout>
+    pub async fn await_shutdown_then_drain<F>(&self, task: F) -> Result<F::Output, DrainTimeout>
     where
         F: std::future::Future,
     {
@@ -261,11 +258,8 @@ mod tests {
         let coord = ShutdownCoordinator::new(Duration::from_secs(5));
         coord.trigger();
         // Subscribing AFTER the trigger must NOT block.
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            coord.shutdown_signal(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), coord.shutdown_signal()).await;
         assert!(
             result.is_ok(),
             "shutdown_signal() must resolve immediately when trigger has already fired"

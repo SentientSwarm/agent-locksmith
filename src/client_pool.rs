@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::config::{AppConfig, EgressMode, ToolConfig};
+use crate::config::{AppConfig, EgressMode, ToolConfig, ToolTimeouts};
 
 /// Stable fingerprint of the tool fields that affect `Client` construction.
 /// Two tool configs with the same fingerprint produce equivalent clients;
@@ -31,15 +31,19 @@ struct ToolFingerprint {
 
 impl ToolFingerprint {
     fn of(tool: &ToolConfig, config: &AppConfig) -> Self {
+        Self::of_parts(tool.timeouts, tool.egress, config)
+    }
+
+    fn of_parts(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConfig) -> Self {
         Self {
-            request_seconds: tool.timeouts.request_seconds,
-            idle_seconds: tool.timeouts.idle_seconds,
-            egress: tool.egress,
+            request_seconds: timeouts.request_seconds,
+            idle_seconds: timeouts.idle_seconds,
+            egress,
             // Egress proxy is shared across tools but only matters when
             // the tool is `proxied`. Including it in the fingerprint means
             // changes to the global proxy URL evict every proxied tool's
             // client (which is the right behavior).
-            egress_proxy_url: if matches!(tool.egress, EgressMode::Proxied) {
+            egress_proxy_url: if matches!(egress, EgressMode::Proxied) {
                 config.egress_proxy.clone()
             } else {
                 None
@@ -94,6 +98,47 @@ impl ClientPool {
         client
     }
 
+    /// Phase E.6 — variant keyed by fields rather than a `ToolConfig`.
+    /// Used by the proxy hot path when the target came from the
+    /// registrations catalog (no `ToolConfig` available). Same caching
+    /// semantics, same fingerprint shape, so registration-sourced and
+    /// config-sourced clients share the cache by name when they share
+    /// timeouts and egress.
+    pub fn get_or_build_for(
+        &self,
+        name: &str,
+        timeouts: ToolTimeouts,
+        egress: EgressMode,
+        config: &AppConfig,
+    ) -> Arc<Client> {
+        let fingerprint = ToolFingerprint::of_parts(timeouts, egress, config);
+
+        {
+            let entries = self
+                .entries
+                .read()
+                .expect("client_pool entries lock poisoned");
+            if let Some((client, cached_fp)) = entries.get(name)
+                && cached_fp == &fingerprint
+            {
+                return Arc::clone(client);
+            }
+        }
+
+        let mut entries = self
+            .entries
+            .write()
+            .expect("client_pool entries lock poisoned");
+        if let Some((client, cached_fp)) = entries.get(name)
+            && cached_fp == &fingerprint
+        {
+            return Arc::clone(client);
+        }
+        let client = Arc::new(build_client_for(timeouts, egress, config));
+        entries.insert(name.to_string(), (Arc::clone(&client), fingerprint));
+        client
+    }
+
     /// Remove cache entries for tool names not in `keep`. Called by M2's
     /// hot-reload mechanism after a successful config swap to drop clients
     /// whose tool was removed from configuration.
@@ -115,11 +160,15 @@ impl ClientPool {
 }
 
 fn build_client(tool: &ToolConfig, config: &AppConfig) -> Client {
-    let mut builder = Client::builder()
-        .timeout(Duration::from_secs(tool.timeouts.request_seconds))
-        .read_timeout(Duration::from_secs(tool.timeouts.idle_seconds));
+    build_client_for(tool.timeouts, tool.egress, config)
+}
 
-    if matches!(tool.egress, EgressMode::Proxied)
+fn build_client_for(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConfig) -> Client {
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(timeouts.request_seconds))
+        .read_timeout(Duration::from_secs(timeouts.idle_seconds));
+
+    if matches!(egress, EgressMode::Proxied)
         && let Some(proxy_url) = &config.egress_proxy
         && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
     {

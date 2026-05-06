@@ -43,9 +43,9 @@ Some `kind=tool` entries are deliberately public — DuckDuckGo, Wikipedia, publ
   timeouts: { request_seconds: 30, idle_seconds: 30 }
 ```
 
-`kind=tool` registered without an `auth:` block is rejected at register-time with `400 / auth_required`. Implicit "no auth block means authless" was a footgun we closed.
+`kind=tool` and `kind=model` registered without an `auth:` block are both rejected at register-time with `400 / auth_required`. Implicit "no auth block means authless" was a footgun we closed.
 
-`kind=model` requires a non-`none` auth (every model upstream we ship to v0.1.0 charges for tokens — authless is a category mistake).
+`kind=model` accepts `auth: none` for self-hosted/LAN-local inference — Ollama and LM Studio default to authless in the seed catalog. Operators who want to require authentication on a model just specify `bearer=...` or `header:...=...` instead.
 
 ## Built-in seed catalog
 

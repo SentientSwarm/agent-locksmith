@@ -160,4 +160,3 @@ async fn run_bearer_branch(
         Err(e) => auth_error_response(&e),
     }
 }
-

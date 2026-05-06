@@ -43,6 +43,70 @@ pub struct UdsState {
     /// `None` ⇒ bearer-only operator path (UDS always; HTTPS in M4
     /// `auth_mode=bearer` mode). `Some(ctx)` ⇒ admin HTTPS with mTLS.
     pub operator_mtls: Option<OperatorMtlsContext>,
+    /// Phase E.3 — registrations repo for `/admin/operator/{tools,models,
+    /// infra}/<name>` routes. `None` for M0/M1 deployments without admin
+    /// substrate; the registrations routes are then absent from the
+    /// router entirely.
+    pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    /// Phase E.6 — agent router's in-memory `Catalog` cache. Threaded
+    /// through so admin write handlers refresh it after upsert/delete/
+    /// enable. `None` keeps the route mounted but skips refresh; the
+    /// proxy hot path then sees stale state until next daemon start.
+    pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
+    /// Phase E.6 — agent router's `ResolvedCreds` map. Threaded through
+    /// so admin write handlers can resolve any newly-referenced env
+    /// vars after a registration's auth shape changes.
+    pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+}
+
+/// Build the Phase E registrations sub-router. Mounts at the operator
+/// nest point (`/admin/operator`); routes look like
+/// `/admin/operator/tools/<name>`, `/admin/operator/models/<name>`,
+/// `/admin/operator/infra/<name>`, plus list endpoints and an
+/// `enable` action to un-disable a previously-disabled seed row.
+///
+/// Phase E.6 — `catalog` and `resolved_creds` are optional refs into
+/// the agent router's runtime state. When `Some`, admin writes refresh
+/// both so the proxy hot path picks up changes without a daemon
+/// restart. When `None` (legacy / non-daemon paths), admin writes
+/// still hit the repo but no in-memory cache exists to invalidate.
+fn build_registrations_admin_router(
+    repo: Arc<crate::registrations::RegistrationRepository>,
+    catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
+    resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+) -> Router {
+    use crate::registrations::api;
+    let st = api::AdminRegistrationsState {
+        repo,
+        catalog,
+        resolved_creds,
+    };
+    Router::new()
+        .route("/tools", get(api::op_list_tools))
+        .route(
+            "/tools/{name}",
+            get(api::op_get_tool)
+                .put(api::op_put_tool)
+                .delete(api::op_delete_tool),
+        )
+        .route("/tools/{name}/enable", post(api::op_enable_tool))
+        .route("/models", get(api::op_list_models))
+        .route(
+            "/models/{name}",
+            get(api::op_get_model)
+                .put(api::op_put_model)
+                .delete(api::op_delete_model),
+        )
+        .route("/models/{name}/enable", post(api::op_enable_model))
+        .route("/infra", get(api::op_list_infra))
+        .route(
+            "/infra/{name}",
+            get(api::op_get_infra)
+                .put(api::op_put_infra)
+                .delete(api::op_delete_infra),
+        )
+        .route("/infra/{name}/enable", post(api::op_enable_infra))
+        .with_state(st)
 }
 
 /// Build the admin router. Public for testing — production wiring uses
@@ -66,9 +130,10 @@ pub fn build_router(state: UdsState) -> Router {
 
     let agent_routes = Router::new()
         .merge(agent_authed_routes)
-        .merge(agent_register_routes);
+        .merge(agent_register_routes)
+        .with_state(state.clone());
 
-    let operator_routes = Router::new()
+    let operator_existing = Router::new()
         .route("/agents", get(op_list_agents).post(op_create_agent))
         .route(
             "/agents/{public_id}",
@@ -87,17 +152,31 @@ pub fn build_router(state: UdsState) -> Router {
             "/bootstrap_tokens/{public_id}/revoke",
             post(op_revoke_bootstrap),
         )
-        .route("/tools", get(op_list_tools))
+        .route("/tools-legacy", get(op_list_tools))
         .route("/audit", get(op_query_audit))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            operator_auth_middleware,
-        ));
+        .with_state(state.clone());
+
+    // Phase E.3 registrations sub-router (only mounted when the repo is
+    // wired). Carries its own `AdminRegistrationsState`, merges in as a
+    // `Router<()>` after `.with_state(...)`. The outer
+    // `operator_auth_middleware` layer applies uniformly across both
+    // sub-routers.
+    let operator_routes = match state.registrations.clone() {
+        Some(repo) => operator_existing.merge(build_registrations_admin_router(
+            repo,
+            state.catalog.clone(),
+            state.resolved_creds.clone(),
+        )),
+        None => operator_existing,
+    }
+    .layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        operator_auth_middleware,
+    ));
 
     Router::new()
         .nest("/admin/agent", agent_routes)
         .nest("/admin/operator", operator_routes)
-        .with_state(state)
 }
 
 /// Bind a Unix domain socket at `path` with mode `0o660` and serve the

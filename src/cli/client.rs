@@ -30,6 +30,10 @@ pub enum CliError {
     Decode(#[from] serde_json::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// Usage-level error in argument parsing (e.g. malformed --auth spec).
+    /// Exits 2 (per §4.7.2 usage convention).
+    #[error("usage: {0}")]
+    Usage(String),
 }
 
 impl CliError {
@@ -40,7 +44,7 @@ impl CliError {
             Self::Server { status: 401, .. } | Self::Server { status: 403, .. } => 3,
             Self::Server { status: 404, .. } => 4,
             Self::Server { status: 409, .. } => 5,
-            Self::InvalidAdminUrl(_) => 2,
+            Self::InvalidAdminUrl(_) | Self::Usage(_) => 2,
             _ => 1,
         }
     }
