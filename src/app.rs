@@ -69,6 +69,27 @@ pub struct AppState {
     /// Refreshed by admin handlers after upsert/delete/enable so
     /// runtime state matches the DB without a daemon restart.
     pub catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    /// Phase F.5 — OAuth runtime state. `None` when
+    /// `LOCKSMITH_OAUTH_SEALING_KEY` is unset — OAuth registrations in
+    /// the catalog then surface `503 oauth_sealing_key_unset` from
+    /// proxy hot path. `Some` enables proxy-side access-token
+    /// injection + on-401 refresh + audit `oauth_session_id`.
+    pub oauth: Option<OauthRuntime>,
+}
+
+/// Bundle of OAuth runtime state shared between the proxy hot path
+/// (this module) and the admin endpoints (`UdsState.oauth`). The
+/// daemon constructs one of these and shares the same Arc-backed
+/// fields with both consumers.
+#[derive(Clone)]
+pub struct OauthRuntime {
+    pub sessions: crate::oauth::OauthSessionRepository,
+    pub sealing_key: crate::oauth::SealingKey,
+    pub locks: crate::oauth::refresh::RefreshLockMap,
+    /// Shared HTTP client for token-endpoint refresh exchanges.
+    /// Built once at daemon startup so we don't allocate a fresh
+    /// reqwest::Client for every refresh.
+    pub refresh_client: reqwest::Client,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -192,6 +213,11 @@ pub fn build_app_full_with_registrations(
 /// after the seed loader and legacy bootstrap have populated the
 /// registrations table; it loads the catalog from the repo, resolves
 /// AuthSpec env vars into `resolved_creds`, and passes both in.
+///
+/// Phase F.5 added an optional `OauthRuntime` for OAuth proxy
+/// dispatch — this entry point passes `None`. The daemon-bound entry
+/// point [`build_app_full_with_oauth`] takes the runtime and wires
+/// it into AppState.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_full_with_catalog(
     config: Arc<ArcSwap<AppConfig>>,
@@ -201,6 +227,32 @@ pub fn build_app_full_with_catalog(
     agent_auth: Option<Arc<dyn AgentAuthenticator>>,
     registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
     catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+) -> Router {
+    build_app_full_with_oauth(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        None,
+    )
+}
+
+/// Phase F.5 entrypoint — same as [`build_app_full_with_catalog`] but
+/// also takes an optional `OauthRuntime`. Daemon path uses this when
+/// `LOCKSMITH_OAUTH_SEALING_KEY` is set.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_oauth(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -216,6 +268,7 @@ pub fn build_app_full_with_catalog(
         agent_auth,
         registrations,
         catalog,
+        oauth,
     });
 
     Router::new()

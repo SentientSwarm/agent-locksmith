@@ -118,16 +118,23 @@ enum ProxyAuth {
     /// shape goes through `Header { header: "Authorization", ... }`
     /// because the legacy resolver may have already prefixed the value.
     Bearer,
-    /// OAuth (PKCE or device-code). The access token lives in the
-    /// `oauth_sessions` cache, not in `resolved_creds`. Phase F.2 ships
-    /// the AuthSpec variants + DB schema; **the proxy hot-path
-    /// injection logic lands in Phase F.5**. Until F.5, this variant
-    /// behaves like `None` on the wire (no header injection, upstream
-    /// gets the agent's cred-stripped request) but reports the OAuth
-    /// audit_mode so audit rows accurately reflect operator intent.
+    /// OAuth (PKCE or device-code). Access token resolved from the
+    /// `oauth_sessions` cache before this struct is constructed, so
+    /// `build_upstream_request` can inject without async work. The
+    /// `oauth_session_id` is included in audit details for forensics
+    /// (ADR-0005 D4).
+    ///
+    /// `access_token=None` indicates a session in degraded state or
+    /// missing entirely — `build_upstream_request` skips injection
+    /// (the response will surface as 401 from upstream, but the
+    /// 503 envelope from `proxy_handler` should already have caught
+    /// this). The variant exists so audit rows still record OAuth
+    /// auth_mode + session id.
     Oauth {
         /// `"oauth_pkce"` or `"oauth_device_code"` per ADR-0005 D4.
         audit_mode: &'static str,
+        oauth_session_id: String,
+        access_token: Option<secrecy::SecretString>,
     },
 }
 
@@ -137,7 +144,17 @@ impl ProxyAuth {
             ProxyAuth::None => "none",
             ProxyAuth::Header { audit_mode, .. } => audit_mode,
             ProxyAuth::Bearer => "bearer",
-            ProxyAuth::Oauth { audit_mode } => audit_mode,
+            ProxyAuth::Oauth { audit_mode, .. } => audit_mode,
+        }
+    }
+
+    /// OAuth session id for audit details, when applicable.
+    fn oauth_session_id(&self) -> Option<&str> {
+        match self {
+            ProxyAuth::Oauth {
+                oauth_session_id, ..
+            } => Some(oauth_session_id.as_str()),
+            _ => None,
         }
     }
 
@@ -160,6 +177,10 @@ impl ProxyTarget {
     /// `ProxyAuth` so the build-upstream-request path is uniform across
     /// catalog and legacy sources.
     fn from_registration(r: &Registration) -> Self {
+        // OAuth ProxyAuth carries token material; this constructor
+        // can only fill the static-credential variants. OAuth
+        // registrations are built via [`from_registration_oauth`]
+        // after the proxy_handler resolves the access token.
         let auth = match &r.auth {
             AuthSpec::None => ProxyAuth::None,
             AuthSpec::Header { header, .. } => ProxyAuth::Header {
@@ -167,12 +188,23 @@ impl ProxyTarget {
                 audit_mode: "header",
             },
             AuthSpec::Bearer { .. } => ProxyAuth::Bearer,
-            AuthSpec::OauthPkce { .. } => ProxyAuth::Oauth {
-                audit_mode: "oauth_pkce",
-            },
-            AuthSpec::OauthDeviceCode { .. } => ProxyAuth::Oauth {
-                audit_mode: "oauth_device_code",
-            },
+            AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
+                // Caller must use from_registration_oauth instead;
+                // this path indicates a programming error. We return
+                // a placeholder Oauth variant with empty session_id
+                // so the audit row still records the right
+                // auth_mode if anyone calls this incorrectly.
+                let audit_mode = match &r.auth {
+                    AuthSpec::OauthPkce { .. } => "oauth_pkce",
+                    AuthSpec::OauthDeviceCode { .. } => "oauth_device_code",
+                    _ => unreachable!(),
+                };
+                ProxyAuth::Oauth {
+                    audit_mode,
+                    oauth_session_id: String::new(),
+                    access_token: None,
+                }
+            }
         };
         Self {
             name: r.name.clone(),
@@ -229,10 +261,24 @@ pub async fn proxy_handler(
     // Phase E.6: catalog lookup first; legacy `config.tools` fallback
     // for M0/M1 / M9 test paths that haven't wired registrations.
     let target = resolve_target(&state, &ctx.tool_name);
-    let target = match target {
+    let mut target = match target {
         Some(t) => t,
         None => return record_tool_not_found(&state.audit, &ctx).await,
     };
+
+    // Phase F.5: for OAuth registrations, materialize the access token
+    // before building the upstream request. Returns a 503 envelope if
+    // the session is missing, degraded, or the sealing key isn't
+    // configured — operator fixes via re-bootstrap.
+    if matches!(target.auth, ProxyAuth::Oauth { .. }) {
+        match resolve_oauth_token(&state, &target).await {
+            Ok(updated_auth) => target.auth = updated_auth,
+            Err(envelope) => {
+                record_oauth_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
+                return envelope.response;
+            }
+        }
+    }
 
     let config = state.config.load();
     let upstream_host = url_host(&target.upstream);
@@ -362,14 +408,18 @@ fn build_upstream_request(
                 upstream_req = upstream_req.header("Authorization", header_value);
             }
         }
-        ProxyAuth::Oauth { .. } => {
-            // Phase F.5 will read access tokens from the oauth_sessions
-            // cache and inject `Authorization: Bearer <access>`. Until
-            // F.5 lands, OAuth registrations forward without injection;
-            // the upstream will 401 and the audit row records
-            // `auth_mode: oauth_pkce | oauth_device_code` so the
-            // operator can see the gap. F.2 ships only the AuthSpec
-            // variant + DB schema.
+        ProxyAuth::Oauth { access_token, .. } => {
+            if let Some(token) = access_token {
+                let header_value =
+                    format!("Bearer {}", secrecy::ExposeSecret::expose_secret(token));
+                upstream_req = upstream_req.header("Authorization", header_value);
+            }
+            // No access token → proxy_handler should have already
+            // returned 503 via record_oauth_unavailable. Reaching
+            // this branch with `None` indicates a degraded session
+            // we couldn't refresh; forwarding without injection lets
+            // the upstream surface its own 401 (informational; the
+            // proxy already audited the failure).
         }
     }
 
@@ -671,10 +721,21 @@ async fn record_proxy_request_success(
     // Phase E.6 / TS-151 — record the upstream auth shape used. "none"
     // for AuthSpec::None (operator-stated authless), "bearer" /
     // "header" for the Phase E catalog path, "config" for the legacy
-    // ToolConfig path, "config_absent" when ToolConfig had no auth
-    // block at all.
-    event.details = Some(json!({"auth_mode": target.auth.audit_mode()}));
+    // ToolConfig path. Phase F.5 — OAuth requests additionally carry
+    // `oauth_session_id` (ADR-0005 D4) for forensic correlation
+    // across access-token refreshes within the same session.
+    event.details = Some(audit_details(target));
     audit_record(audit, event).await;
+}
+
+/// Build audit `details` JSON with `auth_mode` always present and
+/// `oauth_session_id` populated for OAuth requests.
+fn audit_details(target: &ProxyTarget) -> serde_json::Value {
+    let mut v = json!({"auth_mode": target.auth.audit_mode()});
+    if let Some(sid) = target.auth.oauth_session_id() {
+        v["oauth_session_id"] = json!(sid);
+    }
+    v
 }
 
 /// Emit a `proxy/timeout` or `proxy/upstream_error` audit row + the
@@ -697,7 +758,7 @@ async fn record_upstream_error(
     event.status = Some(status.as_u16());
     event.decision = Decision::Error;
     event.upstream_host = upstream_host;
-    event.details = Some(json!({"auth_mode": target.auth.audit_mode()}));
+    event.details = Some(audit_details(target));
     audit_record(audit, event).await;
     (
         status,
@@ -855,4 +916,175 @@ fn url_host(url: &str) -> Option<String> {
     } else {
         Some(host.to_string())
     }
+}
+
+// ─── Phase F.5: OAuth resolution helpers ─────────────────────────────────
+
+/// Wrapped error returned by [`resolve_oauth_token`] when the session
+/// can't be materialized. Carries both the wire response and the
+/// audit cause string for the failure-mode audit row.
+struct OauthUnavailable {
+    response: Response,
+    audit_cause: &'static str,
+}
+
+/// Phase F.5 — materialize the OAuth access token for `target`.
+///
+/// Walks the lifecycle decisions from ADR-0005 D6:
+/// - Sealing key unset (operator hasn't set `LOCKSMITH_OAUTH_SEALING_KEY`)
+///   → 503 `oauth_sealing_key_unset`.
+/// - Session row missing (operator hasn't run `locksmith oauth bootstrap`)
+///   → 503 `oauth_session_missing`.
+/// - Session degraded (refresh previously failed) → 503
+///   `oauth_refresh_failed`.
+/// - Access token absent or expiring within 60s → trigger inline
+///   refresh under the per-session lock; surface the new token.
+/// - Refresh failed inline → mark degraded + 503 `oauth_refresh_failed`.
+async fn resolve_oauth_token(
+    state: &AppState,
+    target: &ProxyTarget,
+) -> Result<ProxyAuth, OauthUnavailable> {
+    let Some(rt) = &state.oauth else {
+        return Err(OauthUnavailable {
+            response: oauth_unavailable_envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "oauth_sealing_key_unset",
+                "OAuth registration requires LOCKSMITH_OAUTH_SEALING_KEY at daemon startup",
+            ),
+            audit_cause: "sealing_key_unset",
+        });
+    };
+    let audit_mode = match &target.auth {
+        ProxyAuth::Oauth { audit_mode, .. } => *audit_mode,
+        _ => "oauth_unknown", // shouldn't happen; caller guards on Oauth variant
+    };
+
+    let lock = rt.locks.get(&target.name).await;
+    let _guard = lock.lock().await;
+
+    let session = match rt.sessions.get(&rt.sealing_key, &target.name).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Err(OauthUnavailable {
+                response: oauth_unavailable_envelope(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "oauth_session_missing",
+                    "OAuth session not bootstrapped for this registration",
+                ),
+                audit_cause: "session_missing",
+            });
+        }
+        Err(e) => {
+            tracing::warn!(name = %target.name, error = %e, "oauth session read failed");
+            return Err(OauthUnavailable {
+                response: oauth_unavailable_envelope(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "oauth_session_read_failed",
+                    "OAuth session unavailable (sealing failure)",
+                ),
+                audit_cause: "session_read_failed",
+            });
+        }
+    };
+
+    if session.degraded {
+        return Err(OauthUnavailable {
+            response: oauth_unavailable_envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "oauth_refresh_failed",
+                "OAuth session degraded — operator must re-bootstrap",
+            ),
+            audit_cause: "degraded",
+        });
+    }
+
+    let now = now_secs();
+    let needs_refresh = match (&session.access_token, session.access_token_expires_at) {
+        (None, _) => true,
+        (Some(_), Some(exp)) if exp <= now + 60 => true,
+        _ => false,
+    };
+
+    let active_session = if needs_refresh {
+        let cat = state.catalog.load();
+        match crate::oauth::refresh::refresh_session(
+            &rt.sessions,
+            &cat,
+            &rt.sealing_key,
+            &rt.refresh_client,
+            &session,
+        )
+        .await
+        {
+            Ok(updated) => updated,
+            Err(e) => {
+                let _ = rt.sessions.mark_degraded(&target.name).await;
+                tracing::warn!(
+                    name = %target.name,
+                    cause = e.audit_cause(),
+                    error = %e,
+                    "oauth refresh failed inline; marking session degraded"
+                );
+                return Err(OauthUnavailable {
+                    response: oauth_unavailable_envelope(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "oauth_refresh_failed",
+                        "OAuth refresh failed — operator must re-bootstrap",
+                    ),
+                    audit_cause: e.audit_cause(),
+                });
+            }
+        }
+    } else {
+        session
+    };
+
+    let oauth_session_id = active_session.audit_session_id();
+    let access_token = active_session.access_token;
+
+    Ok(ProxyAuth::Oauth {
+        audit_mode,
+        oauth_session_id,
+        access_token,
+    })
+}
+
+/// Render the §4.7.9 envelope for OAuth-side unavailability. Three
+/// codes per ADR-0005 D6 + sibling cases above.
+fn oauth_unavailable_envelope(status: StatusCode, code: &'static str, message: &str) -> Response {
+    (
+        status,
+        Json(json!({
+            "error": {
+                "type": "auth_error",
+                "code": code,
+                "message": message,
+            }
+        })),
+    )
+        .into_response()
+}
+
+/// Audit the OAuth-side failure that caused proxy_handler to short-
+/// circuit before reaching the upstream. Distinct from
+/// `record_upstream_error` because no upstream contact happened.
+async fn record_oauth_unavailable(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    audit_cause: &'static str,
+) {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "oauth_unavailable".to_string();
+    event.status = Some(503);
+    event.decision = Decision::Error;
+    event.details = Some(json!({"oauth_cause": audit_cause}));
+    audit_record(audit, event).await;
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

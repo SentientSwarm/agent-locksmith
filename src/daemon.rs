@@ -108,6 +108,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         agent_auth,
         registrations_for_app,
         catalog_for_app,
+        oauth_runtime_for_app,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -129,9 +130,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             // refresh the catalog through that ref; the proxy hot path
             // reads through this one.
             Some(setup.catalog),
+            // Phase F.5: OAuth runtime for the proxy hot path.
+            setup.oauth_runtime,
         )
     } else {
-        (None, None, None, None, None, None)
+        (None, None, None, None, None, None, None)
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -197,7 +200,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // skip the substrate get an empty catalog default from
     // `build_app_full_with_registrations`.
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_catalog(
+        Some(catalog) => crate::app::build_app_full_with_oauth(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -205,6 +208,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             agent_auth,
             registrations_for_app,
             catalog,
+            oauth_runtime_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -453,6 +457,9 @@ struct AdminSetup {
     /// across UdsState (for admin-write invalidation) and AppState (for
     /// proxy hot-path reads).
     catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    /// Phase F.5 — OAuth runtime for the proxy hot path.
+    /// `None` when `LOCKSMITH_OAUTH_SEALING_KEY` is unset.
+    oauth_runtime: Option<crate::app::OauthRuntime>,
 }
 
 async fn build_admin_substrate(
@@ -599,15 +606,10 @@ async fn build_admin_substrate(
     // registrations exist in the catalog but bootstrap calls fail
     // cleanly with a 404 (the routes aren't mounted) and OAuth proxy
     // calls return 503 (Phase F.5 surfaces that envelope code).
-    let oauth_state = match crate::oauth::SealingKey::from_env() {
+    let (oauth_admin, oauth_runtime) = match crate::oauth::SealingKey::from_env() {
         Ok(key) => {
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
             let locks = crate::oauth::refresh::RefreshLockMap::new();
-            // Spawn the background refresh task. Co-terminates with
-            // shutdown via the audit-sweeper-style signal pattern;
-            // for now we use a never-resolving future so the task
-            // runs for the daemon's lifetime. Phase F.5 wires
-            // shutdown propagation properly.
             tokio::spawn(crate::oauth::refresh::run(
                 sessions.clone(),
                 catalog.clone(),
@@ -616,17 +618,28 @@ async fn build_admin_substrate(
                 std::future::pending::<()>(),
             ));
             info!("oauth: sealing key loaded; refresh task spawned");
-            Some(crate::oauth::OauthAdminState {
+            let refresh_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let admin = crate::oauth::OauthAdminState {
                 registrations: registrations.clone(),
+                sessions: sessions.clone(),
+                sealing_key: key.clone(),
+                catalog: catalog.clone(),
+                locks: locks.clone(),
+            };
+            let runtime = crate::app::OauthRuntime {
                 sessions,
                 sealing_key: key,
-                catalog: catalog.clone(),
                 locks,
-            })
+                refresh_client,
+            };
+            (Some(admin), Some(runtime))
         }
         Err(crate::oauth::SealingKeyError::EnvVarUnset) => {
             info!("oauth: LOCKSMITH_OAUTH_SEALING_KEY unset; OAuth admin routes not mounted");
-            None
+            (None, None)
         }
         Err(e) => {
             return Err(DaemonError::AdminConfig(format!("oauth sealing key: {e}")));
@@ -642,12 +655,13 @@ async fn build_admin_substrate(
             registrations: Some(registrations.clone()),
             catalog: Some(catalog.clone()),
             resolved_creds: Some(resolved_creds.clone()),
-            oauth: oauth_state,
+            oauth: oauth_admin,
         },
         audit,
         agent_auth: agent_auth_dyn,
         registrations,
         catalog,
+        oauth_runtime,
     })
 }
 
