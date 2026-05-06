@@ -11,6 +11,7 @@ pub mod daemon;
 pub mod deprecation;
 pub mod migrations;
 pub mod mtls;
+pub mod oauth;
 pub mod proxy;
 pub mod registrations;
 pub mod repo;
