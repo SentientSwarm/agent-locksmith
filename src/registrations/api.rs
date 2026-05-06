@@ -238,17 +238,16 @@ pub async fn op_put(
     //
     // - kind=tool requires the field to be present (use `auth: none` for
     //   authless; field absent → `auth_required`).
-    // - kind=model requires the field to be present AND non-None
-    //   (`model_auth_required` for explicit none; `auth_required` for
-    //   field absent).
+    // - kind=model requires the field to be present (field absent →
+    //   `auth_required`). `auth: none` IS accepted on kind=model — for
+    //   self-hosted/LAN-local inference (Ollama, LM Studio) where the
+    //   upstream doesn't require auth. Operators who want to require
+    //   auth on a model just don't specify `none`.
     // - kind=infra accepts any shape including field-absent (becomes
     //   `AuthSpec::None`).
     let auth = match (kind, body.auth) {
         (Kind::Tool, None) | (Kind::Model, None) => {
             return registration_error_response(&RegistrationError::AuthRequired);
-        }
-        (Kind::Model, Some(AuthSpec::None)) => {
-            return registration_error_response(&RegistrationError::ModelAuthRequired);
         }
         (Kind::Infra, None) => AuthSpec::None,
         (_, Some(a)) => a,

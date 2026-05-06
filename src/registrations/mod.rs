@@ -19,6 +19,7 @@ pub mod api;
 pub mod auth_spec;
 pub mod kind;
 pub mod repo;
+pub mod seed_loader;
 pub mod validators;
 
 pub use auth_spec::AuthSpec;

@@ -454,6 +454,24 @@ async fn build_admin_substrate(
     let registrations = Arc::new(crate::registrations::RegistrationRepository::new(
         pool.clone(),
     ));
+
+    // Phase E.7 — apply the seed catalog before the daemon starts
+    // serving traffic. Missing-file is non-fatal (deployments without
+    // a baked-in catalog start with an empty registrations table);
+    // parse / validation errors ABORT startup since a malformed
+    // catalog ships with the image.
+    if let Some(seed_path) = crate::registrations::seed_loader::seed_path_from_env() {
+        match crate::registrations::seed_loader::load_or_skip(&registrations, &seed_path).await {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "seed catalog load failed (path={}): {e}",
+                    seed_path.display()
+                )));
+            }
+        }
+    }
+
     let mut audit = AuditRepository::new(pool);
 
     // JSONL mirror sink — optional, opens at startup so misconfig

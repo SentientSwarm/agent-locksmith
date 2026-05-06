@@ -175,22 +175,33 @@ async fn ts123_tool_missing_auth_field_400() {
     assert_eq!(body["error"]["code"], "auth_required");
 }
 
-// ─── TS-124: PUT /admin/operator/models/<name> with auth: none → 400 model_auth_required
+// ─── TS-124: PUT /admin/operator/models/<name> with auth: none → 200
+//
+// kind=model + auth: none is accepted because LAN-local self-hosted
+// inference (Ollama, LM Studio) is often authless by default. The
+// design originally rejected this but the catalog gap analysis (E.5)
+// surfaced two SHIP entries (`ollama`, `lmstudio`) defaulting to
+// authless, and rejecting them at the validator made the seed catalog
+// unloadable. The footgun we're closing is the IMPLICIT-absence case
+// (field missing entirely) — explicit `auth: none` is operator intent
+// and is honored. The `model_auth_required` error code is unused at
+// v2.0.0; reserved for future kind=model-specific auth policy.
 #[tokio::test]
-async fn ts124_model_with_auth_none_400() {
+async fn ts124_model_with_auth_none_accepted() {
     let h = setup().await;
     let resp = h
         .server
-        .put("/admin/operator/models/openai")
+        .put("/admin/operator/models/local-ollama")
         .add_header("authorization", auth_header(&h))
         .json(&json!({
-            "upstream": "https://api.openai.com",
+            "upstream": "http://ollama.lan:11434",
             "auth": { "kind": "none" }
         }))
         .await;
-    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    resp.assert_status_ok();
     let body: serde_json::Value = resp.json();
-    assert_eq!(body["error"]["code"], "model_auth_required");
+    assert_eq!(body["auth"]["kind"], "none");
+    assert_eq!(body["kind"], "model");
 }
 
 // ─── TS-125: PUT /admin/operator/tools/<name> with auth: none → 200 + persists
