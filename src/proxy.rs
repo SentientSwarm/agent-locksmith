@@ -98,10 +98,9 @@ struct ProxyTarget {
     auth: ProxyAuth,
 }
 
-/// What the proxy needs to know about auth at injection time. Three
-/// shapes: skip injection; inject `header: value`; inject `Authorization:
-/// Bearer value`. Each carries the audit label so `proxy_request`
-/// rows can record the `auth_mode` used (see TS-151).
+/// What the proxy needs to know about auth at injection time. Each
+/// variant carries the audit label so `proxy_request` rows can record
+/// the `auth_mode` used (see TS-151).
 #[derive(Debug, Clone)]
 enum ProxyAuth {
     /// `AuthSpec::None` — operator-stated authless. Strip incoming
@@ -119,6 +118,17 @@ enum ProxyAuth {
     /// shape goes through `Header { header: "Authorization", ... }`
     /// because the legacy resolver may have already prefixed the value.
     Bearer,
+    /// OAuth (PKCE or device-code). The access token lives in the
+    /// `oauth_sessions` cache, not in `resolved_creds`. Phase F.2 ships
+    /// the AuthSpec variants + DB schema; **the proxy hot-path
+    /// injection logic lands in Phase F.5**. Until F.5, this variant
+    /// behaves like `None` on the wire (no header injection, upstream
+    /// gets the agent's cred-stripped request) but reports the OAuth
+    /// audit_mode so audit rows accurately reflect operator intent.
+    Oauth {
+        /// `"oauth_pkce"` or `"oauth_device_code"` per ADR-0005 D4.
+        audit_mode: &'static str,
+    },
 }
 
 impl ProxyAuth {
@@ -127,6 +137,7 @@ impl ProxyAuth {
             ProxyAuth::None => "none",
             ProxyAuth::Header { audit_mode, .. } => audit_mode,
             ProxyAuth::Bearer => "bearer",
+            ProxyAuth::Oauth { audit_mode } => audit_mode,
         }
     }
 
@@ -139,6 +150,7 @@ impl ProxyAuth {
             ProxyAuth::None => None,
             ProxyAuth::Header { header, .. } => Some(header.to_lowercase()),
             ProxyAuth::Bearer => None, // "authorization" is always stripped
+            ProxyAuth::Oauth { .. } => None, // F.5 will inject Authorization; always stripped
         }
     }
 }
@@ -155,6 +167,12 @@ impl ProxyTarget {
                 audit_mode: "header",
             },
             AuthSpec::Bearer { .. } => ProxyAuth::Bearer,
+            AuthSpec::OauthPkce { .. } => ProxyAuth::Oauth {
+                audit_mode: "oauth_pkce",
+            },
+            AuthSpec::OauthDeviceCode { .. } => ProxyAuth::Oauth {
+                audit_mode: "oauth_device_code",
+            },
         };
         Self {
             name: r.name.clone(),
@@ -343,6 +361,15 @@ fn build_upstream_request(
                     format!("Bearer {}", secrecy::ExposeSecret::expose_secret(value));
                 upstream_req = upstream_req.header("Authorization", header_value);
             }
+        }
+        ProxyAuth::Oauth { .. } => {
+            // Phase F.5 will read access tokens from the oauth_sessions
+            // cache and inject `Authorization: Bearer <access>`. Until
+            // F.5 lands, OAuth registrations forward without injection;
+            // the upstream will 401 and the audit row records
+            // `auth_mode: oauth_pkce | oauth_device_code` so the
+            // operator can see the gap. F.2 ships only the AuthSpec
+            // variant + DB schema.
         }
     }
 
