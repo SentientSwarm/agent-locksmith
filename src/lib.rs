@@ -12,6 +12,7 @@ pub mod deprecation;
 pub mod migrations;
 pub mod mtls;
 pub mod proxy;
+pub mod registrations;
 pub mod repo;
 pub mod response_controls;
 pub mod secret;
