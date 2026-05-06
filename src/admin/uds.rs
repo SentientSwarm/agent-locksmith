@@ -57,6 +57,10 @@ pub struct UdsState {
     /// so admin write handlers can resolve any newly-referenced env
     /// vars after a registration's auth shape changes.
     pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+    /// Phase F.4 — OAuth admin state. `None` for deployments that
+    /// haven't set `LOCKSMITH_OAUTH_SEALING_KEY` (the daemon then
+    /// boots without OAuth support; the routes below 404 cleanly).
+    pub oauth: Option<crate::oauth::OauthAdminState>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -107,6 +111,21 @@ fn build_registrations_admin_router(
         )
         .route("/infra/{name}/enable", post(api::op_enable_infra))
         .with_state(st)
+}
+
+/// Phase F.4 — OAuth admin sub-router. Mounts under operator nest.
+/// Routes: `POST /oauth/<name>/bootstrap`, `GET /oauth/<name>`,
+/// `DELETE /oauth/<name>`. Only mounted when `LOCKSMITH_OAUTH_SEALING_KEY`
+/// is set (`UdsState.oauth = Some(_)`).
+fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
+    use crate::oauth::admin;
+    Router::new()
+        .route(
+            "/oauth/{name}",
+            get(admin::op_oauth_status).delete(admin::op_oauth_revoke),
+        )
+        .route("/oauth/{name}/bootstrap", post(admin::op_oauth_bootstrap))
+        .with_state(state)
 }
 
 /// Build the admin router. Public for testing — production wiring uses
@@ -161,13 +180,19 @@ pub fn build_router(state: UdsState) -> Router {
     // `Router<()>` after `.with_state(...)`. The outer
     // `operator_auth_middleware` layer applies uniformly across both
     // sub-routers.
-    let operator_routes = match state.registrations.clone() {
+    let operator_with_registrations = match state.registrations.clone() {
         Some(repo) => operator_existing.merge(build_registrations_admin_router(
             repo,
             state.catalog.clone(),
             state.resolved_creds.clone(),
         )),
         None => operator_existing,
+    };
+    let operator_routes = match state.oauth.clone() {
+        Some(oauth_state) => {
+            operator_with_registrations.merge(build_oauth_admin_router(oauth_state))
+        }
+        None => operator_with_registrations,
     }
     .layer(axum::middleware::from_fn_with_state(
         state.clone(),

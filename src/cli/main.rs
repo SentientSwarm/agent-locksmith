@@ -15,7 +15,7 @@ mod client;
 mod commands;
 mod output;
 
-use commands::{agent, audit, bootstrap, export, infra, model, mtls, self_svc, tool};
+use commands::{agent, audit, bootstrap, export, infra, model, mtls, oauth, self_svc, tool};
 use output::Format;
 
 /// Default admin socket location. Operators can override with --socket
@@ -80,6 +80,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: infra::InfraCmd,
     },
+    /// OAuth session management (operator). Phase F.4 (v2.0.0).
+    Oauth {
+        #[command(subcommand)]
+        cmd: oauth::OauthCmd,
+    },
     /// Audit log queries (operator).
     Audit {
         #[command(subcommand)]
@@ -127,6 +132,7 @@ async fn main() -> ExitCode {
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,
+        Cmd::Oauth { cmd } => oauth::run(&client, cli.format, cmd).await,
         Cmd::Audit { cmd } => audit::run(&client, cli.format, cmd).await,
         Cmd::Export { cmd } => export::run(&client, cli.format, cmd).await,
         Cmd::Mtls { cmd } => mtls::run(cli.format, cmd).await,

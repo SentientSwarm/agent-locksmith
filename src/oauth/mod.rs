@@ -20,9 +20,11 @@
 //! The first-time auth bootstrap CLI (Phase F.4) and proxy hot-path
 //! dispatch (Phase F.5) consume the types defined here.
 
+pub mod admin;
 pub mod refresh;
 pub mod sealing;
 pub mod session;
 
+pub use admin::OauthAdminState;
 pub use sealing::{SealingKey, SealingKeyError};
 pub use session::{OauthSession, OauthSessionError, OauthSessionRepository};

@@ -524,7 +524,7 @@ async fn build_admin_substrate(
         }
     }
 
-    let mut audit = AuditRepository::new(pool);
+    let mut audit = AuditRepository::new(pool.clone());
 
     // JSONL mirror sink — optional, opens at startup so misconfig
     // (unwritable path) surfaces here rather than at first audit
@@ -594,6 +594,45 @@ async fn build_admin_substrate(
     }
     let catalog: Arc<ArcSwap<crate::registrations::Catalog>> = Arc::new(ArcSwap::from_pointee(cat));
 
+    // Phase F.4 — OAuth admin state. Built only when the operator
+    // supplies `LOCKSMITH_OAUTH_SEALING_KEY`. When absent, OAuth
+    // registrations exist in the catalog but bootstrap calls fail
+    // cleanly with a 404 (the routes aren't mounted) and OAuth proxy
+    // calls return 503 (Phase F.5 surfaces that envelope code).
+    let oauth_state = match crate::oauth::SealingKey::from_env() {
+        Ok(key) => {
+            let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
+            let locks = crate::oauth::refresh::RefreshLockMap::new();
+            // Spawn the background refresh task. Co-terminates with
+            // shutdown via the audit-sweeper-style signal pattern;
+            // for now we use a never-resolving future so the task
+            // runs for the daemon's lifetime. Phase F.5 wires
+            // shutdown propagation properly.
+            tokio::spawn(crate::oauth::refresh::run(
+                sessions.clone(),
+                catalog.clone(),
+                key.clone(),
+                locks.clone(),
+                std::future::pending::<()>(),
+            ));
+            info!("oauth: sealing key loaded; refresh task spawned");
+            Some(crate::oauth::OauthAdminState {
+                registrations: registrations.clone(),
+                sessions,
+                sealing_key: key,
+                catalog: catalog.clone(),
+                locks,
+            })
+        }
+        Err(crate::oauth::SealingKeyError::EnvVarUnset) => {
+            info!("oauth: LOCKSMITH_OAUTH_SEALING_KEY unset; OAuth admin routes not mounted");
+            None
+        }
+        Err(e) => {
+            return Err(DaemonError::AdminConfig(format!("oauth sealing key: {e}")));
+        }
+    };
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -603,6 +642,7 @@ async fn build_admin_substrate(
             registrations: Some(registrations.clone()),
             catalog: Some(catalog.clone()),
             resolved_creds: Some(resolved_creds.clone()),
+            oauth: oauth_state,
         },
         audit,
         agent_auth: agent_auth_dyn,
