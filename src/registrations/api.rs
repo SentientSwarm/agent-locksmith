@@ -178,9 +178,56 @@ pub fn unknown_name_response(name: &str) -> Response {
 /// State carried by the admin registrations handlers. The thin shape lets
 /// `src/admin/uds.rs` derive its own state struct without depending on
 /// the full `AppState`.
+///
+/// Phase E.6 — `catalog` and `resolved_creds` are optional refs into the
+/// agent router's `AppState`. When wired (production daemon), admin
+/// writes refresh both after a successful upsert/delete/enable so the
+/// proxy hot path sees the new state without a daemon restart. When
+/// `None` (older tests or pre-Phase-E paths), admin writes still hit
+/// the repo but no in-memory cache exists to invalidate.
 #[derive(Clone)]
 pub struct AdminRegistrationsState {
     pub repo: Arc<RegistrationRepository>,
+    pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
+    pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+}
+
+impl AdminRegistrationsState {
+    /// Phase E.6 — refresh the in-memory catalog from the repo and
+    /// extend `resolved_creds` with any new env-var references. Called
+    /// after every successful admin write so the proxy hot path sees
+    /// the new state immediately. Failures are logged and swallowed —
+    /// the admin write itself succeeded; a stale cache will heal at
+    /// the next refresh or daemon restart.
+    pub async fn refresh_runtime(&self) {
+        let Some(catalog) = self.catalog.as_ref() else {
+            return;
+        };
+        let new_catalog = match crate::registrations::Catalog::from_repo(self.repo.as_ref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = ?e, "catalog refresh failed; runtime cache stale");
+                return;
+            }
+        };
+
+        if let Some(creds_swap) = self.resolved_creds.as_ref() {
+            let extra = crate::secret::resolve_registration_creds_sync_env_only(&new_catalog);
+            if !extra.is_empty() {
+                let snap = creds_swap.load();
+                let mut merged = (**snap).clone();
+                for (k, v) in extra {
+                    // Operator may have changed the env_var or pointed
+                    // at a different env var; overwrite instead of
+                    // entry-or-insert.
+                    merged.insert(k, v);
+                }
+                creds_swap.store(Arc::new(merged));
+            }
+        }
+
+        catalog.store(Arc::new(new_catalog));
+    }
 }
 
 /// `GET /admin/operator/<kind>` — list all of `kind`. Always includes
@@ -290,6 +337,7 @@ pub async fn op_put(
     if let Err(e) = state.repo.upsert(&r).await {
         return registration_error_response(&e);
     }
+    state.refresh_runtime().await;
 
     (StatusCode::OK, Json(registration_to_admin_json(&r))).into_response()
 }
@@ -315,7 +363,10 @@ pub async fn op_delete(
                 state.repo.delete(&name).await.map(|_| true)
             };
             match result {
-                Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                Ok(_) => {
+                    state.refresh_runtime().await;
+                    StatusCode::NO_CONTENT.into_response()
+                }
                 Err(e) => registration_error_response(&e),
             }
         }
@@ -340,7 +391,10 @@ pub async fn op_enable(
                 });
             }
             match state.repo.set_disabled(&name, false).await {
-                Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                Ok(_) => {
+                    state.refresh_runtime().await;
+                    StatusCode::NO_CONTENT.into_response()
+                }
                 Err(e) => registration_error_response(&e),
             }
         }

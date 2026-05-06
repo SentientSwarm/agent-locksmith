@@ -17,6 +17,7 @@
 
 pub mod api;
 pub mod auth_spec;
+pub mod catalog;
 pub mod kind;
 pub mod legacy_bootstrap;
 pub mod repo;
@@ -24,6 +25,7 @@ pub mod seed_loader;
 pub mod validators;
 
 pub use auth_spec::AuthSpec;
+pub use catalog::Catalog;
 pub use kind::Kind;
 pub use repo::{Registration, RegistrationRepository};
 pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name};

@@ -48,6 +48,15 @@ pub struct UdsState {
     /// substrate; the registrations routes are then absent from the
     /// router entirely.
     pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    /// Phase E.6 — agent router's in-memory `Catalog` cache. Threaded
+    /// through so admin write handlers refresh it after upsert/delete/
+    /// enable. `None` keeps the route mounted but skips refresh; the
+    /// proxy hot path then sees stale state until next daemon start.
+    pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
+    /// Phase E.6 — agent router's `ResolvedCreds` map. Threaded through
+    /// so admin write handlers can resolve any newly-referenced env
+    /// vars after a registration's auth shape changes.
+    pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -55,11 +64,23 @@ pub struct UdsState {
 /// `/admin/operator/tools/<name>`, `/admin/operator/models/<name>`,
 /// `/admin/operator/infra/<name>`, plus list endpoints and an
 /// `enable` action to un-disable a previously-disabled seed row.
+///
+/// Phase E.6 — `catalog` and `resolved_creds` are optional refs into
+/// the agent router's runtime state. When `Some`, admin writes refresh
+/// both so the proxy hot path picks up changes without a daemon
+/// restart. When `None` (legacy / non-daemon paths), admin writes
+/// still hit the repo but no in-memory cache exists to invalidate.
 fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
+    catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
+    resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
 ) -> Router {
     use crate::registrations::api;
-    let st = api::AdminRegistrationsState { repo };
+    let st = api::AdminRegistrationsState {
+        repo,
+        catalog,
+        resolved_creds,
+    };
     Router::new()
         .route("/tools", get(api::op_list_tools))
         .route(
@@ -141,7 +162,11 @@ pub fn build_router(state: UdsState) -> Router {
     // `operator_auth_middleware` layer applies uniformly across both
     // sub-routers.
     let operator_routes = match state.registrations.clone() {
-        Some(repo) => operator_existing.merge(build_registrations_admin_router(repo)),
+        Some(repo) => operator_existing.merge(build_registrations_admin_router(
+            repo,
+            state.catalog.clone(),
+            state.resolved_creds.clone(),
+        )),
         None => operator_existing,
     }
     .layer(axum::middleware::from_fn_with_state(

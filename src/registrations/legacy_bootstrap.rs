@@ -108,39 +108,30 @@ pub async fn bootstrap_from_config_tools(
 /// Translate a pre-Phase-E `ToolAuthConfig` to a v2.0.0 `AuthSpec`.
 /// Returns `None` for shapes we can't represent (sealed file, Vault,
 /// AWS, Inline, legacy strings without a single `${VAR}`).
+///
+/// Always emits `AuthSpec::Header` (never `AuthSpec::Bearer`). Reason:
+/// pre-Phase-E configs commonly wrote
+/// `auth: { header: "Authorization", value: from_env { var: X, prefix: "Bearer " } }`
+/// — the `prefix` was applied at resolve time, so `resolved_creds[name]`
+/// already carries the full `Bearer <token>` header value. Using
+/// `AuthSpec::Bearer` would have the proxy hot path prepend "Bearer "
+/// a second time. Header injection takes the value verbatim, which is
+/// what the pre-Phase-E proxy did. AuthSpec::Bearer is reserved for
+/// seed-catalog entries where the env var is unambiguously just the
+/// token.
 fn translate_auth(tool_name: &str, ta: &ToolAuthConfig) -> Option<AuthSpec> {
     match &ta.value {
-        SecretRef::FromEnv { var, .. } => {
-            // Standard case: header injection from env var. The prefix
-            // (if any) on the SecretRef gets dropped — AuthSpec at
-            // v2.0.0 doesn't preserve it. The proxy hot path applies
-            // the header value as-is.
-            Some(if ta.header.eq_ignore_ascii_case("authorization") {
-                // Sugar: Authorization headers become Bearer auth.
-                // Pre-Phase-E configs typically wrote "Bearer ${VAR}"
-                // as a legacy string; FromEnv direct usually meant the
-                // env var holds just the token without "Bearer " prefix.
-                AuthSpec::Bearer {
-                    env_var: var.clone(),
-                }
-            } else {
-                AuthSpec::Header {
-                    header: ta.header.clone(),
-                    env_var: var.clone(),
-                }
-            })
-        }
+        SecretRef::FromEnv { var, .. } => Some(AuthSpec::Header {
+            header: ta.header.clone(),
+            env_var: var.clone(),
+        }),
         SecretRef::LegacyString(s) => {
             // Pre-Phase-E "Bearer ${VAR}" or "${VAR}" form. Best-effort
             // parse: find the first ${...} reference.
             let var = extract_single_env_var(s)?;
-            Some(if ta.header.eq_ignore_ascii_case("authorization") {
-                AuthSpec::Bearer { env_var: var }
-            } else {
-                AuthSpec::Header {
-                    header: ta.header.clone(),
-                    env_var: var,
-                }
+            Some(AuthSpec::Header {
+                header: ta.header.clone(),
+                env_var: var,
             })
         }
         SecretRef::FromFileSealed { .. }

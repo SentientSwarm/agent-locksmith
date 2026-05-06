@@ -73,6 +73,8 @@ tools: []
         operator_auth,
         operator_mtls: None,
         registrations: None,
+        catalog: None,
+        resolved_creds: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);

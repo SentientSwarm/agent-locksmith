@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::app::AppState;
-use crate::config::ToolConfig;
+use crate::config::{EgressMode, ToolConfig, ToolTimeouts};
+use crate::registrations::{AuthSpec, Registration};
 use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::response_controls::{ApplyOutcome, ResponseControls, SizeCappedStream};
 
@@ -83,6 +84,112 @@ impl RequestCtx {
     }
 }
 
+/// Phase E.6 — unified proxy target shape. Built from either an
+/// in-memory `Registration` (catalog path) or a `ToolConfig`
+/// (config.tools fallback). Owns its data so the hot path doesn't
+/// hold borrows into the catalog `ArcSwap` snapshot or the config
+/// snapshot across the upstream request.
+struct ProxyTarget {
+    name: String,
+    upstream: String,
+    body_limit_bytes: u64,
+    timeouts: ToolTimeouts,
+    egress: EgressMode,
+    auth: ProxyAuth,
+}
+
+/// What the proxy needs to know about auth at injection time. Three
+/// shapes: skip injection; inject `header: value`; inject `Authorization:
+/// Bearer value`. Each carries the audit label so `proxy_request`
+/// rows can record the `auth_mode` used (see TS-151).
+#[derive(Debug, Clone)]
+enum ProxyAuth {
+    /// `AuthSpec::None` — operator-stated authless. Strip incoming
+    /// auth-shaped headers, inject nothing.
+    None,
+    /// Inject `header: value` where `value = resolved_creds[name]`.
+    /// `audit_mode` distinguishes registration-sourced ("header") from
+    /// config-sourced ("config") for the audit row.
+    Header {
+        header: String,
+        audit_mode: &'static str,
+    },
+    /// Inject `Authorization: Bearer value` where `value =
+    /// resolved_creds[name]`. Catalog-only — config.tools' Authorization
+    /// shape goes through `Header { header: "Authorization", ... }`
+    /// because the legacy resolver may have already prefixed the value.
+    Bearer,
+}
+
+impl ProxyAuth {
+    fn audit_mode(&self) -> &'static str {
+        match self {
+            ProxyAuth::None => "none",
+            ProxyAuth::Header { audit_mode, .. } => audit_mode,
+            ProxyAuth::Bearer => "bearer",
+        }
+    }
+
+    /// Header name (lowercased) that should be stripped from the
+    /// agent's incoming request to prevent override of the configured
+    /// credential. `None` means no specific stripping beyond the
+    /// always-stripped `authorization` / `x-api-key` / `host`.
+    fn strip_header_lower(&self) -> Option<String> {
+        match self {
+            ProxyAuth::None => None,
+            ProxyAuth::Header { header, .. } => Some(header.to_lowercase()),
+            ProxyAuth::Bearer => None, // "authorization" is always stripped
+        }
+    }
+}
+
+impl ProxyTarget {
+    /// Build from a Phase E `Registration`. Translates `AuthSpec` →
+    /// `ProxyAuth` so the build-upstream-request path is uniform across
+    /// catalog and legacy sources.
+    fn from_registration(r: &Registration) -> Self {
+        let auth = match &r.auth {
+            AuthSpec::None => ProxyAuth::None,
+            AuthSpec::Header { header, .. } => ProxyAuth::Header {
+                header: header.clone(),
+                audit_mode: "header",
+            },
+            AuthSpec::Bearer { .. } => ProxyAuth::Bearer,
+        };
+        Self {
+            name: r.name.clone(),
+            upstream: r.upstream.clone(),
+            body_limit_bytes: r.body_limit_bytes,
+            timeouts: r.timeouts,
+            egress: r.egress,
+            auth,
+        }
+    }
+
+    /// Build from a legacy `ToolConfig`. Preserves the pre-Phase-E
+    /// behavior: tools with `auth: { header, value: ... }` inject
+    /// `header: <resolved>` (the resolved value may already include
+    /// "Bearer " when the operator wrote a legacy "Bearer ${VAR}"
+    /// string); tools with no `auth:` block inject nothing.
+    fn from_tool_config(t: &ToolConfig) -> Self {
+        let auth = match &t.auth {
+            None => ProxyAuth::None,
+            Some(a) => ProxyAuth::Header {
+                header: a.header.clone(),
+                audit_mode: "config",
+            },
+        };
+        Self {
+            name: t.name.clone(),
+            upstream: t.upstream.clone(),
+            body_limit_bytes: t.body_limit_bytes,
+            timeouts: t.timeouts,
+            egress: t.egress,
+            auth,
+        }
+    }
+}
+
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
     Path((tool_name, path)): Path<(String, String)>,
@@ -101,21 +208,20 @@ pub async fn proxy_handler(
         return record_authz_denied(&state.audit, &ctx, reason).await;
     }
 
-    let config = state.config.load();
-    let tool = match config
-        .active_tools()
-        .into_iter()
-        .find(|t| t.name == ctx.tool_name)
-    {
+    // Phase E.6: catalog lookup first; legacy `config.tools` fallback
+    // for M0/M1 / M9 test paths that haven't wired registrations.
+    let target = resolve_target(&state, &ctx.tool_name);
+    let target = match target {
         Some(t) => t,
         None => return record_tool_not_found(&state.audit, &ctx).await,
     };
 
-    let upstream_host = url_host(&tool.upstream);
-    let upstream_url = format!("{}/{}", tool.upstream.trim_end_matches('/'), path);
+    let config = state.config.load();
+    let upstream_host = url_host(&target.upstream);
+    let upstream_url = format!("{}/{}", target.upstream.trim_end_matches('/'), path);
     let method = req.method().clone();
     let headers = req.headers().clone();
-    let body_bytes = match read_request_body(req, tool.body_limit_bytes).await {
+    let body_bytes = match read_request_body(req, target.body_limit_bytes).await {
         Ok(b) => b,
         Err(_) => {
             return record_body_read_error(&state.audit, &ctx, upstream_host).await;
@@ -125,7 +231,7 @@ pub async fn proxy_handler(
     let upstream_req = build_upstream_request(
         &state,
         &config,
-        tool,
+        &target,
         method,
         &upstream_url,
         headers,
@@ -133,9 +239,35 @@ pub async fn proxy_handler(
     );
 
     match upstream_req.send().await {
-        Ok(resp) => handle_upstream_response(state.clone(), &ctx, upstream_host, resp).await,
-        Err(e) => record_upstream_error(&state.audit, &ctx, upstream_host, e).await,
+        Ok(resp) => {
+            handle_upstream_response(state.clone(), &ctx, &target, upstream_host, resp).await
+        }
+        Err(e) => record_upstream_error(&state.audit, &ctx, &target, upstream_host, e).await,
     }
+}
+
+/// Phase E.6 lookup: try the in-memory catalog (registrations) first,
+/// fall back to `config.tools`. Returns `None` only when the name is
+/// in neither source — which is when `record_tool_not_found` should
+/// fire.
+fn resolve_target(state: &AppState, name: &str) -> Option<ProxyTarget> {
+    // Catalog path. `lookup_active` already filters out `disabled=true`
+    // rows so admin-disabled seed entries return None and proxy_handler
+    // surfaces 404.
+    let catalog = state.catalog.load();
+    if let Some(r) = catalog.lookup_active(name) {
+        return Some(ProxyTarget::from_registration(r));
+    }
+    drop(catalog);
+    // Legacy fallback. `active_tools()` includes every tool whose
+    // upstream is configured; credential-resolved filtering happens
+    // implicitly via `resolved_creds.get(name)` at injection time.
+    let config = state.config.load();
+    config
+        .active_tools()
+        .into_iter()
+        .find(|t| t.name == name)
+        .map(ProxyTarget::from_tool_config)
 }
 
 /// Read the request body up to the tool's `body_limit_bytes`. On error
@@ -149,28 +281,37 @@ async fn read_request_body(req: Request<Body>, body_limit: u64) -> Result<Bytes,
 }
 
 /// Forward request headers (with auth-related headers stripped) plus
-/// the configured tool credential, and attach the body if present.
+/// the configured credential, and attach the body if present. Phase
+/// E.6: source-agnostic — driven by `ProxyTarget` (built from either
+/// a `Registration` or a legacy `ToolConfig`).
 fn build_upstream_request(
     state: &AppState,
     config: &crate::config::AppConfig,
-    tool: &ToolConfig,
+    target: &ProxyTarget,
     method: axum::http::Method,
     upstream_url: &str,
     headers: HeaderMap,
     body_bytes: Bytes,
 ) -> reqwest::RequestBuilder {
-    let client = state.client_pool.get_or_build(tool, config);
+    let client =
+        state
+            .client_pool
+            .get_or_build_for(&target.name, target.timeouts, target.egress, config);
     let mut upstream_req = client.request(method, upstream_url);
 
     // Forward headers, stripping auth-related ones so the agent can't
-    // override the configured credential.
-    let auth_header_name = tool.auth.as_ref().map(|a| a.header.to_lowercase());
+    // override the configured credential. `host`/`authorization`/
+    // `x-api-key` are always stripped (defense in depth — even when
+    // `auth: none` we don't want the agent injecting their own bearer
+    // and reaching the upstream as the proxy's principal). The
+    // target's own auth header is also stripped when distinct.
+    let extra_strip = target.auth.strip_header_lower();
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_lowercase();
         if lower == "host"
             || lower == "authorization"
             || lower == "x-api-key"
-            || auth_header_name.as_deref() == Some(&lower)
+            || extra_strip.as_deref() == Some(&lower)
         {
             continue;
         }
@@ -178,18 +319,31 @@ fn build_upstream_request(
     }
 
     // Inject configured credentials. Reads from the resolved-creds
-    // snapshot (M5 / T5.1) — daemon resolves SecretRefs once at
-    // startup, proxy never touches the raw SecretRef on the hot path.
-    if let Some(auth) = &tool.auth {
-        let resolved = state.resolved_creds.load();
-        if let Some(value) = resolved.get(&tool.name) {
-            upstream_req =
-                upstream_req.header(&auth.header, secrecy::ExposeSecret::expose_secret(value));
+    // snapshot (M5 / T5.1) — daemon resolves SecretRefs and
+    // registration env vars once at startup, the proxy never touches
+    // raw values on the hot path. AuthSpec::None deliberately skips
+    // injection (Phase E.6 / TS-150).
+    match &target.auth {
+        ProxyAuth::None => {}
+        ProxyAuth::Header { header, .. } => {
+            let resolved = state.resolved_creds.load();
+            if let Some(value) = resolved.get(&target.name) {
+                upstream_req =
+                    upstream_req.header(header, secrecy::ExposeSecret::expose_secret(value));
+            }
+            // Auth declared but no credential resolved → degraded
+            // mode. Forward without injection; upstream typically
+            // returns 401 and the response pipeline records the
+            // proxy-side audit row.
         }
-        // Tool declared auth but no credential resolved → degraded
-        // mode. Fall through without injection; upstream returns 401
-        // and we record the proxy-side audit row from the response
-        // pipeline.
+        ProxyAuth::Bearer => {
+            let resolved = state.resolved_creds.load();
+            if let Some(value) = resolved.get(&target.name) {
+                let header_value =
+                    format!("Bearer {}", secrecy::ExposeSecret::expose_secret(value));
+                upstream_req = upstream_req.header("Authorization", header_value);
+            }
+        }
     }
 
     if !body_bytes.is_empty() {
@@ -206,6 +360,7 @@ fn build_upstream_request(
 async fn handle_upstream_response(
     state: Arc<AppState>,
     ctx: &RequestCtx,
+    target: &ProxyTarget,
     upstream_host: Option<String>,
     resp: reqwest::Response,
 ) -> Response {
@@ -243,6 +398,7 @@ async fn handle_upstream_response(
                 rc,
                 &state.audit,
                 ctx,
+                target,
                 upstream_host,
                 upstream_status,
                 upstream_content_type,
@@ -253,7 +409,14 @@ async fn handle_upstream_response(
         }
     }
 
-    record_proxy_request_success(&state.audit, ctx, upstream_host.clone(), upstream_status).await;
+    record_proxy_request_success(
+        &state.audit,
+        ctx,
+        target,
+        upstream_host.clone(),
+        upstream_status,
+    )
+    .await;
 
     // Stream the upstream body to the agent rather than buffering
     // (R-N6: ≤100ms first-byte added latency). T1.2 closes T1.1.
@@ -463,6 +626,7 @@ async fn record_response_content_type_disallowed(
 async fn record_proxy_request_success(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
+    target: &ProxyTarget,
     upstream_host: Option<String>,
     upstream_status: u16,
 ) {
@@ -477,6 +641,12 @@ async fn record_proxy_request_success(
     event.status = Some(upstream_status);
     event.decision = decision;
     event.upstream_host = upstream_host;
+    // Phase E.6 / TS-151 — record the upstream auth shape used. "none"
+    // for AuthSpec::None (operator-stated authless), "bearer" /
+    // "header" for the Phase E catalog path, "config" for the legacy
+    // ToolConfig path, "config_absent" when ToolConfig had no auth
+    // block at all.
+    event.details = Some(json!({"auth_mode": target.auth.audit_mode()}));
     audit_record(audit, event).await;
 }
 
@@ -485,6 +655,7 @@ async fn record_proxy_request_success(
 async fn record_upstream_error(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
+    target: &ProxyTarget,
     upstream_host: Option<String>,
     e: reqwest::Error,
 ) -> Response {
@@ -499,6 +670,7 @@ async fn record_upstream_error(
     event.status = Some(status.as_u16());
     event.decision = Decision::Error;
     event.upstream_host = upstream_host;
+    event.details = Some(json!({"auth_mode": target.auth.audit_mode()}));
     audit_record(audit, event).await;
     (
         status,
@@ -523,6 +695,7 @@ async fn apply_buffered_response_controls(
     rc: &ResponseControls,
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
+    target: &ProxyTarget,
     upstream_host: Option<String>,
     upstream_status: u16,
     upstream_content_type: Option<String>,
@@ -545,7 +718,7 @@ async fn apply_buffered_response_controls(
                 record_response_redaction(audit, ctx, upstream_host.clone(), upstream_status, rec)
                     .await;
             }
-            record_proxy_request_success(audit, ctx, upstream_host, upstream_status).await;
+            record_proxy_request_success(audit, ctx, target, upstream_host, upstream_status).await;
             let status_code =
                 StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
             let mut response = Response::new(Body::from(body));

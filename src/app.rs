@@ -62,6 +62,13 @@ pub struct AppState {
     /// discovery handlers then fall back to the YAML-loaded
     /// `config.tools` so existing M9 tests stay green.
     pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    /// Phase E.6 — in-memory `Catalog` mirror of the registrations
+    /// table. Empty when registrations isn't wired (M0/M1 / M9 test
+    /// path). The proxy hot path looks up by name; the discovery
+    /// handlers can iterate by kind without round-tripping the DB.
+    /// Refreshed by admin handlers after upsert/delete/enable so
+    /// runtime state matches the DB without a daemon restart.
+    pub catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {
@@ -153,6 +160,11 @@ pub fn build_app_full(
 /// registrations repo so `/tools` and `/models` discovery endpoints
 /// read from the registrations table when wired. `None` preserves the
 /// M9 / pre-Phase-E behavior (discovery falls back to `config.tools`).
+///
+/// Phase E.6 added an in-memory `Catalog` cache; this entry point
+/// constructs an empty one so existing callers keep their signature.
+/// Daemon and integration tests that need a populated catalog use
+/// [`build_app_full_with_catalog`].
 pub fn build_app_full_with_registrations(
     config: Arc<ArcSwap<AppConfig>>,
     audit: Option<AuditRepository>,
@@ -160,6 +172,35 @@ pub fn build_app_full_with_registrations(
     mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
     agent_auth: Option<Arc<dyn AgentAuthenticator>>,
     registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+) -> Router {
+    let catalog = Arc::new(ArcSwap::from_pointee(
+        crate::registrations::Catalog::default(),
+    ));
+    build_app_full_with_catalog(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+    )
+}
+
+/// Phase E.6 entrypoint — extends [`build_app_full_with_registrations`]
+/// with a pre-built `ArcSwap<Catalog>`. The daemon path calls this
+/// after the seed loader and legacy bootstrap have populated the
+/// registrations table; it loads the catalog from the repo, resolves
+/// AuthSpec env vars into `resolved_creds`, and passes both in.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_catalog(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -174,6 +215,7 @@ pub fn build_app_full_with_registrations(
         mtls_authenticator,
         agent_auth,
         registrations,
+        catalog,
     });
 
     Router::new()
