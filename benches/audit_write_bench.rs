@@ -31,6 +31,7 @@ fn build_event(idx: u64) -> AuditEvent {
         event_class: EventClass::Proxy,
         event: "proxy_request".to_string(),
         agent_public_id: Some(format!("ag_{idx:08}")),
+        agent_name: None,
         operator_name: None,
         tool: Some("openai".to_string()),
         upstream_host: Some("api.openai.com".to_string()),

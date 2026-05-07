@@ -652,6 +652,7 @@ async fn op_query_audit(
                         "event_class": e.event_class.as_str(),
                         "event": e.event,
                         "agent_public_id": e.agent_public_id,
+                        "agent_name": e.agent_name,
                         "operator_name": e.operator_name,
                         "tool": e.tool,
                         "upstream_host": e.upstream_host,
