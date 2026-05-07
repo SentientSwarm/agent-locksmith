@@ -273,7 +273,10 @@ async fn g4_bootstrap_warns_when_other_label_exists() {
         .await;
     r1.assert_status_ok();
     let b1: serde_json::Value = r1.json();
-    assert!(b1.get("warnings").is_none(), "default bootstrap had warnings");
+    assert!(
+        b1.get("warnings").is_none(),
+        "default bootstrap had warnings"
+    );
 
     // Second: bootstrap with --label hermes. Should warn.
     let r2 = h

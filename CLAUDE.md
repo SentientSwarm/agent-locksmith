@@ -5,13 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Working branch
 
 `develop` is the default working branch — currently at **v2.0.0**
-(catalog substrate + per-agent ACL + mTLS + OAuth credential variant,
-tagged 2026-05-06). `main` only contains M0. Cut feature branches
-from `develop`.
+(catalog substrate + per-agent ACL + mTLS + OAuth credential variant
++ per-agent credential overrides + OAuth session labels). `main` only
+contains M0. Cut feature branches from `develop`.
+
+Phase G (per-agent credential overrides + OAuth session labels) is
+landed on `feature/phase-g-per-agent-creds` and pending merge into
+develop. See `agents-stack/docs/spec/v0.2.0.md` "Per-agent credential
+overrides + OAuth session labels (Phase G)" for the formal design.
 
 The authoritative stack-level docs live at `agents-stack/docs/`:
 
-- `agents-stack/docs/spec/v0.2.0.md` — formal as-built design.
+- `agents-stack/docs/spec/v0.2.0.md` — formal as-built design (Phase E + F + G).
 - `agents-stack/docs/prd/v0.2.0.md` — user-facing requirements.
 - `agents-stack/docs/adrs/0004-kind-taxonomy.md` — kind enum decision.
 - `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design.
@@ -102,15 +107,16 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 
 `proxy::proxy_handler` (`src/proxy.rs`):
 
-1. Reads `auth_method` + `agent_public_id` from request extensions stamped by `auth::auth_middleware`.
+1. Reads `auth_method` + `agent_public_id` from request extensions stamped by `auth::auth_middleware`. `AgentIdentity` carries `id: i64` (Phase G — used for the agent-credential override lookup).
 2. **M9 ACL gate**: when `AgentIdentity` is in extensions, calls `identity.allows_tool(name)`. Failure → 403 `tool_not_allowed` + `authz_denied` audit row (M9 / B1).
 3. **Phase E.6 target resolution**: `state.catalog.lookup_active(name)` (registrations table, in-memory cache). Falls back to `config.active_tools()` for M0/M1 / pre-Phase-E test paths. `ProxyTarget::from_registration` or `from_tool_config`.
-4. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` to materialize the access token from `oauth_sessions` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
-5. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
-6. Injects credentials per `ProxyAuth` variant: `None` skips; `Header` injects from `resolved_creds[name]`; `Bearer` formats as `Authorization: Bearer <resolved>`; `Oauth` injects access token from the OAuth cache.
-7. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
-8. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
-9. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id` for OAuth requests; `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`.
+4. **Phase G per-agent override**: `apply_agent_credential_override` looks up `agent_credential_overrides[agent_id, name]`. If present, swaps in the override's AuthSpec (header/bearer reads env var directly; OAuth records the `session_label` for downstream resolution). `target.auth_source` flips to `agent_override`.
+5. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` with `target.oauth_session_label` (defaults to `DEFAULT_SESSION_LABEL`) to materialize the access token from `oauth_sessions(name, label)` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
+6. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
+7. Injects credentials per `ProxyAuth` variant: `None` skips; `Header { override_value, .. }` and `Bearer { override_value }` use the override value when set, else fall back to `resolved_creds[name]`; `Oauth` injects access token from the OAuth cache.
+8. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
+9. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
+10. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id`; Phase G adds `details.auth_source` (`registration_default` | `agent_override`) and `details.oauth_session_label`. `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`. Audit query results LEFT JOIN `agents` to surface `agent_name` alongside `agent_public_id` (G.0).
 
 `/readyz` is the source-of-truth liveness check for orchestrators: it returns 503 if any tool with an `auth` block has no resolved credential. `/livez` is liveness only. `/health` is an M0 alias for `/livez`.
 
@@ -137,7 +143,8 @@ src/
   client_pool.rs           reqwest client cache keyed by egress mode + timeouts
   cli/                     locksmith CLI: client.rs (UDS/HTTPS), commands/{agent,audit,bootstrap,bootstrap_operator,export,infra,model,mtls,oauth,registration,self_svc,tool}.rs
   registrations/           Phase E: kind enum, AuthSpec, validators, RegistrationRepository, Catalog cache, seed_loader, legacy_bootstrap, admin api
-  oauth/                   Phase F: SealingKey (AES-GCM), OauthSessionRepository, refresh task + RefreshLockMap, admin handlers
+  oauth/                   Phase F + G: SealingKey (AES-GCM), OauthSessionRepository (label-aware), refresh task + RefreshLockMap, admin handlers
+  repo/agent_creds.rs      Phase G: AgentCredentialRepository — per-agent credential overrides keyed on (agent_id, registration)
   shutdown.rs              ShutdownCoordinator + drain window
   telemetry.rs             tracing-subscriber JSON setup
   deprecation.rs           one-shot warnings for legacy config shapes

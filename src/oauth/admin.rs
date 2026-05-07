@@ -156,30 +156,23 @@ pub async fn op_oauth_bootstrap(
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let cat = state.catalog.load();
-    let updated = match refresh_session(
-        &state.sessions,
-        &cat,
-        &state.sealing_key,
-        &client,
-        &session,
-    )
-    .await
-    {
-        Ok(updated) => updated,
-        Err(e) => {
-            // Bootstrap exchange failed — e.g., refresh token is
-            // already expired, provider rejected our client_id, or
-            // network failure. Roll back the half-bootstrapped row
-            // so the operator can fix and retry without a 409.
-            let _ = state.sessions.delete(&name, session_label).await;
-            return error_envelope(
-                StatusCode::BAD_GATEWAY,
-                "auth_error",
-                "oauth_bootstrap_failed",
-                &format!("refresh exchange failed: {e}"),
-            );
-        }
-    };
+    let updated =
+        match refresh_session(&state.sessions, &cat, &state.sealing_key, &client, &session).await {
+            Ok(updated) => updated,
+            Err(e) => {
+                // Bootstrap exchange failed — e.g., refresh token is
+                // already expired, provider rejected our client_id, or
+                // network failure. Roll back the half-bootstrapped row
+                // so the operator can fix and retry without a 409.
+                let _ = state.sessions.delete(&name, session_label).await;
+                return error_envelope(
+                    StatusCode::BAD_GATEWAY,
+                    "auth_error",
+                    "oauth_bootstrap_failed",
+                    &format!("refresh exchange failed: {e}"),
+                );
+            }
+        };
 
     // Phase G.4 — single-grant collision warning. When a non-default
     // label is bootstrapped and other labels already exist under the
