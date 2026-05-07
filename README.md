@@ -102,27 +102,47 @@ docker image) populates the registrations table on first boot. Operators
 provide credentials via env vars (or the layer8-proxy-site sealed-creds
 flow); no per-tool YAML required for the 16 default providers.
 
-### Run
+### Run (standalone)
 
 ```bash
-# Daemon — reads config, opens UDS, binds agent listener.
-target/release/locksmithd --config /etc/locksmith/config.yaml
+# 1. Mint an operator credential. Writes operators.yaml to stdout
+#    (with the argon2-hashed token) + prints the cleartext wire
+#    token to stderr ONCE.
+target/release/locksmith bootstrap-operator --name dev > operators.yaml
+# Save the printed wire token. Conventionally:
+#   export LOCKSMITH_OP_TOKEN=lkop_<public_id>.<secret>
 
-# Operator CLI (UDS by default).
-LOCKSMITH_OP_TOKEN=lkop_... \
-  target/release/locksmith model list
+# 2. Start the daemon. config.example.yaml in this repo is a working
+#    minimal config; point operator_credentials_path at the
+#    operators.yaml from step 1.
+target/release/locksmithd --config config.example.yaml
+
+# 3. Register an agent.
 LOCKSMITH_OP_TOKEN=lkop_... \
   target/release/locksmith agent register \
-    --name hermes-mini-m1 --allowlist anthropic,openai,tavily
+    --name dev-agent --allowlist anthropic,openai,tavily
+# The printed bearer (lk_...) goes in the agent's environment as
+#   LOCKSMITH_AGENT_TOKEN=lk_...
 
-# Agent self-service.
-LOCKSMITH_AGENT_TOKEN=lk_... \
-  target/release/locksmith status
+# 4. Operator commands (catalog, audit, OAuth):
+LOCKSMITH_OP_TOKEN=lkop_... target/release/locksmith model list
+LOCKSMITH_OP_TOKEN=lkop_... target/release/locksmith audit query --since-ms $(($(date +%s) * 1000 - 3600000))
+
+# 5. Agent self-service.
+LOCKSMITH_AGENT_TOKEN=lk_... target/release/locksmith status
 ```
 
-For the Docker Compose / production deployment story, see
-[layer8-proxy][layer8] and the per-host site repos
-(`layer8-proxy-site`, `hermes-site`, `openclaw-site`).
+`bootstrap-operator` is offline — it doesn't talk to a daemon. The
+operator credential it produces is what the daemon validates incoming
+admin-API requests against. Re-running `bootstrap-operator` mints a
+fresh token; the prior wire token stops working immediately.
+
+### Run (production, layer8-proxy bundle)
+
+For Docker Compose deploys with pipelock + lf-scan + sealed-creds
+infrastructure, see [layer8-proxy][layer8]. The bundle includes
+`./scripts/init-site.sh` to bootstrap a site repo from a public
+template at `layer8-proxy/examples/site/`.
 
 ## Wire surface
 

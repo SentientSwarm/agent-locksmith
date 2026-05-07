@@ -15,7 +15,9 @@ mod client;
 mod commands;
 mod output;
 
-use commands::{agent, audit, bootstrap, export, infra, model, mtls, oauth, self_svc, tool};
+use commands::{
+    agent, audit, bootstrap, bootstrap_operator, export, infra, model, mtls, oauth, self_svc, tool,
+};
 use output::Format;
 
 /// Default admin socket location. Operators can override with --socket
@@ -65,6 +67,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: bootstrap::BootstrapCmd,
     },
+    /// Mint a fresh operator credential. Self-contained Rust-native
+    /// flow for standalone deployments — replaces the site-side
+    /// `bootstrap-operator.py`. Writes operators.yaml content to
+    /// stdout; prints the wire token ONCE to stderr.
+    BootstrapOperator(bootstrap_operator::BootstrapOperatorArgs),
     /// Tool management (operator).
     Tool {
         #[command(subcommand)]
@@ -114,6 +121,21 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // Offline subcommands run before client construction so they work
+    // without a daemon to talk to. `bootstrap-operator` is the canonical
+    // example — it mints credentials locally for a fresh deploy where
+    // no admin UDS / HTTPS exists yet.
+    if let Cmd::BootstrapOperator(args) = cli.cmd {
+        return match bootstrap_operator::run(args) {
+            Ok(()) => ExitCode::from(0),
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(e.exit_code())
+            }
+        };
+    }
+
     let client = match client::CliClient::from_options(
         &cli.socket,
         cli.admin_url.as_deref(),
@@ -129,6 +151,7 @@ async fn main() -> ExitCode {
     let res = match cli.cmd {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
+        Cmd::BootstrapOperator(_) => unreachable!("handled before client construction"),
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,
