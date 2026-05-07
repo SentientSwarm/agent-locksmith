@@ -128,7 +128,15 @@ async fn setup() -> Harness {
 /// admin endpoint.
 async fn seed_session(h: &Harness, refresh: &str, access: Option<&str>, expires_at: Option<i64>) {
     h.sessions
-        .create(&h.sealing_key, "codex", refresh, access, expires_at, "")
+        .create(
+            &h.sealing_key,
+            "codex",
+            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+            refresh,
+            access,
+            expires_at,
+            "",
+        )
         .await
         .unwrap();
 }
@@ -186,7 +194,13 @@ async fn ts221_missing_session_returns_503() {
 async fn ts222_degraded_session_returns_503() {
     let h = setup().await;
     seed_session(&h, "rt", Some("at"), Some(unix_now() + 3600)).await;
-    h.sessions.mark_degraded("codex").await.unwrap();
+    h.sessions
+        .mark_degraded(
+            "codex",
+            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+        )
+        .await
+        .unwrap();
 
     let resp = h
         .server
@@ -262,7 +276,11 @@ async fn ts224_refresh_failure_marks_session_degraded() {
     resp2.assert_status_service_unavailable();
     let session = h
         .sessions
-        .get(&h.sealing_key, "codex")
+        .get(
+            &h.sealing_key,
+            "codex",
+            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+        )
         .await
         .unwrap()
         .unwrap();

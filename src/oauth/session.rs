@@ -23,12 +23,23 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Default OAuth session label. Used when the operator doesn't pass
+/// `--label` on `oauth bootstrap` and when overrides don't carry
+/// a `session_label`. Single-session deployments (the common case)
+/// see `"default"` everywhere and never have to think about labels.
+pub const DEFAULT_SESSION_LABEL: &str = "default";
+
 /// In-memory OAuth session record. Tokens are unsealed on read,
 /// resealed on write. Lifetime in memory is bounded by the caller
 /// (the proxy hot path materializes only the access token, briefly).
 #[derive(Clone)]
 pub struct OauthSession {
     pub name: String,
+    /// Session label (Phase G). Distinguishes multiple sessions under
+    /// the same registration name — e.g., `(codex, "hermes")` vs
+    /// `(codex, "openclaw")`. Defaults to `"default"` for shared-
+    /// credential deployments.
+    pub session_label: String,
     pub refresh_token: SecretString,
     pub access_token: Option<SecretString>,
     /// Unix seconds at which the access token expires. `None` only in
@@ -47,6 +58,7 @@ impl std::fmt::Debug for OauthSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OauthSession")
             .field("name", &self.name)
+            .field("session_label", &self.session_label)
             .field("refresh_token", &"<sealed>")
             .field(
                 "access_token",
@@ -63,12 +75,16 @@ impl std::fmt::Debug for OauthSession {
 
 impl OauthSession {
     /// Stable session identifier per ADR-0005 D4. SHA-256 of
-    /// `name + ':' + created_at`, truncated to 16 hex chars. Used as
-    /// `details.oauth_session_id` in audit rows. Never derived from
-    /// token material.
+    /// `name + ':' + session_label + ':' + created_at`, truncated to
+    /// 16 hex chars. Used as `details.oauth_session_id` in audit rows.
+    /// Phase G adds session_label to the hash so two sessions under
+    /// the same registration get distinct identifiers in audit. Never
+    /// derived from token material.
     pub fn audit_session_id(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.name.as_bytes());
+        hasher.update(b":");
+        hasher.update(self.session_label.as_bytes());
         hasher.update(b":");
         hasher.update(self.created_at.to_string().as_bytes());
         let digest = hasher.finalize();
@@ -119,10 +135,16 @@ impl OauthSessionRepository {
     /// Create a fresh session row at first-time auth. Phase F.4
     /// bootstrap CLI calls this immediately after exchanging the
     /// authorization code for the initial token pair.
+    ///
+    /// Phase G: takes a `session_label` to support multiple sessions
+    /// per registration. Pre-Phase-G call sites pass
+    /// [`DEFAULT_SESSION_LABEL`] to preserve existing behavior.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         key: &SealingKey,
         name: &str,
+        session_label: &str,
         refresh_token: &str,
         access_token: Option<&str>,
         access_token_expires_at: Option<i64>,
@@ -137,12 +159,13 @@ impl OauthSessionRepository {
 
         sqlx::query(
             "INSERT INTO oauth_sessions (\
-                name, refresh_token_ciphertext, refresh_token_nonce, \
+                name, session_label, refresh_token_ciphertext, refresh_token_nonce, \
                 access_token_ciphertext, access_token_nonce, \
                 access_token_expires_at, scope, degraded, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(name)
+        .bind(session_label)
         .bind(&refresh_ct)
         .bind(&refresh_nonce)
         .bind(access_sealed.as_ref().map(|(c, _)| c))
@@ -156,6 +179,7 @@ impl OauthSessionRepository {
 
         Ok(OauthSession {
             name: name.to_string(),
+            session_label: session_label.to_string(),
             refresh_token: SecretString::from(refresh_token.to_string()),
             access_token: access_token.map(|s| SecretString::from(s.to_string())),
             access_token_expires_at,
@@ -173,6 +197,7 @@ impl OauthSessionRepository {
         &self,
         key: &SealingKey,
         name: &str,
+        session_label: &str,
         new_access_token: &str,
         new_access_token_expires_at: i64,
         new_refresh_token: Option<&str>,
@@ -188,7 +213,7 @@ impl OauthSessionRepository {
                     access_token_expires_at = ?, \
                     refresh_token_ciphertext = ?, refresh_token_nonce = ?, \
                     degraded = 0, updated_at = ? \
-                 WHERE name = ?",
+                 WHERE name = ? AND session_label = ?",
             )
             .bind(&access_ct)
             .bind(&access_nonce)
@@ -197,6 +222,7 @@ impl OauthSessionRepository {
             .bind(&refresh_nonce)
             .bind(now)
             .bind(name)
+            .bind(session_label)
             .execute(&self.pool)
             .await?;
         } else {
@@ -205,13 +231,14 @@ impl OauthSessionRepository {
                     access_token_ciphertext = ?, access_token_nonce = ?, \
                     access_token_expires_at = ?, \
                     degraded = 0, updated_at = ? \
-                 WHERE name = ?",
+                 WHERE name = ? AND session_label = ?",
             )
             .bind(&access_ct)
             .bind(&access_nonce)
             .bind(new_access_token_expires_at)
             .bind(now)
             .bind(name)
+            .bind(session_label)
             .execute(&self.pool)
             .await?;
         }
@@ -221,29 +248,40 @@ impl OauthSessionRepository {
     /// Mark a session degraded after a failed refresh. Subsequent
     /// proxy calls return 503 with `oauth_refresh_failed` until the
     /// operator re-bootstraps. ADR-0005 D6.
-    pub async fn mark_degraded(&self, name: &str) -> Result<(), OauthSessionError> {
-        sqlx::query("UPDATE oauth_sessions SET degraded = 1, updated_at = ? WHERE name = ?")
-            .bind(unix_now())
-            .bind(name)
-            .execute(&self.pool)
-            .await?;
+    pub async fn mark_degraded(
+        &self,
+        name: &str,
+        session_label: &str,
+    ) -> Result<(), OauthSessionError> {
+        sqlx::query(
+            "UPDATE oauth_sessions SET degraded = 1, updated_at = ? \
+             WHERE name = ? AND session_label = ?",
+        )
+        .bind(unix_now())
+        .bind(name)
+        .bind(session_label)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    /// Read an unsealed session by name. Returns `Ok(None)` for unknown
-    /// names. Tokens are unsealed eagerly — caller controls scope.
+    /// Read an unsealed session by `(name, session_label)`. Returns
+    /// `Ok(None)` for unknown keys. Tokens are unsealed eagerly —
+    /// caller controls scope.
     pub async fn get(
         &self,
         key: &SealingKey,
         name: &str,
+        session_label: &str,
     ) -> Result<Option<OauthSession>, OauthSessionError> {
         let row = sqlx::query(
-            "SELECT name, refresh_token_ciphertext, refresh_token_nonce, \
+            "SELECT name, session_label, refresh_token_ciphertext, refresh_token_nonce, \
                     access_token_ciphertext, access_token_nonce, \
                     access_token_expires_at, scope, degraded, created_at, updated_at \
-             FROM oauth_sessions WHERE name = ?",
+             FROM oauth_sessions WHERE name = ? AND session_label = ?",
         )
         .bind(name)
+        .bind(session_label)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -279,6 +317,7 @@ impl OauthSessionRepository {
         let degraded: i64 = row.get("degraded");
         Ok(Some(OauthSession {
             name: row.get("name"),
+            session_label: row.get("session_label"),
             refresh_token,
             access_token,
             access_token_expires_at: row.get("access_token_expires_at"),
@@ -290,25 +329,27 @@ impl OauthSessionRepository {
     }
 
     /// Delete a session row entirely. Operator-initiated via
-    /// `locksmith oauth revoke <name>`. Does NOT call the provider's
-    /// revoke endpoint (deferred to v1.1+).
-    pub async fn delete(&self, name: &str) -> Result<bool, OauthSessionError> {
-        let result = sqlx::query("DELETE FROM oauth_sessions WHERE name = ?")
+    /// `locksmith oauth revoke <name> [--label <label>]`. Does NOT
+    /// call the provider's revoke endpoint (deferred to v1.1+).
+    pub async fn delete(&self, name: &str, session_label: &str) -> Result<bool, OauthSessionError> {
+        let result = sqlx::query("DELETE FROM oauth_sessions WHERE name = ? AND session_label = ?")
             .bind(name)
+            .bind(session_label)
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
     }
 
-    /// List sessions whose `access_token_expires_at` is at or before
-    /// the supplied threshold and which are not degraded. Used by the
-    /// background refresh task. ADR-0005 D3.
+    /// List `(name, session_label)` pairs whose
+    /// `access_token_expires_at` is at or before the supplied
+    /// threshold and which are not degraded. Used by the background
+    /// refresh task. ADR-0005 D3.
     pub async fn list_pending_refresh(
         &self,
         threshold_unix_secs: i64,
-    ) -> Result<Vec<String>, OauthSessionError> {
+    ) -> Result<Vec<(String, String)>, OauthSessionError> {
         let rows = sqlx::query(
-            "SELECT name FROM oauth_sessions \
+            "SELECT name, session_label FROM oauth_sessions \
              WHERE degraded = 0 AND access_token_expires_at IS NOT NULL \
                AND access_token_expires_at <= ? \
              ORDER BY access_token_expires_at ASC",
@@ -318,7 +359,38 @@ impl OauthSessionRepository {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|r| r.get::<String, _>("name"))
+            .map(|r| {
+                (
+                    r.get::<String, _>("name"),
+                    r.get::<String, _>("session_label"),
+                )
+            })
+            .collect())
+    }
+
+    /// List all `(name, session_label)` pairs in the table. Used by
+    /// `locksmith oauth list` (Phase G CLI) for operator visibility.
+    /// Does not unseal tokens — pure metadata query.
+    pub async fn list_all(
+        &self,
+    ) -> Result<Vec<(String, String, bool, Option<i64>)>, OauthSessionError> {
+        let rows = sqlx::query(
+            "SELECT name, session_label, degraded, access_token_expires_at \
+             FROM oauth_sessions ORDER BY name, session_label",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let degraded: i64 = r.get("degraded");
+                (
+                    r.get::<String, _>("name"),
+                    r.get::<String, _>("session_label"),
+                    degraded != 0,
+                    r.get::<Option<i64>, _>("access_token_expires_at"),
+                )
+            })
             .collect())
     }
 }
@@ -347,6 +419,8 @@ mod tests {
         (dir, repo, key)
     }
 
+    const DEF: &str = DEFAULT_SESSION_LABEL;
+
     #[tokio::test]
     async fn create_and_get_roundtrip() {
         let (_dir, repo, key) = fresh_repo().await;
@@ -354,6 +428,7 @@ mod tests {
             .create(
                 &key,
                 "codex",
+                DEF,
                 "refresh-token-abc",
                 Some("access-token-xyz"),
                 Some(unix_now() + 3600),
@@ -362,13 +437,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(session.name, "codex");
+        assert_eq!(session.session_label, DEF);
         assert_eq!(session.refresh_token.expose_secret(), "refresh-token-abc");
         assert_eq!(
             session.access_token.as_ref().unwrap().expose_secret(),
             "access-token-xyz"
         );
 
-        let back = repo.get(&key, "codex").await.unwrap().unwrap();
+        let back = repo.get(&key, "codex", DEF).await.unwrap().unwrap();
         assert_eq!(back.refresh_token.expose_secret(), "refresh-token-abc");
         assert_eq!(
             back.access_token.as_ref().unwrap().expose_secret(),
@@ -381,13 +457,13 @@ mod tests {
     #[tokio::test]
     async fn update_tokens_replaces_access_only() {
         let (_dir, repo, key) = fresh_repo().await;
-        repo.create(&key, "x", "refresh-1", Some("access-1"), Some(100), "")
+        repo.create(&key, "x", DEF, "refresh-1", Some("access-1"), Some(100), "")
             .await
             .unwrap();
-        repo.update_tokens(&key, "x", "access-2", 200, None)
+        repo.update_tokens(&key, "x", DEF, "access-2", 200, None)
             .await
             .unwrap();
-        let s = repo.get(&key, "x").await.unwrap().unwrap();
+        let s = repo.get(&key, "x", DEF).await.unwrap().unwrap();
         assert_eq!(s.refresh_token.expose_secret(), "refresh-1"); // unchanged
         assert_eq!(s.access_token.as_ref().unwrap().expose_secret(), "access-2");
         assert_eq!(s.access_token_expires_at, Some(200));
@@ -396,13 +472,13 @@ mod tests {
     #[tokio::test]
     async fn update_tokens_replaces_both_when_refresh_supplied() {
         let (_dir, repo, key) = fresh_repo().await;
-        repo.create(&key, "x", "refresh-1", Some("access-1"), Some(100), "")
+        repo.create(&key, "x", DEF, "refresh-1", Some("access-1"), Some(100), "")
             .await
             .unwrap();
-        repo.update_tokens(&key, "x", "access-2", 200, Some("refresh-2"))
+        repo.update_tokens(&key, "x", DEF, "access-2", 200, Some("refresh-2"))
             .await
             .unwrap();
-        let s = repo.get(&key, "x").await.unwrap().unwrap();
+        let s = repo.get(&key, "x", DEF).await.unwrap().unwrap();
         assert_eq!(s.refresh_token.expose_secret(), "refresh-2");
         assert_eq!(s.access_token.as_ref().unwrap().expose_secret(), "access-2");
     }
@@ -410,50 +486,50 @@ mod tests {
     #[tokio::test]
     async fn mark_degraded_clears_on_update() {
         let (_dir, repo, key) = fresh_repo().await;
-        repo.create(&key, "x", "rt", Some("at"), Some(100), "")
+        repo.create(&key, "x", DEF, "rt", Some("at"), Some(100), "")
             .await
             .unwrap();
-        repo.mark_degraded("x").await.unwrap();
-        assert!(repo.get(&key, "x").await.unwrap().unwrap().degraded);
+        repo.mark_degraded("x", DEF).await.unwrap();
+        assert!(repo.get(&key, "x", DEF).await.unwrap().unwrap().degraded);
 
         // Successful refresh clears degraded flag (per ADR-0005 D6).
-        repo.update_tokens(&key, "x", "at-2", 200, None)
+        repo.update_tokens(&key, "x", DEF, "at-2", 200, None)
             .await
             .unwrap();
-        assert!(!repo.get(&key, "x").await.unwrap().unwrap().degraded);
+        assert!(!repo.get(&key, "x", DEF).await.unwrap().unwrap().degraded);
     }
 
     #[tokio::test]
     async fn list_pending_refresh_filters_degraded() {
         let (_dir, repo, key) = fresh_repo().await;
         let now = unix_now();
-        repo.create(&key, "due", "rt", Some("at"), Some(now), "")
+        repo.create(&key, "due", DEF, "rt", Some("at"), Some(now), "")
             .await
             .unwrap();
-        repo.create(&key, "future", "rt", Some("at"), Some(now + 3600), "")
+        repo.create(&key, "future", DEF, "rt", Some("at"), Some(now + 3600), "")
             .await
             .unwrap();
-        repo.create(&key, "degraded", "rt", Some("at"), Some(now), "")
+        repo.create(&key, "degraded", DEF, "rt", Some("at"), Some(now), "")
             .await
             .unwrap();
-        repo.mark_degraded("degraded").await.unwrap();
+        repo.mark_degraded("degraded", DEF).await.unwrap();
 
         // Threshold = now + 60 → "due" is pending; "future" not yet;
         // "degraded" is filtered out even though it's expired.
         let pending = repo.list_pending_refresh(now + 60).await.unwrap();
-        assert_eq!(pending, vec!["due"]);
+        assert_eq!(pending, vec![("due".to_string(), DEF.to_string())]);
     }
 
     #[tokio::test]
     async fn audit_session_id_is_stable_for_same_session() {
         let (_dir, repo, key) = fresh_repo().await;
         let s1 = repo
-            .create(&key, "x", "rt", Some("at"), Some(100), "")
+            .create(&key, "x", DEF, "rt", Some("at"), Some(100), "")
             .await
             .unwrap();
         let id1 = s1.audit_session_id();
         // Reload — should get the same audit ID.
-        let s2 = repo.get(&key, "x").await.unwrap().unwrap();
+        let s2 = repo.get(&key, "x", DEF).await.unwrap().unwrap();
         assert_eq!(id1, s2.audit_session_id());
         assert_eq!(id1.len(), 16); // 8 bytes → 16 hex chars
     }
@@ -461,22 +537,118 @@ mod tests {
     #[tokio::test]
     async fn delete_clears_session() {
         let (_dir, repo, key) = fresh_repo().await;
-        repo.create(&key, "x", "rt", Some("at"), Some(100), "")
+        repo.create(&key, "x", DEF, "rt", Some("at"), Some(100), "")
             .await
             .unwrap();
-        assert!(repo.delete("x").await.unwrap());
-        assert!(repo.get(&key, "x").await.unwrap().is_none());
-        assert!(!repo.delete("x").await.unwrap()); // idempotent
+        assert!(repo.delete("x", DEF).await.unwrap());
+        assert!(repo.get(&key, "x", DEF).await.unwrap().is_none());
+        assert!(!repo.delete("x", DEF).await.unwrap()); // idempotent
     }
 
     #[tokio::test]
     async fn unseal_with_wrong_key_returns_sealing_error() {
         let (_dir, repo, key1) = fresh_repo().await;
-        repo.create(&key1, "x", "rt", Some("at"), Some(100), "")
+        repo.create(&key1, "x", DEF, "rt", Some("at"), Some(100), "")
             .await
             .unwrap();
         let key2 = SealingKey::generate().unwrap();
-        let err = repo.get(&key2, "x").await.unwrap_err();
+        let err = repo.get(&key2, "x", DEF).await.unwrap_err();
         assert!(matches!(err, OauthSessionError::Sealing(_)));
+    }
+
+    // Phase G: label semantics.
+
+    #[tokio::test]
+    async fn two_labels_under_same_name_coexist() {
+        let (_dir, repo, key) = fresh_repo().await;
+        repo.create(&key, "codex", "hermes", "rt-h", Some("at-h"), Some(100), "")
+            .await
+            .unwrap();
+        repo.create(
+            &key,
+            "codex",
+            "openclaw",
+            "rt-o",
+            Some("at-o"),
+            Some(200),
+            "",
+        )
+        .await
+        .unwrap();
+
+        let h = repo.get(&key, "codex", "hermes").await.unwrap().unwrap();
+        let o = repo.get(&key, "codex", "openclaw").await.unwrap().unwrap();
+        assert_eq!(h.refresh_token.expose_secret(), "rt-h");
+        assert_eq!(o.refresh_token.expose_secret(), "rt-o");
+        // Audit IDs are distinct because session_label is part of the
+        // hash input.
+        assert_ne!(h.audit_session_id(), o.audit_session_id());
+    }
+
+    #[tokio::test]
+    async fn get_with_wrong_label_returns_none() {
+        let (_dir, repo, key) = fresh_repo().await;
+        repo.create(&key, "codex", "hermes", "rt", Some("at"), Some(100), "")
+            .await
+            .unwrap();
+        // Asking for the same name under a label we never created
+        // returns None rather than spilling the wrong label's session.
+        assert!(repo.get(&key, "codex", "openclaw").await.unwrap().is_none());
+        assert!(repo.get(&key, "codex", DEF).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_one_label_leaves_other_intact() {
+        let (_dir, repo, key) = fresh_repo().await;
+        repo.create(&key, "codex", "hermes", "rt", Some("at"), Some(100), "")
+            .await
+            .unwrap();
+        repo.create(&key, "codex", "openclaw", "rt", Some("at"), Some(100), "")
+            .await
+            .unwrap();
+        assert!(repo.delete("codex", "hermes").await.unwrap());
+        assert!(repo.get(&key, "codex", "hermes").await.unwrap().is_none());
+        // openclaw's session is untouched.
+        assert!(repo.get(&key, "codex", "openclaw").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn list_pending_refresh_returns_label_too() {
+        let (_dir, repo, key) = fresh_repo().await;
+        let now = unix_now();
+        repo.create(&key, "codex", "hermes", "rt", Some("at"), Some(now), "")
+            .await
+            .unwrap();
+        repo.create(&key, "codex", "openclaw", "rt", Some("at"), Some(now), "")
+            .await
+            .unwrap();
+        let pending = repo.list_pending_refresh(now + 60).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(
+            pending
+                .iter()
+                .any(|p| p == &("codex".to_string(), "hermes".to_string()))
+        );
+        assert!(
+            pending
+                .iter()
+                .any(|p| p == &("codex".to_string(), "openclaw".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_all_label_pairs() {
+        let (_dir, repo, key) = fresh_repo().await;
+        repo.create(&key, "codex", DEF, "rt", Some("at"), Some(100), "")
+            .await
+            .unwrap();
+        repo.create(&key, "codex", "hermes", "rt", Some("at"), Some(200), "")
+            .await
+            .unwrap();
+        repo.create(&key, "anthropic-oauth", DEF, "rt", None, None, "")
+            .await
+            .unwrap();
+        let rows = repo.list_all().await.unwrap();
+        assert_eq!(rows.len(), 3);
     }
 }

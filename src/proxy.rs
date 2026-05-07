@@ -271,7 +271,10 @@ pub async fn proxy_handler(
     // the session is missing, degraded, or the sealing key isn't
     // configured — operator fixes via re-bootstrap.
     if matches!(target.auth, ProxyAuth::Oauth { .. }) {
-        match resolve_oauth_token(&state, &target).await {
+        // Phase G: session_label hard-coded to "default" for now.
+        // G.2 plumbs the per-agent override label here.
+        let session_label = crate::oauth::session::DEFAULT_SESSION_LABEL;
+        match resolve_oauth_token(&state, &target, session_label).await {
             Ok(updated_auth) => target.auth = updated_auth,
             Err(envelope) => {
                 record_oauth_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
@@ -943,6 +946,7 @@ struct OauthUnavailable {
 async fn resolve_oauth_token(
     state: &AppState,
     target: &ProxyTarget,
+    session_label: &str,
 ) -> Result<ProxyAuth, OauthUnavailable> {
     let Some(rt) = &state.oauth else {
         return Err(OauthUnavailable {
@@ -959,10 +963,14 @@ async fn resolve_oauth_token(
         _ => "oauth_unknown", // shouldn't happen; caller guards on Oauth variant
     };
 
-    let lock = rt.locks.get(&target.name).await;
+    let lock = rt.locks.get(&target.name, session_label).await;
     let _guard = lock.lock().await;
 
-    let session = match rt.sessions.get(&rt.sealing_key, &target.name).await {
+    let session = match rt
+        .sessions
+        .get(&rt.sealing_key, &target.name, session_label)
+        .await
+    {
         Ok(Some(s)) => s,
         Ok(None) => {
             return Err(OauthUnavailable {
@@ -1018,7 +1026,7 @@ async fn resolve_oauth_token(
         {
             Ok(updated) => updated,
             Err(e) => {
-                let _ = rt.sessions.mark_degraded(&target.name).await;
+                let _ = rt.sessions.mark_degraded(&target.name, session_label).await;
                 tracing::warn!(
                     name = %target.name,
                     cause = e.audit_cause(),
