@@ -1,0 +1,40 @@
+# Worked example config (T5.5). One tool ("openai") with a
+# from_file_sealed credential. The config holds only the path to the
+# decrypted file — never the credential plaintext.
+
+listen:
+  host: "127.0.0.1"
+  port: 9200
+  admin_socket:
+    path: "/run/locksmith/admin.sock"
+
+shutdown:
+  drain_window_seconds: 30
+
+operator_credentials_path: "/etc/locksmith/operators.yaml"
+
+database:
+  path: "/var/lib/locksmith/locksmith.db"
+
+audit:
+  retention_days: 90
+  sweep_interval_seconds: 3600
+  jsonl_path: "/var/log/locksmith/audit.jsonl"
+
+tools:
+  - name: "openai"
+    description: "OpenAI Chat Completions"
+    upstream: "https://api.openai.com"
+    egress: proxied
+    timeouts:
+      request_seconds: 60
+      idle_seconds: 30
+    auth:
+      header: "authorization"
+      # T5.1: read the decrypted credential at the path
+      # systemd-creds writes it to. The encrypted blob lives at
+      # /etc/locksmith/credentials/openai.enc and is referenced from
+      # the unit's LoadCredentialEncrypted= directive.
+      value:
+        from_file_sealed:
+          path: "/run/credentials/locksmith/openai_token"

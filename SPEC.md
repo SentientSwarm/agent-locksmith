@@ -1,5 +1,30 @@
 # Secure Agent Proxy (SAP) — Technical Specification
 
+> **⚠️ DEPRECATED — DO NOT USE FOR DESIGN DECISIONS**
+>
+> This document describes the original M0-era "Secure Agent Proxy (SAP)" vision,
+> including a `/llm/*`, `/mcp/*`, and `/a2a/*` endpoint shape and a wire-level
+> scanner sidecar that v2 explicitly **rejected** (see `docs/v2/PRD.md` D-11,
+> D-15, D-17, D-18 and `docs/v2/SPEC.md` §3.5).
+>
+> The project was renamed from `secure-agent-proxy` to **agent-locksmith**;
+> binaries are `locksmithd` / `locksmith`, not `sap`. v2 (M1–M7) is feature-
+> complete on `develop` (tagged v1.1.0) and ships only `/api/{tool_name}/{*path}`
+> for proxied traffic — LLMs are ordinary tool entries, not a separate
+> namespace.
+>
+> **Authoritative sources for v2:**
+> - `docs/v2/PRD.md` — product requirements, decisions D-1..D-18
+> - `docs/v2/SPEC.md` — detailed design (UC/R-F/R-N/INF/Q/C/T identifiers)
+> - `docs/v2/SPEC.state.md` — what is actually in code
+> - `docs/v2/HANDOFF.md` — current branch state and post-v2 backlog
+> - `README.md` — operator-facing overview
+>
+> This file is retained only for archaeology of the M0 milestone. Anything
+> below this banner that conflicts with `docs/v2/` is superseded.
+
+---
+
 ## Overview
 
 A Rust proxy that sits between AI agents and external services. It injects
