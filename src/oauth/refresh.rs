@@ -103,9 +103,14 @@ impl RefreshLockMap {
 
     /// Get or create the per-session lock. Cheap on the hot path
     /// (single hashmap lookup); construction is rare.
-    pub async fn get(&self, name: &str) -> Arc<Mutex<()>> {
+    ///
+    /// Phase G: keys on `(name, session_label)` so two labels under
+    /// the same registration get distinct locks. Refreshes for two
+    /// labels can run concurrently without contention.
+    pub async fn get(&self, name: &str, session_label: &str) -> Arc<Mutex<()>> {
         let mut map = self.inner.lock().await;
-        map.entry(name.to_string())
+        let key = format!("{name}\u{1f}{session_label}");
+        map.entry(key)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
@@ -200,6 +205,7 @@ pub async fn refresh_session(
     repo.update_tokens(
         key,
         &session.name,
+        &session.session_label,
         &token_response.access_token,
         new_expires_at,
         token_response.refresh_token.as_deref(),
@@ -209,13 +215,14 @@ pub async fn refresh_session(
 
     info!(
         name = %session.name,
+        session_label = %session.session_label,
         oauth_session_id = %session.audit_session_id(),
         new_lifetime_secs = lifetime,
         "oauth refresh succeeded"
     );
 
     // Read back the canonical state.
-    repo.get(key, &session.name)
+    repo.get(key, &session.name, &session.session_label)
         .await
         .map_err(|e| RefreshError::Persist(e.to_string()))?
         .ok_or_else(|| RefreshError::Persist("session vanished after update".to_string()))
@@ -295,24 +302,30 @@ pub async fn run(
             _ = ticker.tick() => {
                 let threshold = unix_now() + DEFAULT_REFRESH_SAFETY_MARGIN_SECS;
                 match repo.list_pending_refresh(threshold).await {
-                    Ok(names) if names.is_empty() => {}
-                    Ok(names) => {
+                    Ok(items) if items.is_empty() => {}
+                    Ok(items) => {
                         let cat = catalog.load();
-                        for name in names {
+                        for (name, session_label) in items {
                             // Take the per-session lock so concurrent on-
                             // demand refresh from the proxy hot path
-                            // can't race us.
-                            let lock = locks.get(&name).await;
+                            // can't race us. Phase G: lock keys on
+                            // (name, session_label).
+                            let lock = locks.get(&name, &session_label).await;
                             let _guard = lock.lock().await;
 
                             // Re-read inside the lock — another caller
                             // (proxy hot path) may have already
                             // refreshed.
-                            let session = match repo.get(&key, &name).await {
+                            let session = match repo.get(&key, &name, &session_label).await {
                                 Ok(Some(s)) if !s.degraded => s,
                                 Ok(_) => continue,
                                 Err(e) => {
-                                    warn!(name = %name, error = %e, "oauth refresh: get failed; skipping");
+                                    warn!(
+                                        name = %name,
+                                        session_label = %session_label,
+                                        error = %e,
+                                        "oauth refresh: get failed; skipping",
+                                    );
                                     continue;
                                 }
                             };
@@ -325,12 +338,21 @@ pub async fn run(
                                 Err(e) => {
                                     warn!(
                                         name = %name,
+                                        session_label = %session_label,
                                         cause = e.audit_cause(),
                                         error = %e,
-                                        "oauth refresh failed; marking session degraded"
+                                        "oauth refresh failed; marking session degraded",
                                     );
-                                    if let Err(persist_err) = repo.mark_degraded(&name).await {
-                                        warn!(name = %name, error = %persist_err, "mark_degraded failed");
+                                    if let Err(persist_err) = repo
+                                        .mark_degraded(&name, &session_label)
+                                        .await
+                                    {
+                                        warn!(
+                                            name = %name,
+                                            session_label = %session_label,
+                                            error = %persist_err,
+                                            "mark_degraded failed",
+                                        );
                                     }
                                 }
                             }
@@ -377,13 +399,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lock_map_returns_same_lock_for_same_name() {
+    async fn lock_map_returns_same_lock_for_same_name_and_label() {
         let map = RefreshLockMap::new();
-        let l1 = map.get("codex").await;
-        let l2 = map.get("codex").await;
+        let l1 = map.get("codex", "default").await;
+        let l2 = map.get("codex", "default").await;
         assert!(Arc::ptr_eq(&l1, &l2));
 
-        let l3 = map.get("anthropic-oauth").await;
+        let l3 = map.get("anthropic-oauth", "default").await;
         assert!(!Arc::ptr_eq(&l1, &l3));
+    }
+
+    // Phase G: distinct labels under the same registration name get
+    // distinct locks, so two labels can refresh concurrently without
+    // serializing on each other.
+    #[tokio::test]
+    async fn lock_map_distinguishes_labels_under_same_name() {
+        let map = RefreshLockMap::new();
+        let l_default = map.get("codex", "default").await;
+        let l_hermes = map.get("codex", "hermes").await;
+        let l_openclaw = map.get("codex", "openclaw").await;
+        assert!(!Arc::ptr_eq(&l_default, &l_hermes));
+        assert!(!Arc::ptr_eq(&l_hermes, &l_openclaw));
+        assert!(!Arc::ptr_eq(&l_default, &l_openclaw));
     }
 }

@@ -61,6 +61,12 @@ pub struct UdsState {
     /// haven't set `LOCKSMITH_OAUTH_SEALING_KEY` (the daemon then
     /// boots without OAuth support; the routes below 404 cleanly).
     pub oauth: Option<crate::oauth::OauthAdminState>,
+    /// Phase G — per-agent credential override repository. Threaded
+    /// through so the admin endpoints
+    /// `PUT /agents/{id}/credentials/{registration}` and friends can
+    /// persist overrides. `None` for M0/M1 deployments without admin
+    /// substrate.
+    pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -115,11 +121,13 @@ fn build_registrations_admin_router(
 
 /// Phase F.4 — OAuth admin sub-router. Mounts under operator nest.
 /// Routes: `POST /oauth/<name>/bootstrap`, `GET /oauth/<name>`,
-/// `DELETE /oauth/<name>`. Only mounted when `LOCKSMITH_OAUTH_SEALING_KEY`
-/// is set (`UdsState.oauth = Some(_)`).
+/// `DELETE /oauth/<name>`, `GET /oauth` (Phase G — list all sessions).
+/// Only mounted when `LOCKSMITH_OAUTH_SEALING_KEY` is set
+/// (`UdsState.oauth = Some(_)`).
 fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
     use crate::oauth::admin;
     Router::new()
+        .route("/oauth", get(admin::op_oauth_list))
         .route(
             "/oauth/{name}",
             get(admin::op_oauth_status).delete(admin::op_oauth_revoke),
@@ -162,6 +170,15 @@ pub fn build_router(state: UdsState) -> Router {
         .route(
             "/agents/{public_id}/cert_identity",
             axum::routing::patch(op_set_agent_cert_identity),
+        )
+        // Phase G — per-agent credential overrides.
+        .route(
+            "/agents/{public_id}/credentials",
+            get(op_list_agent_credentials),
+        )
+        .route(
+            "/agents/{public_id}/credentials/{registration}",
+            axum::routing::put(op_set_agent_credential).delete(op_unset_agent_credential),
         )
         .route(
             "/bootstrap_tokens",
@@ -652,6 +669,7 @@ async fn op_query_audit(
                         "event_class": e.event_class.as_str(),
                         "event": e.event,
                         "agent_public_id": e.agent_public_id,
+                        "agent_name": e.agent_name,
                         "operator_name": e.operator_name,
                         "tool": e.tool,
                         "upstream_host": e.upstream_host,
@@ -669,6 +687,110 @@ async fn op_query_audit(
             (StatusCode::OK, Json(json!({ "events": rows }))).into_response()
         }
         Err(e) => admin_err_response(e),
+    }
+}
+
+// ─── Phase G — per-agent credential overrides ──────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct SetCredentialBody {
+    /// Full AuthSpec JSON. Validated by serde via the AuthSpec
+    /// `deny_unknown_fields` shape.
+    auth_spec: crate::registrations::AuthSpec,
+}
+
+async fn op_set_agent_credential(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((agent_id_or_name, registration)): Path<(String, String)>,
+    Json(body): Json<SetCredentialBody>,
+) -> Response {
+    let Some(creds) = state.agent_creds.as_ref() else {
+        return admin_err_response(crate::admin::service::AdminError::Backend(
+            "agent_credential_overrides not wired".into(),
+        ));
+    };
+    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
+        Ok(a) => a,
+        Err(e) => return admin_err_response(e),
+    };
+    match creds.set(agent.id, &registration, &body.auth_spec).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "agent_public_id": agent.public_id,
+                "registration": registration,
+                "auth_spec": body.auth_spec,
+            })),
+        )
+            .into_response(),
+        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
+            "agent_credential_overrides.set: {e}"
+        ))),
+    }
+}
+
+async fn op_unset_agent_credential(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((agent_id_or_name, registration)): Path<(String, String)>,
+) -> Response {
+    let Some(creds) = state.agent_creds.as_ref() else {
+        return admin_err_response(crate::admin::service::AdminError::Backend(
+            "agent_credential_overrides not wired".into(),
+        ));
+    };
+    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
+        Ok(a) => a,
+        Err(e) => return admin_err_response(e),
+    };
+    match creds.delete(agent.id, &registration).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
+            "agent_credential_overrides.delete: {e}"
+        ))),
+    }
+}
+
+async fn op_list_agent_credentials(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path(agent_id_or_name): Path<String>,
+) -> Response {
+    let Some(creds) = state.agent_creds.as_ref() else {
+        return admin_err_response(crate::admin::service::AdminError::Backend(
+            "agent_credential_overrides not wired".into(),
+        ));
+    };
+    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
+        Ok(a) => a,
+        Err(e) => return admin_err_response(e),
+    };
+    match creds.list_for_agent(agent.id).await {
+        Ok(rows) => {
+            let arr: Vec<_> = rows
+                .into_iter()
+                .map(|o| {
+                    json!({
+                        "registration": o.registration,
+                        "auth_spec": o.auth_spec,
+                        "created_at": o.created_at,
+                        "updated_at": o.updated_at,
+                    })
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "agent_public_id": agent.public_id,
+                    "overrides": arr,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
+            "agent_credential_overrides.list: {e}"
+        ))),
     }
 }
 

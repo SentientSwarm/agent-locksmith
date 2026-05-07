@@ -26,6 +26,11 @@ use serde_json::json;
 /// The resolved identity of an authenticated agent.
 #[derive(Debug, Clone)]
 pub struct AgentIdentity {
+    /// Stable integer primary key from the agents table. Phase G uses
+    /// this as the FK into `agent_credential_overrides`. Carried in
+    /// AgentIdentity so the proxy hot path doesn't need a second
+    /// lookup per request.
+    pub id: i64,
     pub public_id: String,
     pub name: String,
     pub tool_allowlist: Option<Vec<String>>,
@@ -179,6 +184,7 @@ impl BearerAuthenticator {
         let _ = self.repo.touch_last_used(&record.public_id).await;
 
         Ok(AgentIdentity {
+            id: record.id,
             public_id: record.public_id,
             name: record.name,
             tool_allowlist: record.tool_allowlist,
@@ -236,6 +242,7 @@ mod identity_tests {
 
     fn ident(allow: Option<&[&str]>, deny: Option<&[&str]>) -> AgentIdentity {
         AgentIdentity {
+            id: 0,
             public_id: "test-pid".into(),
             name: "test".into(),
             tool_allowlist: allow.map(|s| s.iter().map(|t| t.to_string()).collect()),

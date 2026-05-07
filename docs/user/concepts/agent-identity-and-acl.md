@@ -55,6 +55,16 @@ For ACL denials specifically, the audit row's `details.reason` is one of:
 
 Use `locksmith audit query --event-class security --agent-public-id <pid>` to investigate.
 
+> **"Who made this call?" is already answered today.** Every
+> `proxy_request` audit row carries `agent_public_id` and (post-G.0)
+> `agent_name`. If your only concern about shared upstream
+> credentials is per-agent attribution, you don't need per-agent
+> credentials — the audit log already partitions calls by agent.
+> Reach for [per-agent credentials](per-agent-credentials.md) only
+> when you need upstream-side billing/quota separation, blast-radius
+> isolation, or distinct upstream identities. For most teams the
+> shared-credential default is the right answer.
+
 ## Operator practical guidance
 
 - **Start narrow.** New agents register with the smallest viable allowlist. Add as you discover real needs. Denylist is rarely needed if allowlists are tight.

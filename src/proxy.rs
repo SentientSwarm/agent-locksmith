@@ -96,6 +96,15 @@ struct ProxyTarget {
     timeouts: ToolTimeouts,
     egress: EgressMode,
     auth: ProxyAuth,
+    /// Phase G — audit attribution for the credential applied:
+    /// `"registration_default"` (no override active) or
+    /// `"agent_override"` (per-agent override applied).
+    auth_source: &'static str,
+    /// Phase G — for OAuth requests, the session label resolved at
+    /// proxy time. `Some("default")` for the common shared-OAuth case;
+    /// `Some("hermes")` etc. when the agent has an OAuth override
+    /// pointing at a non-default label. `None` for non-OAuth requests.
+    oauth_session_label: Option<String>,
 }
 
 /// What the proxy needs to know about auth at injection time. Each
@@ -106,18 +115,27 @@ enum ProxyAuth {
     /// `AuthSpec::None` — operator-stated authless. Strip incoming
     /// auth-shaped headers, inject nothing.
     None,
-    /// Inject `header: value` where `value = resolved_creds[name]`.
+    /// Inject `header: value` where `value` comes from `override_value`
+    /// if present (Phase G per-agent override path) else from
+    /// `resolved_creds[name]` (registration-default path).
     /// `audit_mode` distinguishes registration-sourced ("header") from
     /// config-sourced ("config") for the audit row.
     Header {
         header: String,
         audit_mode: &'static str,
+        /// Phase G per-agent override (`None` for registration-default).
+        override_value: Option<secrecy::SecretString>,
     },
-    /// Inject `Authorization: Bearer value` where `value =
-    /// resolved_creds[name]`. Catalog-only — config.tools' Authorization
-    /// shape goes through `Header { header: "Authorization", ... }`
-    /// because the legacy resolver may have already prefixed the value.
-    Bearer,
+    /// Inject `Authorization: Bearer value` where `value` comes from
+    /// `override_value` if present (Phase G per-agent override path)
+    /// else from `resolved_creds[name]` (registration-default path).
+    /// Catalog-only — config.tools' Authorization shape goes through
+    /// `Header { header: "Authorization", ... }` because the legacy
+    /// resolver may have already prefixed the value.
+    Bearer {
+        /// Phase G per-agent override (`None` for registration-default).
+        override_value: Option<secrecy::SecretString>,
+    },
     /// OAuth (PKCE or device-code). Access token resolved from the
     /// `oauth_sessions` cache before this struct is constructed, so
     /// `build_upstream_request` can inject without async work. The
@@ -143,7 +161,7 @@ impl ProxyAuth {
         match self {
             ProxyAuth::None => "none",
             ProxyAuth::Header { audit_mode, .. } => audit_mode,
-            ProxyAuth::Bearer => "bearer",
+            ProxyAuth::Bearer { .. } => "bearer",
             ProxyAuth::Oauth { audit_mode, .. } => audit_mode,
         }
     }
@@ -166,8 +184,8 @@ impl ProxyAuth {
         match self {
             ProxyAuth::None => None,
             ProxyAuth::Header { header, .. } => Some(header.to_lowercase()),
-            ProxyAuth::Bearer => None, // "authorization" is always stripped
-            ProxyAuth::Oauth { .. } => None, // F.5 will inject Authorization; always stripped
+            ProxyAuth::Bearer { .. } => None, // "authorization" is always stripped
+            ProxyAuth::Oauth { .. } => None,  // F.5 will inject Authorization; always stripped
         }
     }
 }
@@ -186,8 +204,11 @@ impl ProxyTarget {
             AuthSpec::Header { header, .. } => ProxyAuth::Header {
                 header: header.clone(),
                 audit_mode: "header",
+                override_value: None,
             },
-            AuthSpec::Bearer { .. } => ProxyAuth::Bearer,
+            AuthSpec::Bearer { .. } => ProxyAuth::Bearer {
+                override_value: None,
+            },
             AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
                 // Caller must use from_registration_oauth instead;
                 // this path indicates a programming error. We return
@@ -213,6 +234,8 @@ impl ProxyTarget {
             timeouts: r.timeouts,
             egress: r.egress,
             auth,
+            auth_source: "registration_default",
+            oauth_session_label: None,
         }
     }
 
@@ -227,6 +250,7 @@ impl ProxyTarget {
             Some(a) => ProxyAuth::Header {
                 header: a.header.clone(),
                 audit_mode: "config",
+                override_value: None,
             },
         };
         Self {
@@ -236,6 +260,8 @@ impl ProxyTarget {
             timeouts: t.timeouts,
             egress: t.egress,
             auth,
+            auth_source: "registration_default",
+            oauth_session_label: None,
         }
     }
 }
@@ -266,12 +292,24 @@ pub async fn proxy_handler(
         None => return record_tool_not_found(&state.audit, &ctx).await,
     };
 
+    // Phase G: per-agent credential override. When an override row
+    // exists for (agent_id, registration), swap in the override's
+    // AuthSpec BEFORE OAuth resolution / static-credential injection.
+    // Default behavior (no override) leaves target unchanged.
+    apply_agent_credential_override(&state, &mut target, req.extensions()).await;
+
     // Phase F.5: for OAuth registrations, materialize the access token
     // before building the upstream request. Returns a 503 envelope if
     // the session is missing, degraded, or the sealing key isn't
     // configured — operator fixes via re-bootstrap.
     if matches!(target.auth, ProxyAuth::Oauth { .. }) {
-        match resolve_oauth_token(&state, &target).await {
+        // Phase G: session_label was set during apply_agent_credential_override
+        // (defaults to DEFAULT_SESSION_LABEL when no override is in effect).
+        let session_label = target
+            .oauth_session_label
+            .clone()
+            .unwrap_or_else(|| crate::oauth::session::DEFAULT_SESSION_LABEL.to_string());
+        match resolve_oauth_token(&state, &target, &session_label).await {
             Ok(updated_auth) => target.auth = updated_auth,
             Err(envelope) => {
                 record_oauth_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
@@ -389,23 +427,41 @@ fn build_upstream_request(
     // injection (Phase E.6 / TS-150).
     match &target.auth {
         ProxyAuth::None => {}
-        ProxyAuth::Header { header, .. } => {
-            let resolved = state.resolved_creds.load();
-            if let Some(value) = resolved.get(&target.name) {
+        ProxyAuth::Header {
+            header,
+            override_value,
+            ..
+        } => {
+            // Phase G: per-agent override takes precedence; falls back
+            // to the registration-default `resolved_creds[name]` when
+            // None.
+            if let Some(value) = override_value {
                 upstream_req =
                     upstream_req.header(header, secrecy::ExposeSecret::expose_secret(value));
+            } else {
+                let resolved = state.resolved_creds.load();
+                if let Some(value) = resolved.get(&target.name) {
+                    upstream_req =
+                        upstream_req.header(header, secrecy::ExposeSecret::expose_secret(value));
+                }
+                // Auth declared but no credential resolved → degraded
+                // mode. Forward without injection; upstream typically
+                // returns 401 and the response pipeline records the
+                // proxy-side audit row.
             }
-            // Auth declared but no credential resolved → degraded
-            // mode. Forward without injection; upstream typically
-            // returns 401 and the response pipeline records the
-            // proxy-side audit row.
         }
-        ProxyAuth::Bearer => {
-            let resolved = state.resolved_creds.load();
-            if let Some(value) = resolved.get(&target.name) {
+        ProxyAuth::Bearer { override_value } => {
+            if let Some(value) = override_value {
                 let header_value =
                     format!("Bearer {}", secrecy::ExposeSecret::expose_secret(value));
                 upstream_req = upstream_req.header("Authorization", header_value);
+            } else {
+                let resolved = state.resolved_creds.load();
+                if let Some(value) = resolved.get(&target.name) {
+                    let header_value =
+                        format!("Bearer {}", secrecy::ExposeSecret::expose_secret(value));
+                    upstream_req = upstream_req.header("Authorization", header_value);
+                }
             }
         }
         ProxyAuth::Oauth { access_token, .. } => {
@@ -728,12 +784,21 @@ async fn record_proxy_request_success(
     audit_record(audit, event).await;
 }
 
-/// Build audit `details` JSON with `auth_mode` always present and
-/// `oauth_session_id` populated for OAuth requests.
+/// Build audit `details` JSON with `auth_mode` always present,
+/// `oauth_session_id` populated for OAuth requests, and Phase G
+/// fields (`auth_source`, `oauth_session_label`) tracking whether
+/// the credential came from the registration default or a per-agent
+/// override and which OAuth session label was used.
 fn audit_details(target: &ProxyTarget) -> serde_json::Value {
-    let mut v = json!({"auth_mode": target.auth.audit_mode()});
+    let mut v = json!({
+        "auth_mode": target.auth.audit_mode(),
+        "auth_source": target.auth_source,
+    });
     if let Some(sid) = target.auth.oauth_session_id() {
         v["oauth_session_id"] = json!(sid);
+    }
+    if let Some(label) = &target.oauth_session_label {
+        v["oauth_session_label"] = json!(label);
     }
     v
 }
@@ -918,6 +983,104 @@ fn url_host(url: &str) -> Option<String> {
     }
 }
 
+// ─── Phase G: per-agent credential override ──────────────────────────────
+
+/// Apply the per-agent credential override (if any) onto `target`,
+/// updating `target.auth`, `target.auth_source`, and (for OAuth)
+/// `target.oauth_session_label`. No-op when:
+///   - the agent_creds repo isn't wired (M0/M1 / pre-Phase-G test path),
+///   - no `AgentIdentity` is in extensions (unauthenticated request),
+///   - no override row exists for (agent_id, registration).
+///
+/// Override `auth_spec` shapes:
+///   - `AuthSpec::None` → `ProxyAuth::None`
+///   - `AuthSpec::Header { header, env_var }` → reads `env_var` directly
+///     and stashes the value in `ProxyAuth::Header.override_value`.
+///     Bypasses `resolved_creds` because per-agent overrides don't
+///     participate in the startup-resolved creds map.
+///   - `AuthSpec::Bearer { env_var }` → same as Header but for the
+///     `Authorization: Bearer ...` injection path.
+///   - `AuthSpec::OauthPkce` / `OauthDeviceCode` → records the
+///     `session_label` so `resolve_oauth_token` reads from a non-default
+///     label (or "default" when the override doesn't specify a label).
+async fn apply_agent_credential_override(
+    state: &AppState,
+    target: &mut ProxyTarget,
+    extensions: &axum::http::Extensions,
+) {
+    let Some(agent_creds) = state.agent_creds.as_ref() else {
+        return; // No repo wired: keep registration default.
+    };
+    let Some(identity) = extensions.get::<crate::auth_v2::AgentIdentity>() else {
+        return; // No AgentIdentity (M0 shared-bearer path).
+    };
+    let override_row = match agent_creds.get(identity.id, &target.name).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return, // No override: keep registration default.
+        Err(e) => {
+            tracing::warn!(
+                agent_id = identity.id,
+                tool = %target.name,
+                error = %e,
+                "agent_credential_overrides lookup failed; falling back to registration default",
+            );
+            return;
+        }
+    };
+
+    target.auth_source = "agent_override";
+
+    match override_row.auth_spec {
+        AuthSpec::None => {
+            target.auth = ProxyAuth::None;
+        }
+        AuthSpec::Header { header, env_var } => {
+            let value = std::env::var(&env_var)
+                .ok()
+                .map(secrecy::SecretString::from);
+            if value.is_none() {
+                tracing::warn!(
+                    agent_id = identity.id,
+                    tool = %target.name,
+                    env_var = %env_var,
+                    "agent_override env var not set; forwarding without injection (will likely 401)",
+                );
+            }
+            target.auth = ProxyAuth::Header {
+                header,
+                audit_mode: "header",
+                override_value: value,
+            };
+        }
+        AuthSpec::Bearer { env_var } => {
+            let value = std::env::var(&env_var)
+                .ok()
+                .map(secrecy::SecretString::from);
+            if value.is_none() {
+                tracing::warn!(
+                    agent_id = identity.id,
+                    tool = %target.name,
+                    env_var = %env_var,
+                    "agent_override env var not set; forwarding without injection (will likely 401)",
+                );
+            }
+            target.auth = ProxyAuth::Bearer {
+                override_value: value,
+            };
+        }
+        AuthSpec::OauthPkce { session_label, .. }
+        | AuthSpec::OauthDeviceCode { session_label, .. } => {
+            // Don't replace target.auth for OAuth — the registration's
+            // ProxyAuth::Oauth placeholder is correct (resolve_oauth_token
+            // will fill in audit_mode + access token). We only need to
+            // tell that resolver which label to use.
+            let label = session_label
+                .unwrap_or_else(|| crate::oauth::session::DEFAULT_SESSION_LABEL.to_string());
+            target.oauth_session_label = Some(label);
+        }
+    }
+}
+
 // ─── Phase F.5: OAuth resolution helpers ─────────────────────────────────
 
 /// Wrapped error returned by [`resolve_oauth_token`] when the session
@@ -943,6 +1106,7 @@ struct OauthUnavailable {
 async fn resolve_oauth_token(
     state: &AppState,
     target: &ProxyTarget,
+    session_label: &str,
 ) -> Result<ProxyAuth, OauthUnavailable> {
     let Some(rt) = &state.oauth else {
         return Err(OauthUnavailable {
@@ -959,10 +1123,14 @@ async fn resolve_oauth_token(
         _ => "oauth_unknown", // shouldn't happen; caller guards on Oauth variant
     };
 
-    let lock = rt.locks.get(&target.name).await;
+    let lock = rt.locks.get(&target.name, session_label).await;
     let _guard = lock.lock().await;
 
-    let session = match rt.sessions.get(&rt.sealing_key, &target.name).await {
+    let session = match rt
+        .sessions
+        .get(&rt.sealing_key, &target.name, session_label)
+        .await
+    {
         Ok(Some(s)) => s,
         Ok(None) => {
             return Err(OauthUnavailable {
@@ -1018,7 +1186,7 @@ async fn resolve_oauth_token(
         {
             Ok(updated) => updated,
             Err(e) => {
-                let _ = rt.sessions.mark_degraded(&target.name).await;
+                let _ = rt.sessions.mark_degraded(&target.name, session_label).await;
                 tracing::warn!(
                     name = %target.name,
                     cause = e.audit_cause(),

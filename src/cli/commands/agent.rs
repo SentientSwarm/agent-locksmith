@@ -1,6 +1,6 @@
 //! `locksmith agent ...` operator subcommands.
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
 use crate::client::{Auth, CliClient, CliError};
@@ -66,6 +66,65 @@ pub enum AgentCmd {
         #[arg(long, conflicts_with = "cert_identity")]
         clear: bool,
     },
+    /// Phase G: pin a per-agent credential override on a registration.
+    /// One of `--auth bearer=ENV`, `--auth header=H:ENV`, `--no-auth`,
+    /// or `--oauth-session LABEL` is required.
+    SetCredential(SetCredentialArgs),
+    /// Phase G: remove a per-agent credential override; the agent
+    /// returns to using the registration's default credential.
+    /// Idempotent.
+    UnsetCredential {
+        /// Agent public_id.
+        id: String,
+        /// Registration name.
+        registration: String,
+    },
+    /// Phase G: list all credential overrides for one agent.
+    Credentials {
+        #[command(subcommand)]
+        cmd: AgentCredentialsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentCredentialsCmd {
+    /// List all credential overrides for `<id>`.
+    List {
+        /// Agent public_id.
+        id: String,
+    },
+}
+
+#[derive(Args)]
+pub struct SetCredentialArgs {
+    /// Agent public_id.
+    pub id: String,
+    /// Registration name (e.g., `lmstudio`, `codex`).
+    pub registration: String,
+    /// `bearer=<ENV_VAR>` or `header=<Header-Name>:<ENV_VAR>` for
+    /// static-credential overrides. The proxy hot path reads the env
+    /// var directly when this override is in effect.
+    #[arg(
+        long,
+        conflicts_with_all = ["no_auth", "oauth_session"],
+    )]
+    pub auth: Option<String>,
+    /// Override to no-auth (operator-stated authless on a per-agent
+    /// basis). Useful when one agent legitimately bypasses the
+    /// upstream's auth shape.
+    #[arg(
+        long,
+        conflicts_with_all = ["auth", "oauth_session"],
+    )]
+    pub no_auth: bool,
+    /// Pin the agent to a non-default OAuth session label under the
+    /// registration. Operator must have already bootstrapped the
+    /// session: `locksmith oauth bootstrap <reg> --label <label> ...`.
+    #[arg(
+        long,
+        conflicts_with_all = ["auth", "no_auth"],
+    )]
+    pub oauth_session: Option<String>,
 }
 
 pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<(), CliError> {
@@ -168,8 +227,119 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                 )
                 .await?;
         }
+        AgentCmd::SetCredential(args) => {
+            let auth_spec = build_auth_spec(&args)?;
+            let body = json!({"auth_spec": auth_spec});
+            let resp: Value = client
+                .json(
+                    "PUT",
+                    &format!(
+                        "/admin/operator/agents/{}/credentials/{}",
+                        args.id, args.registration
+                    ),
+                    Auth::Operator(&token),
+                    Some(&body),
+                )
+                .await?;
+            print(&resp, format);
+        }
+        AgentCmd::UnsetCredential { id, registration } => {
+            client
+                .unit(
+                    "DELETE",
+                    &format!("/admin/operator/agents/{id}/credentials/{registration}"),
+                    Auth::Operator(&token),
+                    None,
+                )
+                .await?;
+            print(
+                &json!({
+                    "agent": id,
+                    "registration": registration,
+                    "removed": true,
+                }),
+                format,
+            );
+        }
+        AgentCmd::Credentials { cmd } => match cmd {
+            AgentCredentialsCmd::List { id } => {
+                let resp: Value = client
+                    .json(
+                        "GET",
+                        &format!("/admin/operator/agents/{id}/credentials"),
+                        Auth::Operator(&token),
+                        None,
+                    )
+                    .await?;
+                print(&resp["overrides"], format);
+            }
+        },
     }
     Ok(())
+}
+
+/// Translate the CLI's `--auth` / `--no-auth` / `--oauth-session`
+/// flags into the canonical `AuthSpec` JSON shape that the admin
+/// endpoint persists. Returns a usage error on conflicting / missing
+/// flags. Mirrors registrations' AuthSpec wire form so operator
+/// expectations carry across `locksmith {model,tool} put` and the
+/// new `agent set-credential`.
+fn build_auth_spec(args: &SetCredentialArgs) -> Result<Value, CliError> {
+    if args.no_auth {
+        return Ok(json!({"kind": "none"}));
+    }
+    if let Some(label) = &args.oauth_session {
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(CliError::Usage(format!(
+                "session label must be ascii alphanumeric / '-' / '_'; got: {label:?}"
+            )));
+        }
+        // The override carries `session_label` only — the rest of the
+        // OAuth metadata (client_id / scopes / urls) lives on the
+        // registration's default auth_spec. The override merging
+        // happens at the daemon side; we just need to signal the
+        // session pointer here. Use the OauthDeviceCode shape with
+        // empty placeholders since the override path on the daemon
+        // ignores everything but session_label.
+        return Ok(json!({
+            "kind": "oauth_device_code",
+            "client_id": "",
+            "scopes": [],
+            "device_url": "",
+            "token_url": "",
+            "session_label": label,
+        }));
+    }
+    let auth = args.auth.as_deref().ok_or_else(|| {
+        CliError::Usage(
+            "must provide one of: --auth bearer=ENV, --auth header=H:ENV, --no-auth, --oauth-session LABEL".into(),
+        )
+    })?;
+    if let Some(env_var) = auth.strip_prefix("bearer=") {
+        if env_var.is_empty() {
+            return Err(CliError::Usage(
+                "--auth bearer= requires an env var name".into(),
+            ));
+        }
+        Ok(json!({"kind": "bearer", "env_var": env_var}))
+    } else if let Some(rest) = auth.strip_prefix("header=") {
+        let (header, env_var) = rest.split_once(':').ok_or_else(|| {
+            CliError::Usage("--auth header= requires <Header-Name>:<ENV_VAR>".into())
+        })?;
+        if header.is_empty() || env_var.is_empty() {
+            return Err(CliError::Usage(
+                "--auth header= requires non-empty header and env var".into(),
+            ));
+        }
+        Ok(json!({"kind": "header", "header": header, "env_var": env_var}))
+    } else {
+        Err(CliError::Usage(format!(
+            "--auth must start with 'bearer=' or 'header='; got: {auth:?}"
+        )))
+    }
 }
 
 /// CLI shorthand: `--allowlist -` means "explicitly clear the

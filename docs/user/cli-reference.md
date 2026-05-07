@@ -60,6 +60,26 @@ locksmith agent revoke <public_id>
 `register` returns the bearer once. `revoke` sets the agent's row
 to revoked; subsequent calls 401.
 
+#### Per-agent credential overrides (Phase G)
+
+```bash
+locksmith agent set-credential <public_id> <reg> --auth bearer=<ENV_VAR>
+locksmith agent set-credential <public_id> <reg> --auth header=<Header>:<ENV_VAR>
+locksmith agent set-credential <public_id> <reg> --no-auth
+locksmith agent set-credential <public_id> <reg> --oauth-session <label>
+locksmith agent unset-credential <public_id> <reg>
+locksmith agent credentials list <public_id>
+```
+
+`set-credential` upserts an override for one agent on one
+registration. The override replaces the registration's default
+credential on the proxy hot path for that agent only. See
+[`concepts/per-agent-credentials.md`](concepts/per-agent-credentials.md)
+for the design and the OAuth single-grant trap.
+
+`unset-credential` is idempotent — removing an absent override
+returns success.
+
 ### `bootstrap` — bootstrap-token management (operator)
 
 For pre-seeding agents that self-register via the bootstrap listener:
@@ -124,13 +144,15 @@ host-specific routing. The OAuth credential management itself uses
 
 ### `oauth` — OAuth session management (operator)
 
-Phase F. Requires `LOCKSMITH_OAUTH_SEALING_KEY` set in the daemon's env.
+Phase F + Phase G. Requires `LOCKSMITH_OAUTH_SEALING_KEY` set in
+the daemon's env.
 
 ```bash
-locksmith oauth bootstrap <name> --refresh-token <token>
-locksmith oauth bootstrap <name> --refresh-token-stdin
-locksmith oauth status <name>
-locksmith oauth revoke <name>
+locksmith oauth bootstrap <name> [--label <label>] --refresh-token <token>
+locksmith oauth bootstrap <name> [--label <label>] --refresh-token-stdin
+locksmith oauth status   <name> [--label <label>]
+locksmith oauth revoke   <name> [--label <label>]
+locksmith oauth list                                # NEW (Phase G)
 ```
 
 `bootstrap` takes a refresh token obtained out-of-band (provider's
@@ -138,11 +160,22 @@ own OAuth flow) and registers it with locksmith. Daemon does an
 inline first-refresh to verify, then seals refresh + access tokens
 in `oauth_sessions` (AES-GCM with `LOCKSMITH_OAUTH_SEALING_KEY`).
 
-`status` shows session state (present, scope, expires_at, degraded,
-audit_session_id). Never leaks tokens.
+**Phase G — `--label`**: distinguishes multiple sessions under one
+registration, defaulting to `"default"`. Use distinct labels (e.g.,
+`hermes`, `openclaw`) when bootstrapping per-agent OAuth from
+different upstream accounts. Label must be ascii alphanumeric / `-`
+/ `_`. Bootstrapping a non-default label when other labels exist
+under the same registration emits a single-grant warning — see
+[`concepts/per-agent-credentials.md`](concepts/per-agent-credentials.md).
 
-`revoke` clears local session state. Provider-side revocation
-deferred to v1.1+.
+`status` shows session state (present, label, scope, expires_at,
+degraded, audit_session_id). Never leaks tokens.
+
+`revoke` clears local session state. Idempotent. Provider-side
+revocation deferred to v1.1+.
+
+`list` enumerates all `(registration, label)` sessions across the
+deployment. Useful for spotting orphaned per-agent sessions.
 
 ### `audit` — audit log queries (operator)
 

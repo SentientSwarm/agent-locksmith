@@ -109,6 +109,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         registrations_for_app,
         catalog_for_app,
         oauth_runtime_for_app,
+        agent_creds_for_app,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -132,9 +133,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             Some(setup.catalog),
             // Phase F.5: OAuth runtime for the proxy hot path.
             setup.oauth_runtime,
+            // Phase G: per-agent credential override repo.
+            Some(setup.agent_creds),
         )
     } else {
-        (None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None)
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -200,7 +203,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // skip the substrate get an empty catalog default from
     // `build_app_full_with_registrations`.
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_oauth(
+        Some(catalog) => crate::app::build_app_full_with_phase_g(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -209,6 +212,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             registrations_for_app,
             catalog,
             oauth_runtime_for_app,
+            agent_creds_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -460,6 +464,11 @@ struct AdminSetup {
     /// Phase F.5 — OAuth runtime for the proxy hot path.
     /// `None` when `LOCKSMITH_OAUTH_SEALING_KEY` is unset.
     oauth_runtime: Option<crate::app::OauthRuntime>,
+    /// Phase G — per-agent credential overrides repo. Always populated
+    /// when admin substrate is wired (the table is part of the base
+    /// schema after migration 0005). Empty rows mean every lookup
+    /// returns `None` and the registration default applies.
+    agent_creds: crate::repo::AgentCredentialRepository,
 }
 
 async fn build_admin_substrate(
@@ -646,6 +655,7 @@ async fn build_admin_substrate(
         }
     };
 
+    let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -656,12 +666,14 @@ async fn build_admin_substrate(
             catalog: Some(catalog.clone()),
             resolved_creds: Some(resolved_creds.clone()),
             oauth: oauth_admin,
+            agent_creds: Some(agent_creds_repo.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
         registrations,
         catalog,
         oauth_runtime,
+        agent_creds: agent_creds_repo,
     })
 }
 

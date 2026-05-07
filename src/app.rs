@@ -75,6 +75,13 @@ pub struct AppState {
     /// proxy hot path. `Some` enables proxy-side access-token
     /// injection + on-401 refresh + audit `oauth_session_id`.
     pub oauth: Option<OauthRuntime>,
+    /// Phase G — per-agent credential overrides. `None` for M0/M1
+    /// deployments without admin substrate. `Some` enables the
+    /// proxy hot path's override-then-default credential resolution.
+    /// An empty repository (no rows) is functionally equivalent to
+    /// `None` — every lookup is `Ok(None)` and the registration's
+    /// default `auth_spec` always wins.
+    pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
 }
 
 /// Bundle of OAuth runtime state shared between the proxy hot path
@@ -243,6 +250,10 @@ pub fn build_app_full_with_catalog(
 /// Phase F.5 entrypoint — same as [`build_app_full_with_catalog`] but
 /// also takes an optional `OauthRuntime`. Daemon path uses this when
 /// `LOCKSMITH_OAUTH_SEALING_KEY` is set.
+///
+/// Phase G entrypoint forwards to [`build_app_full_with_phase_g`] with
+/// no agent_creds — preserves the existing 8-arg signature for callers
+/// (and there are many) that don't yet wire per-agent overrides.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_full_with_oauth(
     config: Arc<ArcSwap<AppConfig>>,
@@ -253,6 +264,35 @@ pub fn build_app_full_with_oauth(
     registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
     catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
     oauth: Option<OauthRuntime>,
+) -> Router {
+    build_app_full_with_phase_g(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        oauth,
+        None,
+    )
+}
+
+/// Phase G entrypoint — same as [`build_app_full_with_oauth`] but also
+/// takes an optional `AgentCredentialRepository`. Daemon path uses
+/// this once the admin substrate is wired so per-agent credential
+/// overrides are honored on the proxy hot path.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_phase_g(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
+    agent_creds: Option<crate::repo::AgentCredentialRepository>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -269,6 +309,7 @@ pub fn build_app_full_with_oauth(
         registrations,
         catalog,
         oauth,
+        agent_creds,
     });
 
     Router::new()

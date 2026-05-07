@@ -28,18 +28,24 @@ middleware (`kind=infra`) is operator-only.
 
 ## Highlights (v2.0.0)
 
-- **Kind-discriminated registrations** — `model` / `tool` / `infra` taxonomy.
-  Agents reason about LLMs vs service tools differently; operator-only
-  middleware (lf-scan today) lives in its own kind.
+- **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
+  taxonomy. Agents reason about LLMs vs service tools differently;
+  operator-only middleware (lf-scan today) lives in its own kind.
 - **Per-agent bearer + ACL** — each agent registration carries an
   `allowlist` / `denylist`. The proxy hot path enforces it before reaching
   upstream.
 - **mTLS feature flag** — listener `auth_mode: bearer | mtls | both`.
   Admin HTTPS path gets the same treatment.
-- **OAuth credential variant** — `AuthSpec::OauthPkce` and
+- **OAuth credential variant (Phase F)** — `AuthSpec::OauthPkce` and
   `AuthSpec::OauthDeviceCode` for codex / copilot / anthropic-oauth /
   google-gemini-cli / qwen-cli. Refresh tokens sealed at rest with
   AES-GCM (`LOCKSMITH_OAUTH_SEALING_KEY`); access tokens auto-refresh.
+- **Per-agent credential overrides + OAuth labels (Phase G)** —
+  `agent_credential_overrides(agent_id, registration) → AuthSpec`
+  swaps the default credential on a per-agent basis. OAuth sessions
+  gain a `session_label` dimension so one registration can hold N
+  sessions (one per ChatGPT account, GitHub account, etc.). Default
+  behavior unchanged when no overrides are set.
 - **Seed catalog** — 16 default providers baked into the image
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio, tavily,
   github, duckduckgo, wikipedia, lf-scan + 5 OAuth providers). Operators
@@ -47,9 +53,11 @@ middleware (`kind=infra`) is operator-only.
   admin API.
 - **Admin substrate** — UDS (default) and optional HTTPS for cross-host
   operations. Agent registration, tool/model PUT, audit query, OAuth
-  bootstrap.
+  bootstrap, per-agent credential overrides.
 - **Audit** — every proxy request + admin write emits one structured
-  audit row; SQLite + optional JSONL mirror.
+  audit row; SQLite + optional JSONL mirror. Phase G adds
+  `agent_name` (LEFT JOIN), `auth_source` (registration vs override),
+  and `oauth_session_label` to every `proxy_request` row.
 - **Memory-safe secrets** — credentials in `secrecy::SecretString`
   (zeroized on drop); never logged, never in HTTP responses.
 
@@ -294,9 +302,12 @@ For the canonical deployment story:
 
 - **User docs (locksmith-side)**:
   - [`docs/user/concepts/`](docs/user/concepts) — kind taxonomy, error
-    envelope, agent identity + ACL, trust boundary.
+    envelope, agent identity + ACL, trust boundary, per-agent
+    credentials + OAuth labels.
   - [`docs/user/agent-integration/`](docs/user/agent-integration) —
     wiring agents (hermes, openclaw) into a layer8-proxy deployment.
+  - [`docs/user/cli-reference.md`](docs/user/cli-reference.md) —
+    full `locksmith` CLI surface.
 
 - **Engineering docs (per-component)**:
   - [`docs/v2/SPEC.md`](docs/v2/SPEC.md) — engineering spec with task

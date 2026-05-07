@@ -36,9 +36,10 @@ User-level mental models distilled from the stack spec at
 | Doc | Topic |
 |---|---|
 | [concepts/kind-taxonomy.md](concepts/kind-taxonomy.md) | model / tool / infra discriminator (Phase E). |
-| [concepts/agent-identity-and-acl.md](concepts/agent-identity-and-acl.md) | Per-agent bearer + allowlist + audit. |
+| [concepts/agent-identity-and-acl.md](concepts/agent-identity-and-acl.md) | Per-agent bearer + allowlist + audit attribution (the answer to "who made this call?" without per-agent credentials). |
 | [concepts/trust-boundary.md](concepts/trust-boundary.md) | Who holds what credential, why. |
 | [concepts/error-envelope.md](concepts/error-envelope.md) | §4.7.9 wire envelope + Q-8 existence-leak avoidance. |
+| [concepts/per-agent-credentials.md](concepts/per-agent-credentials.md) | Per-agent credential overrides + OAuth session labels (Phase G); single-grant trap. |
 
 ## Tier 3 — agent integration (`agent-integration/`)
 

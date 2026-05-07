@@ -17,6 +17,7 @@ fn ts200_oauth_pkce_serde_roundtrip() {
         scopes: vec!["openid".to_string(), "profile".to_string()],
         auth_url: "https://console.anthropic.com/oauth/authorize".to_string(),
         token_url: "https://console.anthropic.com/oauth/token".to_string(),
+        session_label: None,
     };
     let json = serde_json::to_string(&spec).unwrap();
 
@@ -41,6 +42,7 @@ fn ts201_oauth_device_code_serde_roundtrip() {
         scopes: vec!["openai-api".to_string()],
         device_url: "https://chatgpt.com/auth/device/code".to_string(),
         token_url: "https://chatgpt.com/auth/device/token".to_string(),
+        session_label: None,
     };
     let json = serde_json::to_string(&spec).unwrap();
 
@@ -98,6 +100,7 @@ fn ts203_is_oauth_predicate() {
             scopes: vec![],
             auth_url: "https://a".into(),
             token_url: "https://t".into(),
+            session_label: None,
         }
         .is_oauth()
     );
@@ -107,6 +110,7 @@ fn ts203_is_oauth_predicate() {
             scopes: vec![],
             device_url: "https://d".into(),
             token_url: "https://t".into(),
+            session_label: None,
         }
         .is_oauth()
     );
@@ -121,6 +125,7 @@ fn ts204_oauth_variants_have_no_secret_ref() {
         scopes: vec![],
         auth_url: "https://a".into(),
         token_url: "https://t".into(),
+        session_label: None,
     };
     assert!(
         pkce.to_secret_ref().is_none(),
@@ -132,6 +137,7 @@ fn ts204_oauth_variants_have_no_secret_ref() {
         scopes: vec![],
         device_url: "https://d".into(),
         token_url: "https://t".into(),
+        session_label: None,
     };
     assert!(device.to_secret_ref().is_none());
 }
@@ -151,6 +157,7 @@ async fn ts205_oauth_registration_db_roundtrip() {
         scopes: vec!["openid".to_string(), "profile".to_string()],
         auth_url: "https://console.anthropic.com/oauth/authorize".to_string(),
         token_url: "https://console.anthropic.com/oauth/token".to_string(),
+        session_label: None,
     };
     let r = Registration::new(
         "anthropic-oauth".to_string(),

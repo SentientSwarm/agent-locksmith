@@ -52,6 +52,13 @@ pub struct AuditEvent {
     pub event_class: EventClass,
     pub event: String,
     pub agent_public_id: Option<String>,
+    /// Human-readable agent name (Phase G.0). Populated by `query()`'s
+    /// LEFT JOIN against the `agents` table so operators reading audit
+    /// results don't have to cross-reference public_id to agent name.
+    /// `None` for non-proxy rows (operator events) and for proxy rows
+    /// whose agent has been deleted (orphaned audit row). Audit *write*
+    /// path doesn't populate this — it's a read-time enrichment.
+    pub agent_name: Option<String>,
     pub operator_name: Option<String>,
     pub tool: Option<String>,
     pub upstream_host: Option<String>,
@@ -171,30 +178,35 @@ impl AuditRepository {
         page: AuditPage,
     ) -> Result<Vec<AuditEvent>, RepoError> {
         // Simple builder; full SQL composition is M3 territory.
+        // Phase G.0: LEFT JOIN agents to surface the human-readable
+        // agent name. Left join is required — orphaned audit rows
+        // (agent deleted post-write) must still surface with name=NULL.
         let mut sql = String::from(
-            "SELECT ts, event_class, event, agent_public_id, operator_name, tool, \
-             upstream_host, method, path, status, latency_ms, decision, auth_method, \
-             origin_ip, details FROM audit WHERE 1=1",
+            "SELECT a.ts, a.event_class, a.event, a.agent_public_id, ag.name AS agent_name, \
+             a.operator_name, a.tool, a.upstream_host, a.method, a.path, a.status, \
+             a.latency_ms, a.decision, a.auth_method, a.origin_ip, a.details \
+             FROM audit a LEFT JOIN agents ag ON a.agent_public_id = ag.public_id \
+             WHERE 1=1",
         );
         if filter.since_ms.is_some() {
-            sql.push_str(" AND ts >= ?");
+            sql.push_str(" AND a.ts >= ?");
         }
         if filter.until_ms.is_some() {
-            sql.push_str(" AND ts < ?");
+            sql.push_str(" AND a.ts < ?");
         }
         if filter.agent_public_id.is_some() {
-            sql.push_str(" AND agent_public_id = ?");
+            sql.push_str(" AND a.agent_public_id = ?");
         }
         if filter.tool.is_some() {
-            sql.push_str(" AND tool = ?");
+            sql.push_str(" AND a.tool = ?");
         }
         if filter.event_class.is_some() {
-            sql.push_str(" AND event_class = ?");
+            sql.push_str(" AND a.event_class = ?");
         }
         if filter.decision.is_some() {
-            sql.push_str(" AND decision = ?");
+            sql.push_str(" AND a.decision = ?");
         }
-        sql.push_str(" ORDER BY ts DESC LIMIT ? OFFSET ?");
+        sql.push_str(" ORDER BY a.ts DESC LIMIT ? OFFSET ?");
 
         let mut q = sqlx::query_as::<_, AuditRow>(&sql);
         if let Some(v) = filter.since_ms {
@@ -228,6 +240,7 @@ struct AuditRow {
     event_class: String,
     event: String,
     agent_public_id: Option<String>,
+    agent_name: Option<String>,
     operator_name: Option<String>,
     tool: Option<String>,
     upstream_host: Option<String>,
@@ -248,6 +261,7 @@ impl AuditRow {
             event_class: parse_event_class(&self.event_class)?,
             event: self.event,
             agent_public_id: self.agent_public_id,
+            agent_name: self.agent_name,
             operator_name: self.operator_name,
             tool: self.tool,
             upstream_host: self.upstream_host,

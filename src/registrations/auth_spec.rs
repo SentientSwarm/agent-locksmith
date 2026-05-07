@@ -61,6 +61,17 @@ pub enum AuthSpec {
         scopes: Vec<String>,
         auth_url: String,
         token_url: String,
+        /// Phase G: optional OAuth session label. Meaningful only on
+        /// `agent_credential_overrides` rows — points the proxy hot
+        /// path at a specific session under the registration's name.
+        /// `None` (the default) means "use the
+        /// [`crate::oauth::session::DEFAULT_SESSION_LABEL`] session"
+        /// — the only label that exists on default-shaped catalogs.
+        /// Always `None` on registration rows themselves; only set
+        /// when an override redirects an agent to a non-default
+        /// session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_label: Option<String>,
     },
     /// OAuth 2.0 device-code flow (RFC 8628). Used by codex (ChatGPT
     /// Plus), GitHub Copilot, qwen-cli. First-time auth prints a
@@ -71,6 +82,9 @@ pub enum AuthSpec {
         scopes: Vec<String>,
         device_url: String,
         token_url: String,
+        /// Phase G: see [`AuthSpec::OauthPkce::session_label`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_label: Option<String>,
     },
 }
 
@@ -92,6 +106,32 @@ impl AuthSpec {
         matches!(
             self,
             AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. }
+        )
+    }
+
+    /// Phase G: the OAuth session label this AuthSpec resolves to.
+    /// `None` for non-OAuth variants. For OAuth variants, returns the
+    /// custom label if one was set on the spec, else `None` to signal
+    /// "fall back to [`crate::oauth::session::DEFAULT_SESSION_LABEL`]".
+    /// Callers should resolve via `.session_label_or_default()`.
+    pub fn oauth_session_label(&self) -> Option<&str> {
+        match self {
+            AuthSpec::OauthPkce { session_label, .. }
+            | AuthSpec::OauthDeviceCode { session_label, .. } => session_label.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// OAuth session label to actually use at hot-path resolution
+    /// time, with `DEFAULT_SESSION_LABEL` as the fallback. Returns
+    /// `None` for non-OAuth variants.
+    pub fn session_label_or_default(&self) -> Option<&str> {
+        if !self.is_oauth() {
+            return None;
+        }
+        Some(
+            self.oauth_session_label()
+                .unwrap_or(crate::oauth::session::DEFAULT_SESSION_LABEL),
         )
     }
 
