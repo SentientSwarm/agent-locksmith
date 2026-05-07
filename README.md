@@ -9,7 +9,7 @@ The keystone component of the [layer8-proxy][layer8] stack.
 
 [layer8]: https://github.com/SentientSwarm/layer8-proxy
 
-**Current version: v2.0.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.0.0))
+**Current version: v2.2.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.2.0))
 
 ## What it does
 
@@ -26,7 +26,7 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.0.0)
+## Highlights (v2.2.0)
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
@@ -46,6 +46,13 @@ middleware (`kind=infra`) is operator-only.
   gain a `session_label` dimension so one registration can hold N
   sessions (one per ChatGPT account, GitHub account, etc.). Default
   behavior unchanged when no overrides are set.
+- **codex `ChatGPT-Account-ID` injection (Phase G2)** — locksmith
+  decodes the access-token JWT at OAuth bootstrap/refresh, extracts
+  `chatgpt_account_id`, and injects the required
+  `ChatGPT-Account-ID` header on `/backend-api/codex/*` upstream
+  calls. Agents proxied through locksmith get full ChatGPT plan auth
+  (Responses API) without needing to be JWT-aware OAuth clients
+  themselves. See [`docs/user/concepts/oauth-flow.md`](docs/user/concepts/oauth-flow.md).
 - **Seed catalog** — 16 default providers baked into the image
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio, tavily,
   github, duckduckgo, wikipedia, lf-scan + 5 OAuth providers). Operators

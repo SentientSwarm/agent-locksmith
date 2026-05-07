@@ -122,9 +122,30 @@ processes).
   listen address is reachable from the openclaw container (typically
   via host networking or an explicit network alias).
 
+## codex specifics (Phase G2 — locksmith v2.2.0+)
+
+OpenClaw natively supports OpenAI's Responses API
+(`/backend-api/codex/responses`). When OpenClaw runs *directly*
+against chatgpt.com, it extracts `chatgpt_account_id` from the
+access-token JWT itself and adds the required
+`ChatGPT-Account-ID: <uuid>` header on every call.
+
+When proxied through locksmith, OpenClaw doesn't see the JWT —
+it only holds the locksmith bearer. **Locksmith handles the header
+injection automatically** (Phase G2). Set
+`OPENAI_BASE_URL=http://layer8.lan:9200/api/codex` and OpenClaw's
+existing codex provider works unchanged; locksmith decodes the JWT
+at OAuth bootstrap, stores `chatgpt_account_id` on the
+`oauth_sessions` row, and adds the header on every
+`/backend-api/codex/*` upstream call.
+
+For the full OAuth flow (bootstrap, refresh, header injection),
+see [`docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md).
+
 ## See also
 
 - [`layer8-proxy/docs/user/getting-started.md`](../../../../layer8-proxy/docs/user/getting-started.md) — full deploy walkthrough.
 - [`layer8-proxy/docs/user/add-an-agent.md`](../../../../layer8-proxy/docs/user/add-an-agent.md) — agent registration.
 - [`agent-locksmith/docs/user/concepts/agent-identity-and-acl.md`](../concepts/agent-identity-and-acl.md) — per-agent bearer semantics.
+- [`agent-locksmith/docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md) — end-to-end OAuth flow (bootstrap, refresh, codex header injection).
 - [`agents-stack/docs/spec/v0.2.0.md`](../../../../agents-stack/docs/spec/v0.2.0.md) — formal stack spec.
