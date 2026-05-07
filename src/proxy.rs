@@ -153,6 +153,13 @@ enum ProxyAuth {
         audit_mode: &'static str,
         oauth_session_id: String,
         access_token: Option<secrecy::SecretString>,
+        /// Phase G2 — provider-side account identifier extracted from
+        /// the access-token JWT (`https://api.openai.com/auth.chatgpt_account_id`).
+        /// Injected as `ChatGPT-Account-ID` on codex hot-path requests
+        /// when the upstream URL matches the codex pattern. `None` for
+        /// non-JWT access tokens; the proxy then skips the header,
+        /// which is the correct outcome for non-codex providers.
+        account_id: Option<String>,
     },
 }
 
@@ -224,6 +231,7 @@ impl ProxyTarget {
                     audit_mode,
                     oauth_session_id: String::new(),
                     access_token: None,
+                    account_id: None,
                 }
             }
         };
@@ -386,6 +394,23 @@ async fn read_request_body(req: Request<Body>, body_limit: u64) -> Result<Bytes,
 /// the configured credential, and attach the body if present. Phase
 /// E.6: source-agnostic — driven by `ProxyTarget` (built from either
 /// a `Registration` or a legacy `ToolConfig`).
+/// Phase G2 — does the upstream point at codex's ChatGPT-plan
+/// Responses backend? The trigger is the path fragment
+/// `/backend-api/codex` — distinct from the bare `/backend-api`
+/// surface (chat plugins, etc.). The substring match is intentionally
+/// loose: it works against the canonical `chatgpt.com` host, the
+/// `chatgpt-staging.com` host, AND test/proxy hosts that mirror the
+/// path shape, so tests can drive the injection through wiremock
+/// without monkey-patching DNS.
+///
+/// False positives are extremely narrow — no other proxied provider
+/// uses `/backend-api/codex` in its URL, and an operator who
+/// deliberately routes elsewhere through that path would already be
+/// off the supported configuration map.
+fn is_chatgpt_codex_upstream(upstream: &str) -> bool {
+    upstream.to_ascii_lowercase().contains("/backend-api/codex")
+}
+
 fn build_upstream_request(
     state: &AppState,
     config: &crate::config::AppConfig,
@@ -464,7 +489,11 @@ fn build_upstream_request(
                 }
             }
         }
-        ProxyAuth::Oauth { access_token, .. } => {
+        ProxyAuth::Oauth {
+            access_token,
+            account_id,
+            ..
+        } => {
             if let Some(token) = access_token {
                 let header_value =
                     format!("Bearer {}", secrecy::ExposeSecret::expose_secret(token));
@@ -476,6 +505,22 @@ fn build_upstream_request(
             // we couldn't refresh; forwarding without injection lets
             // the upstream surface its own 401 (informational; the
             // proxy already audited the failure).
+
+            // Phase G2 — inject `ChatGPT-Account-ID` for codex's
+            // chatgpt.com/backend-api/codex endpoint. Both hermes and
+            // openclaw extract this from the JWT themselves when they
+            // own the access token; under locksmith they only see
+            // their per-agent bearer, so locksmith must inject. The
+            // upstream-URL pattern is the trigger — `account_id` is
+            // populated only for JWTs that carry the OpenAI claim, so
+            // a non-codex provider with a JWT-shaped access token
+            // (rare) won't get the header injected unless it also
+            // routes to a chatgpt.com upstream.
+            if let Some(acct) = account_id
+                && is_chatgpt_codex_upstream(&target.upstream)
+            {
+                upstream_req = upstream_req.header("ChatGPT-Account-ID", acct.as_str());
+            }
         }
     }
 
@@ -1209,11 +1254,13 @@ async fn resolve_oauth_token(
 
     let oauth_session_id = active_session.audit_session_id();
     let access_token = active_session.access_token;
+    let account_id = active_session.account_id;
 
     Ok(ProxyAuth::Oauth {
         audit_mode,
         oauth_session_id,
         access_token,
+        account_id,
     })
 }
 
@@ -1255,4 +1302,51 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod codex_upstream_tests {
+    use super::is_chatgpt_codex_upstream;
+
+    #[test]
+    fn matches_canonical_codex_upstream() {
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/codex"
+        ));
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/codex/responses"
+        ));
+        assert!(is_chatgpt_codex_upstream(
+            "HTTPS://CHATGPT.COM/backend-api/codex"
+        )); // case-insensitive
+    }
+
+    #[test]
+    fn matches_staging_and_test_hosts() {
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt-staging.com/backend-api/codex"
+        ));
+        // Test wiremock mirroring the path shape — used by integration
+        // tests so they don't need real DNS for chatgpt.com.
+        assert!(is_chatgpt_codex_upstream(
+            "http://127.0.0.1:43287/backend-api/codex"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_codex_upstreams() {
+        assert!(!is_chatgpt_codex_upstream("https://api.openai.com"));
+        assert!(!is_chatgpt_codex_upstream("https://api.anthropic.com"));
+        // Bare backend-api without /codex is the *other* codex
+        // surface (chat plugins / etc.) — distinct from the Responses
+        // endpoint that needs the account_id header.
+        assert!(!is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api"
+        ));
+        assert!(!is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/dev"
+        ));
+        assert!(!is_chatgpt_codex_upstream("http://localhost:9200"));
+        assert!(!is_chatgpt_codex_upstream(""));
+    }
 }

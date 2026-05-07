@@ -52,6 +52,15 @@ pub struct OauthSession {
     pub degraded: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Phase G2 — provider-side account identifier extracted from the
+    /// access-token JWT at bootstrap and refresh time. For codex this
+    /// is the `chatgpt_account_id` claim; the proxy hot path reads it
+    /// to inject the `ChatGPT-Account-ID` header alongside the bearer
+    /// token. `None` for non-JWT access tokens (any other OAuth
+    /// provider that doesn't follow the OpenAI claim shape) — those
+    /// requests proceed without the header, which is the correct
+    /// behavior for non-codex upstreams.
+    pub account_id: Option<String>,
 }
 
 impl std::fmt::Debug for OauthSession {
@@ -69,6 +78,7 @@ impl std::fmt::Debug for OauthSession {
             .field("degraded", &self.degraded)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
+            .field("account_id", &self.account_id)
             .finish()
     }
 }
@@ -139,6 +149,14 @@ impl OauthSessionRepository {
     /// Phase G: takes a `session_label` to support multiple sessions
     /// per registration. Pre-Phase-G call sites pass
     /// [`DEFAULT_SESSION_LABEL`] to preserve existing behavior.
+    ///
+    /// Phase G2: when `access_token` parses as a JWT with the OpenAI
+    /// `chatgpt_account_id` claim, the value is auto-extracted and
+    /// stored in the `account_id` column for header injection on the
+    /// proxy hot path. Non-JWT tokens (other OAuth providers) get
+    /// `account_id = NULL`, which the proxy treats as "skip the
+    /// chatgpt-account-id header" — the right answer for non-codex
+    /// upstreams.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
@@ -156,13 +174,15 @@ impl OauthSessionRepository {
             Some(at) => Some(key.seal(at.as_bytes())?),
             None => None,
         };
+        let account_id = access_token.and_then(crate::oauth::jwt::extract_chatgpt_account_id);
 
         sqlx::query(
             "INSERT INTO oauth_sessions (\
                 name, session_label, refresh_token_ciphertext, refresh_token_nonce, \
                 access_token_ciphertext, access_token_nonce, \
-                access_token_expires_at, scope, degraded, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                access_token_expires_at, scope, degraded, created_at, updated_at, \
+                account_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
         )
         .bind(name)
         .bind(session_label)
@@ -174,6 +194,7 @@ impl OauthSessionRepository {
         .bind(scope)
         .bind(now)
         .bind(now)
+        .bind(account_id.as_deref())
         .execute(&self.pool)
         .await?;
 
@@ -187,6 +208,7 @@ impl OauthSessionRepository {
             degraded: false,
             created_at: now,
             updated_at: now,
+            account_id,
         })
     }
 
@@ -204,6 +226,12 @@ impl OauthSessionRepository {
     ) -> Result<(), OauthSessionError> {
         let now = unix_now();
         let (access_ct, access_nonce) = key.seal(new_access_token.as_bytes())?;
+        // Phase G2: re-derive account_id from each fresh access token.
+        // Defensive against the rare case where a re-login swaps the
+        // upstream identity bound to the session — the chatgpt-
+        // account-id we inject must always match the access token in
+        // hand.
+        let new_account_id = crate::oauth::jwt::extract_chatgpt_account_id(new_access_token);
 
         if let Some(rt) = new_refresh_token {
             let (refresh_ct, refresh_nonce) = key.seal(rt.as_bytes())?;
@@ -212,6 +240,7 @@ impl OauthSessionRepository {
                     access_token_ciphertext = ?, access_token_nonce = ?, \
                     access_token_expires_at = ?, \
                     refresh_token_ciphertext = ?, refresh_token_nonce = ?, \
+                    account_id = ?, \
                     degraded = 0, updated_at = ? \
                  WHERE name = ? AND session_label = ?",
             )
@@ -220,6 +249,7 @@ impl OauthSessionRepository {
             .bind(new_access_token_expires_at)
             .bind(&refresh_ct)
             .bind(&refresh_nonce)
+            .bind(new_account_id.as_deref())
             .bind(now)
             .bind(name)
             .bind(session_label)
@@ -230,12 +260,14 @@ impl OauthSessionRepository {
                 "UPDATE oauth_sessions SET \
                     access_token_ciphertext = ?, access_token_nonce = ?, \
                     access_token_expires_at = ?, \
+                    account_id = ?, \
                     degraded = 0, updated_at = ? \
                  WHERE name = ? AND session_label = ?",
             )
             .bind(&access_ct)
             .bind(&access_nonce)
             .bind(new_access_token_expires_at)
+            .bind(new_account_id.as_deref())
             .bind(now)
             .bind(name)
             .bind(session_label)
@@ -277,7 +309,8 @@ impl OauthSessionRepository {
         let row = sqlx::query(
             "SELECT name, session_label, refresh_token_ciphertext, refresh_token_nonce, \
                     access_token_ciphertext, access_token_nonce, \
-                    access_token_expires_at, scope, degraded, created_at, updated_at \
+                    access_token_expires_at, scope, degraded, created_at, updated_at, \
+                    account_id \
              FROM oauth_sessions WHERE name = ? AND session_label = ?",
         )
         .bind(name)
@@ -325,6 +358,7 @@ impl OauthSessionRepository {
             degraded: degraded != 0,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
+            account_id: row.get("account_id"),
         }))
     }
 
