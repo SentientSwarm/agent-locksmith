@@ -4,11 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working branch
 
-`develop` is the default working branch — it carries M0..M7 plus post-v1.0.0 enhancements (currently tagged **v1.1.0**). `main` only contains M0. Cut feature branches from `develop`.
+`develop` is the default working branch — currently at **v2.0.0**
+(catalog substrate + per-agent ACL + mTLS + OAuth credential variant,
+tagged 2026-05-06). `main` only contains M0. Cut feature branches
+from `develop`.
 
-The cold-start handoff is `docs/v2/HANDOFF.md`. Read it before substantive work — it tracks per-task status, gates, and post-v2 backlog. Authoritative spec: `docs/v2/SPEC.md` (with `SPEC.state.md` for "what's actually in code"). PRD/threat-model/runbooks live under `docs/v2/`.
+The authoritative stack-level docs live at `agents-stack/docs/`:
 
-**Ignore the top-level `SPEC.md`.** It's the deprecated M0-era "Secure Agent Proxy (SAP)" document — the project was renamed to agent-locksmith and v2 explicitly removed the `/llm/*`, `/mcp/*`, `/a2a/*` namespaces and the wire-level scanner sidecar described there (see PRD D-11/D-15/D-17/D-18). It's kept only for archaeology and carries a deprecation banner at the top.
+- `agents-stack/docs/spec/v0.2.0.md` — formal as-built design.
+- `agents-stack/docs/prd/v0.2.0.md` — user-facing requirements.
+- `agents-stack/docs/adrs/0004-kind-taxonomy.md` — kind enum decision.
+- `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design.
+
+In-repo per-component engineering docs are at `docs/v2/SPEC.md` (with
+`SPEC.state.md` for "what's actually in code") + `docs/v2/HANDOFF.md`
+(cold-start handoff for contributors). User docs are at `docs/user/`
+(concepts, agent-integration recipes).
+
+**Ignore the top-level `SPEC.md`.** It's the deprecated M0-era "Secure Agent Proxy (SAP)" document — the project was renamed to agent-locksmith and v2 explicitly removed the `/llm/*`, `/mcp/*`, `/a2a/*` namespaces and the wire-level scanner sidecar described there. It's kept only for archaeology and carries a deprecation banner at the top.
 
 ## Common commands
 
@@ -46,17 +59,21 @@ SQLite migrations under `migrations/` are embedded and applied on daemon startup
 `Cargo.toml` declares two binaries from one crate:
 
 - **`locksmithd`** (`src/main.rs`) — the daemon. Loads YAML config, wires telemetry + shutdown coordinator, calls `daemon::run`.
-- **`locksmith`** (`src/cli/main.rs`) — operator + agent self-service CLI. Talks to the daemon over the admin UDS or admin HTTPS. Subcommands: `agent`, `bootstrap`, `tool`, `audit`, `export`, `mtls`, `status`, `rotate`. Exit codes are SPEC §4.7.2 (0/1/2/3/4/5).
+- **`locksmith`** (`src/cli/main.rs`) — operator + agent self-service CLI. Talks to the daemon over the admin UDS or admin HTTPS. Subcommands: `agent`, `bootstrap`, `bootstrap-operator` (offline; mints operator credential), `tool` / `model` / `infra` (catalog management — Phase E.4), `oauth` (Phase F.4), `audit`, `export`, `mtls`, `status`, `rotate`. Exit codes are SPEC §4.7.2 (0/1/2/3/4/5).
 
-Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/` (53 test binaries, ~250 tests at v1.1.0).
+Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/` (~70 test binaries, ~340 tests at v2.0.0).
 
 ## Runtime architecture
 
 `daemon::run` (in `src/daemon.rs`) is the single composition root. Everything below is wired from there:
 
 1. **Shared config** — `Arc<ArcSwap<AppConfig>>`. The agent router and the AdminService both observe the same snapshot, so hot reload (T1.5) is unified across surfaces. The `deny_unknown_fields` schema is in `src/config.rs`.
-2. **Credential resolution** — `secret::SecretResolver` resolves each `tool.auth.value: SecretRef` at startup into an `Arc<ArcSwap<ResolvedCreds>>`. Backends in `src/secret/`: `EnvBackend` (incl. legacy `${VAR}` strings), `FileSealedBackend` (systemd-creds-decrypted files; rejects group/world-readable), Vault + AWS stubs. Tools whose secrets fail to resolve are inactive (degraded per INF-4) but the daemon still boots.
-3. **Admin substrate** (built only when `listen.admin_socket` is set) — opens the SQLite pool (`migrations::open_and_migrate`), constructs `AgentRepository`, `BootstrapTokenRepository`, `AuditRepository`, the `BearerAuthenticator` (for agents), the `OperatorAuthenticator` (loaded from `operator_credentials_path`), and the `AdminService`. The audit repository is **shared** with the agent listener so proxy and admin writes hit the same SQLite pool and JSONL mirror.
+2. **Credential resolution** — two paths converge into one `ResolvedCreds` map:
+   - **`config.tools` legacy path**: `secret::SecretResolver` resolves each `tool.auth.value: SecretRef` at startup. Backends in `src/secret/`: `EnvBackend` (incl. legacy `${VAR}` strings), `FileSealedBackend` (systemd-creds-decrypted files; rejects group/world-readable), Vault + AWS stubs.
+   - **Phase E registrations path**: after seed_loader + legacy_bootstrap populate the registrations table, `secret::resolve_registration_creds_sync_env_only` walks `AuthSpec::Header` / `AuthSpec::Bearer` entries and resolves their env vars into the same map. OAuth registrations skip this path (their tokens live in the `oauth_sessions` cache).
+
+   Tools whose secrets fail to resolve are inactive (degraded per INF-4) but the daemon still boots.
+3. **Admin substrate** (built only when `listen.admin_socket` is set) — opens the SQLite pool (`migrations::open_and_migrate`), constructs `AgentRepository`, `BootstrapTokenRepository`, `AuditRepository`, `RegistrationRepository` (Phase E), `OauthSessionRepository` (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set), the `BearerAuthenticator` (for agents), the `OperatorAuthenticator` (loaded from `operator_credentials_path`), and the `AdminService`. Runs the seed loader (Phase E.7) and the `legacy_bootstrap` shim (config.tools → registrations migration). The audit repository is **shared** with the agent listener so proxy and admin writes hit the same SQLite pool and JSONL mirror.
 4. **Audit retention sweeper** — bounded `DELETE WHERE ts < cutoff` on a tokio interval; co-terminates with the shutdown signal.
 5. **Agent listener** — switches on `listen.auth_mode`:
    - `Bearer`: plain TCP + axum.
@@ -64,28 +81,36 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
 6. **Admin UDS listener** — at `listen.admin_socket.path`. AdminService handlers live in `src/admin/service.rs`; the UDS shim is `src/admin/uds.rs`.
 7. **Admin HTTPS listener** (M4, off by default) — same `UdsState` / handlers, different transport. Supports `Bearer`, `Mtls`, or `Both` independently of the agent listener. Operator client certs map to operators via `OperatorRecord.cert_identity`.
 8. **Bootstrap-only listener** (M6 / C-4) — separate single-endpoint TLS listener for agent enrollment that doesn't require operator credentials.
+9. **OAuth refresh task** (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set) — `tokio` task scanning `oauth_sessions` for tokens nearing expiry; refreshes via `oauth::refresh::run`. Per-session `Mutex<()>` (`RefreshLockMap`) prevents racing with on-demand proxy refresh.
 
 Both listeners share one `ShutdownCoordinator` with a configurable drain window (`shutdown.drain_window_seconds`, default 30s).
 
 ## Agent request flow (the proxy hot path)
 
-Router is built by `app::build_app_full` in `src/app.rs`:
+Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 
 ```
-/livez, /health, /readyz, /version, /tools     unauthenticated (livez/readyz)
+/livez, /health, /readyz, /version             unauthenticated
+/skill                                         auth-optional (personalised when bearer present)
+/tools                                         agent-authenticated; kind=tool, ACL-filtered
+/models                                        agent-authenticated; kind=model, ACL-filtered
 /api/{tool_name}/{*path}                       agent-authenticated; bearer or mtls
                                                → proxy::proxy_handler
 ```
 
+(`kind=infra` registrations have no agent-facing surface — operator-only via `/admin/operator/infra/*`.)
+
 `proxy::proxy_handler` (`src/proxy.rs`):
 
 1. Reads `auth_method` + `agent_public_id` from request extensions stamped by `auth::auth_middleware`.
-2. Resolves the tool from the active set (`config.active_tools_against(&resolved_creds)` — tools without resolved credentials are filtered out, which is also why they vanish from `/tools` and cause `/readyz` to 503).
-3. Strips agent-sent `Authorization` and `x-api-key` headers, plus the tool's configured auth header (defense against agent override).
-4. Injects credentials from `resolved_creds` into the upstream request.
-5. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `tool.egress: proxied` (or legacy `cloud: true`); otherwise direct.
-6. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
-7. Emits one `AuditEvent` per request to `AuditRepository`, which fans out to SQLite + the optional JSONL sink.
+2. **M9 ACL gate**: when `AgentIdentity` is in extensions, calls `identity.allows_tool(name)`. Failure → 403 `tool_not_allowed` + `authz_denied` audit row (M9 / B1).
+3. **Phase E.6 target resolution**: `state.catalog.lookup_active(name)` (registrations table, in-memory cache). Falls back to `config.active_tools()` for M0/M1 / pre-Phase-E test paths. `ProxyTarget::from_registration` or `from_tool_config`.
+4. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` to materialize the access token from `oauth_sessions` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
+5. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
+6. Injects credentials per `ProxyAuth` variant: `None` skips; `Header` injects from `resolved_creds[name]`; `Bearer` formats as `Authorization: Bearer <resolved>`; `Oauth` injects access token from the OAuth cache.
+7. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
+8. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
+9. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id` for OAuth requests; `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`.
 
 `/readyz` is the source-of-truth liveness check for orchestrators: it returns 503 if any tool with an `auth` block has no resolved credential. `/livez` is liveness only. `/health` is an M0 alias for `/livez`.
 
@@ -110,16 +135,20 @@ src/
   config.rs                deny_unknown_fields YAML schema (ListenConfig, ToolConfig, AuditConfig, …)
   migrations.rs            embeds migrations/*.sql; open_and_migrate(path) → SqlitePool
   client_pool.rs           reqwest client cache keyed by egress mode + timeouts
-  cli/                     locksmith CLI: client.rs (UDS/HTTPS), commands/{agent,audit,bootstrap,export,mtls,self_svc,tool}.rs
+  cli/                     locksmith CLI: client.rs (UDS/HTTPS), commands/{agent,audit,bootstrap,bootstrap_operator,export,infra,model,mtls,oauth,registration,self_svc,tool}.rs
+  registrations/           Phase E: kind enum, AuthSpec, validators, RegistrationRepository, Catalog cache, seed_loader, legacy_bootstrap, admin api
+  oauth/                   Phase F: SealingKey (AES-GCM), OauthSessionRepository, refresh task + RefreshLockMap, admin handlers
   shutdown.rs              ShutdownCoordinator + drain window
   telemetry.rs             tracing-subscriber JSON setup
   deprecation.rs           one-shot warnings for legacy config shapes
 tests/                     integration tests, one binary per file
 benches/audit_write_bench  criterion bench — validates A-2 / INF-26 audit throughput
 migrations/                SQLite schema (embedded into the binary)
+seed/catalog.yaml          Phase E.7: bundled default registrations (16 entries at v2.1.0)
 dist/systemd/              hardened unit template (NoNewPrivileges, ProtectSystem=strict, …)
 dist/examples/             smallstep mTLS + sealed-secrets worked examples
-docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks
+docs/user/                 User docs (concepts, agent-integration recipes)
+docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineering)
 ```
 
 ## Conventions worth knowing
