@@ -283,6 +283,7 @@ async fn rotate_agent_emits_audit_row() {
         .unwrap();
     let secret = created.token.split_once('.').unwrap().1.to_string();
     let agent = AgentIdentity {
+        id: 0,
         public_id: created.public_id.clone(),
         name: "agent-rot".into(),
         tool_allowlist: None,

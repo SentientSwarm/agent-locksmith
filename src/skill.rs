@@ -165,6 +165,7 @@ mod tests {
 
     fn ident_with(name: &str, allow: Option<&[&str]>, deny: Option<&[&str]>) -> AgentIdentity {
         AgentIdentity {
+            id: 0,
             public_id: "TESTPID12345".into(),
             name: name.into(),
             tool_allowlist: allow.map(|s| s.iter().map(|t| t.to_string()).collect()),

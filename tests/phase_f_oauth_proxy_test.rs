@@ -67,6 +67,7 @@ async fn setup() -> Harness {
             scopes: vec!["openai-api".to_string()],
             device_url: format!("{}/device", mock.uri()),
             token_url,
+            session_label: None,
         },
     );
     registrations.create(&r).await.unwrap();
