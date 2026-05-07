@@ -76,6 +76,7 @@ tools: []
         catalog: None,
         resolved_creds: None,
         oauth: None,
+        agent_creds: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);

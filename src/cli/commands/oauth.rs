@@ -27,11 +27,26 @@ pub enum OauthCmd {
     /// refresh token here. Future versions ship the interactive
     /// flow inside this command.
     Bootstrap(BootstrapArgs),
-    /// Show OAuth session status for `<name>`.
-    Status { name: String },
-    /// Revoke (delete locally) the OAuth session for `<name>`.
-    /// Idempotent. Does NOT call the provider's revoke endpoint.
-    Revoke { name: String },
+    /// Show OAuth session status for `<name>` [--label <label>].
+    Status {
+        name: String,
+        /// Phase G: session label (defaults to "default"). Use to
+        /// inspect a specific per-agent session under a registration.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Revoke (delete locally) the OAuth session for `<name>`
+    /// [--label <label>]. Idempotent. Does NOT call the provider's
+    /// revoke endpoint.
+    Revoke {
+        name: String,
+        /// Phase G: session label (defaults to "default").
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// List all OAuth sessions across all registrations + labels.
+    /// Phase G; useful for spotting orphaned per-agent sessions.
+    List,
 }
 
 #[derive(Args, Debug)]
@@ -39,6 +54,14 @@ pub struct BootstrapArgs {
     /// Registration name (must already exist as a kind=tool or
     /// kind=model with an OAuth AuthSpec).
     pub name: String,
+
+    /// Phase G: session label. Defaults to "default" — single shared
+    /// session per registration. Use distinct labels (e.g., "hermes",
+    /// "openclaw") when bootstrapping per-agent OAuth from different
+    /// upstream accounts. See concepts/per-agent-credentials.md for
+    /// the single-grant trap explanation.
+    #[arg(long)]
+    pub label: Option<String>,
 
     /// Refresh token obtained out-of-band from the provider's OAuth
     /// flow. WARNING: this argument transits the shell history. Prefer
@@ -55,8 +78,39 @@ pub struct BootstrapArgs {
 pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<(), CliError> {
     match cmd {
         OauthCmd::Bootstrap(args) => bootstrap(client, format, args).await,
-        OauthCmd::Status { name } => status(client, format, &name).await,
-        OauthCmd::Revoke { name } => revoke(client, format, &name).await,
+        OauthCmd::Status { name, label } => status(client, format, &name, label.as_deref()).await,
+        OauthCmd::Revoke { name, label } => revoke(client, format, &name, label.as_deref()).await,
+        OauthCmd::List => list(client, format).await,
+    }
+}
+
+/// Append `?label=<label>` to `path` when a non-default label is
+/// supplied. Skipping the query string for the default case keeps
+/// audit-grep patterns and curl recipes uniform with pre-Phase-G
+/// deployments.
+///
+/// Labels MUST be ascii alphanumeric / `-` / `_` (validated here);
+/// anything else is a usage error. This bounds the query-string
+/// shape so we can avoid pulling in a URL-encoder crate.
+fn with_label_query(path: &str, label: Option<&str>) -> Result<String, CliError> {
+    match label {
+        Some(l) if l != "default" => {
+            if !l
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(CliError::Usage(format!(
+                    "session label must be ascii alphanumeric / '-' / '_'; got: {l:?}"
+                )));
+            }
+            Ok(format!(
+                "{}{}label={}",
+                path,
+                if path.contains('?') { '&' } else { '?' },
+                l
+            ))
+        }
+        _ => Ok(path.to_string()),
     }
 }
 
@@ -80,43 +134,65 @@ async fn bootstrap(
     }
     let op_token = CliClient::op_token()?;
     let body = json!({"refresh_token": token.trim()});
+    let path = with_label_query(
+        &format!("/admin/operator/oauth/{}/bootstrap", args.name),
+        args.label.as_deref(),
+    )?;
     let response: Value = client
-        .json(
-            "POST",
-            &format!("/admin/operator/oauth/{}/bootstrap", args.name),
-            Auth::Operator(&op_token),
-            Some(&body),
-        )
+        .json("POST", &path, Auth::Operator(&op_token), Some(&body))
         .await?;
     print(&response, format);
     Ok(())
 }
 
-async fn status(client: &CliClient, format: Format, name: &str) -> Result<(), CliError> {
+async fn status(
+    client: &CliClient,
+    format: Format,
+    name: &str,
+    label: Option<&str>,
+) -> Result<(), CliError> {
+    let op_token = CliClient::op_token()?;
+    let path = with_label_query(&format!("/admin/operator/oauth/{name}"), label)?;
+    let response: Value = client
+        .json("GET", &path, Auth::Operator(&op_token), None)
+        .await?;
+    print(&response, format);
+    Ok(())
+}
+
+async fn revoke(
+    client: &CliClient,
+    format: Format,
+    name: &str,
+    label: Option<&str>,
+) -> Result<(), CliError> {
+    let op_token = CliClient::op_token()?;
+    let path = with_label_query(&format!("/admin/operator/oauth/{name}"), label)?;
+    client
+        .unit("DELETE", &path, Auth::Operator(&op_token), None)
+        .await?;
+    print(
+        &json!({
+            "name": name,
+            "label": label.unwrap_or("default"),
+            "revoked": true,
+        }),
+        format,
+    );
+    Ok(())
+}
+
+async fn list(client: &CliClient, format: Format) -> Result<(), CliError> {
     let op_token = CliClient::op_token()?;
     let response: Value = client
         .json(
             "GET",
-            &format!("/admin/operator/oauth/{name}"),
+            "/admin/operator/oauth",
             Auth::Operator(&op_token),
             None,
         )
         .await?;
-    print(&response, format);
-    Ok(())
-}
-
-async fn revoke(client: &CliClient, format: Format, name: &str) -> Result<(), CliError> {
-    let op_token = CliClient::op_token()?;
-    client
-        .unit(
-            "DELETE",
-            &format!("/admin/operator/oauth/{name}"),
-            Auth::Operator(&op_token),
-            None,
-        )
-        .await?;
-    print(&json!({"name": name, "revoked": true}), format);
+    print(&response["sessions"], format);
     Ok(())
 }
 

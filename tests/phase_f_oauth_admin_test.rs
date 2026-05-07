@@ -104,6 +104,7 @@ async fn setup() -> Harness {
             catalog: catalog_arc,
             locks: RefreshLockMap::new(),
         }),
+        agent_creds: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);

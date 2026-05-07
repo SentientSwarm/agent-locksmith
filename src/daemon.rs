@@ -655,6 +655,7 @@ async fn build_admin_substrate(
         }
     };
 
+    let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -665,13 +666,14 @@ async fn build_admin_substrate(
             catalog: Some(catalog.clone()),
             resolved_creds: Some(resolved_creds.clone()),
             oauth: oauth_admin,
+            agent_creds: Some(agent_creds_repo.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
         registrations,
         catalog,
         oauth_runtime,
-        agent_creds: crate::repo::AgentCredentialRepository::new(pool.clone()),
+        agent_creds: agent_creds_repo,
     })
 }
 
