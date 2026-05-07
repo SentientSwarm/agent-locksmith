@@ -48,6 +48,8 @@ Wiring an agent through a layer8-proxy deployment:
 |---|---|
 | [agent-integration/wire-contract.md](agent-integration/wire-contract.md) | What an agent sees: endpoints, headers, error codes, streaming semantics. |
 | [agent-integration/openclaw.md](agent-integration/openclaw.md) | Openclaw integration recipe (works out-of-box via `*_BASE_URL`). |
-| `agent-integration/hermes.md` | Hermes integration (planned). |
-| `agent-integration/skill-reference.md` | `/skill` endpoint spec (planned). |
-| `agent-integration/examples/` | curl + Python + TypeScript snippets (planned). |
+| [agent-integration/hermes.md](agent-integration/hermes.md) | Hermes integration: provider-config block + `*_BASE_URL` paths, multi-agent topologies, OAuth providers. |
+| [agent-integration/skill-reference.md](agent-integration/skill-reference.md) | `/skill` endpoint spec — generic + personalized forms, cache headers. |
+| [agent-integration/examples/curl.md](agent-integration/examples/curl.md) | Copy-paste curl recipes for every common operation. |
+| [agent-integration/examples/python.md](agent-integration/examples/python.md) | Python recipes — anthropic / openai SDKs, httpx, aiohttp, error handling. |
+| [agent-integration/examples/typescript.md](agent-integration/examples/typescript.md) | TypeScript / Node recipes — anthropic / openai SDKs, fetch, axios, streaming. |
