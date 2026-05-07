@@ -156,26 +156,76 @@ pub async fn op_oauth_bootstrap(
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let cat = state.catalog.load();
-    match refresh_session(&state.sessions, &cat, &state.sealing_key, &client, &session).await {
-        Ok(updated) => (
-            StatusCode::OK,
-            Json(session_status_json(&updated, /*present=*/ true)),
-        )
-            .into_response(),
+    let updated = match refresh_session(
+        &state.sessions,
+        &cat,
+        &state.sealing_key,
+        &client,
+        &session,
+    )
+    .await
+    {
+        Ok(updated) => updated,
         Err(e) => {
             // Bootstrap exchange failed — e.g., refresh token is
             // already expired, provider rejected our client_id, or
             // network failure. Roll back the half-bootstrapped row
             // so the operator can fix and retry without a 409.
             let _ = state.sessions.delete(&name, session_label).await;
-            error_envelope(
+            return error_envelope(
                 StatusCode::BAD_GATEWAY,
                 "auth_error",
                 "oauth_bootstrap_failed",
                 &format!("refresh exchange failed: {e}"),
-            )
+            );
         }
+    };
+
+    // Phase G.4 — single-grant collision warning. When a non-default
+    // label is bootstrapped and other labels already exist under the
+    // same registration, the operator may be falling into the OAuth
+    // single-grant trap (one ChatGPT account, two labels →
+    // re-authenticating invalidates the prior label's refresh token
+    // upstream). Soft-warn here so the trap is visible at bootstrap
+    // time rather than 30 minutes later when the prior session's
+    // background refresh fails.
+    let warnings = collision_warnings(&state, &name, session_label).await;
+    let mut body = session_status_json(&updated, /*present=*/ true);
+    if !warnings.is_empty() {
+        body["warnings"] = json!(warnings);
     }
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Returns operator-visible warnings about other labels under the
+/// same registration that may have been invalidated upstream.
+async fn collision_warnings(
+    state: &OauthAdminState,
+    name: &str,
+    bootstrapped_label: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(rows) = state.sessions.list_all().await else {
+        return out;
+    };
+    let other_labels: Vec<String> = rows
+        .into_iter()
+        .filter(|(n, l, _, _)| n == name && l != bootstrapped_label)
+        .map(|(_, l, _, _)| l)
+        .collect();
+    if !other_labels.is_empty() {
+        out.push(format!(
+            "Registration `{name}` already has session label(s): {labels}. \
+             If those sessions point at the same upstream account as \
+             label `{bootstrapped_label}`, the provider has likely \
+             invalidated the prior refresh tokens (single-grant OAuth \
+             policy on OpenAI ChatGPT, GitHub, Google, etc.). \
+             Per-agent OAuth requires distinct upstream accounts; see \
+             concepts/per-agent-credentials.md.",
+            labels = other_labels.join(", "),
+        ));
+    }
+    out
 }
 
 /// `GET /admin/operator/oauth/<name>[?label=<label>]`.

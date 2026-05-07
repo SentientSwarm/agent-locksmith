@@ -249,3 +249,73 @@ async fn ts214_failed_bootstrap_rolls_back() {
     let body: serde_json::Value = status.json();
     assert_eq!(body["present"], false);
 }
+
+// ─── G.4: bootstrap with --label and a default session present → warns ──────
+#[tokio::test]
+async fn g4_bootstrap_warns_when_other_label_exists() {
+    let h = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-1",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+        })))
+        .mount(&h.mock)
+        .await;
+
+    // First: bootstrap default. No warnings.
+    let r1 = h
+        .server
+        .post("/admin/operator/oauth/codex/bootstrap")
+        .add_header("authorization", format!("Bearer {}", h.op_token))
+        .json(&serde_json::json!({"refresh_token": "rt-default"}))
+        .await;
+    r1.assert_status_ok();
+    let b1: serde_json::Value = r1.json();
+    assert!(b1.get("warnings").is_none(), "default bootstrap had warnings");
+
+    // Second: bootstrap with --label hermes. Should warn.
+    let r2 = h
+        .server
+        .post("/admin/operator/oauth/codex/bootstrap?label=hermes")
+        .add_header("authorization", format!("Bearer {}", h.op_token))
+        .json(&serde_json::json!({"refresh_token": "rt-hermes"}))
+        .await;
+    r2.assert_status_ok();
+    let b2: serde_json::Value = r2.json();
+    let warnings = b2["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1);
+    let w = warnings[0].as_str().unwrap();
+    assert!(
+        w.contains("default") && w.contains("single-grant"),
+        "warning text was: {w}"
+    );
+}
+
+// ─── G.4: bootstrap fresh registration with --label, no warning ─────────────
+#[tokio::test]
+async fn g4_bootstrap_first_label_does_not_warn() {
+    let h = setup().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-1",
+            "expires_in": 3600,
+        })))
+        .mount(&h.mock)
+        .await;
+    let r = h
+        .server
+        .post("/admin/operator/oauth/codex/bootstrap?label=openclaw")
+        .add_header("authorization", format!("Bearer {}", h.op_token))
+        .json(&serde_json::json!({"refresh_token": "rt-1"}))
+        .await;
+    r.assert_status_ok();
+    let body: serde_json::Value = r.json();
+    assert!(
+        body.get("warnings").is_none(),
+        "first-label bootstrap should not warn; got: {body}"
+    );
+    assert_eq!(body["session_label"], "openclaw");
+}
