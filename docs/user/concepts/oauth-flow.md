@@ -564,6 +564,34 @@ Same answer as G2's "why locksmith owns the header":
   routes by upstream URL). Encoding the quirk in one place is
   cheaper than encoding it in N places.
 
+### Wire framing — Content-Length / Transfer-Encoding stripped
+
+Because G3 may rewrite the body to a different size than what the
+agent sent, locksmith strips `Content-Length` and `Transfer-Encoding`
+from forwarded headers and lets reqwest recompute them from the
+actual outgoing body. This applies to **every** request, not just
+codex — locksmith owns the wire framing on the upstream side.
+
+If you're debugging a 400 from upstream and your agent's HTTP
+client logs show a `Content-Length` mismatch, the cause is
+elsewhere — locksmith's outgoing `Content-Length` always matches
+the body it sends.
+
+### What you still need to handle (codex specifically)
+
+Two codex-specific headers are NOT yet injected by locksmith. Set
+them yourself on every `/api/codex/responses` call:
+
+| Header | Value | Why |
+|---|---|---|
+| `OpenAI-Beta` | `responses=experimental` | Codex `/responses` is gated behind this beta flag; absence returns 400. |
+| `originator` | `<your-agent-id>` | Codex requires an originator identifier. Use any stable string for your agent (e.g., `hermes-agent`, `openclaw`). |
+
+A future locksmith release will inject `OpenAI-Beta` automatically
+following the G2/G3 pattern; for now it's the agent's job. The
+`/skill` endpoint surfaces this requirement when codex is in the
+agent's ACL.
+
 ## See also
 
 - [`per-agent-credentials.md`](per-agent-credentials.md) — operator

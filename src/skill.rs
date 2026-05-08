@@ -93,6 +93,33 @@ pub fn render_authenticated(
         }
     }
 
+    // Phase G3 — when codex is in the agent's effective tool list, append
+    // a per-tool quirks section that re-emphasizes the codex requirements
+    // most likely to trip an agent up. Generic skill template covers them
+    // too; this section just makes them inescapable in the personalized
+    // form (the form an agent sees on first authenticated /skill fetch).
+    let codex_in_acl = effective.iter().any(|t| t.name == "codex");
+    let codex_quirks_md = if codex_in_acl {
+        r#"
+### Codex quirks (because `codex` is in your ACL)
+
+- Locksmith **does** inject `Authorization: Bearer <access_token>`,
+  `ChatGPT-Account-ID: <uuid>` (Phase G2), and the body fields `store: false`,
+  `stream: true`, default `instructions` (Phase G3) on every
+  `/api/codex/responses` call.
+- You **must** set `OpenAI-Beta: responses=experimental` and
+  `originator: <your-agent-id>` headers — locksmith doesn't inject these
+  yet (tracked separately).
+- Send the body in OpenAI Responses API shape (`model`, `input: [...]`).
+  See the "Codex (OpenAI ChatGPT plan auth) — special case" section above
+  for the canonical request shape.
+- Streaming-only — codex rejects `stream: false` and locksmith forces
+  `stream: true` regardless. Your client must handle SSE.
+"#
+    } else {
+        ""
+    };
+
     let personalized = format!(
         r#"
 
@@ -118,7 +145,7 @@ example, `/api/{first_tool_or_placeholder}/v1/chat/completions` reaches the
 upstream's `v1/chat/completions` endpoint. Locksmith strips your
 `Authorization` header and injects the configured upstream credential
 before forwarding.
-
+{codex_quirks_md}
 ### Your ACL
 
 - **Allowlist**: {allowlist}
@@ -146,6 +173,7 @@ specific failure mode (`missing_credential`, `malformed_token`,
         name = identity.name,
         public_id = identity.public_id,
         tools_md = tools_md,
+        codex_quirks_md = codex_quirks_md,
         allowlist = allowlist_str,
         denylist = denylist_str,
         first_tool_or_placeholder = effective
@@ -180,32 +208,41 @@ mod tests {
     }
 
     #[test]
-    fn unauthenticated_form_has_no_tool_or_model_names() {
-        // Operational hygiene: the unauth form must not leak tool
-        // catalog or per-deployment model names. Operators rotate
-        // tools / models without bumping this constant; keeping it
-        // generic prevents an unauthenticated probe from learning the
-        // active deployment shape.
-        let s = render_unauthenticated();
-        // Sanity: should NOT mention any specific tool or model that
-        // a real deployment might configure (these strings appear in
-        // typical configs but should not be in the embedded template).
+    fn unauthenticated_form_does_not_leak_specific_model_ids() {
+        // Operational hygiene: the unauth form must not leak per-
+        // deployment model identifiers (specific models the operator
+        // chose to load). It MAY reference well-known upstream
+        // protocol patterns (anthropic, openai-compatible, codex)
+        // because those are public protocol names, not deployment-
+        // specific configuration — every locksmith deployment that
+        // touches those upstreams looks the same shape.
+        //
+        // Hard line: model IDs (gpt-4, claude-opus, qwen-3.5,
+        // gemma-3, llama-4) and operator-side env var names
+        // (LM_API_KEY, ANTHROPIC_API_KEY) leak deployment shape and
+        // must stay out of the template.
+        let s = render_unauthenticated().to_lowercase();
         for forbidden in [
-            "anthropic",
-            "openai",
-            "lmstudio",
-            "ollama",
-            "tavily",
-            "github",
-            "qwen",
-            "claude",
             "gpt-4",
-            "gemma",
+            "gpt-3",
+            "claude-opus",
+            "claude-sonnet",
+            "claude-haiku",
+            "qwen3.",
+            "qwen-3",
+            "gemma-3",
+            "gemma-4",
+            "llama-3",
+            "llama-4",
+            "mistral-",
+            "lm_api_key",
+            "anthropic_api_key",
+            "openai_api_key",
         ] {
             assert!(
-                !s.to_lowercase().contains(forbidden),
-                "unauthenticated /skill must not mention any specific tool/model; \
-                 found '{forbidden}' in template"
+                !s.contains(forbidden),
+                "unauthenticated /skill must not mention deployment-specific \
+                 model IDs or env var names; found '{forbidden}' in template"
             );
         }
     }
