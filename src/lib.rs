@@ -6,6 +6,7 @@ pub mod audit_sink;
 pub mod auth;
 pub mod auth_v2;
 pub mod client_pool;
+pub mod codex_body;
 pub mod config;
 pub mod daemon;
 pub mod deprecation;

@@ -459,6 +459,139 @@ exposed via the admin surface). Sealing key compromise + DB
 compromise together would expose tokens; either one alone is not
 sufficient.
 
+## Codex Responses API body fixup (Phase G3)
+
+OpenAI's `/backend-api/codex/responses` endpoint also requires three
+specific body fields that generic OpenAI-compatible clients don't
+necessarily set. Native codex CLI sets them because it's
+codex-aware; agents that send the more general `openai-responses`
+shape miss them and get **400** from chatgpt.com.
+
+The three required fields:
+
+| Field | Required value | Why |
+|---|---|---|
+| `store` | `false` | Codex rejects `true` — server-side storage isn't supported on this endpoint. |
+| `stream` | `true` | The endpoint is fundamentally streaming; `false` is rejected. |
+| `instructions` | non-empty string | Codex requires a system-prompt analog. |
+
+Phase G2 owns the codex *header*. Phase G3 owns the codex *body
+fields*. Same trust-model premise: locksmith encodes upstream-
+specific behavior so agents can stay generic.
+
+### How it works
+
+When the request matches **both** predicates:
+
+1. The upstream is codex (`is_chatgpt_codex_upstream` — same
+   case-insensitive `/backend-api/codex` substring match as G2).
+2. The request path ends with `/responses` (case-insensitive
+   suffix). Other codex endpoints — sessions, model info — pass
+   through untouched.
+
+…locksmith inspects the JSON body and applies these rules:
+
+- `store` → forced to `false` (overridden if the agent set `true`,
+  added if missing). Audit records this as a `fields_overridden`
+  or `fields_added` entry.
+- `stream` → forced to `true` (same shape).
+- `instructions` → **inject if missing**, **preserve if set**.
+  Default text: `"You are a helpful assistant."` Agents that supply
+  their own instructions get them through unchanged.
+
+Body parsing is tolerant: non-JSON bodies, malformed JSON, JSON
+arrays, JSON null all pass through unchanged (codex itself will 400
+on malformed bodies — that's the right error for the agent to see).
+
+### Size cap
+
+Locksmith enforces a 1 MiB cap on bodies it inspects for fixup. Over
+the cap returns **413 Payload Too Large** with envelope:
+
+```json
+{
+  "error": {
+    "type": "payload_too_large",
+    "code": "codex_body_too_large",
+    "message": "Codex request body exceeds 1048576 byte cap"
+  }
+}
+```
+
+Codex bodies are tiny in practice (a few KB). The cap is a defense
+against pathological streaming bodies blowing memory during the
+inspect+rewrite pass.
+
+### Audit
+
+When fixup happened, the `proxy_request` audit row carries
+`details.codex_body_fixup`:
+
+```json
+"details": {
+  "auth_mode": "oauth_device_code",
+  "oauth_session_id": "...",
+  "codex_body_fixup": {
+    "fields_added": ["instructions"],
+    "fields_overridden": ["store", "stream"]
+  }
+}
+```
+
+Field is **omitted entirely** when no fixup happened (agent sent a
+correctly-formed body). Operators grepping audit don't see noise on
+every codex call — only the fixup-triggering calls surface.
+
+### Default instructions text — soft-API note
+
+`"You are a helpful assistant."` is intentionally neutral. If you
+need a specific style (terse, formal, role-play, etc.), set
+`instructions` in the agent's request — locksmith preserves it.
+Don't rely on the default text staying stable across versions; it
+may change to a tighter or more explicit phrasing in future
+locksmith releases.
+
+### Why locksmith owns this (not the agents)
+
+Same answer as G2's "why locksmith owns the header":
+
+- Agents proxied through locksmith may not know they're talking to
+  codex specifically. They see a generic OpenAI-compatible
+  `/responses` endpoint and send a generic body shape.
+- Pushing codex awareness back to every agent means every agent
+  needs codex-specific code paths, defeating the proxy's value.
+- Locksmith already knows (it has the registration metadata, it
+  routes by upstream URL). Encoding the quirk in one place is
+  cheaper than encoding it in N places.
+
+### Wire framing — Content-Length / Transfer-Encoding stripped
+
+Because G3 may rewrite the body to a different size than what the
+agent sent, locksmith strips `Content-Length` and `Transfer-Encoding`
+from forwarded headers and lets reqwest recompute them from the
+actual outgoing body. This applies to **every** request, not just
+codex — locksmith owns the wire framing on the upstream side.
+
+If you're debugging a 400 from upstream and your agent's HTTP
+client logs show a `Content-Length` mismatch, the cause is
+elsewhere — locksmith's outgoing `Content-Length` always matches
+the body it sends.
+
+### What you still need to handle (codex specifically)
+
+Two codex-specific headers are NOT yet injected by locksmith. Set
+them yourself on every `/api/codex/responses` call:
+
+| Header | Value | Why |
+|---|---|---|
+| `OpenAI-Beta` | `responses=experimental` | Codex `/responses` is gated behind this beta flag; absence returns 400. |
+| `originator` | `<your-agent-id>` | Codex requires an originator identifier. Use any stable string for your agent (e.g., `hermes-agent`, `openclaw`). |
+
+A future locksmith release will inject `OpenAI-Beta` automatically
+following the G2/G3 pattern; for now it's the agent's job. The
+`/skill` endpoint surfaces this requirement when codex is in the
+agent's ACL.
+
 ## See also
 
 - [`per-agent-credentials.md`](per-agent-credentials.md) — operator

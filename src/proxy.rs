@@ -35,6 +35,11 @@ struct RequestCtx {
     /// without admin substrate leave this `None`).
     agent_public_id: Option<String>,
     started: Instant,
+    /// Phase G3 — populated when `codex_body::fixup` modified the
+    /// request body destined for codex `/responses`. `None` when no
+    /// fixup happened (most calls); flows into `details.codex_body_fixup`
+    /// on the `proxy_request` audit row when set.
+    codex_body_fixup: Option<serde_json::Value>,
 }
 
 impl RequestCtx {
@@ -60,6 +65,7 @@ impl RequestCtx {
             auth_method,
             agent_public_id,
             started,
+            codex_body_fixup: None,
         }
     }
 
@@ -279,7 +285,7 @@ pub async fn proxy_handler(
     Path((tool_name, path)): Path<(String, String)>,
     req: Request<Body>,
 ) -> Response {
-    let ctx = RequestCtx::snapshot(&req, tool_name);
+    let mut ctx = RequestCtx::snapshot(&req, tool_name);
 
     // M9 ACL gate. When the request carries an AgentIdentity (per-agent
     // bearer or mTLS), enforce the agent's tool_allowlist /
@@ -336,6 +342,33 @@ pub async fn proxy_handler(
         Err(_) => {
             return record_body_read_error(&state.audit, &ctx, upstream_host).await;
         }
+    };
+
+    // Phase G3 — codex Responses API body fixup. Only when both
+    // predicates match (upstream is chatgpt.com codex AND request
+    // path is /responses). Skips on empty body (passthrough) and on
+    // non-JSON bodies (passthrough). Returns 413 only on the >1MB
+    // size cap. The summary is stashed on `ctx` so audit_details
+    // can emit `details.codex_body_fixup` when fixup happened.
+    let body_bytes = if is_chatgpt_codex_upstream(&target.upstream)
+        && request_path_ends_with_responses(&ctx.request_path)
+    {
+        match crate::codex_body::fixup(&body_bytes) {
+            Ok((new_body, summary)) => {
+                if !summary.is_noop() {
+                    ctx.codex_body_fixup = Some(serde_json::json!({
+                        "fields_added": summary.fields_added,
+                        "fields_overridden": summary.fields_overridden,
+                    }));
+                }
+                Bytes::from(new_body)
+            }
+            Err(crate::codex_body::CodexBodyError::TooLarge) => {
+                return record_codex_body_too_large(&state.audit, &ctx, upstream_host).await;
+            }
+        }
+    } else {
+        body_bytes
     };
 
     let upstream_req = build_upstream_request(
@@ -411,6 +444,20 @@ fn is_chatgpt_codex_upstream(upstream: &str) -> bool {
     upstream.to_ascii_lowercase().contains("/backend-api/codex")
 }
 
+/// Phase G3 — does this request path target the codex Responses
+/// endpoint? Tighter than [`is_chatgpt_codex_upstream`] (which is
+/// upstream-URL-based): only `/responses` requests get body fixup.
+/// Other codex endpoints (sessions, model info, etc.) pass through
+/// untouched even when the upstream registration is codex.
+///
+/// Case-insensitive suffix match on `/responses` (the leading slash
+/// guarantees we don't false-positive on paths like `/myresponses`).
+/// `request_path` is the URI path with query string stripped, so we
+/// don't need to handle `?stream=true` etc.
+fn request_path_ends_with_responses(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with("/responses")
+}
+
 fn build_upstream_request(
     state: &AppState,
     config: &crate::config::AppConfig,
@@ -432,12 +479,23 @@ fn build_upstream_request(
     // `auth: none` we don't want the agent injecting their own bearer
     // and reaching the upstream as the proxy's principal). The
     // target's own auth header is also stripped when distinct.
+    //
+    // `content-length` and `transfer-encoding` are also stripped:
+    // reqwest computes both itself based on the body we attach via
+    // `.body(...)`, and Phase G3 may rewrite the body to a different
+    // size. Forwarding the agent's stale Content-Length to upstream
+    // causes silent body truncation/mismatch (Phase G3 hit this with
+    // codex `/responses` returning 400 when the injected default
+    // `instructions` made the body larger than the original
+    // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_lowercase();
         if lower == "host"
             || lower == "authorization"
             || lower == "x-api-key"
+            || lower == "content-length"
+            || lower == "transfer-encoding"
             || extra_strip.as_deref() == Some(&lower)
         {
             continue;
@@ -769,6 +827,36 @@ async fn record_body_read_error(
         .into_response()
 }
 
+/// Phase G3 — emit a `proxy/codex_body_too_large` audit row + 413
+/// wire response when the codex Responses request body exceeds the
+/// 1 MiB cap. Tighter than the per-tool `body_limit_bytes`: this is
+/// the size at which locksmith refuses to inspect the body for
+/// fixup, even if `body_limit_bytes` would allow more.
+async fn record_codex_body_too_large(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    upstream_host: Option<String>,
+) -> Response {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "codex_body_too_large".to_string();
+    event.status = Some(413);
+    event.decision = Decision::Denied;
+    event.upstream_host = upstream_host;
+    audit_record(audit, event).await;
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(json!({
+            "error": {
+                "message": format!("Codex request body exceeds {} byte cap", crate::codex_body::MAX_BODY_BYTES),
+                "type": "payload_too_large",
+                "code": "codex_body_too_large",
+            }
+        })),
+    )
+        .into_response()
+}
+
 /// Emit a `proxy/response_content_type_disallowed` audit row + 502
 /// wire response when the upstream's Content-Type isn't in the M7
 /// allowlist.
@@ -825,16 +913,18 @@ async fn record_proxy_request_success(
     // ToolConfig path. Phase F.5 — OAuth requests additionally carry
     // `oauth_session_id` (ADR-0005 D4) for forensic correlation
     // across access-token refreshes within the same session.
-    event.details = Some(audit_details(target));
+    event.details = Some(audit_details(ctx, target));
     audit_record(audit, event).await;
 }
 
 /// Build audit `details` JSON with `auth_mode` always present,
-/// `oauth_session_id` populated for OAuth requests, and Phase G
+/// `oauth_session_id` populated for OAuth requests, Phase G
 /// fields (`auth_source`, `oauth_session_label`) tracking whether
 /// the credential came from the registration default or a per-agent
-/// override and which OAuth session label was used.
-fn audit_details(target: &ProxyTarget) -> serde_json::Value {
+/// override and which OAuth session label was used, and the Phase G3
+/// `codex_body_fixup` field when locksmith modified the request body
+/// for a codex `/responses` call.
+fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
     let mut v = json!({
         "auth_mode": target.auth.audit_mode(),
         "auth_source": target.auth_source,
@@ -844,6 +934,9 @@ fn audit_details(target: &ProxyTarget) -> serde_json::Value {
     }
     if let Some(label) = &target.oauth_session_label {
         v["oauth_session_label"] = json!(label);
+    }
+    if let Some(fixup) = &ctx.codex_body_fixup {
+        v["codex_body_fixup"] = fixup.clone();
     }
     v
 }
@@ -868,7 +961,7 @@ async fn record_upstream_error(
     event.status = Some(status.as_u16());
     event.decision = Decision::Error;
     event.upstream_host = upstream_host;
-    event.details = Some(audit_details(target));
+    event.details = Some(audit_details(ctx, target));
     audit_record(audit, event).await;
     (
         status,
@@ -1348,5 +1441,33 @@ mod codex_upstream_tests {
         ));
         assert!(!is_chatgpt_codex_upstream("http://localhost:9200"));
         assert!(!is_chatgpt_codex_upstream(""));
+    }
+}
+
+#[cfg(test)]
+mod request_path_responses_tests {
+    use super::request_path_ends_with_responses;
+
+    #[test]
+    fn matches_canonical_responses_path() {
+        assert!(request_path_ends_with_responses("/responses"));
+        assert!(request_path_ends_with_responses("/api/codex/responses"));
+        assert!(request_path_ends_with_responses("/backend-api/codex/responses"));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(request_path_ends_with_responses("/RESPONSES"));
+        assert!(request_path_ends_with_responses("/api/codex/Responses"));
+    }
+
+    #[test]
+    fn rejects_non_responses_paths() {
+        assert!(!request_path_ends_with_responses("/api/codex/sessions"));
+        assert!(!request_path_ends_with_responses("/api/codex"));
+        assert!(!request_path_ends_with_responses("/responses-debug"));
+        assert!(!request_path_ends_with_responses("/myresponses"));
+        assert!(!request_path_ends_with_responses("/responses/"));
+        assert!(!request_path_ends_with_responses(""));
     }
 }
