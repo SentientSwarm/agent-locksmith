@@ -21,6 +21,7 @@
 //! dispatch (Phase F.5) consume the types defined here.
 
 pub mod admin;
+pub mod jwt;
 pub mod refresh;
 pub mod sealing;
 pub mod session;

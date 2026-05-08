@@ -1,0 +1,21 @@
+-- Phase G2 — extend oauth_sessions with the upstream account identifier
+-- extracted from the access-token JWT.
+--
+-- Motivation: codex's chatgpt.com/backend-api/codex endpoint requires a
+-- `ChatGPT-Account-ID` header alongside the bearer access token. The
+-- account_id lives in the JWT payload at
+-- `https://api.openai.com/auth.chatgpt_account_id`. Both hermes and
+-- openclaw extract this themselves when they hold the JWT — but when
+-- they're proxied through locksmith they only have the locksmith
+-- bearer (not a JWT), so locksmith must inject the header.
+--
+-- We extract the claim at OAuth bootstrap and again on every refresh
+-- (defensive — the value rarely changes but a re-login could swap it).
+-- The proxy hot path reads the stored value and injects the header
+-- when the upstream URL matches the codex pattern.
+--
+-- Generic field name (`account_id`, not `chatgpt_account_id`) so the
+-- column can host equivalent identifiers from other providers if any
+-- ever need similar treatment. Today only codex uses it.
+
+ALTER TABLE oauth_sessions ADD COLUMN account_id TEXT;

@@ -34,7 +34,16 @@ struct RequestCtx {
     /// `AgentIdentity` into request extensions (M0/M1 deployments
     /// without admin substrate leave this `None`).
     agent_public_id: Option<String>,
+    /// Phase G4 — human-readable agent name from `AgentIdentity.name`.
+    /// Used as the `originator` header value on codex hot-path
+    /// requests when the agent didn't supply their own.
+    agent_name: Option<String>,
     started: Instant,
+    /// Phase G3 — populated when `codex_body::fixup` modified the
+    /// request body destined for codex `/responses`. `None` when no
+    /// fixup happened (most calls); flows into `details.codex_body_fixup`
+    /// on the `proxy_request` audit row when set.
+    codex_body_fixup: Option<serde_json::Value>,
 }
 
 impl RequestCtx {
@@ -49,17 +58,18 @@ impl RequestCtx {
             Some(crate::auth::AuthenticatedAs::Mtls) => "mtls",
             _ => "bearer",
         };
-        let agent_public_id = req
-            .extensions()
-            .get::<crate::auth_v2::AgentIdentity>()
-            .map(|id| id.public_id.clone());
+        let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
+        let agent_public_id = identity.map(|id| id.public_id.clone());
+        let agent_name = identity.map(|id| id.name.clone());
         Self {
             tool_name,
             request_path,
             method,
             auth_method,
             agent_public_id,
+            agent_name,
             started,
+            codex_body_fixup: None,
         }
     }
 
@@ -153,6 +163,13 @@ enum ProxyAuth {
         audit_mode: &'static str,
         oauth_session_id: String,
         access_token: Option<secrecy::SecretString>,
+        /// Phase G2 — provider-side account identifier extracted from
+        /// the access-token JWT (`https://api.openai.com/auth.chatgpt_account_id`).
+        /// Injected as `ChatGPT-Account-ID` on codex hot-path requests
+        /// when the upstream URL matches the codex pattern. `None` for
+        /// non-JWT access tokens; the proxy then skips the header,
+        /// which is the correct outcome for non-codex providers.
+        account_id: Option<String>,
     },
 }
 
@@ -224,6 +241,7 @@ impl ProxyTarget {
                     audit_mode,
                     oauth_session_id: String::new(),
                     access_token: None,
+                    account_id: None,
                 }
             }
         };
@@ -271,7 +289,7 @@ pub async fn proxy_handler(
     Path((tool_name, path)): Path<(String, String)>,
     req: Request<Body>,
 ) -> Response {
-    let ctx = RequestCtx::snapshot(&req, tool_name);
+    let mut ctx = RequestCtx::snapshot(&req, tool_name);
 
     // M9 ACL gate. When the request carries an AgentIdentity (per-agent
     // bearer or mTLS), enforce the agent's tool_allowlist /
@@ -330,6 +348,33 @@ pub async fn proxy_handler(
         }
     };
 
+    // Phase G3 — codex Responses API body fixup. Only when both
+    // predicates match (upstream is chatgpt.com codex AND request
+    // path is /responses). Skips on empty body (passthrough) and on
+    // non-JSON bodies (passthrough). Returns 413 only on the >1MB
+    // size cap. The summary is stashed on `ctx` so audit_details
+    // can emit `details.codex_body_fixup` when fixup happened.
+    let body_bytes = if is_chatgpt_codex_upstream(&target.upstream)
+        && request_path_ends_with_responses(&ctx.request_path)
+    {
+        match crate::codex_body::fixup(&body_bytes) {
+            Ok((new_body, summary)) => {
+                if !summary.is_noop() {
+                    ctx.codex_body_fixup = Some(serde_json::json!({
+                        "fields_added": summary.fields_added,
+                        "fields_overridden": summary.fields_overridden,
+                    }));
+                }
+                Bytes::from(new_body)
+            }
+            Err(crate::codex_body::CodexBodyError::TooLarge) => {
+                return record_codex_body_too_large(&state.audit, &ctx, upstream_host).await;
+            }
+        }
+    } else {
+        body_bytes
+    };
+
     let upstream_req = build_upstream_request(
         &state,
         &config,
@@ -338,6 +383,7 @@ pub async fn proxy_handler(
         &upstream_url,
         headers,
         body_bytes,
+        ctx.agent_name.as_deref(),
     );
 
     match upstream_req.send().await {
@@ -386,6 +432,42 @@ async fn read_request_body(req: Request<Body>, body_limit: u64) -> Result<Bytes,
 /// the configured credential, and attach the body if present. Phase
 /// E.6: source-agnostic — driven by `ProxyTarget` (built from either
 /// a `Registration` or a legacy `ToolConfig`).
+/// Phase G2 — does the upstream point at codex's ChatGPT-plan
+/// Responses backend? The trigger is the path fragment
+/// `/backend-api/codex` — distinct from the bare `/backend-api`
+/// surface (chat plugins, etc.). The substring match is intentionally
+/// loose: it works against the canonical `chatgpt.com` host, the
+/// `chatgpt-staging.com` host, AND test/proxy hosts that mirror the
+/// path shape, so tests can drive the injection through wiremock
+/// without monkey-patching DNS.
+///
+/// False positives are extremely narrow — no other proxied provider
+/// uses `/backend-api/codex` in its URL, and an operator who
+/// deliberately routes elsewhere through that path would already be
+/// off the supported configuration map.
+fn is_chatgpt_codex_upstream(upstream: &str) -> bool {
+    upstream.to_ascii_lowercase().contains("/backend-api/codex")
+}
+
+/// Phase G3 — does this request path target the codex Responses
+/// endpoint? Tighter than [`is_chatgpt_codex_upstream`] (which is
+/// upstream-URL-based): only `/responses` requests get body fixup.
+/// Other codex endpoints (sessions, model info, etc.) pass through
+/// untouched even when the upstream registration is codex.
+///
+/// Case-insensitive suffix match on `/responses` (the leading slash
+/// guarantees we don't false-positive on paths like `/myresponses`).
+/// `request_path` is the URI path with query string stripped, so we
+/// don't need to handle `?stream=true` etc.
+fn request_path_ends_with_responses(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with("/responses")
+}
+
+// Phase G4 added the `agent_name` parameter (used as the codex
+// `originator` fallback). build_upstream_request was already at the
+// clippy threshold; allow rather than refactor mid-phase. Future work
+// could collapse the per-call params into a struct.
+#[allow(clippy::too_many_arguments)]
 fn build_upstream_request(
     state: &AppState,
     config: &crate::config::AppConfig,
@@ -394,6 +476,10 @@ fn build_upstream_request(
     upstream_url: &str,
     headers: HeaderMap,
     body_bytes: Bytes,
+    // Phase G4 — used as the codex `originator` header value when the
+    // agent didn't supply one. `None` for M0/M1 paths without
+    // `AgentIdentity`; falls back to a static `"locksmith-proxy"` then.
+    agent_name: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let client =
         state
@@ -407,12 +493,34 @@ fn build_upstream_request(
     // `auth: none` we don't want the agent injecting their own bearer
     // and reaching the upstream as the proxy's principal). The
     // target's own auth header is also stripped when distinct.
+    //
+    // `content-length` and `transfer-encoding` are also stripped:
+    // reqwest computes both itself based on the body we attach via
+    // `.body(...)`, and Phase G3 may rewrite the body to a different
+    // size. Forwarding the agent's stale Content-Length to upstream
+    // causes silent body truncation/mismatch (Phase G3 hit this with
+    // codex `/responses` returning 400 when the injected default
+    // `instructions` made the body larger than the original
+    // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
+    let codex_upstream = is_chatgpt_codex_upstream(&target.upstream);
+    // Phase G4 — for codex requests, snapshot whether the agent supplied
+    // their own `originator` header before stripping; controls whether
+    // we inject our default below.
+    let agent_sent_originator = codex_upstream
+        && headers
+            .iter()
+            .any(|(name, _)| name.as_str().eq_ignore_ascii_case("originator"));
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_lowercase();
         if lower == "host"
             || lower == "authorization"
             || lower == "x-api-key"
+            || lower == "content-length"
+            || lower == "transfer-encoding"
+            // Phase G4 — for codex, force `OpenAI-Beta: responses=experimental`.
+            // Strip the agent's value (if any) here; we re-inject below.
+            || (codex_upstream && lower == "openai-beta")
             || extra_strip.as_deref() == Some(&lower)
         {
             continue;
@@ -464,7 +572,11 @@ fn build_upstream_request(
                 }
             }
         }
-        ProxyAuth::Oauth { access_token, .. } => {
+        ProxyAuth::Oauth {
+            access_token,
+            account_id,
+            ..
+        } => {
             if let Some(token) = access_token {
                 let header_value =
                     format!("Bearer {}", secrecy::ExposeSecret::expose_secret(token));
@@ -476,6 +588,45 @@ fn build_upstream_request(
             // we couldn't refresh; forwarding without injection lets
             // the upstream surface its own 401 (informational; the
             // proxy already audited the failure).
+
+            // Phase G2 — inject `ChatGPT-Account-ID` for codex's
+            // chatgpt.com/backend-api/codex endpoint. Both hermes and
+            // openclaw extract this from the JWT themselves when they
+            // own the access token; under locksmith they only see
+            // their per-agent bearer, so locksmith must inject. The
+            // upstream-URL pattern is the trigger — `account_id` is
+            // populated only for JWTs that carry the OpenAI claim, so
+            // a non-codex provider with a JWT-shaped access token
+            // (rare) won't get the header injected unless it also
+            // routes to a chatgpt.com upstream.
+            if let Some(acct) = account_id
+                && is_chatgpt_codex_upstream(&target.upstream)
+            {
+                upstream_req = upstream_req.header("ChatGPT-Account-ID", acct.as_str());
+            }
+        }
+    }
+
+    // Phase G4 — codex required headers, applied to every codex
+    // request regardless of auth shape (paranoia: only `oauth_*`
+    // configurations make sense for codex today, but the predicate
+    // is upstream-URL-based so a hypothetical future static-key codex
+    // route still gets the headers).
+    //
+    // - `OpenAI-Beta: responses=experimental` is mandatory; codex
+    //   rejects requests without it. We strip the agent's value
+    //   (above) and force ours so a confused agent can't downgrade.
+    //
+    // - `originator: <agent-name>` lets codex distinguish requesters.
+    //   We preserve the agent's value if they sent one (it might be
+    //   meaningful to their own observability) and inject the agent
+    //   name otherwise. Falls back to `"locksmith-proxy"` for paths
+    //   without an `AgentIdentity` (M0/M1 deployments).
+    if codex_upstream {
+        upstream_req = upstream_req.header("OpenAI-Beta", "responses=experimental");
+        if !agent_sent_originator {
+            let originator = agent_name.unwrap_or("locksmith-proxy");
+            upstream_req = upstream_req.header("originator", originator);
         }
     }
 
@@ -724,6 +875,36 @@ async fn record_body_read_error(
         .into_response()
 }
 
+/// Phase G3 — emit a `proxy/codex_body_too_large` audit row + 413
+/// wire response when the codex Responses request body exceeds the
+/// 1 MiB cap. Tighter than the per-tool `body_limit_bytes`: this is
+/// the size at which locksmith refuses to inspect the body for
+/// fixup, even if `body_limit_bytes` would allow more.
+async fn record_codex_body_too_large(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    upstream_host: Option<String>,
+) -> Response {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "codex_body_too_large".to_string();
+    event.status = Some(413);
+    event.decision = Decision::Denied;
+    event.upstream_host = upstream_host;
+    audit_record(audit, event).await;
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(json!({
+            "error": {
+                "message": format!("Codex request body exceeds {} byte cap", crate::codex_body::MAX_BODY_BYTES),
+                "type": "payload_too_large",
+                "code": "codex_body_too_large",
+            }
+        })),
+    )
+        .into_response()
+}
+
 /// Emit a `proxy/response_content_type_disallowed` audit row + 502
 /// wire response when the upstream's Content-Type isn't in the M7
 /// allowlist.
@@ -780,16 +961,18 @@ async fn record_proxy_request_success(
     // ToolConfig path. Phase F.5 — OAuth requests additionally carry
     // `oauth_session_id` (ADR-0005 D4) for forensic correlation
     // across access-token refreshes within the same session.
-    event.details = Some(audit_details(target));
+    event.details = Some(audit_details(ctx, target));
     audit_record(audit, event).await;
 }
 
 /// Build audit `details` JSON with `auth_mode` always present,
-/// `oauth_session_id` populated for OAuth requests, and Phase G
+/// `oauth_session_id` populated for OAuth requests, Phase G
 /// fields (`auth_source`, `oauth_session_label`) tracking whether
 /// the credential came from the registration default or a per-agent
-/// override and which OAuth session label was used.
-fn audit_details(target: &ProxyTarget) -> serde_json::Value {
+/// override and which OAuth session label was used, and the Phase G3
+/// `codex_body_fixup` field when locksmith modified the request body
+/// for a codex `/responses` call.
+fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
     let mut v = json!({
         "auth_mode": target.auth.audit_mode(),
         "auth_source": target.auth_source,
@@ -799,6 +982,9 @@ fn audit_details(target: &ProxyTarget) -> serde_json::Value {
     }
     if let Some(label) = &target.oauth_session_label {
         v["oauth_session_label"] = json!(label);
+    }
+    if let Some(fixup) = &ctx.codex_body_fixup {
+        v["codex_body_fixup"] = fixup.clone();
     }
     v
 }
@@ -823,7 +1009,7 @@ async fn record_upstream_error(
     event.status = Some(status.as_u16());
     event.decision = Decision::Error;
     event.upstream_host = upstream_host;
-    event.details = Some(audit_details(target));
+    event.details = Some(audit_details(ctx, target));
     audit_record(audit, event).await;
     (
         status,
@@ -1209,11 +1395,13 @@ async fn resolve_oauth_token(
 
     let oauth_session_id = active_session.audit_session_id();
     let access_token = active_session.access_token;
+    let account_id = active_session.account_id;
 
     Ok(ProxyAuth::Oauth {
         audit_mode,
         oauth_session_id,
         access_token,
+        account_id,
     })
 }
 
@@ -1255,4 +1443,79 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod codex_upstream_tests {
+    use super::is_chatgpt_codex_upstream;
+
+    #[test]
+    fn matches_canonical_codex_upstream() {
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/codex"
+        ));
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/codex/responses"
+        ));
+        assert!(is_chatgpt_codex_upstream(
+            "HTTPS://CHATGPT.COM/backend-api/codex"
+        )); // case-insensitive
+    }
+
+    #[test]
+    fn matches_staging_and_test_hosts() {
+        assert!(is_chatgpt_codex_upstream(
+            "https://chatgpt-staging.com/backend-api/codex"
+        ));
+        // Test wiremock mirroring the path shape — used by integration
+        // tests so they don't need real DNS for chatgpt.com.
+        assert!(is_chatgpt_codex_upstream(
+            "http://127.0.0.1:43287/backend-api/codex"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_codex_upstreams() {
+        assert!(!is_chatgpt_codex_upstream("https://api.openai.com"));
+        assert!(!is_chatgpt_codex_upstream("https://api.anthropic.com"));
+        // Bare backend-api without /codex is the *other* codex
+        // surface (chat plugins / etc.) — distinct from the Responses
+        // endpoint that needs the account_id header.
+        assert!(!is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api"
+        ));
+        assert!(!is_chatgpt_codex_upstream(
+            "https://chatgpt.com/backend-api/dev"
+        ));
+        assert!(!is_chatgpt_codex_upstream("http://localhost:9200"));
+        assert!(!is_chatgpt_codex_upstream(""));
+    }
+}
+
+#[cfg(test)]
+mod request_path_responses_tests {
+    use super::request_path_ends_with_responses;
+
+    #[test]
+    fn matches_canonical_responses_path() {
+        assert!(request_path_ends_with_responses("/responses"));
+        assert!(request_path_ends_with_responses("/api/codex/responses"));
+        assert!(request_path_ends_with_responses("/backend-api/codex/responses"));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(request_path_ends_with_responses("/RESPONSES"));
+        assert!(request_path_ends_with_responses("/api/codex/Responses"));
+    }
+
+    #[test]
+    fn rejects_non_responses_paths() {
+        assert!(!request_path_ends_with_responses("/api/codex/sessions"));
+        assert!(!request_path_ends_with_responses("/api/codex"));
+        assert!(!request_path_ends_with_responses("/responses-debug"));
+        assert!(!request_path_ends_with_responses("/myresponses"));
+        assert!(!request_path_ends_with_responses("/responses/"));
+        assert!(!request_path_ends_with_responses(""));
+    }
 }

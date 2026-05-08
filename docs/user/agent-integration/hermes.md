@@ -288,7 +288,7 @@ which threads a per-agent token into each service via injected env.
 
 ## OAuth providers (codex, copilot, etc.)
 
-For OAuth-flow providers (`codex` for ChatGPT Plus subscriptions,
+For OAuth-flow providers (`codex` for ChatGPT plan auth,
 `copilot` for GitHub Copilot, `anthropic-oauth`, `google-gemini-cli`,
 `qwen-cli`):
 
@@ -313,6 +313,26 @@ For OAuth-flow providers (`codex` for ChatGPT Plus subscriptions,
 Locksmith handles the OAuth dance internally — refresh tokens are
 sealed at rest and refreshed transparently. Hermes never sees the
 OAuth machinery.
+
+### codex specifics (Phase G2 — locksmith v2.2.0+)
+
+OpenAI's `/backend-api/codex/responses` endpoint requires a
+`ChatGPT-Account-ID: <uuid>` header in addition to the bearer access
+token. The value lives inside the access-token JWT payload and is
+how OpenAI selects which ChatGPT workspace (personal / Teams /
+enterprise) the request hits. **Locksmith injects the header
+automatically** — hermes-agent does not need to extract or pass
+`chatgpt_account_id` itself when proxied through locksmith. From
+hermes' perspective, codex is just another HTTP backend behind
+`${layer8_endpoint}/api/codex/...`.
+
+If you're running hermes against codex *without* locksmith (direct
+to chatgpt.com), hermes' native codex provider handles the JWT
+extraction itself. Locksmith mode and direct mode are
+behaviorally equivalent from hermes' point of view.
+
+For the full OAuth flow design (bootstrap, refresh, header
+injection), see [`docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md).
 
 ## Verifying the integration
 

@@ -40,6 +40,7 @@ User-level mental models distilled from the stack spec at
 | [concepts/trust-boundary.md](concepts/trust-boundary.md) | Who holds what credential, why. |
 | [concepts/error-envelope.md](concepts/error-envelope.md) | §4.7.9 wire envelope + Q-8 existence-leak avoidance. |
 | [concepts/per-agent-credentials.md](concepts/per-agent-credentials.md) | Per-agent credential overrides + OAuth session labels (Phase G); single-grant trap. |
+| [concepts/oauth-flow.md](concepts/oauth-flow.md) | End-to-end OAuth flow: bootstrap, refresh, per-request hot path; codex `ChatGPT-Account-ID` injection (Phase G2). |
 
 ## Tier 3 — agent integration (`agent-integration/`)
 
