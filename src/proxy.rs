@@ -479,12 +479,23 @@ fn build_upstream_request(
     // `auth: none` we don't want the agent injecting their own bearer
     // and reaching the upstream as the proxy's principal). The
     // target's own auth header is also stripped when distinct.
+    //
+    // `content-length` and `transfer-encoding` are also stripped:
+    // reqwest computes both itself based on the body we attach via
+    // `.body(...)`, and Phase G3 may rewrite the body to a different
+    // size. Forwarding the agent's stale Content-Length to upstream
+    // causes silent body truncation/mismatch (Phase G3 hit this with
+    // codex `/responses` returning 400 when the injected default
+    // `instructions` made the body larger than the original
+    // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_lowercase();
         if lower == "host"
             || lower == "authorization"
             || lower == "x-api-key"
+            || lower == "content-length"
+            || lower == "transfer-encoding"
             || extra_strip.as_deref() == Some(&lower)
         {
             continue;
