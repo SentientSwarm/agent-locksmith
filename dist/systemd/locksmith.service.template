@@ -1,0 +1,100 @@
+# systemd unit template for Agent Locksmith (T5.2 / SPEC §6.2 M5).
+#
+# Operators copy this to /etc/systemd/system/locksmith.service and edit
+# the placeholders marked with %%PLACEHOLDER%%. The directives below are
+# the M5 hardening baseline; remove or relax only with deliberate
+# justification (and update docs/v2/threat-model.md if you do).
+#
+# Each directive comment names the threat it blunts. See
+# docs/v2/runbooks/m5-sealed-secrets.md and docs/v2/threat-model.md for
+# the full rationale.
+
+[Unit]
+Description=Agent Locksmith — credential and identity substrate for AI agents
+Documentation=https://github.com/SentientSwarm/agent-locksmith
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%%LOCKSMITHD_PATH%% --config /etc/locksmith/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# ── Identity ─────────────────────────────────────────────────────────
+# Run as a dedicated unprivileged user. The user owns its own home dir
+# and is created out-of-band (Ansible / packaging / `useradd -r`).
+User=locksmith
+Group=locksmith
+UMask=0027
+
+# ── Credentials (T5.1 — file-sealed backend) ─────────────────────────
+# systemd-creds decrypts these blobs at service start and drops the
+# plaintext into /run/credentials/locksmith/<name> with mode 0400.
+# Locksmith reads the path via SecretRef::FromFileSealed.
+#
+# Replace `api_key` with one entry per encrypted credential. Generate
+# encrypted blobs with `systemd-creds encrypt` (see
+# dist/examples/sealed-secrets/seal-credential.sh).
+#
+#LoadCredentialEncrypted=api_key:/etc/locksmith/credentials/api_key.enc
+#LoadCredentialEncrypted=openai_token:/etc/locksmith/credentials/openai_token.enc
+
+# ── Filesystem isolation ─────────────────────────────────────────────
+# ProtectSystem=strict makes / read-only except for ReadWritePaths.
+# Defends against: post-compromise persistence via /usr write,
+# config tampering, log injection.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# Locksmith writes the SQLite DB, JSONL audit, and admin UDS in these
+# specific locations. Adjust if your config.yaml uses different paths.
+ReadWritePaths=/var/lib/locksmith /var/log/locksmith /run/locksmith
+
+# ── Capability + syscall reduction ───────────────────────────────────
+# NoNewPrivileges blocks setuid escalation post-fork.
+# Defends against: in-process exploit using a setuid helper.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount
+
+# ── Resource limits ──────────────────────────────────────────────────
+# fd limit governs streaming-cap concurrency (A-3); tune to your
+# expected concurrent stream count.
+LimitNOFILE=65536
+LimitNPROC=512
+TasksMax=512
+
+# ── Memory hardening ─────────────────────────────────────────────────
+MemoryDenyWriteExecute=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# ── Logging ──────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+
+# ── Graceful shutdown ────────────────────────────────────────────────
+# Locksmith's drain window is set in config.yaml under
+# `shutdown.drain_window_seconds`; this hard cap is a backstop.
+TimeoutStopSec=60s
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

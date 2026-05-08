@@ -1,13 +1,12 @@
 use clap::Parser;
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use tokio::net::TcpListener;
-use tracing::info;
+use std::time::Duration;
+use tracing::error;
 
-use agent_locksmith::{app, config, telemetry};
+use agent_locksmith::{config, daemon, shutdown::ShutdownCoordinator, telemetry};
 
 #[derive(Parser)]
-#[command(name = "locksmith", about = "Agent Locksmith")]
+#[command(name = "locksmithd", about = "Agent Locksmith daemon")]
 struct Cli {
     /// Path to config file
     #[arg(short, long, default_value = "/etc/locksmith/config.yaml")]
@@ -25,37 +24,11 @@ async fn main() {
 
     telemetry::init_logging(loaded.logging.as_ref());
 
-    let addr = SocketAddr::new(
-        loaded.listen.host.parse().unwrap_or([127, 0, 0, 1].into()),
-        loaded.listen.port,
-    );
+    let drain_window = Duration::from_secs(loaded.shutdown.drain_window_seconds);
+    let coord = ShutdownCoordinator::install(drain_window);
 
-    let tool_count = loaded.active_tools().len();
-
-    info!(
-        listen = %addr,
-        tools = tool_count,
-        "Starting agent-locksmith"
-    );
-
-    let router = app::build_app(loaded);
-
-    let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
-        eprintln!("Failed to bind to {}: {}", addr, e);
+    if let Err(e) = daemon::run(loaded, coord).await {
+        error!(error = %e, "daemon exited with error");
         std::process::exit(1);
-    });
-
-    info!("Listening on {}", addr);
-
-    let shutdown = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to register ctrl-c handler");
-        info!("Shutting down");
-    };
-
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
-        .unwrap();
+    }
 }
