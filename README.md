@@ -9,7 +9,7 @@ The keystone component of the [layer8-proxy][layer8] stack.
 
 [layer8]: https://github.com/SentientSwarm/layer8-proxy
 
-**Current version: v2.2.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.2.0))
+**Current version: v2.3.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.3.0))
 
 ## What it does
 
@@ -26,7 +26,7 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.2.0)
+## Highlights (v2.3.0)
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
@@ -53,6 +53,14 @@ middleware (`kind=infra`) is operator-only.
   calls. Agents proxied through locksmith get full ChatGPT plan auth
   (Responses API) without needing to be JWT-aware OAuth clients
   themselves. See [`docs/user/concepts/oauth-flow.md`](docs/user/concepts/oauth-flow.md).
+- **codex Responses API body fixup (Phase G3)** — on requests where
+  the upstream is codex AND the path is `/responses`, locksmith
+  inspects the JSON body and injects/overrides the three codex-
+  required fields: `store: false`, `stream: true`, `instructions:
+  <default>` (preserves user-supplied `instructions`). Agents that
+  send a generic `openai-responses` body shape get a working codex
+  call without needing codex-specific code paths. 1 MiB body cap.
+  Audit captures `details.codex_body_fixup` when fixup happened.
 - **Seed catalog** — 16 default providers baked into the image
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio, tavily,
   github, duckduckgo, wikipedia, lf-scan + 5 OAuth providers). Operators
