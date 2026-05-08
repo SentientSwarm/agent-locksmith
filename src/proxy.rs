@@ -13,10 +13,28 @@ use std::time::Duration;
 
 use crate::app::AppState;
 use crate::config::ToolConfig;
+use crate::kamiwaza;
+
+pub async fn proxy_handler_no_path(
+    State(state): State<Arc<AppState>>,
+    Path(tool_name): Path<String>,
+    req: Request<Body>,
+) -> Response {
+    proxy_tool_request(state, tool_name, String::new(), req).await
+}
 
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
     Path((tool_name, path)): Path<(String, String)>,
+    req: Request<Body>,
+) -> Response {
+    proxy_tool_request(state, tool_name, path, req).await
+}
+
+async fn proxy_tool_request(
+    state: Arc<AppState>,
+    tool_name: String,
+    path: String,
     req: Request<Body>,
 ) -> Response {
     let config = state.config.load();
@@ -29,6 +47,9 @@ pub async fn proxy_handler(
     {
         Some(t) => t,
         None => {
+            if let Some(response) = kamiwaza::handle_proxy_call(&config, &tool_name, req).await {
+                return response;
+            }
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({

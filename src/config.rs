@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub listen: ListenConfig,
     pub inbound_auth: Option<InboundAuthConfig>,
     pub egress_proxy: Option<String>,
+    pub kamiwaza: Option<KamiwazaConfig>,
     pub telemetry: Option<TelemetryConfig>,
     pub logging: Option<LoggingConfig>,
     #[serde(default)]
@@ -75,6 +76,38 @@ fn default_timeout() -> u64 {
 pub struct ToolAuthConfig {
     pub header: String,
     pub value: SecretString,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KamiwazaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub api_url: Option<String>,
+    #[serde(default)]
+    pub api_url_candidates: Vec<String>,
+    pub api_token: Option<SecretString>,
+    #[serde(default = "default_kamiwaza_tool_prefix")]
+    pub tool_prefix: String,
+    #[serde(default = "default_kamiwaza_include_types")]
+    pub include_types: Vec<String>,
+    #[serde(default = "default_true")]
+    pub verify_tls: bool,
+    #[serde(default)]
+    pub cloud: bool,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+}
+
+fn default_kamiwaza_tool_prefix() -> String {
+    "kamiwaza".to_string()
+}
+
+fn default_kamiwaza_include_types() -> Vec<String> {
+    vec!["tool".to_string()]
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AppConfig {

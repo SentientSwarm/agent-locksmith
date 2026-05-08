@@ -7,6 +7,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth;
 use crate::config::AppConfig;
+use crate::kamiwaza;
 use crate::proxy;
 
 pub struct AppState {
@@ -23,6 +24,10 @@ pub fn build_app(config: AppConfig) -> Router {
     Router::new()
         .route("/health", routing::get(health_handler))
         .route("/tools", routing::get(tools_handler))
+        .route(
+            "/api/{tool_name}",
+            routing::any(proxy::proxy_handler_no_path),
+        )
         .route(
             "/api/{tool_name}/{*path}",
             routing::any(proxy::proxy_handler),
@@ -53,7 +58,7 @@ async fn health_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
 
 async fn tools_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
     let config = state.config.load();
-    let tools: Vec<Value> = config
+    let mut tools: Vec<Value> = config
         .active_tools()
         .iter()
         .map(|t| {
@@ -65,6 +70,17 @@ async fn tools_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
             })
         })
         .collect();
+
+    if kamiwaza::is_configured(&config) {
+        match kamiwaza::discover_tools(&config).await {
+            Ok(discovered) => {
+                tools.extend(discovered.iter().map(kamiwaza::catalog_entry));
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to discover Kamiwaza tools");
+            }
+        }
+    }
 
     Json(json!({ "tools": tools }))
 }
