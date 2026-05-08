@@ -1,7 +1,7 @@
 ---
 name: locksmith
-description: Credential proxy that mediates AI-agent calls to upstream LLMs and tools. Per-agent bearer authentication, per-agent ACL on tool routes, structured audit, uniform error envelope, codex Phase G2/G3 transparent integration.
-version: 2.3.0
+description: Credential proxy that mediates AI-agent calls to upstream LLMs and tools. Per-agent bearer authentication, per-agent ACL on tool routes, structured audit, uniform error envelope, fully-transparent codex integration (Phase G2/G3/G4).
+version: 2.4.0
 format: agentskills.io
 ---
 
@@ -14,9 +14,11 @@ You're talking to **agent-locksmith**, a credential proxy that:
 - Injects upstream provider credentials at the proxy layer (your code never sees them).
 - Audits every request for the operator.
 - For codex (OpenAI ChatGPT plan auth), transparently injects the
-  `ChatGPT-Account-ID` header (Phase G2) and the required body
-  fields `store: false`, `stream: true`, default `instructions`
-  (Phase G3) — see the codex section below.
+  `ChatGPT-Account-ID` header (Phase G2), the required body fields
+  `store: false`, `stream: true`, default `instructions` (Phase G3),
+  and the required `OpenAI-Beta` + `originator` headers (Phase G4)
+  — see the codex section below. Agents call codex with only
+  `Authorization` + minimal body.
 
 ## Authentication
 
@@ -67,7 +69,7 @@ calls. There is no separate auth scheme for this endpoint.
 | Path routing | Strips `/api/<tool>` prefix; forwards the remainder to the configured upstream URL. | Construct request as `POST /api/<tool>/<upstream-path>` per the wire-shape of the upstream. |
 | Codex `ChatGPT-Account-ID` header | Extracts from JWT at OAuth bootstrap; injects on `/backend-api/codex/*` requests automatically (Phase G2). | Don't send it yourself — locksmith owns this. |
 | Codex body fields `store` / `stream` / `instructions` | On `/responses` paths: forces `store: false`, `stream: true`, injects default `instructions` if missing (Phase G3). | Send the rest of the body shape as the upstream expects. Override `instructions` if you want a non-default system prompt — locksmith preserves user-supplied values. |
-| Other codex-required headers (`OpenAI-Beta`, `originator`) | Not yet — you must set these (see codex section). | Send `OpenAI-Beta: responses=experimental` and `originator: <your-agent-id>` on codex `/responses` calls. |
+| Codex required headers `OpenAI-Beta` / `originator` | Forces `OpenAI-Beta: responses=experimental`; injects `originator: <agent-name>` if missing, preserves yours otherwise (Phase G4). | Optionally set your own `originator` if you want a non-default identifier on codex's side; otherwise nothing to do. |
 
 ## Per-tool wire shape
 
@@ -91,30 +93,32 @@ you specifically can call.
 
 ## Codex (OpenAI ChatGPT plan auth) — special case
 
-OpenAI's `/backend-api/codex/responses` endpoint has stricter requirements
-than the generic OpenAI-compat shape. Locksmith handles most of them
-transparently; **two pieces are still on you**.
+OpenAI's `/backend-api/codex/responses` endpoint has stricter
+requirements than the generic OpenAI-compat shape. **As of v2.4.0,
+locksmith handles all of them transparently** — agents call codex
+the same way they'd call any other OpenAI-compatible endpoint.
 
 ### What locksmith does
 
-- **`Authorization` header**: injects the OAuth access token (refreshed
-  ahead of expiry; you never see the JWT).
-- **`ChatGPT-Account-ID` header (Phase G2)**: extracted from the access-
-  token JWT at bootstrap, injected on every `/backend-api/codex/*` request.
+- **`Authorization` header**: injects the OAuth access token
+  (refreshed ahead of expiry; you never see the JWT).
+- **`ChatGPT-Account-ID` header (Phase G2)**: extracted from the
+  access-token JWT at bootstrap, injected on every
+  `/backend-api/codex/*` request.
+- **`OpenAI-Beta` header (Phase G4)**: forced to
+  `responses=experimental` on every codex request. Your supplied
+  value (if any) is stripped — codex requires this exact value.
+- **`originator` header (Phase G4)**: injected with your agent name
+  if you didn't supply one. Preserves yours if you did.
 - **Body field `store`**: forced to `false` (codex rejects `true`).
 - **Body field `stream`**: forced to `true` (codex rejects `false`).
 - **Body field `instructions`**: injected with default
-  `"You are a helpful assistant."` if missing. **Preserved verbatim if
-  you set it** — supply your own when you want a non-default system prompt.
+  `"You are a helpful assistant."` if missing. **Preserved verbatim
+  if you set it** — supply your own when you want a non-default
+  system prompt.
 
 ### What you do
 
-- **Send `OpenAI-Beta: responses=experimental` header** — codex
-  rejects requests without it. Locksmith doesn't inject this yet (tracked
-  for a future release; for now it's your responsibility).
-- **Send `originator: <your-agent-id>` header** — codex requires an
-  originator identifier. Use any stable string identifying your agent
-  (e.g., `originator: hermes-agent` or `originator: codex_cli_rs`).
 - **Send the request body in the OpenAI Responses API shape**:
   ```json
   {
@@ -135,6 +139,10 @@ transparently; **two pieces are still on you**.
   fundamentally streaming (SSE). The `stream: true` is non-negotiable;
   agents that can't handle SSE will see a long response payload they
   can't process incrementally.
+
+That's it. The minimal call is `POST /api/codex/responses` with
+`Authorization: Bearer lk_…`, `Content-Type: application/json`, and
+the body above. Everything else is locksmith.
 
 ### Codex body cap
 

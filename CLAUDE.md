@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working branch
 
-`develop` is the default working branch — currently at **v2.3.0**
+`develop` is the default working branch — currently at **v2.4.0**
 (catalog substrate + per-agent ACL + mTLS + OAuth credential variant
-+ per-agent credential overrides + OAuth session labels + codex
-`ChatGPT-Account-ID` auto-injection + codex Responses API body
-fixup). `main` only contains M0. Cut feature branches from `develop`.
++ per-agent credential overrides + OAuth session labels + complete
+codex transparent integration through Phase G2/G3/G4). `main` only
+contains M0. Cut feature branches from `develop`.
 
 Recent phase shipments on develop:
 
@@ -24,17 +24,23 @@ Recent phase shipments on develop:
   upstream is codex AND the path ends with `/responses`, locksmith
   inspects the request body and injects/overrides three required
   fields: `store: false`, `stream: true`, `instructions: <default>`.
-  Agents proxied through locksmith get a working codex Responses
-  call without needing to be codex-aware. 1 MiB body cap (413 over).
-  Audit captures `details.codex_body_fixup` when fixup happened.
+  1 MiB body cap (413 over). Audit captures
+  `details.codex_body_fixup` when fixup happened.
+- **Phase G4** (v2.4.0): codex required-header injection
+  (`OpenAI-Beta: responses=experimental` + `originator: <agent>`).
+  Forces `OpenAI-Beta`; preserves agent-supplied `originator` else
+  injects `AgentIdentity.name` (fallback `locksmith-proxy` for
+  identityless paths). After G4, agents can call codex through
+  locksmith with only `Authorization` + minimal body — locksmith
+  owns every codex-specific wire piece.
   See `docs/user/concepts/oauth-flow.md` for the end-to-end flow.
 
 The authoritative stack-level docs live at `agents-stack/docs/`:
 
-- `agents-stack/docs/spec/v0.2.0.md` — formal as-built design (Phase E + F + G + G2 + G3).
+- `agents-stack/docs/spec/v0.2.0.md` — formal as-built design (Phase E + F + G + G2 + G3 + G4).
 - `agents-stack/docs/prd/v0.2.0.md` — user-facing requirements.
 - `agents-stack/docs/adrs/0004-kind-taxonomy.md` — kind enum decision.
-- `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design (Phase F + G2 + G3 addenda).
+- `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design (Phase F + G2 + G3 + G4 addenda).
 
 In-repo per-component engineering docs are at `docs/v2/SPEC.md` (with
 `SPEC.state.md` for "what's actually in code") + `docs/v2/HANDOFF.md`
@@ -131,6 +137,7 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 7. Injects credentials per `ProxyAuth` variant: `None` skips; `Header { override_value, .. }` and `Bearer { override_value }` use the override value when set, else fall back to `resolved_creds[name]`; `Oauth` injects access token from the OAuth cache.
 7a. **Phase G2 codex header injection**: when `ProxyAuth::Oauth.account_id` is `Some(_)` and `is_chatgpt_codex_upstream(target.upstream)` matches (`/backend-api/codex` substring, case-insensitive), adds `ChatGPT-Account-ID: <account_id>`. Silent skip otherwise. The account_id was extracted from the access-token JWT at bootstrap/refresh by `oauth::jwt::extract_chatgpt_account_id` and stored in `oauth_sessions.account_id`.
 7b. **Phase G3 codex body fixup**: when `is_chatgpt_codex_upstream(target.upstream)` AND `request_path_ends_with_responses(ctx.request_path)` both match, calls `codex_body::fixup` on the request body. Injects `store: false`, `stream: true`, `instructions: <default>` if missing; overrides `store`/`stream` if set wrong; preserves user-supplied `instructions`. 1 MiB body cap (413 over via `record_codex_body_too_large`). Non-JSON bodies pass through. `RequestCtx.codex_body_fixup` records what changed; surfaces in audit `details.codex_body_fixup` when non-noop.
+7c. **Phase G4 codex required headers**: when `is_chatgpt_codex_upstream(target.upstream)` matches (any path, not just `/responses`), forces `OpenAI-Beta: responses=experimental` (agent's value stripped during forward loop). Injects `originator: <agent-name>` from `AgentIdentity.name` if the agent didn't supply their own; falls back to `"locksmith-proxy"` for identityless paths. Preserves agent-supplied `originator`.
 8. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
 9. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
 10. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id`; Phase G adds `details.auth_source` (`registration_default` | `agent_override`) and `details.oauth_session_label`. `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`. Audit query results LEFT JOIN `agents` to surface `agent_name` alongside `agent_public_id` (G.0).

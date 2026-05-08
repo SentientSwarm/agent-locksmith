@@ -9,7 +9,7 @@ The keystone component of the [layer8-proxy][layer8] stack.
 
 [layer8]: https://github.com/SentientSwarm/layer8-proxy
 
-**Current version: v2.3.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.3.0))
+**Current version: v2.4.0** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.4.0))
 
 ## What it does
 
@@ -26,7 +26,7 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.3.0)
+## Highlights (v2.4.0)
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
@@ -61,6 +61,13 @@ middleware (`kind=infra`) is operator-only.
   send a generic `openai-responses` body shape get a working codex
   call without needing codex-specific code paths. 1 MiB body cap.
   Audit captures `details.codex_body_fixup` when fixup happened.
+- **codex required-header injection (Phase G4)** — locksmith
+  injects `OpenAI-Beta: responses=experimental` (forced) and
+  `originator: <agent-name>` (preserves agent-supplied value
+  otherwise) on every `/backend-api/codex/*` upstream call. Combined
+  with G2 (ChatGPT-Account-ID) and G3 (body fields), agents can call
+  codex with only `Authorization: Bearer lk_…` + minimal body —
+  locksmith owns every codex-specific wire piece.
 - **Seed catalog** — 16 default providers baked into the image
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio, tavily,
   github, duckduckgo, wikipedia, lf-scan + 5 OAuth providers). Operators

@@ -34,6 +34,10 @@ struct RequestCtx {
     /// `AgentIdentity` into request extensions (M0/M1 deployments
     /// without admin substrate leave this `None`).
     agent_public_id: Option<String>,
+    /// Phase G4 — human-readable agent name from `AgentIdentity.name`.
+    /// Used as the `originator` header value on codex hot-path
+    /// requests when the agent didn't supply their own.
+    agent_name: Option<String>,
     started: Instant,
     /// Phase G3 — populated when `codex_body::fixup` modified the
     /// request body destined for codex `/responses`. `None` when no
@@ -54,16 +58,16 @@ impl RequestCtx {
             Some(crate::auth::AuthenticatedAs::Mtls) => "mtls",
             _ => "bearer",
         };
-        let agent_public_id = req
-            .extensions()
-            .get::<crate::auth_v2::AgentIdentity>()
-            .map(|id| id.public_id.clone());
+        let identity = req.extensions().get::<crate::auth_v2::AgentIdentity>();
+        let agent_public_id = identity.map(|id| id.public_id.clone());
+        let agent_name = identity.map(|id| id.name.clone());
         Self {
             tool_name,
             request_path,
             method,
             auth_method,
             agent_public_id,
+            agent_name,
             started,
             codex_body_fixup: None,
         }
@@ -379,6 +383,7 @@ pub async fn proxy_handler(
         &upstream_url,
         headers,
         body_bytes,
+        ctx.agent_name.as_deref(),
     );
 
     match upstream_req.send().await {
@@ -458,6 +463,11 @@ fn request_path_ends_with_responses(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with("/responses")
 }
 
+// Phase G4 added the `agent_name` parameter (used as the codex
+// `originator` fallback). build_upstream_request was already at the
+// clippy threshold; allow rather than refactor mid-phase. Future work
+// could collapse the per-call params into a struct.
+#[allow(clippy::too_many_arguments)]
 fn build_upstream_request(
     state: &AppState,
     config: &crate::config::AppConfig,
@@ -466,6 +476,10 @@ fn build_upstream_request(
     upstream_url: &str,
     headers: HeaderMap,
     body_bytes: Bytes,
+    // Phase G4 — used as the codex `originator` header value when the
+    // agent didn't supply one. `None` for M0/M1 paths without
+    // `AgentIdentity`; falls back to a static `"locksmith-proxy"` then.
+    agent_name: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let client =
         state
@@ -489,6 +503,14 @@ fn build_upstream_request(
     // `instructions` made the body larger than the original
     // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
+    let codex_upstream = is_chatgpt_codex_upstream(&target.upstream);
+    // Phase G4 — for codex requests, snapshot whether the agent supplied
+    // their own `originator` header before stripping; controls whether
+    // we inject our default below.
+    let agent_sent_originator = codex_upstream
+        && headers
+            .iter()
+            .any(|(name, _)| name.as_str().eq_ignore_ascii_case("originator"));
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_lowercase();
         if lower == "host"
@@ -496,6 +518,9 @@ fn build_upstream_request(
             || lower == "x-api-key"
             || lower == "content-length"
             || lower == "transfer-encoding"
+            // Phase G4 — for codex, force `OpenAI-Beta: responses=experimental`.
+            // Strip the agent's value (if any) here; we re-inject below.
+            || (codex_upstream && lower == "openai-beta")
             || extra_strip.as_deref() == Some(&lower)
         {
             continue;
@@ -579,6 +604,29 @@ fn build_upstream_request(
             {
                 upstream_req = upstream_req.header("ChatGPT-Account-ID", acct.as_str());
             }
+        }
+    }
+
+    // Phase G4 — codex required headers, applied to every codex
+    // request regardless of auth shape (paranoia: only `oauth_*`
+    // configurations make sense for codex today, but the predicate
+    // is upstream-URL-based so a hypothetical future static-key codex
+    // route still gets the headers).
+    //
+    // - `OpenAI-Beta: responses=experimental` is mandatory; codex
+    //   rejects requests without it. We strip the agent's value
+    //   (above) and force ours so a confused agent can't downgrade.
+    //
+    // - `originator: <agent-name>` lets codex distinguish requesters.
+    //   We preserve the agent's value if they sent one (it might be
+    //   meaningful to their own observability) and inject the agent
+    //   name otherwise. Falls back to `"locksmith-proxy"` for paths
+    //   without an `AgentIdentity` (M0/M1 deployments).
+    if codex_upstream {
+        upstream_req = upstream_req.header("OpenAI-Beta", "responses=experimental");
+        if !agent_sent_originator {
+            let originator = agent_name.unwrap_or("locksmith-proxy");
+            upstream_req = upstream_req.header("originator", originator);
         }
     }
 
