@@ -577,20 +577,30 @@ client logs show a `Content-Length` mismatch, the cause is
 elsewhere — locksmith's outgoing `Content-Length` always matches
 the body it sends.
 
-### What you still need to handle (codex specifically)
+## Required-header injection (Phase G4)
 
-Two codex-specific headers are NOT yet injected by locksmith. Set
-them yourself on every `/api/codex/responses` call:
+Two more codex-specific headers — `OpenAI-Beta` and `originator` —
+are required by chatgpt.com on every `/backend-api/codex/*`
+request. Locksmith injects both transparently (Phase G4).
 
-| Header | Value | Why |
+| Header | Value | Behavior |
 |---|---|---|
-| `OpenAI-Beta` | `responses=experimental` | Codex `/responses` is gated behind this beta flag; absence returns 400. |
-| `originator` | `<your-agent-id>` | Codex requires an originator identifier. Use any stable string for your agent (e.g., `hermes-agent`, `openclaw`). |
+| `OpenAI-Beta` | `responses=experimental` | **Forced** — locksmith strips any agent-supplied value and injects this constant. The endpoint is beta-gated and rejects requests without it. |
+| `originator` | `<agent-name>` | **Preserved if agent supplies one**, else injected from `AgentIdentity.name` (or `"locksmith-proxy"` for paths without an identity). Codex uses originator for request attribution; preserving the agent's value lets agents that already track this (e.g., `originator: codex_cli_rs` from a wrapper) keep their existing identity. |
 
-A future locksmith release will inject `OpenAI-Beta` automatically
-following the G2/G3 pattern; for now it's the agent's job. The
-`/skill` endpoint surfaces this requirement when codex is in the
-agent's ACL.
+Together with G2 (`ChatGPT-Account-ID`) and G3 (body fields), G4
+closes the codex integration loop. Agents now call codex through
+locksmith with only:
+
+```
+Authorization: Bearer lk_<public_id>.<secret>
+Content-Type: application/json
+
+{"model":"gpt-5.5","input":[...]}
+```
+
+Locksmith owns every codex-specific wire piece — no codex-aware
+client code required on the agent side.
 
 ## See also
 
