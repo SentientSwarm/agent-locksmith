@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub listen: ListenConfig,
     pub inbound_auth: Option<InboundAuthConfig>,
     pub egress_proxy: Option<String>,
+    pub kamiwaza: Option<KamiwazaConfig>,
     pub logging: Option<LoggingConfig>,
     #[serde(default)]
     pub shutdown: ShutdownConfig,
@@ -409,6 +410,43 @@ pub struct ToolAuthConfig {
     /// { from_env: { var: ... } }`, `from_file_sealed`, etc.). See
     /// `crate::secret::SecretRef` for the deserialization contract.
     pub value: SecretRef,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KamiwazaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub api_url: Option<String>,
+    #[serde(default)]
+    pub api_url_candidates: Vec<String>,
+    pub api_token: Option<SecretString>,
+    #[serde(default = "default_kamiwaza_tool_prefix")]
+    pub tool_prefix: String,
+    #[serde(default = "default_kamiwaza_include_types")]
+    pub include_types: Vec<String>,
+    #[serde(default = "default_true")]
+    pub verify_tls: bool,
+    #[serde(default)]
+    pub cloud: bool,
+    #[serde(default = "default_kamiwaza_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+fn default_kamiwaza_tool_prefix() -> String {
+    "kamiwaza".to_string()
+}
+
+fn default_kamiwaza_include_types() -> Vec<String> {
+    vec!["tool".to_string()]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_kamiwaza_timeout_seconds() -> u64 {
+    30
 }
 
 impl AppConfig {

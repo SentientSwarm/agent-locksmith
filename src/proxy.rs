@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use crate::app::AppState;
 use crate::config::{EgressMode, ToolConfig, ToolTimeouts};
+use crate::kamiwaza;
 use crate::registrations::{AuthSpec, Registration};
 use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::response_controls::{ApplyOutcome, ResponseControls, SizeCappedStream};
@@ -284,9 +285,26 @@ impl ProxyTarget {
     }
 }
 
+pub async fn proxy_handler_no_path(
+    State(state): State<Arc<AppState>>,
+    Path(tool_name): Path<String>,
+    req: Request<Body>,
+) -> Response {
+    proxy_tool_request(state, tool_name, String::new(), req).await
+}
+
 pub async fn proxy_handler(
     State(state): State<Arc<AppState>>,
     Path((tool_name, path)): Path<(String, String)>,
+    req: Request<Body>,
+) -> Response {
+    proxy_tool_request(state, tool_name, path, req).await
+}
+
+async fn proxy_tool_request(
+    state: Arc<AppState>,
+    tool_name: String,
+    path: String,
     req: Request<Body>,
 ) -> Response {
     let mut ctx = RequestCtx::snapshot(&req, tool_name);
@@ -307,7 +325,14 @@ pub async fn proxy_handler(
     let target = resolve_target(&state, &ctx.tool_name);
     let mut target = match target {
         Some(t) => t,
-        None => return record_tool_not_found(&state.audit, &ctx).await,
+        None => {
+            let config = state.config.load();
+            if let Some(response) = kamiwaza::handle_proxy_call(&config, &ctx.tool_name, req).await
+            {
+                return response;
+            }
+            return record_tool_not_found(&state.audit, &ctx).await;
+        }
     };
 
     // Phase G: per-agent credential override. When an override row
@@ -1500,7 +1525,9 @@ mod request_path_responses_tests {
     fn matches_canonical_responses_path() {
         assert!(request_path_ends_with_responses("/responses"));
         assert!(request_path_ends_with_responses("/api/codex/responses"));
-        assert!(request_path_ends_with_responses("/backend-api/codex/responses"));
+        assert!(request_path_ends_with_responses(
+            "/backend-api/codex/responses"
+        ));
     }
 
     #[test]

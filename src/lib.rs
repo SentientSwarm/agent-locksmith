@@ -10,6 +10,7 @@ pub mod codex_body;
 pub mod config;
 pub mod daemon;
 pub mod deprecation;
+pub mod kamiwaza;
 pub mod migrations;
 pub mod mtls;
 pub mod oauth;

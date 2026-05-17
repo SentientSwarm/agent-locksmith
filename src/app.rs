@@ -11,6 +11,7 @@ use crate::auth;
 use crate::auth_v2::AgentAuthenticator;
 use crate::client_pool::ClientPool;
 use crate::config::AppConfig;
+use crate::kamiwaza;
 use crate::mtls::MtlsAuthenticator;
 use crate::proxy;
 use crate::repo::AuditRepository;
@@ -336,6 +337,10 @@ pub fn build_app_full_with_phase_g(
         .route("/tools", routing::get(tools_handler))
         .route("/models", routing::get(models_handler))
         .route(
+            "/api/{tool_name}",
+            routing::any(proxy::proxy_handler_no_path),
+        )
+        .route(
             "/api/{tool_name}/{*path}",
             routing::any(proxy::proxy_handler),
         )
@@ -481,35 +486,65 @@ async fn catalog_listing(
     identity: Option<&crate::auth_v2::AgentIdentity>,
     kind: crate::registrations::Kind,
 ) -> Vec<Value> {
-    if let Some(repo) = state.registrations.as_ref() {
+    let mut items = if let Some(repo) = state.registrations.as_ref() {
         match crate::registrations::api::list_public(repo.as_ref(), kind, identity).await {
-            Ok(items) => return items,
+            Ok(items) => items,
             Err(e) => {
                 tracing::error!(error = ?e, "registrations list_public failed; returning empty");
-                return Vec::new();
+                Vec::new()
             }
         }
+    } else {
+        // Fallback: pre-Phase-E behavior. Only honors `kind=tool` (config has
+        // no model concept). `kind=model` returns empty. ACL filter still
+        // applies via AgentIdentity::allows_tool.
+        if !matches!(kind, crate::registrations::Kind::Tool) {
+            return Vec::new();
+        }
+        let config = state.config.load();
+        let resolved = state.resolved_creds.load();
+        config
+            .active_tools_against(&resolved)
+            .iter()
+            .filter(|t| identity.is_none_or(|id| id.allows_tool(&t.name).is_ok()))
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "type": "api",
+                    "path": format!("/api/{}", t.name),
+                    "description": t.description,
+                })
+            })
+            .collect()
+    };
+
+    if matches!(kind, crate::registrations::Kind::Tool) {
+        append_kamiwaza_catalog_entries(state, identity, &mut items).await;
     }
 
-    // Fallback: pre-Phase-E behavior. Only honors `kind=tool` (config has
-    // no model concept). `kind=model` returns empty. ACL filter still
-    // applies via AgentIdentity::allows_tool.
-    if !matches!(kind, crate::registrations::Kind::Tool) {
-        return Vec::new();
-    }
+    items
+}
+
+async fn append_kamiwaza_catalog_entries(
+    state: &Arc<AppState>,
+    identity: Option<&crate::auth_v2::AgentIdentity>,
+    items: &mut Vec<Value>,
+) {
     let config = state.config.load();
-    let resolved = state.resolved_creds.load();
-    config
-        .active_tools_against(&resolved)
-        .iter()
-        .filter(|t| identity.is_none_or(|id| id.allows_tool(&t.name).is_ok()))
-        .map(|t| {
-            json!({
-                "name": t.name,
-                "type": "api",
-                "path": format!("/api/{}", t.name),
-                "description": t.description,
-            })
-        })
-        .collect()
+    if !kamiwaza::is_configured(&config) {
+        return;
+    }
+    match kamiwaza::discover_tools(&config).await {
+        Ok(discovered) => {
+            items.extend(
+                discovered
+                    .iter()
+                    .filter(|tool| identity.is_none_or(|id| id.allows_tool(&tool.slug).is_ok()))
+                    .map(kamiwaza::catalog_entry),
+            );
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to discover Kamiwaza tools");
+        }
+    }
 }
