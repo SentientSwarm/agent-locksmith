@@ -158,8 +158,8 @@ enum ProxyAuth {
         /// Header name for `stored_header`; `None` for `stored_bearer`.
         header: Option<String>,
         audit_mode: &'static str,
-        /// `credential_secrets` handle to unseal (read at inject-time in T1.6).
-        #[allow(dead_code)]
+        /// `credential_secrets` handle read at inject-time by the hot-path
+        /// resolution step (T1.6) to fetch + unseal the stored value.
         secret_ref: String,
         /// Unsealed value, filled by the hot-path resolution step (T1.6).
         resolved_value: Option<secrecy::SecretString>,
@@ -364,6 +364,30 @@ pub async fn proxy_handler(
             Ok(updated_auth) => target.auth = updated_auth,
             Err(envelope) => {
                 record_oauth_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
+                return envelope.response;
+            }
+        }
+    }
+
+    // Phase J (T1.6, CCS-5): for `stored` custody registrations, fetch the
+    // sealed value from `credential_secrets` and unseal it before building
+    // the upstream request. Mirrors the OAuth block above. An absent
+    // store/key, a missing/tombstoned ref, or an unseal failure returns a
+    // loud `503 credential_unresolved` envelope — never a silent no-inject
+    // that would forward the agent's request stripped of its credential.
+    let stored_ref = match &target.auth {
+        ProxyAuth::Stored { secret_ref, .. } => Some(secret_ref.clone()),
+        _ => None,
+    };
+    if let Some(secret_ref) = stored_ref {
+        match resolve_stored_credential(&state, &secret_ref).await {
+            Ok(value) => {
+                if let ProxyAuth::Stored { resolved_value, .. } = &mut target.auth {
+                    *resolved_value = Some(value);
+                }
+            }
+            Err(envelope) => {
+                record_stored_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
                 return envelope.response;
             }
         }
@@ -1523,6 +1547,113 @@ async fn record_oauth_unavailable(
     event.status = Some(503);
     event.decision = Decision::Error;
     event.details = Some(json!({"oauth_cause": audit_cause}));
+    audit_record(audit, event).await;
+}
+
+// ─── Phase J (T1.6, CCS-5): stored-credential resolution helpers ─────────────
+
+/// Wrapped error returned by [`resolve_stored_credential`] when the sealed
+/// value can't be materialized. Carries both the 503 wire response and the
+/// audit cause for the failure-mode audit row. All variants surface the
+/// same wire code (`credential_unresolved`); the `audit_cause` distinguishes
+/// them for forensics.
+struct StoredUnavailable {
+    response: Response,
+    audit_cause: &'static str,
+}
+
+/// Phase J (T1.6) — fetch + unseal the `stored` custody value for a
+/// registration. Fails loud (never a silent no-inject):
+/// - Sealing key / sealed store unwired (operator hasn't set
+///   `LOCKSMITH_CREDENTIAL_SEALING_KEY`) → 503 (`credential_store_unconfigured`).
+/// - `secret_ref` missing or tombstoned (rotated out / cleared) → 503
+///   (`credential_unresolved`).
+/// - Store read error / unseal failure → 503 (`store_read_failed` /
+///   `unseal_failed`).
+async fn resolve_stored_credential(
+    state: &AppState,
+    secret_ref: &str,
+) -> Result<secrecy::SecretString, StoredUnavailable> {
+    let (Some(key), Some(secrets)) = (
+        state.credential_sealing_key.as_ref(),
+        state.credential_secrets.as_ref(),
+    ) else {
+        return Err(StoredUnavailable {
+            response: stored_unavailable_envelope(
+                "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)",
+            ),
+            audit_cause: "credential_store_unconfigured",
+        });
+    };
+
+    let sealed = match secrets.get(secret_ref).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Err(StoredUnavailable {
+                response: stored_unavailable_envelope(
+                    "stored credential not found (missing or rotated out)",
+                ),
+                audit_cause: "credential_unresolved",
+            });
+        }
+        Err(e) => {
+            tracing::warn!(secret_ref = %secret_ref, error = %e, "stored credential read failed");
+            return Err(StoredUnavailable {
+                response: stored_unavailable_envelope("stored credential store unavailable"),
+                audit_cause: "store_read_failed",
+            });
+        }
+    };
+
+    match key.unseal(&sealed.sealed_value, &sealed.nonce) {
+        Ok(plain) => {
+            // Stored credential values are UTF-8 (the set path seals a JSON
+            // string). Hold the plaintext in a zeroizing SecretString.
+            let s = String::from_utf8_lossy(&plain).into_owned();
+            Ok(secrecy::SecretString::from(s))
+        }
+        Err(e) => {
+            tracing::warn!(secret_ref = %secret_ref, error = %e, "stored credential unseal failed");
+            Err(StoredUnavailable {
+                response: stored_unavailable_envelope("stored credential could not be unsealed"),
+                audit_cause: "unseal_failed",
+            })
+        }
+    }
+}
+
+/// Render the §4.7.9 envelope for a stored-credential-resolution failure.
+/// Always `503` with code `credential_unresolved` — the loud contract that
+/// a `stored_*` registration whose value can't be materialized fails the
+/// request rather than forwarding it unauthenticated.
+fn stored_unavailable_envelope(message: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": {
+                "type": "auth_error",
+                "code": "credential_unresolved",
+                "message": message,
+            }
+        })),
+    )
+        .into_response()
+}
+
+/// Audit the stored-credential failure that caused proxy_handler to
+/// short-circuit before reaching the upstream. Mirrors
+/// [`record_oauth_unavailable`].
+async fn record_stored_unavailable(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    audit_cause: &'static str,
+) {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "credential_unavailable".to_string();
+    event.status = Some(503);
+    event.decision = Decision::Error;
+    event.details = Some(json!({"credential_cause": audit_cause}));
     audit_record(audit, event).await;
 }
 
