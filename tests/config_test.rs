@@ -55,6 +55,51 @@ tools: []
 }
 
 #[test]
+fn test_operational_log_absent_defaults_to_none() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools: []
+"#;
+    let config = parse_config_str(yaml).unwrap();
+    assert!(config.operational_log.is_none());
+}
+
+#[test]
+fn test_operational_log_parses_and_defaults_retention() {
+    // Present but empty block → defaults (30-day retention, hourly sweep).
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+operational_log: {}
+tools: []
+"#;
+    let config = parse_config_str(yaml).unwrap();
+    let ol = config.operational_log.expect("operational_log present");
+    assert_eq!(ol.retention_days, 30);
+    assert_eq!(ol.sweep_interval_seconds, 3600);
+}
+
+#[test]
+fn test_operational_log_overrides_parse() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+operational_log:
+  retention_days: 7
+  sweep_interval_seconds: 600
+tools: []
+"#;
+    let config = parse_config_str(yaml).unwrap();
+    let ol = config.operational_log.expect("operational_log present");
+    assert_eq!(ol.retention_days, 7);
+    assert_eq!(ol.sweep_interval_seconds, 600);
+}
+
+#[test]
 fn test_tls_upstream_ca_bundle_parses() {
     let yaml = r#"
 listen:
