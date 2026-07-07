@@ -68,6 +68,22 @@ pub enum AuthSpec {
     StoredBearer {
         secret_ref: String,
     },
+    /// Phase J / M2 (CCS-2): `op` custody backend — inject
+    /// `<header>: <op-resolved-value>`. Carries only an
+    /// `op://vault/item/field` **reference**, never a value. The value is
+    /// resolved out-of-band by [`crate::secret::OpResolver`] at startup +
+    /// on catalog change (never per request) and injected from the
+    /// resolver's cache on the hot path (T2.3). **Never carries a value.**
+    OpHeader {
+        header: String,
+        reference: String,
+    },
+    /// Phase J / M2 (CCS-2): `op` custody backend — inject
+    /// `Authorization: Bearer <op-resolved-value>`. Carries only the
+    /// `op://` reference (see [`AuthSpec::OpHeader`]).
+    OpBearer {
+        reference: String,
+    },
     /// OAuth 2.0 PKCE flow (RFC 7636). Used by anthropic-oauth,
     /// google-gemini-cli. First-time auth opens a browser to `auth_url`
     /// with a code-challenge; the operator-host loopback receives the
@@ -173,6 +189,11 @@ impl AuthSpec {
             AuthSpec::None
             | AuthSpec::StoredHeader { .. }
             | AuthSpec::StoredBearer { .. }
+            // `op_*` resolve via the OpResolver cache (T2.3), not the
+            // env-var static resolver, so they yield no env-backed
+            // SecretRef here.
+            | AuthSpec::OpHeader { .. }
+            | AuthSpec::OpBearer { .. }
             | AuthSpec::OauthPkce { .. }
             | AuthSpec::OauthDeviceCode { .. } => None,
             AuthSpec::Header { env_var, .. } | AuthSpec::Bearer { env_var } => {
@@ -204,6 +225,45 @@ impl AuthSpec {
                 Some(secret_ref.as_str())
             }
             _ => None,
+        }
+    }
+
+    /// True iff this is an `op` custody variant (Phase J / M2, CCS-2): the
+    /// credential value is resolved from an `op://` reference by the
+    /// [`crate::secret::OpResolver`] cache at inject-time rather than
+    /// sealed at rest or read from an env var.
+    pub fn is_op(&self) -> bool {
+        matches!(self, AuthSpec::OpHeader { .. } | AuthSpec::OpBearer { .. })
+    }
+
+    /// The `op://vault/item/field` reference for an `op` variant, else
+    /// `None`. Used by the OpResolver to build its resolution set and by
+    /// the proxy hot path to look up the cached value for injection.
+    pub fn op_reference(&self) -> Option<&str> {
+        match self {
+            AuthSpec::OpHeader { reference, .. } | AuthSpec::OpBearer { reference } => {
+                Some(reference.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// Validate an `op` variant's reference carries the `op://` scheme.
+    /// Non-`op` variants pass trivially. The register-time validator
+    /// calls this so a malformed reference is rejected before it reaches
+    /// the resolver (which would otherwise silently degrade it).
+    pub fn validate_op_reference(&self) -> Result<(), String> {
+        match self {
+            AuthSpec::OpHeader { reference, .. } | AuthSpec::OpBearer { reference } => {
+                if reference.starts_with("op://") && reference.len() > "op://".len() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "op custody reference must use the op:// scheme, got: {reference}"
+                    ))
+                }
+            }
+            _ => Ok(()),
         }
     }
 }
@@ -261,6 +321,87 @@ mod tests {
     }
 
     #[test]
+    fn op_bearer_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::OpBearer {
+            reference: "op://vault/item/field".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"op_bearer""#), "tag: {json}");
+        assert!(json.contains(r#""reference":"op://vault/item/field""#));
+        // No value ever appears in the serialized shape.
+        assert!(!json.to_lowercase().contains("value"));
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn op_header_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::OpHeader {
+            header: "x-api-key".to_string(),
+            reference: "op://vault/item/field".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"op_header""#), "tag: {json}");
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn is_op_and_reference_accessor() {
+        let oh = AuthSpec::OpHeader {
+            header: "x".into(),
+            reference: "op://v/i/f".into(),
+        };
+        let ob = AuthSpec::OpBearer {
+            reference: "op://v/i/g".into(),
+        };
+        assert!(oh.is_op());
+        assert!(ob.is_op());
+        assert_eq!(oh.op_reference(), Some("op://v/i/f"));
+        assert_eq!(ob.op_reference(), Some("op://v/i/g"));
+        // op variants inject a header but are neither stored nor oauth,
+        // and never resolve via the env-var static resolver.
+        assert!(ob.injects_header());
+        assert!(!ob.is_stored());
+        assert!(!ob.is_oauth());
+        assert!(ob.to_secret_ref().is_none());
+
+        let env = AuthSpec::Bearer {
+            env_var: "TOK".into(),
+        };
+        assert!(!env.is_op());
+        assert_eq!(env.op_reference(), None);
+    }
+
+    #[test]
+    fn validate_op_reference_rejects_non_op_scheme() {
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "op://vault/item/field".into(),
+            }
+            .validate_op_reference()
+            .is_ok()
+        );
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "https://not-op".into(),
+            }
+            .validate_op_reference()
+            .is_err()
+        );
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "op://".into(),
+            }
+            .validate_op_reference()
+            .is_err(),
+            "bare scheme with no path is rejected"
+        );
+        // Non-op variants pass trivially.
+        assert!(AuthSpec::None.validate_op_reference().is_ok());
+    }
+
+    #[test]
     fn stored_variants_inject_but_are_not_oauth_and_have_no_env_secret_ref() {
         let sb = AuthSpec::StoredBearer {
             secret_ref: "cs_x".into(),
@@ -289,6 +430,7 @@ mod tests {
             "header",
             "env_var",
             "secret_ref",
+            "reference",
             "client_id",
             "redirect_uri",
             "scopes",
@@ -318,6 +460,13 @@ mod tests {
             },
             AuthSpec::StoredBearer {
                 secret_ref: "cs_ref".into(),
+            },
+            AuthSpec::OpHeader {
+                header: "x-api-key".into(),
+                reference: "op://vault/item/field".into(),
+            },
+            AuthSpec::OpBearer {
+                reference: "op://vault/item/field".into(),
             },
             AuthSpec::OauthPkce {
                 client_id: "cid".into(),

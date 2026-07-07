@@ -164,6 +164,26 @@ enum ProxyAuth {
         /// Unsealed value, filled by the hot-path resolution step (T1.6).
         resolved_value: Option<secrecy::SecretString>,
     },
+    /// Phase J / M2 `op` custody backend (CCS-2/CCS-8). The value is
+    /// resolved from an `op://` reference by [`crate::secret::OpResolver`]
+    /// at startup + on catalog change (never per request) and injected
+    /// from the resolver's cache on the hot path (T2.3). Injects like
+    /// `Header`/`Bearer`: `header=Some(name)` → `name: value`;
+    /// `header=None` → `Authorization: Bearer value`. `resolved_value` is
+    /// filled from the cache; a cache miss turns into a loud 503 pre-flight
+    /// (T2.3) so no value is ever reconstructed proxy-side.
+    Op {
+        /// Header name for `op_header`; `None` for `op_bearer`.
+        header: Option<String>,
+        audit_mode: &'static str,
+        /// `op://vault/item/field` reference looked up in the resolver
+        /// cache at inject-time (T2.3). Never resolved per request.
+        // Read by the hot-path pre-flight resolution added in T2.3.
+        #[allow(dead_code)]
+        reference: String,
+        /// Cached value, filled by the hot-path resolution step (T2.3).
+        resolved_value: Option<secrecy::SecretString>,
+    },
     /// OAuth (PKCE or device-code). Access token resolved from the
     /// `oauth_sessions` cache before this struct is constructed, so
     /// `build_upstream_request` can inject without async work. The
@@ -198,6 +218,7 @@ impl ProxyAuth {
             ProxyAuth::Header { audit_mode, .. } => audit_mode,
             ProxyAuth::Bearer { .. } => "bearer",
             ProxyAuth::Stored { audit_mode, .. } => audit_mode,
+            ProxyAuth::Op { audit_mode, .. } => audit_mode,
             ProxyAuth::Oauth { audit_mode, .. } => audit_mode,
         }
     }
@@ -223,6 +244,8 @@ impl ProxyAuth {
             ProxyAuth::Bearer { .. } => None, // "authorization" is always stripped
             // stored_header strips its header; stored_bearer → Authorization (always stripped).
             ProxyAuth::Stored { header, .. } => header.as_ref().map(|h| h.to_lowercase()),
+            // op_header strips its header; op_bearer → Authorization (always stripped).
+            ProxyAuth::Op { header, .. } => header.as_ref().map(|h| h.to_lowercase()),
             ProxyAuth::Oauth { .. } => None, // F.5 will inject Authorization; always stripped
         }
     }
@@ -257,6 +280,18 @@ impl ProxyTarget {
                 header: None,
                 audit_mode: "stored_bearer",
                 secret_ref: secret_ref.clone(),
+                resolved_value: None,
+            },
+            AuthSpec::OpHeader { header, reference } => ProxyAuth::Op {
+                header: Some(header.clone()),
+                audit_mode: "op_header",
+                reference: reference.clone(),
+                resolved_value: None,
+            },
+            AuthSpec::OpBearer { reference } => ProxyAuth::Op {
+                header: None,
+                audit_mode: "op_bearer",
+                reference: reference.clone(),
                 resolved_value: None,
             },
             AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
@@ -669,6 +704,28 @@ fn build_upstream_request(
             // `credential_secrets` before we reach here, and 503s an
             // unresolvable stored ref pre-flight. While `None`, inject
             // nothing (the value is never reconstructed proxy-side).
+            if let Some(value) = resolved_value {
+                let exposed = secrecy::ExposeSecret::expose_secret(value);
+                match header {
+                    Some(h) => {
+                        upstream_req = upstream_req.header(h, exposed);
+                    }
+                    None => {
+                        upstream_req =
+                            upstream_req.header("Authorization", format!("Bearer {exposed}"));
+                    }
+                }
+            }
+        }
+        ProxyAuth::Op {
+            header,
+            resolved_value,
+            ..
+        } => {
+            // The hot-path resolution step (T2.3) fills `resolved_value`
+            // from the OpResolver cache before we reach here, and 503s a
+            // cache miss pre-flight. While `None`, inject nothing (the
+            // value is never resolved proxy-side per request).
             if let Some(value) = resolved_value {
                 let exposed = secrecy::ExposeSecret::expose_secret(value);
                 match header {
@@ -1379,6 +1436,24 @@ async fn apply_agent_credential_override(
                 header: None,
                 audit_mode: "stored_bearer",
                 secret_ref,
+                resolved_value: None,
+            };
+        }
+        AuthSpec::OpHeader { header, reference } => {
+            // T2.3 fills the value from the OpResolver cache before
+            // build_upstream_request; here we only carry the shape.
+            target.auth = ProxyAuth::Op {
+                header: Some(header),
+                audit_mode: "op_header",
+                reference,
+                resolved_value: None,
+            };
+        }
+        AuthSpec::OpBearer { reference } => {
+            target.auth = ProxyAuth::Op {
+                header: None,
+                audit_mode: "op_bearer",
+                reference,
                 resolved_value: None,
             };
         }

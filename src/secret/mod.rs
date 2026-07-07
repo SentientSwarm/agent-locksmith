@@ -105,6 +105,10 @@ pub fn resolve_registration_creds_sync_env_only(
                 // credential_secrets store at inject-time, not the startup
                 // env-var resolver. Skip here.
                 AuthSpec::StoredHeader { .. } | AuthSpec::StoredBearer { .. } => continue,
+                // op_* (Phase J / M2, CCS-8) resolve via the OpResolver
+                // cache (populated at startup + on catalog change), not
+                // the env-var resolver. Skip here.
+                AuthSpec::OpHeader { .. } | AuthSpec::OpBearer { .. } => continue,
                 // OAuth variants don't resolve via env-var indirection — their
                 // tokens live in the oauth_sessions cache, populated by the
                 // bootstrap CLI (Phase F.4) and refreshed by the daemon's

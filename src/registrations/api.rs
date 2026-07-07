@@ -340,6 +340,13 @@ pub async fn op_put(
         (_, Some(a)) => a,
     };
 
+    // Phase J / M2 (CCS-2): an `op` custody reference must use the `op://`
+    // scheme. Reject a malformed reference at register-time so it never
+    // reaches the resolver (which would otherwise silently degrade it).
+    if let Err(msg) = auth.validate_op_reference() {
+        return registration_error_response(&RegistrationError::InvalidMetadata(msg));
+    }
+
     // Existing row? Check kind immutability + preserve created_at + disabled.
     let now = unix_now();
     let (created_at, disabled) = match state.repo.get(&name).await {
