@@ -28,6 +28,16 @@ logging:
 # tls:
 #   upstream_ca_bundle: "/etc/locksmith/ca/kamiwaza-ca.pem"
 
+# ── Operational-log stream (optional) ─────────────────────
+# Daemon-internal operational events (config reloads, OAuth-refresh
+# degradations, registration mutations, credential-store degradations),
+# queryable via GET /admin/operator/logs. DISTINCT from the audit stream
+# and retained independently. Secret-free by contract — no credential
+# value is ever recorded here. Defaults: 30-day retention, hourly sweep.
+# operational_log:
+#   retention_days: 30
+#   sweep_interval_seconds: 3600
+
 # Graceful shutdown on SIGINT/SIGTERM. Streaming requests in flight at the
 # moment a signal is received get up to this many seconds to complete
 # before the listener is forcibly closed (INF-1).

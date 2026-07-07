@@ -5,10 +5,16 @@ pub mod agent;
 pub mod agent_creds;
 pub mod audit;
 pub mod bootstrap;
+pub mod credential_secrets;
+pub mod operational_log;
 
 pub use agent::{AgentRecord, AgentRepository, RepoError};
 pub use agent_creds::{AgentCredentialOverride, AgentCredentialRepository};
 pub use audit::{AuditEvent, AuditFilter, AuditPage, AuditRepository, Decision, EventClass};
 pub use bootstrap::{
     BootstrapScope, BootstrapStatus, BootstrapTokenRecord, BootstrapTokenRepository,
+};
+pub use credential_secrets::{CredentialSecretsRepository, SealedSecret};
+pub use operational_log::{
+    LogComponent, LogFilter, LogLevel, OperationalLogRecord, OperationalLogStore,
 };

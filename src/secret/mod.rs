@@ -18,14 +18,18 @@
 
 pub mod aws;
 pub mod backend;
+pub mod credential_sealing;
 pub mod env;
 pub mod file_sealed;
+pub mod op_resolver;
 pub mod vault;
 
 pub use aws::AwsSecretsManagerBackend;
 pub use backend::{BackendError, SecretBackend, SecretResolver};
+pub use credential_sealing::{CREDENTIAL_SEALING_KEY_ENV, CredentialSealingKey};
 pub use env::EnvBackend;
 pub use file_sealed::FileSealedBackend;
+pub use op_resolver::{OpCliCommand, OpCommand, OpResolver};
 pub use vault::VaultBackend;
 
 use std::collections::HashMap;
@@ -99,6 +103,14 @@ pub fn resolve_registration_creds_sync_env_only(
                 AuthSpec::None => continue,
                 AuthSpec::Header { env_var, .. } => env_var,
                 AuthSpec::Bearer { env_var } => env_var,
+                // stored_* (Phase J, ADR-0008) resolve via the sealed
+                // credential_secrets store at inject-time, not the startup
+                // env-var resolver. Skip here.
+                AuthSpec::StoredHeader { .. } | AuthSpec::StoredBearer { .. } => continue,
+                // op_* (Phase J / M2, CCS-8) resolve via the OpResolver
+                // cache (populated at startup + on catalog change), not
+                // the env-var resolver. Skip here.
+                AuthSpec::OpHeader { .. } | AuthSpec::OpBearer { .. } => continue,
                 // OAuth variants don't resolve via env-var indirection — their
                 // tokens live in the oauth_sessions cache, populated by the
                 // bootstrap CLI (Phase F.4) and refreshed by the daemon's

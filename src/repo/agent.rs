@@ -24,6 +24,8 @@ pub enum RepoError {
     Sqlx(#[from] sqlx::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("rng: {0}")]
+    Rng(String),
 }
 
 #[derive(Debug, Clone)]

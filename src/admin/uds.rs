@@ -14,7 +14,7 @@ use crate::mtls::MtlsValidator;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use axum::{Router, body::Body};
 use serde::Deserialize;
 use serde_json::json;
@@ -67,6 +67,25 @@ pub struct UdsState {
     /// persist overrides. `None` for M0/M1 deployments without admin
     /// substrate.
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    /// Phase J (ADR-0008) — credential-store sealing key. Threaded into
+    /// the registrations admin router so the
+    /// `PUT/DELETE /admin/operator/<kind>/<name>/credential` routes can
+    /// seal operator-supplied values. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset — the credential routes
+    /// then 404 (the sealing-key gate).
+    pub credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present.
+    pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2) — operational-log emitter, threaded into the
+    /// registrations admin router so registration create/update/delete
+    /// records a `registry` operational-log event. `None` for M0/M1
+    /// deployments without the operational-log substrate.
+    pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// Phase J / M2 (LOG-3) — operational-log store, read by the
+    /// `GET /admin/operator/logs` query route. `None` for M0/M1
+    /// deployments; the route then returns an empty result set.
+    pub operational_log_store: Option<crate::repo::OperationalLogStore>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -80,16 +99,23 @@ pub struct UdsState {
 /// both so the proxy hot path picks up changes without a daemon
 /// restart. When `None` (legacy / non-daemon paths), admin writes
 /// still hit the repo but no in-memory cache exists to invalidate.
+#[allow(clippy::too_many_arguments)]
 fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
     catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
         repo,
         catalog,
         resolved_creds,
+        credential_sealing_key,
+        credential_secrets,
+        operational_log,
     };
     Router::new()
         .route("/tools", get(api::op_list_tools))
@@ -100,6 +126,11 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_tool),
         )
         .route("/tools/{name}/enable", post(api::op_enable_tool))
+        // Phase J (ADR-0008) — stored-credential set-value / clear.
+        .route(
+            "/tools/{name}/credential",
+            put(api::op_put_tool_credential).delete(api::op_delete_tool_credential),
+        )
         .route("/models", get(api::op_list_models))
         .route(
             "/models/{name}",
@@ -108,6 +139,10 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_model),
         )
         .route("/models/{name}/enable", post(api::op_enable_model))
+        .route(
+            "/models/{name}/credential",
+            put(api::op_put_model_credential).delete(api::op_delete_model_credential),
+        )
         .route("/infra", get(api::op_list_infra))
         .route(
             "/infra/{name}",
@@ -116,6 +151,10 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_infra),
         )
         .route("/infra/{name}/enable", post(api::op_enable_infra))
+        .route(
+            "/infra/{name}/credential",
+            put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
+        )
         .with_state(st)
 }
 
@@ -180,6 +219,12 @@ pub fn build_router(state: UdsState) -> Router {
             "/agents/{public_id}/credentials/{registration}",
             axum::routing::put(op_set_agent_credential).delete(op_unset_agent_credential),
         )
+        // Phase J / M2 (CCS-7) — set a STORED value on a per-agent
+        // override: seal → insert → mint ref → write a stored_* override.
+        .route(
+            "/agents/{public_id}/credentials/{registration}/credential",
+            axum::routing::put(op_set_agent_stored_credential),
+        )
         .route(
             "/bootstrap_tokens",
             get(op_list_bootstrap).post(op_mint_bootstrap),
@@ -190,6 +235,9 @@ pub fn build_router(state: UdsState) -> Router {
         )
         .route("/tools-legacy", get(op_list_tools))
         .route("/audit", get(op_query_audit))
+        // Phase J / M2 (LOG-3) — operational-log query. Distinct route +
+        // handler from `/audit`; reads the `operational_logs` table.
+        .route("/logs", get(op_query_logs))
         .with_state(state.clone());
 
     // Phase E.3 registrations sub-router (only mounted when the repo is
@@ -202,6 +250,9 @@ pub fn build_router(state: UdsState) -> Router {
             repo,
             state.catalog.clone(),
             state.resolved_creds.clone(),
+            state.credential_sealing_key.clone(),
+            state.credential_secrets.clone(),
+            state.operational_log.clone(),
         )),
         None => operator_existing,
     };
@@ -690,6 +741,97 @@ async fn op_query_audit(
     }
 }
 
+// ─── Phase J / M2 (LOG-3) — operational-log query ──────────────────────────
+
+#[derive(Deserialize, Default)]
+struct LogQueryParams {
+    level: Option<String>,
+    component: Option<String>,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+/// `GET /admin/operator/logs?level&component&since_ms&until_ms&limit&offset`
+/// — query the operational-log stream. Distinct from `/audit`: separate
+/// table, separate handler, `{"logs":[...]}` envelope. `400`s on an
+/// invalid `level` or `component`, mirroring `/audit`'s
+/// invalid_event_class / invalid_decision handling. When the store isn't
+/// wired (M0/M1), returns an empty result set.
+async fn op_query_logs(
+    State(state): State<UdsState>,
+    Extension(_op): Extension<OperatorIdentity>,
+    Query(q): Query<LogQueryParams>,
+) -> Response {
+    use crate::repo::{LogComponent, LogFilter, LogLevel};
+
+    let level = match q.level.as_deref() {
+        Some(s) => match LogLevel::parse(s) {
+            Some(l) => Some(l),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": { "code": "invalid_level", "message": format!("unknown level: {s}") }
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let component = match q.component.as_deref() {
+        Some(s) => match LogComponent::parse(s) {
+            Some(c) => Some(c),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": { "code": "invalid_component", "message": format!("unknown component: {s}") }
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
+    let filter = LogFilter {
+        level,
+        component,
+        since_ms: q.since_ms,
+        until_ms: q.until_ms,
+        limit: q.limit.unwrap_or(100),
+        offset: q.offset.unwrap_or(0),
+    };
+
+    let Some(store) = state.operational_log_store.as_ref() else {
+        // No operational-log substrate wired — empty result, not an error.
+        return (StatusCode::OK, Json(json!({ "logs": [] }))).into_response();
+    };
+    match store.query(&filter).await {
+        Ok(rows) => {
+            let rows: Vec<_> = rows
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "ts_ms": r.ts_ms,
+                        "level": r.level,
+                        "component": r.component,
+                        "event": r.event,
+                        "message": r.message,
+                        "fields": r.fields,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "logs": rows }))).into_response()
+        }
+        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(e.to_string())),
+    }
+}
+
 // ─── Phase G — per-agent credential overrides ──────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -728,6 +870,129 @@ async fn op_set_agent_credential(
             "agent_credential_overrides.set: {e}"
         ))),
     }
+}
+
+/// Body for `PUT /agents/{id}/credentials/{registration}/credential`
+/// (Phase J / M2, CCS-7). The cleartext `value` is sealed before storage
+/// (reveal-never); it is never logged, echoed, or persisted in cleartext.
+/// An optional `header` makes the override a `stored_header` (else
+/// `stored_bearer`, unless an existing header-shaped override is
+/// preserved). `deny_unknown_fields` rejects a stray `secret_ref`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetAgentStoredCredentialBody {
+    value: String,
+    #[serde(default)]
+    header: Option<String>,
+}
+
+/// `PUT /admin/operator/agents/{public_id}/credentials/{registration}/credential`
+/// — seal an operator-supplied value into `credential_secrets` and write a
+/// `stored_*` per-agent override (CCS-7). Mirrors `op_put_credential` on
+/// the registration path: seal → insert → mint ref → set override →
+/// tombstone the prior stored ref on rotation. Gated on the credential
+/// sealing key (404 when unconfigured — the feature gate). The value is
+/// never echoed.
+async fn op_set_agent_stored_credential(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((agent_id_or_name, registration)): Path<(String, String)>,
+    Json(body): Json<SetAgentStoredCredentialBody>,
+) -> Response {
+    use crate::registrations::AuthSpec;
+
+    // Sealing-key gate: feature off ⇒ 404 (route behaves as if absent).
+    let (Some(key), Some(secrets)) = (
+        state.credential_sealing_key.as_ref(),
+        state.credential_secrets.as_ref(),
+    ) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "type": "not_found",
+                    "code": "credential_store_unconfigured",
+                    "message": "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)",
+                }
+            })),
+        )
+            .into_response();
+    };
+    let Some(creds) = state.agent_creds.as_ref() else {
+        return admin_err_response(crate::admin::service::AdminError::Backend(
+            "agent_credential_overrides not wired".into(),
+        ));
+    };
+    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
+        Ok(a) => a,
+        Err(e) => return admin_err_response(e),
+    };
+
+    // Capture the prior override's stored ref (for tombstoning) and its
+    // header shape (to preserve when the body doesn't supply one).
+    let existing = creds.get(agent.id, &registration).await.ok().flatten();
+    let old_ref = existing
+        .as_ref()
+        .and_then(|o| o.auth_spec.stored_secret_ref().map(|s| s.to_string()));
+    let preserved_header = existing.as_ref().and_then(|o| match &o.auth_spec {
+        AuthSpec::StoredHeader { header, .. } | AuthSpec::Header { header, .. } => {
+            Some(header.clone())
+        }
+        _ => None,
+    });
+    let header_name = body.header.clone().or(preserved_header);
+
+    // Seal the cleartext, then drop it. Never logged / echoed (CCS-1).
+    let (sealed, nonce) = match key.seal(body.value.as_bytes()) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+                "credential seal failed: {e}"
+            )));
+        }
+    };
+    let secret_ref = match secrets.insert(&sealed, &nonce).await {
+        Ok(r) => r,
+        Err(e) => {
+            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+                "credential store insert failed: {e}"
+            )));
+        }
+    };
+
+    let new_auth = match header_name {
+        Some(header) => AuthSpec::StoredHeader {
+            header,
+            secret_ref: secret_ref.clone(),
+        },
+        None => AuthSpec::StoredBearer {
+            secret_ref: secret_ref.clone(),
+        },
+    };
+
+    if let Err(e) = creds.set(agent.id, &registration, &new_auth).await {
+        return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+            "agent_credential_overrides.set: {e}"
+        )));
+    }
+
+    // Tombstone the rotated ref only after the override write succeeds so a
+    // failed write never orphans the live secret.
+    if let Some(old) = old_ref
+        && let Err(e) = secrets.tombstone(&old).await
+    {
+        tracing::warn!(error = %e, "tombstone of rotated agent-override credential ref failed");
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "agent_public_id": agent.public_id,
+            "registration": registration,
+            "secret_ref": secret_ref,
+        })),
+    )
+        .into_response()
 }
 
 async fn op_unset_agent_credential(

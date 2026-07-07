@@ -277,11 +277,13 @@ impl RefreshError {
 /// margin, takes their per-session lock, and refreshes them.
 ///
 /// Co-terminates with `shutdown` to stop cleanly on SIGTERM.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     repo: OauthSessionRepository,
     catalog: Arc<arc_swap::ArcSwap<Catalog>>,
     key: SealingKey,
     locks: RefreshLockMap,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) {
     let client = reqwest::Client::builder()
@@ -343,6 +345,24 @@ pub async fn run(
                                         error = %e,
                                         "oauth refresh failed; marking session degraded",
                                     );
+                                    // Phase J / M2 (LOG-2, oauth emit site):
+                                    // record the refresh degradation on the
+                                    // operational-log stream. Non-secret —
+                                    // registration name + session label +
+                                    // audit cause only; never the token.
+                                    if let Some(emitter) = operational_log.as_ref() {
+                                        emitter.emit(
+                                            crate::repo::LogLevel::Warn,
+                                            crate::repo::LogComponent::Oauth,
+                                            "oauth_refresh_degraded",
+                                            "oauth refresh failed; session marked degraded",
+                                            Some(serde_json::json!({
+                                                "registration": name,
+                                                "session_label": session_label,
+                                                "cause": e.audit_cause(),
+                                            })),
+                                        );
+                                    }
                                     if let Err(persist_err) = repo
                                         .mark_degraded(&name, &session_label)
                                         .await

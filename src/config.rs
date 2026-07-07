@@ -37,6 +37,10 @@ pub struct AppConfig {
     /// Audit subsystem tuning (M3). Optional — daemon applies defaults
     /// (90-day retention, hourly sweep) when absent.
     pub audit: Option<AuditConfig>,
+    /// Operational-log stream tuning (Phase J / M2, T2.5). Optional —
+    /// daemon applies defaults (30-day retention, hourly sweep) when
+    /// absent. Independent of `audit` retention by design (LOG-1).
+    pub operational_log: Option<OperationalLogConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -107,6 +111,39 @@ fn default_jsonl_max_bytes() -> u64 {
 
 fn default_jsonl_keep_files() -> usize {
     14
+}
+
+/// Operational-log stream tuning (Phase J / M2, T2.5). Separate from
+/// [`AuditConfig`] so the two streams retain independently (LOG-1).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct OperationalLogConfig {
+    /// Days of operational-log history to retain. Rows older than `now -
+    /// retention_days` are deleted by the operational-log sweeper (T2.8).
+    /// Default 30 — shorter than audit's 90 by design; operational events
+    /// are debugging aids, not the forensic record of record.
+    #[serde(default = "default_operational_log_retention_days")]
+    pub retention_days: u32,
+    /// Sweep cadence in seconds. Default 3600 (hourly).
+    #[serde(default = "default_operational_log_sweep_interval_seconds")]
+    pub sweep_interval_seconds: u64,
+}
+
+impl Default for OperationalLogConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_operational_log_retention_days(),
+            sweep_interval_seconds: default_operational_log_sweep_interval_seconds(),
+        }
+    }
+}
+
+fn default_operational_log_retention_days() -> u32 {
+    30
+}
+
+fn default_operational_log_sweep_interval_seconds() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize)]

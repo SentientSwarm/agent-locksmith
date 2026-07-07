@@ -3,7 +3,13 @@
 //! Locked at devloop `phase-e-catalog-substrate` Design phase. Extended at
 //! Phase F (OAuth — see ADR-0005).
 //!
-//! Five variants, internally tagged on `kind`:
+//! Seven variants, internally tagged on `kind`:
+//!
+//!   `stored_header` / `stored_bearer` — Phase J `stored` custody backend
+//!                         (ADR-0008). Same wire injection as `header`/`bearer`
+//!                         but the value is sealed at rest in `credential_secrets`;
+//!                         the variant carries only an opaque `secret_ref` handle,
+//!                         never a value. Unsealed at inject-time (T1.6).
 //!
 //!   `none`              — no auth header injection. Required to be explicit for
 //!                         `kind=tool` (implicit absence is rejected at register-time,
@@ -46,6 +52,37 @@ pub enum AuthSpec {
     },
     Bearer {
         env_var: String,
+    },
+    /// Phase J (ADR-0008): `stored` custody backend — inject
+    /// `<header>: <unsealed-value>`. Carries only the opaque
+    /// `secret_ref` handle into the `credential_secrets` sealed store;
+    /// the value is sealed at rest with the credential sealing key and
+    /// unsealed at inject-time (T1.6). **Never carries a value.**
+    StoredHeader {
+        header: String,
+        secret_ref: String,
+    },
+    /// Phase J (ADR-0008): `stored` custody backend — inject
+    /// `Authorization: Bearer <unsealed-value>`. Carries only the
+    /// `secret_ref` handle (see [`AuthSpec::StoredHeader`]).
+    StoredBearer {
+        secret_ref: String,
+    },
+    /// Phase J / M2 (CCS-2): `op` custody backend — inject
+    /// `<header>: <op-resolved-value>`. Carries only an
+    /// `op://vault/item/field` **reference**, never a value. The value is
+    /// resolved out-of-band by [`crate::secret::OpResolver`] at startup +
+    /// on catalog change (never per request) and injected from the
+    /// resolver's cache on the hot path (T2.3). **Never carries a value.**
+    OpHeader {
+        header: String,
+        reference: String,
+    },
+    /// Phase J / M2 (CCS-2): `op` custody backend — inject
+    /// `Authorization: Bearer <op-resolved-value>`. Carries only the
+    /// `op://` reference (see [`AuthSpec::OpHeader`]).
+    OpBearer {
+        reference: String,
     },
     /// OAuth 2.0 PKCE flow (RFC 7636). Used by anthropic-oauth,
     /// google-gemini-cli. First-time auth opens a browser to `auth_url`
@@ -146,12 +183,317 @@ impl AuthSpec {
     /// convention.
     pub fn to_secret_ref(&self) -> Option<SecretRef> {
         match self {
-            AuthSpec::None | AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => None,
+            // `stored_*` resolve via the sealed `credential_secrets`
+            // store at inject-time (T1.6), not the env-var static
+            // resolver, so they yield no env-backed SecretRef here.
+            AuthSpec::None
+            | AuthSpec::StoredHeader { .. }
+            | AuthSpec::StoredBearer { .. }
+            // `op_*` resolve via the OpResolver cache (T2.3), not the
+            // env-var static resolver, so they yield no env-backed
+            // SecretRef here.
+            | AuthSpec::OpHeader { .. }
+            | AuthSpec::OpBearer { .. }
+            | AuthSpec::OauthPkce { .. }
+            | AuthSpec::OauthDeviceCode { .. } => None,
             AuthSpec::Header { env_var, .. } | AuthSpec::Bearer { env_var } => {
                 Some(SecretRef::FromEnv {
                     var: env_var.clone(),
                     prefix: None,
                 })
+            }
+        }
+    }
+
+    /// True iff this is a `stored` custody variant (Phase J, ADR-0008):
+    /// the credential value is sealed in `credential_secrets` and
+    /// unsealed at inject-time rather than resolved from an env var.
+    pub fn is_stored(&self) -> bool {
+        matches!(
+            self,
+            AuthSpec::StoredHeader { .. } | AuthSpec::StoredBearer { .. }
+        )
+    }
+
+    /// The `credential_secrets` handle for a `stored` variant, else
+    /// `None`. Used by the set-value path (to tombstone the prior
+    /// secret on rotation) and the proxy hot path (to fetch + unseal
+    /// the value for injection).
+    pub fn stored_secret_ref(&self) -> Option<&str> {
+        match self {
+            AuthSpec::StoredHeader { secret_ref, .. } | AuthSpec::StoredBearer { secret_ref } => {
+                Some(secret_ref.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// True iff this is an `op` custody variant (Phase J / M2, CCS-2): the
+    /// credential value is resolved from an `op://` reference by the
+    /// [`crate::secret::OpResolver`] cache at inject-time rather than
+    /// sealed at rest or read from an env var.
+    pub fn is_op(&self) -> bool {
+        matches!(self, AuthSpec::OpHeader { .. } | AuthSpec::OpBearer { .. })
+    }
+
+    /// The `op://vault/item/field` reference for an `op` variant, else
+    /// `None`. Used by the OpResolver to build its resolution set and by
+    /// the proxy hot path to look up the cached value for injection.
+    pub fn op_reference(&self) -> Option<&str> {
+        match self {
+            AuthSpec::OpHeader { reference, .. } | AuthSpec::OpBearer { reference } => {
+                Some(reference.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// Validate an `op` variant's reference carries the `op://` scheme.
+    /// Non-`op` variants pass trivially. The register-time validator
+    /// calls this so a malformed reference is rejected before it reaches
+    /// the resolver (which would otherwise silently degrade it).
+    pub fn validate_op_reference(&self) -> Result<(), String> {
+        match self {
+            AuthSpec::OpHeader { reference, .. } | AuthSpec::OpBearer { reference } => {
+                if reference.starts_with("op://") && reference.len() > "op://".len() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "op custody reference must use the op:// scheme, got: {reference}"
+                    ))
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_bearer_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::StoredBearer {
+            secret_ref: "cs_deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"stored_bearer""#), "tag: {json}");
+        assert!(json.contains(r#""secret_ref":"cs_deadbeef""#));
+        // No value ever appears in the serialized shape.
+        assert!(!json.to_lowercase().contains("value"));
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn stored_header_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::StoredHeader {
+            header: "x-api-key".to_string(),
+            secret_ref: "cs_abc123".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"stored_header""#), "tag: {json}");
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn is_stored_and_secret_ref_accessor() {
+        let sh = AuthSpec::StoredHeader {
+            header: "x".into(),
+            secret_ref: "cs_1".into(),
+        };
+        let sb = AuthSpec::StoredBearer {
+            secret_ref: "cs_2".into(),
+        };
+        assert!(sh.is_stored());
+        assert!(sb.is_stored());
+        assert_eq!(sh.stored_secret_ref(), Some("cs_1"));
+        assert_eq!(sb.stored_secret_ref(), Some("cs_2"));
+
+        let env = AuthSpec::Bearer {
+            env_var: "TOK".into(),
+        };
+        assert!(!env.is_stored());
+        assert_eq!(env.stored_secret_ref(), None);
+        assert!(!AuthSpec::None.is_stored());
+    }
+
+    #[test]
+    fn op_bearer_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::OpBearer {
+            reference: "op://vault/item/field".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"op_bearer""#), "tag: {json}");
+        assert!(json.contains(r#""reference":"op://vault/item/field""#));
+        // No value ever appears in the serialized shape.
+        assert!(!json.to_lowercase().contains("value"));
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn op_header_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::OpHeader {
+            header: "x-api-key".to_string(),
+            reference: "op://vault/item/field".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"op_header""#), "tag: {json}");
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn is_op_and_reference_accessor() {
+        let oh = AuthSpec::OpHeader {
+            header: "x".into(),
+            reference: "op://v/i/f".into(),
+        };
+        let ob = AuthSpec::OpBearer {
+            reference: "op://v/i/g".into(),
+        };
+        assert!(oh.is_op());
+        assert!(ob.is_op());
+        assert_eq!(oh.op_reference(), Some("op://v/i/f"));
+        assert_eq!(ob.op_reference(), Some("op://v/i/g"));
+        // op variants inject a header but are neither stored nor oauth,
+        // and never resolve via the env-var static resolver.
+        assert!(ob.injects_header());
+        assert!(!ob.is_stored());
+        assert!(!ob.is_oauth());
+        assert!(ob.to_secret_ref().is_none());
+
+        let env = AuthSpec::Bearer {
+            env_var: "TOK".into(),
+        };
+        assert!(!env.is_op());
+        assert_eq!(env.op_reference(), None);
+    }
+
+    #[test]
+    fn validate_op_reference_rejects_non_op_scheme() {
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "op://vault/item/field".into(),
+            }
+            .validate_op_reference()
+            .is_ok()
+        );
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "https://not-op".into(),
+            }
+            .validate_op_reference()
+            .is_err()
+        );
+        assert!(
+            AuthSpec::OpBearer {
+                reference: "op://".into(),
+            }
+            .validate_op_reference()
+            .is_err(),
+            "bare scheme with no path is rejected"
+        );
+        // Non-op variants pass trivially.
+        assert!(AuthSpec::None.validate_op_reference().is_ok());
+    }
+
+    #[test]
+    fn stored_variants_inject_but_are_not_oauth_and_have_no_env_secret_ref() {
+        let sb = AuthSpec::StoredBearer {
+            secret_ref: "cs_x".into(),
+        };
+        assert!(sb.injects_header(), "stored injects a header");
+        assert!(!sb.is_oauth());
+        // Does not resolve via the env-var static resolver.
+        assert!(sb.to_secret_ref().is_none());
+        assert_eq!(sb.session_label_or_default(), None);
+    }
+
+    /// CCS-4 reveal-never guard: no AuthSpec variant may carry a credential
+    /// *value* in its serialized (read / DB / wire) form. AuthSpec holds
+    /// only names / handles / public metadata — the stored value lives
+    /// sealed in `credential_secrets`, keyed by `secret_ref`. This test
+    /// enumerates every variant and asserts each serialized object's keys
+    /// are drawn only from a fixed allowlist of non-secret fields, so if
+    /// anyone ever adds a value-bearing field to AuthSpec it fails loudly.
+    #[test]
+    fn no_authspec_variant_serializes_a_value() {
+        // Field names that are allowed to appear — none of them holds a
+        // secret value (they are names, handles, urls, or public client
+        // metadata).
+        let allowed: std::collections::HashSet<&str> = [
+            "kind",
+            "header",
+            "env_var",
+            "secret_ref",
+            "reference",
+            "client_id",
+            "redirect_uri",
+            "scopes",
+            "auth_url",
+            "token_url",
+            "device_url",
+            "session_label",
+        ]
+        .into_iter()
+        .collect();
+
+        // A sentinel we plant in every *name/ref/metadata* field; it must
+        // never be interpretable as a value key. (It appears as a value of
+        // an allowed key, which is fine — those keys are names, not secrets.)
+        let every_variant = vec![
+            AuthSpec::None,
+            AuthSpec::Header {
+                header: "x-api-key".into(),
+                env_var: "TOOL_KEY".into(),
+            },
+            AuthSpec::Bearer {
+                env_var: "TOOL_KEY".into(),
+            },
+            AuthSpec::StoredHeader {
+                header: "x-api-key".into(),
+                secret_ref: "cs_ref".into(),
+            },
+            AuthSpec::StoredBearer {
+                secret_ref: "cs_ref".into(),
+            },
+            AuthSpec::OpHeader {
+                header: "x-api-key".into(),
+                reference: "op://vault/item/field".into(),
+            },
+            AuthSpec::OpBearer {
+                reference: "op://vault/item/field".into(),
+            },
+            AuthSpec::OauthPkce {
+                client_id: "cid".into(),
+                redirect_uri: "http://127.0.0.1/cb".into(),
+                scopes: vec!["s".into()],
+                auth_url: "https://a".into(),
+                token_url: "https://t".into(),
+                session_label: Some("lbl".into()),
+            },
+            AuthSpec::OauthDeviceCode {
+                client_id: "cid".into(),
+                scopes: vec!["s".into()],
+                device_url: "https://d".into(),
+                token_url: "https://t".into(),
+                session_label: None,
+            },
+        ];
+
+        for spec in every_variant {
+            let val = serde_json::to_value(&spec).unwrap();
+            let obj = val.as_object().expect("AuthSpec serializes to an object");
+            for key in obj.keys() {
+                assert!(
+                    allowed.contains(key.as_str()),
+                    "AuthSpec {spec:?} serialized an unexpected field `{key}` — \
+                     a value-bearing field would break the reveal-never invariant",
+                );
             }
         }
     }
