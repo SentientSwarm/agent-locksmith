@@ -178,8 +178,6 @@ enum ProxyAuth {
         audit_mode: &'static str,
         /// `op://vault/item/field` reference looked up in the resolver
         /// cache at inject-time (T2.3). Never resolved per request.
-        // Read by the hot-path pre-flight resolution added in T2.3.
-        #[allow(dead_code)]
         reference: String,
         /// Cached value, filled by the hot-path resolution step (T2.3).
         resolved_value: Option<secrecy::SecretString>,
@@ -440,6 +438,43 @@ pub async fn proxy_handler(
                     );
                 }
                 return envelope.response;
+            }
+        }
+    }
+
+    // Phase J / M2 (T2.3, CCS-8): for `op` custody registrations, read the
+    // value from the OpResolver cache — populated out-of-band at startup +
+    // on catalog change, NEVER by shelling `op` here. Mirrors the stored
+    // block above. An unwired resolver or a cache miss returns a loud
+    // `503 credential_unresolved` — never a silent no-inject.
+    let op_ref = match &target.auth {
+        ProxyAuth::Op { reference, .. } => Some(reference.clone()),
+        _ => None,
+    };
+    if let Some(reference) = op_ref {
+        match state.op_resolver.as_ref().and_then(|r| r.get(&reference)) {
+            Some(value) => {
+                if let ProxyAuth::Op { resolved_value, .. } = &mut target.auth {
+                    *resolved_value = Some(value);
+                }
+            }
+            None => {
+                record_stored_unavailable(&state.audit, &ctx, "op_reference_unresolved").await;
+                if let Some(emitter) = state.operational_log.as_ref() {
+                    emitter.emit(
+                        crate::repo::LogLevel::Warn,
+                        crate::repo::LogComponent::Proxy,
+                        "credential_unresolved",
+                        "op:// credential not resolved (cache miss); request failed 503",
+                        Some(json!({
+                            "registration": target.name,
+                            "cause": "op_reference_unresolved",
+                        })),
+                    );
+                }
+                return stored_unavailable_envelope(
+                    "op:// credential not resolved (cache miss or op unavailable)",
+                );
             }
         }
     }
