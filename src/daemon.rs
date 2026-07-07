@@ -114,6 +114,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         credential_secrets_for_app,
         operational_log_for_app,
         operational_log_store_for_sweeper,
+        op_resolver_for_app,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -146,10 +147,12 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             // store (retention sweeper).
             Some(setup.operational_log),
             Some(setup.operational_log_store),
+            // Phase J / M2: op:// resolver cache (proxy hot path, T2.3).
+            Some(setup.op_resolver),
         )
     } else {
         (
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
 
@@ -263,6 +266,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             credential_sealing_key_for_app,
             credential_secrets_for_app,
             operational_log_for_app,
+            op_resolver_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -572,6 +576,10 @@ struct AdminSetup {
     /// Phase J / M2 — operational-log store, handed to the retention
     /// sweeper (T2.8). Same pool as the emitter's drain task.
     operational_log_store: crate::repo::OperationalLogStore,
+    /// Phase J / M2 (CCS-8) — `op://` resolver cache, refreshed from the
+    /// catalog at startup. Always present when the admin substrate is up;
+    /// the cache is empty when no `op` registrations exist.
+    op_resolver: Arc<crate::secret::OpResolver>,
 }
 
 async fn build_admin_substrate(
@@ -804,6 +812,28 @@ async fn build_admin_substrate(
 
     // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
     // Built unconditionally when the admin substrate is up (the table is
+    // Phase J / M2 (CCS-8) — `op://` resolver. Built with the real `op`
+    // CLI command, then refreshed once from the catalog so every `op`
+    // registration's reference is resolved into the cache BEFORE traffic
+    // starts. A missing `op` binary or a failed read degrades that one
+    // reference (logged on the operational-log stream) — the daemon still
+    // boots. Refresh happens here (startup); on catalog change the admin
+    // handlers can re-refresh. Never per request.
+    let op_resolver = Arc::new(crate::secret::OpResolver::with_cli(Some(
+        operational_log.clone(),
+    )));
+    {
+        let cat = catalog.load();
+        let op_refs = collect_op_references(&cat);
+        if !op_refs.is_empty() {
+            info!(
+                count = op_refs.len(),
+                "resolving op:// references at startup"
+            );
+            op_resolver.refresh(&op_refs);
+        }
+    }
+
     let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
@@ -831,7 +861,28 @@ async fn build_admin_substrate(
         credential_secrets,
         operational_log,
         operational_log_store,
+        op_resolver,
     })
+}
+
+/// Collect every `op://` reference referenced by an enabled registration
+/// in `catalog`, de-duplicated. Feeds [`crate::secret::OpResolver::refresh`]
+/// at startup (and on catalog change). Reads references only — never a
+/// value (CCS-8).
+fn collect_op_references(catalog: &crate::registrations::Catalog) -> Vec<String> {
+    use crate::registrations::Kind;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
+        for r in catalog.iter_enabled_by_kind(kind) {
+            if let Some(reference) = r.auth.op_reference()
+                && seen.insert(reference.to_string())
+            {
+                out.push(reference.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Convenience for tests: pre-construct a coordinator with the given

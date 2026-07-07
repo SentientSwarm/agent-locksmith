@@ -99,6 +99,11 @@ pub struct AppState {
     /// record degraded/credential-unresolved events on the operational-log
     /// stream (distinct from audit, secret-free).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// Phase J / M2 (CCS-8) — `op://` reference resolver cache. `None`
+    /// when the `op` custody backend isn't wired. The proxy hot path
+    /// injects `op` credentials from this cache (T2.3); resolution
+    /// happens out-of-band (startup + catalog change), never per request.
+    pub op_resolver: Option<Arc<crate::secret::OpResolver>>,
 }
 
 /// Bundle of OAuth runtime state shared between the proxy hot path
@@ -364,14 +369,17 @@ pub fn build_app_full_with_phase_j(
         credential_sealing_key,
         credential_secrets,
         None,
+        None,
     )
 }
 
 /// Phase J / M2 entrypoint — same as [`build_app_full_with_phase_j`] but
-/// also takes the optional operational-log emitter (LOG-2). The daemon
-/// path uses this so the proxy hot path can emit operational-log events
-/// (distinct from audit, secret-free). `None` for the many callers (and
-/// tests) that don't need it.
+/// also takes the optional operational-log emitter (LOG-2) and the
+/// optional `op://` resolver cache (CCS-8). The daemon path uses this so
+/// the proxy hot path can emit operational-log events (distinct from
+/// audit, secret-free) and inject `op` credentials from the pre-resolved
+/// cache. Both are `None` for the many callers (and tests) that don't
+/// need them.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_full_with_phase_k(
     config: Arc<ArcSwap<AppConfig>>,
@@ -386,6 +394,7 @@ pub fn build_app_full_with_phase_k(
     credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
     credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    op_resolver: Option<Arc<crate::secret::OpResolver>>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -406,6 +415,7 @@ pub fn build_app_full_with_phase_k(
         credential_sealing_key,
         credential_secrets,
         operational_log,
+        op_resolver,
     });
 
     Router::new()

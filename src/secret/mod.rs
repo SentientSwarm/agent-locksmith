@@ -21,6 +21,7 @@ pub mod backend;
 pub mod credential_sealing;
 pub mod env;
 pub mod file_sealed;
+pub mod op_resolver;
 pub mod vault;
 
 pub use aws::AwsSecretsManagerBackend;
@@ -28,6 +29,7 @@ pub use backend::{BackendError, SecretBackend, SecretResolver};
 pub use credential_sealing::{CREDENTIAL_SEALING_KEY_ENV, CredentialSealingKey};
 pub use env::EnvBackend;
 pub use file_sealed::FileSealedBackend;
+pub use op_resolver::{OpCliCommand, OpCommand, OpResolver};
 pub use vault::VaultBackend;
 
 use std::collections::HashMap;
