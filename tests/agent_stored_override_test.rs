@@ -18,12 +18,12 @@ use agent_locksmith::app::build_app_full_with_phase_k;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator, OperatorAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
+use agent_locksmith::registrations::AuthSpec;
 use agent_locksmith::registrations::{Catalog, Kind, Registration, RegistrationRepository};
 use agent_locksmith::repo::{
     AgentCredentialRepository, AgentRepository, BootstrapTokenRepository,
     CredentialSecretsRepository,
 };
-use agent_locksmith::registrations::AuthSpec;
 use agent_locksmith::secret::CredentialSealingKey;
 use agent_locksmith::{argon2_helper, token};
 use arc_swap::ArcSwap;
