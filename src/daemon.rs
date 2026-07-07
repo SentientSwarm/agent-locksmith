@@ -164,9 +164,22 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
     });
 
-    // T2.8 wires the operational-log retention sweeper from this store;
-    // bound here so the daemon owns it for the process lifetime.
-    let _ = &operational_log_store_for_sweeper;
+    // Operational-log retention sweeper (T2.8). A SEPARATE interval task
+    // from the audit sweeper, with its own retention window — sweeping the
+    // operational-log stream never touches the audit table (LOG-1). Runs
+    // only when the operational-log substrate is up; co-terminates with
+    // shutdown like the audit sweeper.
+    let ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot
+            .operational_log
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(operational_log_retention_sweeper(store, cfg, shutdown))
+    });
 
     // Agent listener. Switch on auth_mode (post-v2 / #67):
     // - Bearer (default): plain TCP + axum (M0..M6 behavior).
@@ -402,6 +415,9 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         if let Some(s) = sweeper_task {
             let _ = s.await;
         }
+        if let Some(s) = ops_log_sweeper_task {
+            let _ = s.await;
+        }
         agent_res
     };
 
@@ -465,6 +481,39 @@ async fn audit_retention_sweeper(
                     Ok(0) => {}
                     Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "audit retention sweep deleted rows"),
                     Err(e) => warn!(error = %e, "audit retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
+/// Periodically sweep operational-log rows older than `now -
+/// retention_days` (T2.8, LOG-1/LOG-4). Independent of the audit sweeper:
+/// its own interval, its own retention window, and a bounded `DELETE`
+/// that only touches the `operational_logs` table. Exits cleanly when
+/// the shutdown future resolves.
+async fn operational_log_retention_sweeper(
+    store: crate::repo::OperationalLogStore,
+    cfg: crate::config::OperationalLogConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const MS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("operational-log sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let cutoff = now_ms() - i64::from(cfg.retention_days) * MS_PER_DAY;
+                match store.sweep(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "operational-log retention sweep deleted rows"),
+                    Err(e) => warn!(error = %e, "operational-log retention sweep failed; will retry next interval"),
                 }
             }
         }
