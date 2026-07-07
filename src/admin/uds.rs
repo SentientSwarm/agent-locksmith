@@ -219,6 +219,12 @@ pub fn build_router(state: UdsState) -> Router {
             "/agents/{public_id}/credentials/{registration}",
             axum::routing::put(op_set_agent_credential).delete(op_unset_agent_credential),
         )
+        // Phase J / M2 (CCS-7) — set a STORED value on a per-agent
+        // override: seal → insert → mint ref → write a stored_* override.
+        .route(
+            "/agents/{public_id}/credentials/{registration}/credential",
+            axum::routing::put(op_set_agent_stored_credential),
+        )
         .route(
             "/bootstrap_tokens",
             get(op_list_bootstrap).post(op_mint_bootstrap),
@@ -864,6 +870,129 @@ async fn op_set_agent_credential(
             "agent_credential_overrides.set: {e}"
         ))),
     }
+}
+
+/// Body for `PUT /agents/{id}/credentials/{registration}/credential`
+/// (Phase J / M2, CCS-7). The cleartext `value` is sealed before storage
+/// (reveal-never); it is never logged, echoed, or persisted in cleartext.
+/// An optional `header` makes the override a `stored_header` (else
+/// `stored_bearer`, unless an existing header-shaped override is
+/// preserved). `deny_unknown_fields` rejects a stray `secret_ref`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetAgentStoredCredentialBody {
+    value: String,
+    #[serde(default)]
+    header: Option<String>,
+}
+
+/// `PUT /admin/operator/agents/{public_id}/credentials/{registration}/credential`
+/// — seal an operator-supplied value into `credential_secrets` and write a
+/// `stored_*` per-agent override (CCS-7). Mirrors `op_put_credential` on
+/// the registration path: seal → insert → mint ref → set override →
+/// tombstone the prior stored ref on rotation. Gated on the credential
+/// sealing key (404 when unconfigured — the feature gate). The value is
+/// never echoed.
+async fn op_set_agent_stored_credential(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((agent_id_or_name, registration)): Path<(String, String)>,
+    Json(body): Json<SetAgentStoredCredentialBody>,
+) -> Response {
+    use crate::registrations::AuthSpec;
+
+    // Sealing-key gate: feature off ⇒ 404 (route behaves as if absent).
+    let (Some(key), Some(secrets)) = (
+        state.credential_sealing_key.as_ref(),
+        state.credential_secrets.as_ref(),
+    ) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "type": "not_found",
+                    "code": "credential_store_unconfigured",
+                    "message": "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)",
+                }
+            })),
+        )
+            .into_response();
+    };
+    let Some(creds) = state.agent_creds.as_ref() else {
+        return admin_err_response(crate::admin::service::AdminError::Backend(
+            "agent_credential_overrides not wired".into(),
+        ));
+    };
+    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
+        Ok(a) => a,
+        Err(e) => return admin_err_response(e),
+    };
+
+    // Capture the prior override's stored ref (for tombstoning) and its
+    // header shape (to preserve when the body doesn't supply one).
+    let existing = creds.get(agent.id, &registration).await.ok().flatten();
+    let old_ref = existing
+        .as_ref()
+        .and_then(|o| o.auth_spec.stored_secret_ref().map(|s| s.to_string()));
+    let preserved_header = existing.as_ref().and_then(|o| match &o.auth_spec {
+        AuthSpec::StoredHeader { header, .. } | AuthSpec::Header { header, .. } => {
+            Some(header.clone())
+        }
+        _ => None,
+    });
+    let header_name = body.header.clone().or(preserved_header);
+
+    // Seal the cleartext, then drop it. Never logged / echoed (CCS-1).
+    let (sealed, nonce) = match key.seal(body.value.as_bytes()) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+                "credential seal failed: {e}"
+            )));
+        }
+    };
+    let secret_ref = match secrets.insert(&sealed, &nonce).await {
+        Ok(r) => r,
+        Err(e) => {
+            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+                "credential store insert failed: {e}"
+            )));
+        }
+    };
+
+    let new_auth = match header_name {
+        Some(header) => AuthSpec::StoredHeader {
+            header,
+            secret_ref: secret_ref.clone(),
+        },
+        None => AuthSpec::StoredBearer {
+            secret_ref: secret_ref.clone(),
+        },
+    };
+
+    if let Err(e) = creds.set(agent.id, &registration, &new_auth).await {
+        return admin_err_response(crate::admin::service::AdminError::Backend(format!(
+            "agent_credential_overrides.set: {e}"
+        )));
+    }
+
+    // Tombstone the rotated ref only after the override write succeeds so a
+    // failed write never orphans the live secret.
+    if let Some(old) = old_ref
+        && let Err(e) = secrets.tombstone(&old).await
+    {
+        tracing::warn!(error = %e, "tombstone of rotated agent-override credential ref failed");
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "agent_public_id": agent.public_id,
+            "registration": registration,
+            "secret_ref": secret_ref,
+        })),
+    )
+        .into_response()
 }
 
 async fn op_unset_agent_credential(
