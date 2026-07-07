@@ -646,7 +646,7 @@ async fn build_admin_substrate(
             };
             (Some(admin), Some(runtime))
         }
-        Err(crate::oauth::SealingKeyError::EnvVarUnset) => {
+        Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
             info!("oauth: LOCKSMITH_OAUTH_SEALING_KEY unset; OAuth admin routes not mounted");
             (None, None)
         }
