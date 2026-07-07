@@ -82,6 +82,10 @@ pub struct UdsState {
     /// records a `registry` operational-log event. `None` for M0/M1
     /// deployments without the operational-log substrate.
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// Phase J / M2 (LOG-3) — operational-log store, read by the
+    /// `GET /admin/operator/logs` query route. `None` for M0/M1
+    /// deployments; the route then returns an empty result set.
+    pub operational_log_store: Option<crate::repo::OperationalLogStore>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -225,6 +229,9 @@ pub fn build_router(state: UdsState) -> Router {
         )
         .route("/tools-legacy", get(op_list_tools))
         .route("/audit", get(op_query_audit))
+        // Phase J / M2 (LOG-3) — operational-log query. Distinct route +
+        // handler from `/audit`; reads the `operational_logs` table.
+        .route("/logs", get(op_query_logs))
         .with_state(state.clone());
 
     // Phase E.3 registrations sub-router (only mounted when the repo is
@@ -725,6 +732,97 @@ async fn op_query_audit(
             (StatusCode::OK, Json(json!({ "events": rows }))).into_response()
         }
         Err(e) => admin_err_response(e),
+    }
+}
+
+// ─── Phase J / M2 (LOG-3) — operational-log query ──────────────────────────
+
+#[derive(Deserialize, Default)]
+struct LogQueryParams {
+    level: Option<String>,
+    component: Option<String>,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+/// `GET /admin/operator/logs?level&component&since_ms&until_ms&limit&offset`
+/// — query the operational-log stream. Distinct from `/audit`: separate
+/// table, separate handler, `{"logs":[...]}` envelope. `400`s on an
+/// invalid `level` or `component`, mirroring `/audit`'s
+/// invalid_event_class / invalid_decision handling. When the store isn't
+/// wired (M0/M1), returns an empty result set.
+async fn op_query_logs(
+    State(state): State<UdsState>,
+    Extension(_op): Extension<OperatorIdentity>,
+    Query(q): Query<LogQueryParams>,
+) -> Response {
+    use crate::repo::{LogComponent, LogFilter, LogLevel};
+
+    let level = match q.level.as_deref() {
+        Some(s) => match LogLevel::parse(s) {
+            Some(l) => Some(l),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": { "code": "invalid_level", "message": format!("unknown level: {s}") }
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let component = match q.component.as_deref() {
+        Some(s) => match LogComponent::parse(s) {
+            Some(c) => Some(c),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": { "code": "invalid_component", "message": format!("unknown component: {s}") }
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
+    let filter = LogFilter {
+        level,
+        component,
+        since_ms: q.since_ms,
+        until_ms: q.until_ms,
+        limit: q.limit.unwrap_or(100),
+        offset: q.offset.unwrap_or(0),
+    };
+
+    let Some(store) = state.operational_log_store.as_ref() else {
+        // No operational-log substrate wired — empty result, not an error.
+        return (StatusCode::OK, Json(json!({ "logs": [] }))).into_response();
+    };
+    match store.query(&filter).await {
+        Ok(rows) => {
+            let rows: Vec<_> = rows
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "ts_ms": r.ts_ms,
+                        "level": r.level,
+                        "component": r.component,
+                        "event": r.event,
+                        "message": r.message,
+                        "fields": r.fields,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "logs": rows }))).into_response()
+        }
+        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(e.to_string())),
     }
 }
 

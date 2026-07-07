@@ -770,6 +770,7 @@ async fn build_admin_substrate(
             credential_sealing_key: credential_sealing_key.clone(),
             credential_secrets: credential_secrets.clone(),
             operational_log: Some(operational_log.clone()),
+            operational_log_store: Some(operational_log_store.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,

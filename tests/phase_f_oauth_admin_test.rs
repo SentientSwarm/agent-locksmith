@@ -108,6 +108,7 @@ async fn setup() -> Harness {
         credential_sealing_key: None,
         credential_secrets: None,
         operational_log: None,
+        operational_log_store: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);
