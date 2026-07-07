@@ -271,4 +271,81 @@ mod tests {
         assert!(sb.to_secret_ref().is_none());
         assert_eq!(sb.session_label_or_default(), None);
     }
+
+    /// CCS-4 reveal-never guard: no AuthSpec variant may carry a credential
+    /// *value* in its serialized (read / DB / wire) form. AuthSpec holds
+    /// only names / handles / public metadata — the stored value lives
+    /// sealed in `credential_secrets`, keyed by `secret_ref`. This test
+    /// enumerates every variant and asserts each serialized object's keys
+    /// are drawn only from a fixed allowlist of non-secret fields, so if
+    /// anyone ever adds a value-bearing field to AuthSpec it fails loudly.
+    #[test]
+    fn no_authspec_variant_serializes_a_value() {
+        // Field names that are allowed to appear — none of them holds a
+        // secret value (they are names, handles, urls, or public client
+        // metadata).
+        let allowed: std::collections::HashSet<&str> = [
+            "kind",
+            "header",
+            "env_var",
+            "secret_ref",
+            "client_id",
+            "redirect_uri",
+            "scopes",
+            "auth_url",
+            "token_url",
+            "device_url",
+            "session_label",
+        ]
+        .into_iter()
+        .collect();
+
+        // A sentinel we plant in every *name/ref/metadata* field; it must
+        // never be interpretable as a value key. (It appears as a value of
+        // an allowed key, which is fine — those keys are names, not secrets.)
+        let every_variant = vec![
+            AuthSpec::None,
+            AuthSpec::Header {
+                header: "x-api-key".into(),
+                env_var: "TOOL_KEY".into(),
+            },
+            AuthSpec::Bearer {
+                env_var: "TOOL_KEY".into(),
+            },
+            AuthSpec::StoredHeader {
+                header: "x-api-key".into(),
+                secret_ref: "cs_ref".into(),
+            },
+            AuthSpec::StoredBearer {
+                secret_ref: "cs_ref".into(),
+            },
+            AuthSpec::OauthPkce {
+                client_id: "cid".into(),
+                redirect_uri: "http://127.0.0.1/cb".into(),
+                scopes: vec!["s".into()],
+                auth_url: "https://a".into(),
+                token_url: "https://t".into(),
+                session_label: Some("lbl".into()),
+            },
+            AuthSpec::OauthDeviceCode {
+                client_id: "cid".into(),
+                scopes: vec!["s".into()],
+                device_url: "https://d".into(),
+                token_url: "https://t".into(),
+                session_label: None,
+            },
+        ];
+
+        for spec in every_variant {
+            let val = serde_json::to_value(&spec).unwrap();
+            let obj = val.as_object().expect("AuthSpec serializes to an object");
+            for key in obj.keys() {
+                assert!(
+                    allowed.contains(key.as_str()),
+                    "AuthSpec {spec:?} serialized an unexpected field `{key}` — \
+                     a value-bearing field would break the reveal-never invariant",
+                );
+            }
+        }
+    }
 }
