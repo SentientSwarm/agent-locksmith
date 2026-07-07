@@ -3,7 +3,13 @@
 //! Locked at devloop `phase-e-catalog-substrate` Design phase. Extended at
 //! Phase F (OAuth — see ADR-0005).
 //!
-//! Five variants, internally tagged on `kind`:
+//! Seven variants, internally tagged on `kind`:
+//!
+//!   `stored_header` / `stored_bearer` — Phase J `stored` custody backend
+//!                         (ADR-0008). Same wire injection as `header`/`bearer`
+//!                         but the value is sealed at rest in `credential_secrets`;
+//!                         the variant carries only an opaque `secret_ref` handle,
+//!                         never a value. Unsealed at inject-time (T1.6).
 //!
 //!   `none`              — no auth header injection. Required to be explicit for
 //!                         `kind=tool` (implicit absence is rejected at register-time,
@@ -46,6 +52,21 @@ pub enum AuthSpec {
     },
     Bearer {
         env_var: String,
+    },
+    /// Phase J (ADR-0008): `stored` custody backend — inject
+    /// `<header>: <unsealed-value>`. Carries only the opaque
+    /// `secret_ref` handle into the `credential_secrets` sealed store;
+    /// the value is sealed at rest with the credential sealing key and
+    /// unsealed at inject-time (T1.6). **Never carries a value.**
+    StoredHeader {
+        header: String,
+        secret_ref: String,
+    },
+    /// Phase J (ADR-0008): `stored` custody backend — inject
+    /// `Authorization: Bearer <unsealed-value>`. Carries only the
+    /// `secret_ref` handle (see [`AuthSpec::StoredHeader`]).
+    StoredBearer {
+        secret_ref: String,
     },
     /// OAuth 2.0 PKCE flow (RFC 7636). Used by anthropic-oauth,
     /// google-gemini-cli. First-time auth opens a browser to `auth_url`
@@ -146,7 +167,14 @@ impl AuthSpec {
     /// convention.
     pub fn to_secret_ref(&self) -> Option<SecretRef> {
         match self {
-            AuthSpec::None | AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => None,
+            // `stored_*` resolve via the sealed `credential_secrets`
+            // store at inject-time (T1.6), not the env-var static
+            // resolver, so they yield no env-backed SecretRef here.
+            AuthSpec::None
+            | AuthSpec::StoredHeader { .. }
+            | AuthSpec::StoredBearer { .. }
+            | AuthSpec::OauthPkce { .. }
+            | AuthSpec::OauthDeviceCode { .. } => None,
             AuthSpec::Header { env_var, .. } | AuthSpec::Bearer { env_var } => {
                 Some(SecretRef::FromEnv {
                     var: env_var.clone(),
@@ -154,5 +182,93 @@ impl AuthSpec {
                 })
             }
         }
+    }
+
+    /// True iff this is a `stored` custody variant (Phase J, ADR-0008):
+    /// the credential value is sealed in `credential_secrets` and
+    /// unsealed at inject-time rather than resolved from an env var.
+    pub fn is_stored(&self) -> bool {
+        matches!(
+            self,
+            AuthSpec::StoredHeader { .. } | AuthSpec::StoredBearer { .. }
+        )
+    }
+
+    /// The `credential_secrets` handle for a `stored` variant, else
+    /// `None`. Used by the set-value path (to tombstone the prior
+    /// secret on rotation) and the proxy hot path (to fetch + unseal
+    /// the value for injection).
+    pub fn stored_secret_ref(&self) -> Option<&str> {
+        match self {
+            AuthSpec::StoredHeader { secret_ref, .. } | AuthSpec::StoredBearer { secret_ref } => {
+                Some(secret_ref.as_str())
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_bearer_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::StoredBearer {
+            secret_ref: "cs_deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"stored_bearer""#), "tag: {json}");
+        assert!(json.contains(r#""secret_ref":"cs_deadbeef""#));
+        // No value ever appears in the serialized shape.
+        assert!(!json.to_lowercase().contains("value"));
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn stored_header_serde_roundtrip_and_tag() {
+        let spec = AuthSpec::StoredHeader {
+            header: "x-api-key".to_string(),
+            secret_ref: "cs_abc123".to_string(),
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""kind":"stored_header""#), "tag: {json}");
+        let back: AuthSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn is_stored_and_secret_ref_accessor() {
+        let sh = AuthSpec::StoredHeader {
+            header: "x".into(),
+            secret_ref: "cs_1".into(),
+        };
+        let sb = AuthSpec::StoredBearer {
+            secret_ref: "cs_2".into(),
+        };
+        assert!(sh.is_stored());
+        assert!(sb.is_stored());
+        assert_eq!(sh.stored_secret_ref(), Some("cs_1"));
+        assert_eq!(sb.stored_secret_ref(), Some("cs_2"));
+
+        let env = AuthSpec::Bearer {
+            env_var: "TOK".into(),
+        };
+        assert!(!env.is_stored());
+        assert_eq!(env.stored_secret_ref(), None);
+        assert!(!AuthSpec::None.is_stored());
+    }
+
+    #[test]
+    fn stored_variants_inject_but_are_not_oauth_and_have_no_env_secret_ref() {
+        let sb = AuthSpec::StoredBearer {
+            secret_ref: "cs_x".into(),
+        };
+        assert!(sb.injects_header(), "stored injects a header");
+        assert!(!sb.is_oauth());
+        // Does not resolve via the env-var static resolver.
+        assert!(sb.to_secret_ref().is_none());
+        assert_eq!(sb.session_label_or_default(), None);
     }
 }

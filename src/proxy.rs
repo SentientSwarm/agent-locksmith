@@ -146,6 +146,24 @@ enum ProxyAuth {
         /// Phase G per-agent override (`None` for registration-default).
         override_value: Option<secrecy::SecretString>,
     },
+    /// Phase J `stored` custody backend (ADR-0008). The value is sealed
+    /// in `credential_secrets` and unsealed at request time before
+    /// `build_upstream_request` (T1.6). Injects like `Header`/`Bearer`:
+    /// `header=Some(name)` → `name: value`; `header=None` →
+    /// `Authorization: Bearer value`. `resolved_value` is filled by the
+    /// hot-path unseal step; while `None` no value is injected (the T1.6
+    /// pre-flight turns an unresolvable stored ref into a loud 503
+    /// before reaching here).
+    Stored {
+        /// Header name for `stored_header`; `None` for `stored_bearer`.
+        header: Option<String>,
+        audit_mode: &'static str,
+        /// `credential_secrets` handle to unseal (read at inject-time in T1.6).
+        #[allow(dead_code)]
+        secret_ref: String,
+        /// Unsealed value, filled by the hot-path resolution step (T1.6).
+        resolved_value: Option<secrecy::SecretString>,
+    },
     /// OAuth (PKCE or device-code). Access token resolved from the
     /// `oauth_sessions` cache before this struct is constructed, so
     /// `build_upstream_request` can inject without async work. The
@@ -179,6 +197,7 @@ impl ProxyAuth {
             ProxyAuth::None => "none",
             ProxyAuth::Header { audit_mode, .. } => audit_mode,
             ProxyAuth::Bearer { .. } => "bearer",
+            ProxyAuth::Stored { audit_mode, .. } => audit_mode,
             ProxyAuth::Oauth { audit_mode, .. } => audit_mode,
         }
     }
@@ -202,7 +221,9 @@ impl ProxyAuth {
             ProxyAuth::None => None,
             ProxyAuth::Header { header, .. } => Some(header.to_lowercase()),
             ProxyAuth::Bearer { .. } => None, // "authorization" is always stripped
-            ProxyAuth::Oauth { .. } => None,  // F.5 will inject Authorization; always stripped
+            // stored_header strips its header; stored_bearer → Authorization (always stripped).
+            ProxyAuth::Stored { header, .. } => header.as_ref().map(|h| h.to_lowercase()),
+            ProxyAuth::Oauth { .. } => None, // F.5 will inject Authorization; always stripped
         }
     }
 }
@@ -225,6 +246,18 @@ impl ProxyTarget {
             },
             AuthSpec::Bearer { .. } => ProxyAuth::Bearer {
                 override_value: None,
+            },
+            AuthSpec::StoredHeader { header, secret_ref } => ProxyAuth::Stored {
+                header: Some(header.clone()),
+                audit_mode: "stored_header",
+                secret_ref: secret_ref.clone(),
+                resolved_value: None,
+            },
+            AuthSpec::StoredBearer { secret_ref } => ProxyAuth::Stored {
+                header: None,
+                audit_mode: "stored_bearer",
+                secret_ref: secret_ref.clone(),
+                resolved_value: None,
             },
             AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
                 // Caller must use from_registration_oauth instead;
@@ -584,6 +617,28 @@ fn build_upstream_request(
                     let header_value =
                         format!("Bearer {}", secrecy::ExposeSecret::expose_secret(value));
                     upstream_req = upstream_req.header("Authorization", header_value);
+                }
+            }
+        }
+        ProxyAuth::Stored {
+            header,
+            resolved_value,
+            ..
+        } => {
+            // The hot-path unseal step (T1.6) fills `resolved_value` from
+            // `credential_secrets` before we reach here, and 503s an
+            // unresolvable stored ref pre-flight. While `None`, inject
+            // nothing (the value is never reconstructed proxy-side).
+            if let Some(value) = resolved_value {
+                let exposed = secrecy::ExposeSecret::expose_secret(value);
+                match header {
+                    Some(h) => {
+                        upstream_req = upstream_req.header(h, exposed);
+                    }
+                    None => {
+                        upstream_req =
+                            upstream_req.header("Authorization", format!("Bearer {exposed}"));
+                    }
                 }
             }
         }
@@ -1267,6 +1322,24 @@ async fn apply_agent_credential_override(
             }
             target.auth = ProxyAuth::Bearer {
                 override_value: value,
+            };
+        }
+        AuthSpec::StoredHeader { header, secret_ref } => {
+            // T1.6 unseals `secret_ref` from credential_secrets before
+            // build_upstream_request; here we only carry the shape.
+            target.auth = ProxyAuth::Stored {
+                header: Some(header),
+                audit_mode: "stored_header",
+                secret_ref,
+                resolved_value: None,
+            };
+        }
+        AuthSpec::StoredBearer { secret_ref } => {
+            target.auth = ProxyAuth::Stored {
+                header: None,
+                audit_mode: "stored_bearer",
+                secret_ref,
+                resolved_value: None,
             };
         }
         AuthSpec::OauthPkce { session_label, .. }

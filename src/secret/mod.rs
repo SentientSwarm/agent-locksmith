@@ -101,6 +101,10 @@ pub fn resolve_registration_creds_sync_env_only(
                 AuthSpec::None => continue,
                 AuthSpec::Header { env_var, .. } => env_var,
                 AuthSpec::Bearer { env_var } => env_var,
+                // stored_* (Phase J, ADR-0008) resolve via the sealed
+                // credential_secrets store at inject-time, not the startup
+                // env-var resolver. Skip here.
+                AuthSpec::StoredHeader { .. } | AuthSpec::StoredBearer { .. } => continue,
                 // OAuth variants don't resolve via env-var indirection — their
                 // tokens live in the oauth_sessions cache, populated by the
                 // bootstrap CLI (Phase F.4) and refreshed by the daemon's
