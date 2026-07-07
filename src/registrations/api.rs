@@ -87,6 +87,18 @@ pub struct PutBody {
     pub metadata: Option<Value>,
 }
 
+/// Phase J (ADR-0008) — body for `PUT /admin/operator/<kind>/<name>/credential`.
+/// The single `value` field is the cleartext credential to seal + store.
+/// Reveal-never (CCS-1): the value is sealed with the credential sealing
+/// key before it hits the `credential_secrets` store; it is never logged,
+/// echoed in the response, or persisted in cleartext. `deny_unknown_fields`
+/// rejects any accidental extra fields (e.g. a stray `secret_ref`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutCredentialBody {
+    pub value: String,
+}
+
 /// Render a `Registration` as the admin-facing JSON. Operators see
 /// everything including the auth shape (env-var name only — never the
 /// resolved cleartext) and lifecycle flags.
@@ -190,6 +202,15 @@ pub struct AdminRegistrationsState {
     pub repo: Arc<RegistrationRepository>,
     pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+    /// Phase J (ADR-0008) — credential-store sealing key. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset; the set-value / clear
+    /// credential routes then behave as if absent (404) — the sealing-key
+    /// gate. `Some` seals operator-supplied values before storage (CCS-1).
+    pub credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present, so "no key" cleanly
+    /// means "feature off".
+    pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 }
 
 impl AdminRegistrationsState {
@@ -403,6 +424,160 @@ pub async fn op_enable(
     }
 }
 
+// ─── Phase J (ADR-0008) — stored-credential set-value + clear ──────────────
+//
+// `PUT /admin/operator/<kind>/<name>/credential` seals an operator-supplied
+// value into the `credential_secrets` store and rewrites the registration's
+// AuthSpec to a `stored_*` variant carrying only the opaque `secret_ref`
+// (CCS-3 / CCS-6). `DELETE` clears it back to `AuthSpec::None`. Both are
+// gated on the credential sealing key: when the daemon booted without
+// `LOCKSMITH_CREDENTIAL_SEALING_KEY`, the routes 404 (feature off), mirroring
+// the OAuth-key gate.
+
+/// `PUT /admin/operator/<kind>/<name>/credential` — seal + store a value.
+///
+/// Fetches the registration (404 on absent / kind mismatch); when the
+/// sealing key + store aren't configured, 404s (the feature gate). Seals
+/// the value → inserts a fresh `credential_secrets` row → mints a new
+/// `secret_ref`. Preserves the current header name if the registration
+/// already injects a `Header`/`StoredHeader` (→ `StoredHeader`), else
+/// `StoredBearer`. Tombstones the prior stored ref on rotation. Returns a
+/// shape-only `{secret_ref, set_at}` — the value is NEVER echoed (CCS-1).
+pub async fn op_put_credential(
+    State(state): State<AdminRegistrationsState>,
+    kind: Kind,
+    name: String,
+    body: PutCredentialBody,
+) -> Response {
+    // Sealing-key gate: feature off ⇒ 404 (route behaves as if absent).
+    let (Some(key), Some(secrets)) = (
+        state.credential_sealing_key.as_ref(),
+        state.credential_secrets.as_ref(),
+    ) else {
+        return unknown_name_response(&name);
+    };
+
+    let existing = match state.repo.get(&name).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return unknown_name_response(&name),
+        Err(e) => return registration_error_response(&e),
+    };
+    if existing.kind != kind {
+        return registration_error_response(&RegistrationError::WrongKind {
+            existing_kind: existing.kind,
+            requested_kind: kind,
+        });
+    }
+
+    // Seal the cleartext, then drop it. Never logged / echoed (CCS-1).
+    let (sealed, nonce) = match key.seal(body.value.as_bytes()) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return registration_error_response(&RegistrationError::Backend(format!(
+                "credential seal failed: {e}"
+            )));
+        }
+    };
+    let secret_ref = match secrets.insert(&sealed, &nonce).await {
+        Ok(r) => r,
+        Err(e) => {
+            return registration_error_response(&RegistrationError::Backend(format!(
+                "credential store insert failed: {e}"
+            )));
+        }
+    };
+
+    // Preserve the header name for header-shaped auth; else bearer.
+    let new_auth = match &existing.auth {
+        AuthSpec::Header { header, .. } | AuthSpec::StoredHeader { header, .. } => {
+            AuthSpec::StoredHeader {
+                header: header.clone(),
+                secret_ref: secret_ref.clone(),
+            }
+        }
+        _ => AuthSpec::StoredBearer {
+            secret_ref: secret_ref.clone(),
+        },
+    };
+
+    // Capture the prior stored ref BEFORE overwriting so rotation can
+    // tombstone the old sealed row after the upsert commits.
+    let old_ref = existing.auth.stored_secret_ref().map(|s| s.to_string());
+
+    let now = unix_now();
+    let updated = Registration {
+        auth: new_auth,
+        updated_at: now,
+        ..existing
+    };
+    if let Err(e) = state.repo.upsert(&updated).await {
+        return registration_error_response(&e);
+    }
+
+    // Tombstone the rotated ref only after the upsert succeeds, so a
+    // failed write never orphans the live secret.
+    if let Some(old) = old_ref
+        && let Err(e) = secrets.tombstone(&old).await
+    {
+        tracing::warn!(error = %e, "tombstone of rotated credential ref failed");
+    }
+
+    state.refresh_runtime().await;
+
+    (
+        StatusCode::OK,
+        Json(json!({ "secret_ref": secret_ref, "set_at": now })),
+    )
+        .into_response()
+}
+
+/// `DELETE /admin/operator/<kind>/<name>/credential` — clear a stored
+/// credential. Tombstones the current `stored_*` secret (if any) and resets
+/// the registration's auth to `AuthSpec::None`. Idempotent: returns 200 even
+/// when nothing was stored. Gated on the sealing key (404 when unconfigured).
+pub async fn op_delete_credential(
+    State(state): State<AdminRegistrationsState>,
+    kind: Kind,
+    name: String,
+) -> Response {
+    let (Some(_key), Some(secrets)) = (
+        state.credential_sealing_key.as_ref(),
+        state.credential_secrets.as_ref(),
+    ) else {
+        return unknown_name_response(&name);
+    };
+
+    let existing = match state.repo.get(&name).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return unknown_name_response(&name),
+        Err(e) => return registration_error_response(&e),
+    };
+    if existing.kind != kind {
+        return registration_error_response(&RegistrationError::WrongKind {
+            existing_kind: existing.kind,
+            requested_kind: kind,
+        });
+    }
+
+    if let Some(old) = existing.auth.stored_secret_ref().map(|s| s.to_string()) {
+        let now = unix_now();
+        let updated = Registration {
+            auth: AuthSpec::None,
+            updated_at: now,
+            ..existing
+        };
+        if let Err(e) = state.repo.upsert(&updated).await {
+            return registration_error_response(&e);
+        }
+        if let Err(e) = secrets.tombstone(&old).await {
+            tracing::warn!(error = %e, "tombstone of cleared credential ref failed");
+        }
+        state.refresh_runtime().await;
+    }
+
+    (StatusCode::OK, Json(json!({ "cleared": true }))).into_response()
+}
+
 // ─── Per-kind shim handlers (axum-routable) ────────────────────────────────
 //
 // axum's `Path` extractor needs a concrete type at compile time. Rather than
@@ -510,6 +685,53 @@ pub async fn op_enable_infra(
     Path(name): Path<String>,
 ) -> Response {
     op_enable(state, Kind::Infra, name).await
+}
+
+// Phase J (ADR-0008) — per-kind credential set-value / clear shims.
+
+pub async fn op_put_tool_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+    Json(body): Json<PutCredentialBody>,
+) -> Response {
+    op_put_credential(state, Kind::Tool, name, body).await
+}
+
+pub async fn op_put_model_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+    Json(body): Json<PutCredentialBody>,
+) -> Response {
+    op_put_credential(state, Kind::Model, name, body).await
+}
+
+pub async fn op_put_infra_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+    Json(body): Json<PutCredentialBody>,
+) -> Response {
+    op_put_credential(state, Kind::Infra, name, body).await
+}
+
+pub async fn op_delete_tool_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+) -> Response {
+    op_delete_credential(state, Kind::Tool, name).await
+}
+
+pub async fn op_delete_model_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+) -> Response {
+    op_delete_credential(state, Kind::Model, name).await
+}
+
+pub async fn op_delete_infra_credential(
+    state: State<AdminRegistrationsState>,
+    Path(name): Path<String>,
+) -> Response {
+    op_delete_credential(state, Kind::Infra, name).await
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

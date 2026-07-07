@@ -110,6 +110,8 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         catalog_for_app,
         oauth_runtime_for_app,
         agent_creds_for_app,
+        credential_sealing_key_for_app,
+        credential_secrets_for_app,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -135,9 +137,12 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             setup.oauth_runtime,
             // Phase G: per-agent credential override repo.
             Some(setup.agent_creds),
+            // Phase J: credential-store sealing key + sealed secrets repo.
+            setup.credential_sealing_key,
+            setup.credential_secrets,
         )
     } else {
-        (None, None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None, None, None)
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -203,7 +208,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // skip the substrate get an empty catalog default from
     // `build_app_full_with_registrations`.
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_g(
+        Some(catalog) => crate::app::build_app_full_with_phase_j(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -213,6 +218,8 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             catalog,
             oauth_runtime_for_app,
             agent_creds_for_app,
+            credential_sealing_key_for_app,
+            credential_secrets_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -469,6 +476,15 @@ struct AdminSetup {
     /// schema after migration 0005). Empty rows mean every lookup
     /// returns `None` and the registration default applies.
     agent_creds: crate::repo::AgentCredentialRepository,
+    /// Phase J (ADR-0008) — credential-store sealing key. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset (stored-credential
+    /// routes not mounted; `stored_*` registrations fail loud at proxy
+    /// time).
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present, so "no key" cleanly
+    /// means "feature off".
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 }
 
 async fn build_admin_substrate(
@@ -655,6 +671,34 @@ async fn build_admin_substrate(
         }
     };
 
+    // Phase J (ADR-0008) — credential-store sealing key. Built only when
+    // the operator supplies `LOCKSMITH_CREDENTIAL_SEALING_KEY` — distinct
+    // from the OAuth key so the two sealing domains have independent
+    // blast radius. When absent, the stored-credential admin routes 404
+    // (feature off) and any `stored_*` registration fails loud with a
+    // `503 credential_unresolved` at proxy time (T1.6). The sealed store
+    // is constructed only when the key is present so "no key" cleanly
+    // means "feature off".
+    let (credential_sealing_key, credential_secrets) =
+        match crate::secret::CredentialSealingKey::from_env() {
+            Ok(key) => {
+                info!("credential store: sealing key loaded; stored-credential routes mounted");
+                let secrets = crate::repo::CredentialSecretsRepository::new(pool.clone());
+                (Some(key), Some(secrets))
+            }
+            Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
+                info!(
+                    "credential store: LOCKSMITH_CREDENTIAL_SEALING_KEY unset; stored-credential routes not mounted"
+                );
+                (None, None)
+            }
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "credential sealing key: {e}"
+                )));
+            }
+        };
+
     let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
@@ -667,6 +711,8 @@ async fn build_admin_substrate(
             resolved_creds: Some(resolved_creds.clone()),
             oauth: oauth_admin,
             agent_creds: Some(agent_creds_repo.clone()),
+            credential_sealing_key: credential_sealing_key.clone(),
+            credential_secrets: credential_secrets.clone(),
         },
         audit,
         agent_auth: agent_auth_dyn,
@@ -674,6 +720,8 @@ async fn build_admin_substrate(
         catalog,
         oauth_runtime,
         agent_creds: agent_creds_repo,
+        credential_sealing_key,
+        credential_secrets,
     })
 }
 

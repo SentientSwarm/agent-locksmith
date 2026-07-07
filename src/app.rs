@@ -82,6 +82,17 @@ pub struct AppState {
     /// `None` — every lookup is `Ok(None)` and the registration's
     /// default `auth_spec` always wins.
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    /// Phase J (ADR-0008) — credential-store sealing key. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset: the stored-credential
+    /// admin routes 404 and any `stored_*` registration fails loud with a
+    /// `503 credential_unresolved` at proxy time (T1.6). `Some` enables
+    /// inject-time unseal of stored credential values.
+    pub credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present, so "no key" cleanly
+    /// means "feature off". The proxy hot path fetches the sealed bytes by
+    /// `secret_ref` and unseals with `credential_sealing_key` (T1.6).
+    pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 }
 
 /// Bundle of OAuth runtime state shared between the proxy hot path
@@ -282,6 +293,10 @@ pub fn build_app_full_with_oauth(
 /// takes an optional `AgentCredentialRepository`. Daemon path uses
 /// this once the admin substrate is wired so per-agent credential
 /// overrides are honored on the proxy hot path.
+///
+/// Phase J entrypoint forwards to [`build_app_full_with_phase_j`] with
+/// no credential-store wiring — preserves the existing 9-arg signature
+/// for the many callers that don't need the `stored` custody backend.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_full_with_phase_g(
     config: Arc<ArcSwap<AppConfig>>,
@@ -293,6 +308,42 @@ pub fn build_app_full_with_phase_g(
     catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
     oauth: Option<OauthRuntime>,
     agent_creds: Option<crate::repo::AgentCredentialRepository>,
+) -> Router {
+    build_app_full_with_phase_j(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        oauth,
+        agent_creds,
+        None,
+        None,
+    )
+}
+
+/// Phase J entrypoint (ADR-0008) — same as [`build_app_full_with_phase_g`]
+/// but also takes the optional credential-store sealing key + sealed
+/// `credential_secrets` repo for the `stored` custody backend. The daemon
+/// path uses this when `LOCKSMITH_CREDENTIAL_SEALING_KEY` is set so the
+/// proxy hot path can unseal stored credential values at inject-time
+/// (T1.6). Both are `None` when the feature is off — a `stored_*`
+/// registration then fails loud with `503 credential_unresolved`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_phase_j(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
+    agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -310,6 +361,8 @@ pub fn build_app_full_with_phase_g(
         catalog,
         oauth,
         agent_creds,
+        credential_sealing_key,
+        credential_secrets,
     });
 
     Router::new()

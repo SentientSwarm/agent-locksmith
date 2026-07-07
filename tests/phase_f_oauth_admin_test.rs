@@ -105,6 +105,8 @@ async fn setup() -> Harness {
             locks: RefreshLockMap::new(),
         }),
         agent_creds: None,
+        credential_sealing_key: None,
+        credential_secrets: None,
     };
     let router = build_router(state);
     let server = TestServer::new(router);

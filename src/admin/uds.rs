@@ -14,7 +14,7 @@ use crate::mtls::MtlsValidator;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use axum::{Router, body::Body};
 use serde::Deserialize;
 use serde_json::json;
@@ -67,6 +67,16 @@ pub struct UdsState {
     /// persist overrides. `None` for M0/M1 deployments without admin
     /// substrate.
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    /// Phase J (ADR-0008) — credential-store sealing key. Threaded into
+    /// the registrations admin router so the
+    /// `PUT/DELETE /admin/operator/<kind>/<name>/credential` routes can
+    /// seal operator-supplied values. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset — the credential routes
+    /// then 404 (the sealing-key gate).
+    pub credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present.
+    pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -84,12 +94,16 @@ fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
     catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
         repo,
         catalog,
         resolved_creds,
+        credential_sealing_key,
+        credential_secrets,
     };
     Router::new()
         .route("/tools", get(api::op_list_tools))
@@ -100,6 +114,11 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_tool),
         )
         .route("/tools/{name}/enable", post(api::op_enable_tool))
+        // Phase J (ADR-0008) — stored-credential set-value / clear.
+        .route(
+            "/tools/{name}/credential",
+            put(api::op_put_tool_credential).delete(api::op_delete_tool_credential),
+        )
         .route("/models", get(api::op_list_models))
         .route(
             "/models/{name}",
@@ -108,6 +127,10 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_model),
         )
         .route("/models/{name}/enable", post(api::op_enable_model))
+        .route(
+            "/models/{name}/credential",
+            put(api::op_put_model_credential).delete(api::op_delete_model_credential),
+        )
         .route("/infra", get(api::op_list_infra))
         .route(
             "/infra/{name}",
@@ -116,6 +139,10 @@ fn build_registrations_admin_router(
                 .delete(api::op_delete_infra),
         )
         .route("/infra/{name}/enable", post(api::op_enable_infra))
+        .route(
+            "/infra/{name}/credential",
+            put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
+        )
         .with_state(st)
 }
 
@@ -202,6 +229,8 @@ pub fn build_router(state: UdsState) -> Router {
             repo,
             state.catalog.clone(),
             state.resolved_creds.clone(),
+            state.credential_sealing_key.clone(),
+            state.credential_secrets.clone(),
         )),
         None => operator_existing,
     };
