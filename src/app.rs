@@ -93,6 +93,12 @@ pub struct AppState {
     /// means "feature off". The proxy hot path fetches the sealed bytes by
     /// `secret_ref` and unseals with `credential_sealing_key` (T1.6).
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2) — non-blocking operational-log emitter. `None`
+    /// for M0/M1 deployments without admin substrate; the proxy hot path
+    /// then skips operational-log emits entirely. `Some` lets the proxy
+    /// record degraded/credential-unresolved events on the operational-log
+    /// stream (distinct from audit, secret-free).
+    pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 }
 
 /// Bundle of OAuth runtime state shared between the proxy hot path
@@ -345,6 +351,42 @@ pub fn build_app_full_with_phase_j(
     credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
     credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
 ) -> Router {
+    build_app_full_with_phase_k(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        oauth,
+        agent_creds,
+        credential_sealing_key,
+        credential_secrets,
+        None,
+    )
+}
+
+/// Phase J / M2 entrypoint — same as [`build_app_full_with_phase_j`] but
+/// also takes the optional operational-log emitter (LOG-2). The daemon
+/// path uses this so the proxy hot path can emit operational-log events
+/// (distinct from audit, secret-free). `None` for the many callers (and
+/// tests) that don't need it.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_phase_k(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
+    agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     drop(snapshot);
@@ -363,6 +405,7 @@ pub fn build_app_full_with_phase_j(
         agent_creds,
         credential_sealing_key,
         credential_secrets,
+        operational_log,
     });
 
     Router::new()

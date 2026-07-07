@@ -77,6 +77,11 @@ pub struct UdsState {
     /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
     /// only when `credential_sealing_key` is present.
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2) — operational-log emitter, threaded into the
+    /// registrations admin router so registration create/update/delete
+    /// records a `registry` operational-log event. `None` for M0/M1
+    /// deployments without the operational-log substrate.
+    pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -90,12 +95,14 @@ pub struct UdsState {
 /// both so the proxy hot path picks up changes without a daemon
 /// restart. When `None` (legacy / non-daemon paths), admin writes
 /// still hit the repo but no in-memory cache exists to invalidate.
+#[allow(clippy::too_many_arguments)]
 fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
     catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
     credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
     credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
@@ -104,6 +111,7 @@ fn build_registrations_admin_router(
         resolved_creds,
         credential_sealing_key,
         credential_secrets,
+        operational_log,
     };
     Router::new()
         .route("/tools", get(api::op_list_tools))
@@ -231,6 +239,7 @@ pub fn build_router(state: UdsState) -> Router {
             state.resolved_creds.clone(),
             state.credential_sealing_key.clone(),
             state.credential_secrets.clone(),
+            state.operational_log.clone(),
         )),
         None => operator_existing,
     };

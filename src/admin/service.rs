@@ -146,6 +146,10 @@ pub struct AdminService {
     /// state, not just the structural config. When `None`, fall back
     /// to `SecretRef::looks_present` (M2/M3 backward-compat).
     resolved_creds: Option<std::sync::Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
+    /// Phase J / M2 (LOG-2, agent emit site) — operational-log emitter.
+    /// `None` outside the production daemon. Records agent register /
+    /// revoke on the `agent` component (secret-free).
+    operational_log: Option<std::sync::Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 }
 
 impl AdminService {
@@ -172,6 +176,7 @@ impl AdminService {
             config,
             audit,
             resolved_creds: None,
+            operational_log: None,
         }
     }
 
@@ -191,6 +196,33 @@ impl AdminService {
             config,
             audit,
             resolved_creds: Some(resolved_creds),
+            operational_log: None,
+        }
+    }
+
+    /// Phase J / M2 — attach the operational-log emitter so agent
+    /// register / revoke records a `agent` operational-log event.
+    /// Builder-style so existing constructor call sites are untouched.
+    pub fn with_operational_log(
+        mut self,
+        emitter: std::sync::Arc<crate::operational_log_sink::OperationalLogEmitter>,
+    ) -> Self {
+        self.operational_log = Some(emitter);
+        self
+    }
+
+    /// Emit an `agent` operational-log event (register / revoke). No-op
+    /// when the emitter isn't wired. Secret-free — records the agent
+    /// public id + action only (LOG-4).
+    fn emit_agent(&self, action: &str, public_id: &str) {
+        if let Some(emitter) = self.operational_log.as_ref() {
+            emitter.emit(
+                crate::repo::LogLevel::Info,
+                crate::repo::LogComponent::Agent,
+                format!("agent_{action}"),
+                format!("agent {action}: {public_id}"),
+                Some(serde_json::json!({ "public_id": public_id, "action": action })),
+            );
         }
     }
 
@@ -280,6 +312,7 @@ impl AdminService {
                     ..AuditEvent::default()
                 })
                 .await;
+                self.emit_agent("registered", &out.public_id);
             }
             Err(e) => {
                 // Distinguish bootstrap_reuse_attempt (security) from a
@@ -653,6 +686,9 @@ impl AdminService {
             },
         )
         .await;
+        if result.is_ok() {
+            self.emit_agent("revoked", public_id);
+        }
         result?;
         Ok(())
     }

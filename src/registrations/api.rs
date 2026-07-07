@@ -211,9 +211,28 @@ pub struct AdminRegistrationsState {
     /// only when `credential_sealing_key` is present, so "no key" cleanly
     /// means "feature off".
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2, registry emit site) — operational-log emitter.
+    /// `None` outside the production daemon. Records registration
+    /// create/update/delete on the `registry` component (secret-free).
+    pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
 }
 
 impl AdminRegistrationsState {
+    /// Emit a `registry` operational-log event (create/update/delete of a
+    /// registration). No-op when the emitter isn't wired. Secret-free —
+    /// records only the registration name + kind + action (LOG-4).
+    fn emit_registry(&self, action: &str, kind: Kind, name: &str) {
+        if let Some(emitter) = self.operational_log.as_ref() {
+            emitter.emit(
+                crate::repo::LogLevel::Info,
+                crate::repo::LogComponent::Registry,
+                format!("registration_{action}"),
+                format!("registration {action}: {kind} {name}"),
+                Some(json!({ "kind": kind.to_string(), "name": name, "action": action })),
+            );
+        }
+    }
+
     /// Phase E.6 — refresh the in-memory catalog from the repo and
     /// extend `resolved_creds` with any new env-var references. Called
     /// after every successful admin write so the proxy hot path sees
@@ -355,10 +374,12 @@ pub async fn op_put(
         updated_at: now,
     };
 
+    let is_update = created_at != now;
     if let Err(e) = state.repo.upsert(&r).await {
         return registration_error_response(&e);
     }
     state.refresh_runtime().await;
+    state.emit_registry(if is_update { "updated" } else { "created" }, kind, &name);
 
     (StatusCode::OK, Json(registration_to_admin_json(&r))).into_response()
 }
@@ -386,6 +407,7 @@ pub async fn op_delete(
             match result {
                 Ok(_) => {
                     state.refresh_runtime().await;
+                    state.emit_registry("deleted", kind, &name);
                     StatusCode::NO_CONTENT.into_response()
                 }
                 Err(e) => registration_error_response(&e),

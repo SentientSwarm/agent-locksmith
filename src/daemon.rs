@@ -112,6 +112,8 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         agent_creds_for_app,
         credential_sealing_key_for_app,
         credential_secrets_for_app,
+        operational_log_for_app,
+        operational_log_store_for_sweeper,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -140,9 +142,15 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             // Phase J: credential-store sealing key + sealed secrets repo.
             setup.credential_sealing_key,
             setup.credential_secrets,
+            // Phase J / M2: operational-log emitter (proxy hot path) +
+            // store (retention sweeper).
+            Some(setup.operational_log),
+            Some(setup.operational_log_store),
         )
     } else {
-        (None, None, None, None, None, None, None, None, None, None)
+        (
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        )
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -155,6 +163,10 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         let shutdown = coord.shutdown_signal();
         tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
     });
+
+    // T2.8 wires the operational-log retention sweeper from this store;
+    // bound here so the daemon owns it for the process lifetime.
+    let _ = &operational_log_store_for_sweeper;
 
     // Agent listener. Switch on auth_mode (post-v2 / #67):
     // - Bearer (default): plain TCP + axum (M0..M6 behavior).
@@ -207,8 +219,25 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // state without a daemon restart. Pre-Phase-E test paths that
     // skip the substrate get an empty catalog default from
     // `build_app_full_with_registrations`.
+    // Phase J / M2 (LOG-1, config emit site): record that the daemon
+    // loaded its configuration on the operational-log stream. Non-secret
+    // context only (tool count + admin flag) — never a credential value.
+    if let Some(emitter) = operational_log_for_app.as_ref() {
+        let snap = shared_config.load();
+        emitter.emit(
+            crate::repo::LogLevel::Info,
+            crate::repo::LogComponent::Config,
+            "config_loaded",
+            "daemon configuration loaded",
+            Some(serde_json::json!({
+                "tools": snap.tools.len(),
+                "admin": admin_enabled,
+            })),
+        );
+    }
+
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_j(
+        Some(catalog) => crate::app::build_app_full_with_phase_k(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -220,6 +249,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             agent_creds_for_app,
             credential_sealing_key_for_app,
             credential_secrets_for_app,
+            operational_log_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -485,6 +515,14 @@ struct AdminSetup {
     /// only when `credential_sealing_key` is present, so "no key" cleanly
     /// means "feature off".
     credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2) — operational-log emitter, shared across the
+    /// proxy hot path (via `AppState`), the admin handlers (registry /
+    /// agent emit sites), and the OAuth refresh task. Always present when
+    /// the admin substrate is wired.
+    operational_log: Arc<crate::operational_log_sink::OperationalLogEmitter>,
+    /// Phase J / M2 — operational-log store, handed to the retention
+    /// sweeper (T2.8). Same pool as the emitter's drain task.
+    operational_log_store: crate::repo::OperationalLogStore,
 }
 
 async fn build_admin_substrate(
@@ -585,6 +623,20 @@ async fn build_admin_substrate(
     }
     drop(snapshot);
 
+    // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
+    // Built unconditionally when the admin substrate is up (the table is
+    // part of the base schema after migration 0008). The emitter is
+    // shared across the proxy hot path (via `AppState`), the admin
+    // handlers (registry / agent emit sites), and the OAuth refresh task;
+    // the store is handed to the retention sweeper (T2.8). Constructed
+    // here — ahead of `AdminService` + the refresh task — so both can take
+    // a clone.
+    let operational_log_store = crate::repo::OperationalLogStore::new(pool.clone());
+    let operational_log = Arc::new(crate::operational_log_sink::OperationalLogEmitter::spawn(
+        operational_log_store.clone(),
+        crate::operational_log_sink::DEFAULT_CAPACITY,
+    ));
+
     // Construct once as a concrete Arc so `UdsState` (which holds the
     // concrete type) and the agent listener (which takes the trait
     // object via `AppState.agent_auth`) share the same authenticator
@@ -604,7 +656,8 @@ async fn build_admin_substrate(
         config,
         Some(audit.clone()),
         resolved_creds.clone(),
-    );
+    )
+    .with_operational_log(operational_log.clone());
 
     let agent_auth_dyn: Arc<dyn crate::auth_v2::AgentAuthenticator> = bearer.clone();
 
@@ -640,6 +693,7 @@ async fn build_admin_substrate(
                 catalog.clone(),
                 key.clone(),
                 locks.clone(),
+                Some(operational_log.clone()),
                 std::future::pending::<()>(),
             ));
             info!("oauth: sealing key loaded; refresh task spawned");
@@ -699,6 +753,8 @@ async fn build_admin_substrate(
             }
         };
 
+    // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
+    // Built unconditionally when the admin substrate is up (the table is
     let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
@@ -713,6 +769,7 @@ async fn build_admin_substrate(
             agent_creds: Some(agent_creds_repo.clone()),
             credential_sealing_key: credential_sealing_key.clone(),
             credential_secrets: credential_secrets.clone(),
+            operational_log: Some(operational_log.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
@@ -722,6 +779,8 @@ async fn build_admin_substrate(
         agent_creds: agent_creds_repo,
         credential_sealing_key,
         credential_secrets,
+        operational_log,
+        operational_log_store,
     })
 }
 

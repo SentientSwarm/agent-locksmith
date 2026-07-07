@@ -388,6 +388,22 @@ pub async fn proxy_handler(
             }
             Err(envelope) => {
                 record_stored_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
+                // Phase J / M2 (LOG-2, proxy emit site): a credential that
+                // can't be materialized is an operational degradation.
+                // Record it on the operational-log stream — non-secret:
+                // registration name + cause only, never a value (LOG-4).
+                if let Some(emitter) = state.operational_log.as_ref() {
+                    emitter.emit(
+                        crate::repo::LogLevel::Warn,
+                        crate::repo::LogComponent::Proxy,
+                        "credential_unresolved",
+                        "stored credential could not be resolved; request failed 503",
+                        Some(json!({
+                            "registration": target.name,
+                            "cause": envelope.audit_cause,
+                        })),
+                    );
+                }
                 return envelope.response;
             }
         }
