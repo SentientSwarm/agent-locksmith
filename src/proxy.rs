@@ -1527,6 +1527,9 @@ struct OauthUnavailable {
 /// - Access token absent or expiring within 60s → trigger inline
 ///   refresh under the per-session lock; surface the new token.
 /// - Refresh failed inline → mark degraded + 503 `oauth_refresh_failed`.
+// The Err variant carries the finished wire `Response` on a cold path that
+// returns it immediately; boxing would only add an allocation + churn.
+#[allow(clippy::result_large_err)]
 async fn resolve_oauth_token(
     state: &AppState,
     target: &ProxyTarget,
@@ -1696,6 +1699,8 @@ struct StoredUnavailable {
 ///   (`credential_unresolved`).
 /// - Store read error / unseal failure → 503 (`store_read_failed` /
 ///   `unseal_failed`).
+// Large Err variant: see `resolve_oauth_token`.
+#[allow(clippy::result_large_err)]
 async fn resolve_stored_credential(
     state: &AppState,
     secret_ref: &str,
