@@ -29,7 +29,9 @@ pub use backend::{BackendError, SecretBackend, SecretResolver};
 pub use credential_sealing::{CREDENTIAL_SEALING_KEY_ENV, CredentialSealingKey};
 pub use env::EnvBackend;
 pub use file_sealed::FileSealedBackend;
-pub use op_resolver::{OpCliCommand, OpCommand, OpResolver};
+pub use op_resolver::{
+    OpCliCommand, OpCommand, OpResolver, catalog_op_references, resync_op_references,
+};
 pub use vault::VaultBackend;
 
 use std::collections::HashMap;

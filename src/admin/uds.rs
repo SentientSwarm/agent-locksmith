@@ -86,6 +86,28 @@ pub struct UdsState {
     /// `GET /admin/operator/logs` query route. `None` for M0/M1
     /// deployments; the route then returns an empty result set.
     pub operational_log_store: Option<crate::repo::OperationalLogStore>,
+    /// Phase J / M2 (CCS-8, T2.2) — `op://` resolver cache, shared with the
+    /// proxy hot path. Admin writes that change which `op` references are
+    /// in use (registration auth, per-agent overrides) resync it so the
+    /// change takes effect without a restart. `None` outside the daemon.
+    pub op_resolver: Option<Arc<crate::secret::OpResolver>>,
+}
+
+impl UdsState {
+    /// Reconcile the `op://` resolver with the references now in use after
+    /// a per-agent override mutation. No-op when the resolver or catalog
+    /// isn't wired (non-daemon / test paths).
+    async fn resync_op_references(&self) {
+        if let (Some(resolver), Some(catalog)) = (self.op_resolver.as_ref(), self.catalog.as_ref())
+        {
+            crate::secret::resync_op_references(
+                resolver,
+                &catalog.load(),
+                self.agent_creds.as_ref(),
+            )
+            .await;
+        }
+    }
 }
 
 /// Build the Phase E registrations sub-router. Mounts at the operator
@@ -99,23 +121,20 @@ pub struct UdsState {
 /// both so the proxy hot path picks up changes without a daemon
 /// restart. When `None` (legacy / non-daemon paths), admin writes
 /// still hit the repo but no in-memory cache exists to invalidate.
-#[allow(clippy::too_many_arguments)]
 fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
-    catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
-    resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
-    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
-    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
-    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    state: &UdsState,
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
         repo,
-        catalog,
-        resolved_creds,
-        credential_sealing_key,
-        credential_secrets,
-        operational_log,
+        catalog: state.catalog.clone(),
+        resolved_creds: state.resolved_creds.clone(),
+        credential_sealing_key: state.credential_sealing_key.clone(),
+        credential_secrets: state.credential_secrets.clone(),
+        operational_log: state.operational_log.clone(),
+        op_resolver: state.op_resolver.clone(),
+        agent_creds: state.agent_creds.clone(),
     };
     Router::new()
         .route("/tools", get(api::op_list_tools))
@@ -246,14 +265,7 @@ pub fn build_router(state: UdsState) -> Router {
     // `operator_auth_middleware` layer applies uniformly across both
     // sub-routers.
     let operator_with_registrations = match state.registrations.clone() {
-        Some(repo) => operator_existing.merge(build_registrations_admin_router(
-            repo,
-            state.catalog.clone(),
-            state.resolved_creds.clone(),
-            state.credential_sealing_key.clone(),
-            state.credential_secrets.clone(),
-            state.operational_log.clone(),
-        )),
+        Some(repo) => operator_existing.merge(build_registrations_admin_router(repo, &state)),
         None => operator_existing,
     };
     let operator_routes = match state.oauth.clone() {
@@ -857,15 +869,19 @@ async fn op_set_agent_credential(
         Err(e) => return admin_err_response(e),
     };
     match creds.set(agent.id, &registration, &body.auth_spec).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "agent_public_id": agent.public_id,
-                "registration": registration,
-                "auth_spec": body.auth_spec,
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            // An `op_*` override must resolve without a restart (T2.2).
+            state.resync_op_references().await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "agent_public_id": agent.public_id,
+                    "registration": registration,
+                    "auth_spec": body.auth_spec,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
             "agent_credential_overrides.set: {e}"
         ))),
@@ -881,7 +897,7 @@ async fn op_set_agent_credential(
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetAgentStoredCredentialBody {
-    value: String,
+    value: secrecy::SecretString,
     #[serde(default)]
     header: Option<String>,
 }
@@ -900,6 +916,7 @@ async fn op_set_agent_stored_credential(
     Json(body): Json<SetAgentStoredCredentialBody>,
 ) -> Response {
     use crate::registrations::AuthSpec;
+    use secrecy::ExposeSecret;
 
     // Sealing-key gate: feature off ⇒ 404 (route behaves as if absent).
     let (Some(key), Some(secrets)) = (
@@ -928,22 +945,32 @@ async fn op_set_agent_stored_credential(
         Err(e) => return admin_err_response(e),
     };
 
-    // Capture the prior override's stored ref (for tombstoning) and its
-    // header shape (to preserve when the body doesn't supply one).
+    // Capture the prior override's stored ref (for tombstoning). The header
+    // shape comes from the body, else the prior override, else the
+    // registration itself — so a header-auth registration (`x-api-key`)
+    // stays header-shaped instead of silently injecting `Authorization`.
     let existing = creds.get(agent.id, &registration).await.ok().flatten();
     let old_ref = existing
         .as_ref()
         .and_then(|o| o.auth_spec.stored_secret_ref().map(|s| s.to_string()));
-    let preserved_header = existing.as_ref().and_then(|o| match &o.auth_spec {
-        AuthSpec::StoredHeader { header, .. } | AuthSpec::Header { header, .. } => {
-            Some(header.clone())
-        }
-        _ => None,
+    let registration_header = state.catalog.as_ref().and_then(|c| {
+        c.load()
+            .lookup_any(&registration)
+            .and_then(|r| r.auth.header_name().map(str::to_string))
     });
-    let header_name = body.header.clone().or(preserved_header);
+    let header_name = body
+        .header
+        .clone()
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|o| o.auth_spec.header_name().map(str::to_string))
+        })
+        .or(registration_header);
 
-    // Seal the cleartext, then drop it. Never logged / echoed (CCS-1).
-    let (sealed, nonce) = match key.seal(body.value.as_bytes()) {
+    // Seal the cleartext; the SecretString zeroizes on drop. Never logged /
+    // echoed (CCS-1).
+    let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {
         Ok(pair) => pair,
         Err(e) => {
             return admin_err_response(crate::admin::service::AdminError::Backend(format!(
@@ -983,6 +1010,8 @@ async fn op_set_agent_stored_credential(
     {
         tracing::warn!(error = %e, "tombstone of rotated agent-override credential ref failed");
     }
+    // A replaced `op_*` override's reference drops out of the cache.
+    state.resync_op_references().await;
 
     (
         StatusCode::OK,
@@ -1009,12 +1038,26 @@ async fn op_unset_agent_credential(
         Ok(a) => a,
         Err(e) => return admin_err_response(e),
     };
-    match creds.delete(agent.id, &registration).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
+    // Capture a stored override's ref before the delete so the sealed value
+    // can be tombstoned once nothing points at it (T2.4).
+    let old_ref = creds
+        .get(agent.id, &registration)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|o| o.auth_spec.stored_secret_ref().map(str::to_string));
+    if let Err(e) = creds.delete(agent.id, &registration).await {
+        return admin_err_response(crate::admin::service::AdminError::Backend(format!(
             "agent_credential_overrides.delete: {e}"
-        ))),
+        )));
     }
+    if let (Some(old), Some(secrets)) = (old_ref, state.credential_secrets.as_ref())
+        && let Err(e) = secrets.tombstone(&old).await
+    {
+        tracing::warn!(error = %e, "tombstone of cleared agent-override credential ref failed");
+    }
+    state.resync_op_references().await;
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn op_list_agent_credentials(

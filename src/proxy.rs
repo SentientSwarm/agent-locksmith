@@ -1738,10 +1738,23 @@ async fn resolve_stored_credential(
 
     match key.unseal(&sealed.sealed_value, &sealed.nonce) {
         Ok(plain) => {
-            // Stored credential values are UTF-8 (the set path seals a JSON
-            // string). Hold the plaintext in a zeroizing SecretString.
-            let s = String::from_utf8_lossy(&plain).into_owned();
-            Ok(secrecy::SecretString::from(s))
+            // Stored values are UTF-8 (the set path seals a JSON string).
+            // The unsealed buffer is zeroized on drop; the value lives on
+            // only in the zeroizing SecretString. A non-UTF-8 value fails
+            // loud instead of being lossily rewritten.
+            let plain = secrecy::zeroize::Zeroizing::new(plain);
+            match std::str::from_utf8(&plain) {
+                Ok(s) => Ok(secrecy::SecretString::from(s)),
+                Err(_) => {
+                    tracing::warn!(secret_ref = %secret_ref, "stored credential is not valid UTF-8");
+                    Err(StoredUnavailable {
+                        response: stored_unavailable_envelope(
+                            "stored credential could not be decoded",
+                        ),
+                        audit_cause: "unseal_failed",
+                    })
+                }
+            }
         }
         Err(e) => {
             tracing::warn!(secret_ref = %secret_ref, error = %e, "stored credential unseal failed");

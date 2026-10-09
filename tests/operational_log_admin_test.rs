@@ -76,6 +76,7 @@ async fn setup() -> (Harness, OperationalLogStore) {
         credential_secrets: None,
         operational_log: None,
         operational_log_store: Some(store.clone()),
+        op_resolver: None,
     };
     let server = TestServer::new(build_router(state));
 

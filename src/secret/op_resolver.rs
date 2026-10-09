@@ -4,7 +4,7 @@
 //! `OpBearer`) stores only an `op://vault/item/field` reference. This
 //! resolver materializes those references into secret values by shelling
 //! out to the 1Password CLI (`op read <ref>`) **at startup and on catalog
-//! change — never per request**. Results are held in an
+//! or per-agent-override change — never per request**. Results are held in an
 //! [`arc_swap::ArcSwap`]-backed cache; the proxy hot path reads the cache
 //! with a lock-free load and never invokes `op` (T2.3).
 //!
@@ -19,11 +19,13 @@
 //! the real CLI (which is absent in CI).
 
 use crate::operational_log_sink::OperationalLogEmitter;
+use crate::registrations::{Catalog, Kind};
+use crate::repo::AgentCredentialRepository;
 use arc_swap::ArcSwap;
 use secrecy::SecretString;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tracing::warn;
 
 /// One-reference resolution command. Injected so tests can substitute a
@@ -67,8 +69,11 @@ pub struct OpResolver {
     emitter: Option<Arc<OperationalLogEmitter>>,
     /// Total `op` invocations since construction. Used by tests to prove
     /// the hot-path `get` never shells out (invocations happen only in
-    /// `refresh`).
+    /// `refresh` / `sync`).
     invocations: AtomicU64,
+    /// Serializes cache rebuilds so two concurrent admin writes can't each
+    /// build from the same snapshot and drop the other's resolutions.
+    rebuild: Mutex<()>,
 }
 
 impl OpResolver {
@@ -80,6 +85,7 @@ impl OpResolver {
             cache: ArcSwap::from_pointee(HashMap::new()),
             emitter,
             invocations: AtomicU64::new(0),
+            rebuild: Mutex::new(()),
         }
     }
 
@@ -89,37 +95,41 @@ impl OpResolver {
     }
 
     /// Resolve every reference in `references` and atomically swap the
-    /// cache. Called at startup and on catalog change — NEVER on the hot
-    /// path. Each reference that fails to resolve is omitted from the new
-    /// cache and logged (degrade-not-crash, CCS-8). Duplicate references
-    /// are resolved once.
+    /// cache. Called at startup — NEVER on the hot path. Each reference
+    /// that fails to resolve is omitted from the new cache and logged
+    /// (degrade-not-crash, CCS-8). Duplicate references are resolved once.
     pub fn refresh(&self, references: &[String]) {
+        self.rebuild(references, false);
+    }
+
+    /// Incrementally reconcile the cache with `references` on catalog or
+    /// per-agent-override change (T2.2 "on-change"). Values already cached
+    /// for a still-referenced key are kept without re-invoking `op`; keys
+    /// not yet cached — new references, or ones that degraded earlier —
+    /// are resolved; keys no longer referenced are dropped. NEVER on the
+    /// hot path.
+    pub fn sync(&self, references: &[String]) {
+        self.rebuild(references, true);
+    }
+
+    fn rebuild(&self, references: &[String], reuse_cached: bool) {
+        let _guard = self.rebuild.lock().unwrap_or_else(|e| e.into_inner());
+        let current = self.cache.load();
         let mut next: HashMap<String, SecretString> = HashMap::new();
         let mut degraded = 0usize;
         for reference in references {
             if next.contains_key(reference) {
                 continue;
             }
-            self.invocations.fetch_add(1, Ordering::Relaxed);
-            match self.command.read(reference) {
-                Ok(value) => {
+            if reuse_cached && let Some(value) = current.get(reference) {
+                next.insert(reference.clone(), value.clone());
+                continue;
+            }
+            match self.resolve_one(reference) {
+                Some(value) => {
                     next.insert(reference.clone(), value);
                 }
-                Err(e) => {
-                    degraded += 1;
-                    // Non-secret: the reference is a path (vault/item/field),
-                    // not a value; the error is a CLI status, not a secret.
-                    warn!(reference = %reference, error = %e, "op reference resolution failed; degraded");
-                    if let Some(emitter) = self.emitter.as_ref() {
-                        emitter.emit(
-                            crate::repo::LogLevel::Warn,
-                            crate::repo::LogComponent::Config,
-                            "op_resolution_degraded",
-                            "op:// reference could not be resolved; credential degraded",
-                            Some(serde_json::json!({ "reference": reference, "error": e })),
-                        );
-                    }
-                }
+                None => degraded += 1,
             }
         }
         let resolved = next.len();
@@ -127,8 +137,32 @@ impl OpResolver {
         if degraded > 0 {
             warn!(
                 resolved,
-                degraded, "op resolver refresh completed with degraded references"
+                degraded, "op resolver rebuild completed with degraded references"
             );
+        }
+    }
+
+    /// Invoke `op` for one reference. `None` (logged + emitted on the
+    /// operational-log stream) when it can't be resolved.
+    fn resolve_one(&self, reference: &str) -> Option<SecretString> {
+        self.invocations.fetch_add(1, Ordering::Relaxed);
+        match self.command.read(reference) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                // Non-secret: the reference is a path (vault/item/field),
+                // not a value; the error is a CLI status, not a secret.
+                warn!(reference = %reference, error = %e, "op reference resolution failed; degraded");
+                if let Some(emitter) = self.emitter.as_ref() {
+                    emitter.emit(
+                        crate::repo::LogLevel::Warn,
+                        crate::repo::LogComponent::Config,
+                        "op_resolution_degraded",
+                        "op:// reference could not be resolved; credential degraded",
+                        Some(serde_json::json!({ "reference": reference, "error": e })),
+                    );
+                }
+                None
+            }
         }
     }
 
@@ -148,6 +182,55 @@ impl OpResolver {
     /// hot path stays out of `op`.
     pub fn invocation_count(&self) -> u64 {
         self.invocations.load(Ordering::Relaxed)
+    }
+}
+
+/// Every `op://` reference in use by an enabled registration in
+/// `catalog`, de-duplicated, in catalog order. References only — never a
+/// value (CCS-8).
+pub fn catalog_op_references(catalog: &Catalog) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
+        for r in catalog.iter_enabled_by_kind(kind) {
+            if let Some(reference) = r.auth.op_reference()
+                && seen.insert(reference.to_string())
+            {
+                out.push(reference.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Reconcile `resolver` with every `op://` reference currently in use:
+/// enabled registrations in `catalog` plus every per-agent override.
+/// Called at startup, after each catalog refresh, and after each override
+/// mutation, so an `op` credential added at runtime — or referenced only
+/// by an override — resolves without a restart (T2.2). The `op` reads run
+/// on the blocking pool. If the override table can't be read, the cache
+/// is left untouched rather than shrunk to a partial reference set.
+pub async fn resync_op_references(
+    resolver: &Arc<OpResolver>,
+    catalog: &Catalog,
+    overrides: Option<&AgentCredentialRepository>,
+) {
+    let mut references = catalog_op_references(catalog);
+    if let Some(repo) = overrides {
+        match repo.list_all().await {
+            Ok(rows) => references.extend(
+                rows.iter()
+                    .filter_map(|o| o.auth_spec.op_reference().map(str::to_string)),
+            ),
+            Err(e) => {
+                warn!(error = %e, "op resync skipped: agent override read failed; cache unchanged");
+                return;
+            }
+        }
+    }
+    let resolver = resolver.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || resolver.sync(&references)).await {
+        warn!(error = %e, "op resync task failed; cache unchanged");
     }
 }
 
@@ -254,5 +337,57 @@ mod tests {
         resolver.refresh(&["op://v/a".to_string()]);
         assert_eq!(resolver.cached_count(), 1);
         assert!(resolver.get("op://v/b").is_none());
+    }
+
+    #[test]
+    fn sync_keeps_cached_values_without_reinvoking_op() {
+        let resolver = OpResolver::new(
+            Box::new(FakeOp::new(&[("op://v/a", "1"), ("op://v/b", "2")])),
+            None,
+        );
+        resolver.sync(&["op://v/a".to_string()]);
+        assert_eq!(resolver.invocation_count(), 1);
+        // Adding a reference resolves only the new one.
+        resolver.sync(&["op://v/a".to_string(), "op://v/b".to_string()]);
+        assert_eq!(resolver.invocation_count(), 2, "cached `a` not re-read");
+        assert_eq!(resolver.get("op://v/a").unwrap().expose_secret(), "1");
+        assert_eq!(resolver.get("op://v/b").unwrap().expose_secret(), "2");
+    }
+
+    #[test]
+    fn sync_drops_unreferenced_values() {
+        let resolver = OpResolver::new(
+            Box::new(FakeOp::new(&[("op://v/a", "1"), ("op://v/b", "2")])),
+            None,
+        );
+        resolver.sync(&["op://v/a".to_string(), "op://v/b".to_string()]);
+        resolver.sync(&["op://v/b".to_string()]);
+        assert!(
+            resolver.get("op://v/a").is_none(),
+            "dropped reference evicted"
+        );
+        assert!(resolver.get("op://v/b").is_some());
+        assert_eq!(resolver.invocation_count(), 2, "no re-read on shrink");
+    }
+
+    #[test]
+    fn sync_retries_previously_degraded_reference() {
+        let resolver = OpResolver::new(Box::new(FakeOp::new(&[])), None);
+        resolver.sync(&["op://v/missing".to_string()]);
+        resolver.sync(&["op://v/missing".to_string()]);
+        assert_eq!(
+            resolver.invocation_count(),
+            2,
+            "a degraded reference is retried on the next sync"
+        );
+        assert_eq!(resolver.cached_count(), 0);
+    }
+
+    #[test]
+    fn sync_resolves_duplicates_once() {
+        let resolver = OpResolver::new(Box::new(FakeOp::new(&[("op://v/a", "1")])), None);
+        resolver.sync(&["op://v/a".to_string(), "op://v/a".to_string()]);
+        assert_eq!(resolver.invocation_count(), 1);
+        assert_eq!(resolver.cached_count(), 1);
     }
 }

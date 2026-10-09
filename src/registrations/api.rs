@@ -23,6 +23,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -96,7 +97,8 @@ pub struct PutBody {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PutCredentialBody {
-    pub value: String,
+    /// Zeroized on drop; exposed only for the instant it is sealed.
+    pub value: secrecy::SecretString,
 }
 
 /// Render a `Registration` as the admin-facing JSON. Operators see
@@ -215,6 +217,14 @@ pub struct AdminRegistrationsState {
     /// `None` outside the production daemon. Records registration
     /// create/update/delete on the `registry` component (secret-free).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// Phase J / M2 (CCS-8, T2.2) — `op://` resolver cache shared with the
+    /// proxy hot path. [`refresh_runtime`](Self::refresh_runtime) resyncs
+    /// it so an `op_*` registration added or changed at runtime resolves
+    /// without a restart. `None` outside the production daemon.
+    pub op_resolver: Option<Arc<crate::secret::OpResolver>>,
+    /// Per-agent override repo — read by the `op` resync so references
+    /// used only by an override stay resolved.
+    pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
 }
 
 impl AdminRegistrationsState {
@@ -266,7 +276,13 @@ impl AdminRegistrationsState {
             }
         }
 
-        catalog.store(Arc::new(new_catalog));
+        let new_catalog = Arc::new(new_catalog);
+        catalog.store(new_catalog.clone());
+
+        if let Some(resolver) = self.op_resolver.as_ref() {
+            crate::secret::resync_op_references(resolver, &new_catalog, self.agent_creds.as_ref())
+                .await;
+        }
     }
 }
 
@@ -498,8 +514,9 @@ pub async fn op_put_credential(
         });
     }
 
-    // Seal the cleartext, then drop it. Never logged / echoed (CCS-1).
-    let (sealed, nonce) = match key.seal(body.value.as_bytes()) {
+    // Seal the cleartext; the SecretString zeroizes on drop. Never logged /
+    // echoed (CCS-1).
+    let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {
         Ok(pair) => pair,
         Err(e) => {
             return registration_error_response(&RegistrationError::Backend(format!(
@@ -516,15 +533,14 @@ pub async fn op_put_credential(
         }
     };
 
-    // Preserve the header name for header-shaped auth; else bearer.
-    let new_auth = match &existing.auth {
-        AuthSpec::Header { header, .. } | AuthSpec::StoredHeader { header, .. } => {
-            AuthSpec::StoredHeader {
-                header: header.clone(),
-                secret_ref: secret_ref.clone(),
-            }
-        }
-        _ => AuthSpec::StoredBearer {
+    // Preserve the header name for header-shaped auth (env, stored or op);
+    // else bearer.
+    let new_auth = match existing.auth.header_name() {
+        Some(header) => AuthSpec::StoredHeader {
+            header: header.to_string(),
+            secret_ref: secret_ref.clone(),
+        },
+        None => AuthSpec::StoredBearer {
             secret_ref: secret_ref.clone(),
         },
     };
@@ -533,9 +549,13 @@ pub async fn op_put_credential(
     // tombstone the old sealed row after the upsert commits.
     let old_ref = existing.auth.stored_secret_ref().map(|s| s.to_string());
 
+    // An operator-set credential makes the row operator-owned (mirrors
+    // `op_put`): a seed row left at `seed=true` would be refreshed — and its
+    // stored credential silently overwritten — on the next catalog bump.
     let now = unix_now();
     let updated = Registration {
         auth: new_auth,
+        seed: false,
         updated_at: now,
         ..existing
     };
@@ -592,6 +612,7 @@ pub async fn op_delete_credential(
         let now = unix_now();
         let updated = Registration {
             auth: AuthSpec::None,
+            seed: false,
             updated_at: now,
             ..existing
         };
