@@ -41,6 +41,11 @@ pub struct AppConfig {
     /// daemon applies defaults (30-day retention, hourly sweep) when
     /// absent. Independent of `audit` retention by design (LOG-1).
     pub operational_log: Option<OperationalLogConfig>,
+    /// Credential-store retention (Phase J, ADR-0008). Optional — daemon
+    /// applies defaults (7-day tombstone retention, 1-hour orphan grace,
+    /// hourly sweep) when absent. Only consulted when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is set.
+    pub credential_store: Option<CredentialStoreConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -143,6 +148,50 @@ fn default_operational_log_retention_days() -> u32 {
 }
 
 fn default_operational_log_sweep_interval_seconds() -> u64 {
+    3600
+}
+
+/// Credential-store sweeper tuning (Phase J, ADR-0008). Each sweep first
+/// tombstones sealed `credential_secrets` rows that no registration or
+/// per-agent override references (once older than `orphan_grace_seconds`),
+/// then hard-deletes tombstoned rows older than `tombstone_retention_days`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialStoreConfig {
+    /// Days a tombstoned (rotated-out, cleared or orphaned) sealed row is
+    /// kept before hard deletion. Default 7.
+    #[serde(default = "default_credential_tombstone_retention_days")]
+    pub tombstone_retention_days: u32,
+    /// Seconds a live row must exist before the sweeper may tombstone it
+    /// as unreferenced. Covers the gap between sealing a value and
+    /// recording its ref on the registration / override. Default 3600;
+    /// values below 60 are raised to 60.
+    #[serde(default = "default_credential_orphan_grace_seconds")]
+    pub orphan_grace_seconds: u64,
+    /// Sweep cadence in seconds. Default 3600 (hourly).
+    #[serde(default = "default_credential_sweep_interval_seconds")]
+    pub sweep_interval_seconds: u64,
+}
+
+impl Default for CredentialStoreConfig {
+    fn default() -> Self {
+        Self {
+            tombstone_retention_days: default_credential_tombstone_retention_days(),
+            orphan_grace_seconds: default_credential_orphan_grace_seconds(),
+            sweep_interval_seconds: default_credential_sweep_interval_seconds(),
+        }
+    }
+}
+
+fn default_credential_tombstone_retention_days() -> u32 {
+    7
+}
+
+fn default_credential_orphan_grace_seconds() -> u64 {
+    3600
+}
+
+fn default_credential_sweep_interval_seconds() -> u64 {
     3600
 }
 

@@ -199,6 +199,7 @@ async fn setup() -> M2 {
         credential_secrets: Some(secrets.clone()),
         operational_log: Some(emitter.clone()),
         operational_log_store: Some(logs.clone()),
+        op_resolver: None,
     };
     let admin = TestServer::new(build_router(uds));
 

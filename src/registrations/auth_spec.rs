@@ -228,6 +228,20 @@ impl AuthSpec {
         }
     }
 
+    /// The custom header name for header-shaped variants (`header`,
+    /// `stored_header`, `op_header`), else `None` (bearer / OAuth / none
+    /// inject `Authorization`). Set-value paths use this to keep a
+    /// header-auth registration header-shaped when its custody backend
+    /// changes — e.g. `x-api-key` must not silently become `Authorization`.
+    pub fn header_name(&self) -> Option<&str> {
+        match self {
+            AuthSpec::Header { header, .. }
+            | AuthSpec::StoredHeader { header, .. }
+            | AuthSpec::OpHeader { header, .. } => Some(header.as_str()),
+            _ => None,
+        }
+    }
+
     /// True iff this is an `op` custody variant (Phase J / M2, CCS-2): the
     /// credential value is resolved from an `op://` reference by the
     /// [`crate::secret::OpResolver`] cache at inject-time rather than
@@ -495,6 +509,56 @@ mod tests {
                      a value-bearing field would break the reveal-never invariant",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn header_name_covers_every_header_shaped_variant() {
+        let header = |h: &str| Some(h.to_string());
+        let cases = [
+            (
+                AuthSpec::Header {
+                    header: "x-api-key".into(),
+                    env_var: "K".into(),
+                },
+                header("x-api-key"),
+            ),
+            (
+                AuthSpec::StoredHeader {
+                    header: "x-api-key".into(),
+                    secret_ref: "cs_1".into(),
+                },
+                header("x-api-key"),
+            ),
+            (
+                AuthSpec::OpHeader {
+                    header: "x-api-key".into(),
+                    reference: "op://v/i/f".into(),
+                },
+                header("x-api-key"),
+            ),
+            (
+                AuthSpec::Bearer {
+                    env_var: "K".into(),
+                },
+                None,
+            ),
+            (
+                AuthSpec::StoredBearer {
+                    secret_ref: "cs_1".into(),
+                },
+                None,
+            ),
+            (
+                AuthSpec::OpBearer {
+                    reference: "op://v/i/f".into(),
+                },
+                None,
+            ),
+            (AuthSpec::None, None),
+        ];
+        for (spec, want) in cases {
+            assert_eq!(spec.header_name().map(str::to_string), want, "{spec:?}");
         }
     }
 }

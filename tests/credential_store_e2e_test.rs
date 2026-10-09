@@ -132,6 +132,7 @@ async fn setup(wire_key: bool) -> E2E {
         credential_secrets: app_secrets.clone(),
         operational_log: None,
         operational_log_store: None,
+        op_resolver: None,
     };
     let admin = TestServer::new(build_router(uds));
 

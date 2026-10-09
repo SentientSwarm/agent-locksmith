@@ -96,18 +96,7 @@ impl AgentCredentialRepository {
         .bind(registration)
         .fetch_optional(&self.pool)
         .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let auth_json: String = row.get("auth_spec");
-        let auth_spec: AuthSpec = serde_json::from_str(&auth_json)?;
-        Ok(Some(AgentCredentialOverride {
-            agent_id: row.get("agent_id"),
-            registration: row.get("registration"),
-            auth_spec,
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-        }))
+        row.map(|r| row_to_override(&r)).transpose()
     }
 
     /// Idempotent delete. Returns `true` when a row was actually
@@ -146,20 +135,33 @@ impl AgentCredentialRepository {
         .bind(agent_id)
         .fetch_all(&self.pool)
         .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let auth_json: String = row.get("auth_spec");
-            let auth_spec: AuthSpec = serde_json::from_str(&auth_json)?;
-            out.push(AgentCredentialOverride {
-                agent_id: row.get("agent_id"),
-                registration: row.get("registration"),
-                auth_spec,
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
-            });
-        }
-        Ok(out)
+        rows.iter().map(row_to_override).collect()
     }
+
+    /// List every override across all agents. Used off the hot path by
+    /// the `op://` resolver resync (Phase J / M2, T2.2) to find references
+    /// that only a per-agent override uses.
+    pub async fn list_all(&self) -> Result<Vec<AgentCredentialOverride>, RepoError> {
+        let rows = sqlx::query(
+            "SELECT agent_id, registration, auth_spec, created_at, updated_at \
+             FROM agent_credential_overrides ORDER BY agent_id, registration",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row_to_override).collect()
+    }
+}
+
+fn row_to_override(row: &sqlx::sqlite::SqliteRow) -> Result<AgentCredentialOverride, RepoError> {
+    let auth_json: String = row.get("auth_spec");
+    let auth_spec: AuthSpec = serde_json::from_str(&auth_json)?;
+    Ok(AgentCredentialOverride {
+        agent_id: row.get("agent_id"),
+        registration: row.get("registration"),
+        auth_spec,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
 }
 
 fn unix_now() -> i64 {
@@ -355,5 +357,33 @@ mod tests {
         creds.set(id, "codex", &spec).await.unwrap();
         let back = creds.get(id, "codex").await.unwrap().unwrap();
         assert_eq!(back.auth_spec.oauth_session_label(), Some("hermes"));
+    }
+
+    #[tokio::test]
+    async fn list_all_spans_every_agent() {
+        let (_d, agents, creds) = fresh().await;
+        let a = make_agent(&agents, "hermes").await;
+        let b = make_agent(&agents, "openclaw").await;
+        let op = AuthSpec::OpBearer {
+            reference: "op://v/i/f".into(),
+        };
+        creds.set(a, "lmstudio", &op).await.unwrap();
+        creds
+            .set(
+                b,
+                "tavily",
+                &AuthSpec::Bearer {
+                    env_var: "T".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let all = creds.list_all().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|o| o.agent_id == a && o.auth_spec == op));
+        assert!(
+            all.iter()
+                .any(|o| o.agent_id == b && o.registration == "tavily")
+        );
     }
 }

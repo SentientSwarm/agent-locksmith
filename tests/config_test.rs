@@ -116,3 +116,32 @@ tools: []
         Some(std::path::Path::new("/etc/locksmith/ca/kamiwaza-ca.pem")),
     );
 }
+
+#[test]
+fn test_credential_store_absent_defaults_to_none() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools: []
+"#;
+    let config = parse_config_str(yaml).unwrap();
+    assert!(config.credential_store.is_none());
+}
+
+#[test]
+fn test_credential_store_parses_with_defaults_and_overrides() {
+    let yaml = r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+credential_store:
+  orphan_grace_seconds: 600
+tools: []
+"#;
+    let config = parse_config_str(yaml).unwrap();
+    let cs = config.credential_store.expect("credential_store present");
+    assert_eq!(cs.tombstone_retention_days, 7);
+    assert_eq!(cs.orphan_grace_seconds, 600);
+    assert_eq!(cs.sweep_interval_seconds, 3600);
+}

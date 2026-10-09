@@ -184,6 +184,22 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         tokio::spawn(operational_log_retention_sweeper(store, cfg, shutdown))
     });
 
+    // Credential-store sweeper (Phase J, ADR-0008). Collects sealed values
+    // nothing references any more, then hard-deletes tombstoned rows past
+    // retention. Runs only when the sealing key is configured (the store
+    // exists only then).
+    let credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot
+            .credential_store
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(credential_store_sweeper(repo, cfg, shutdown))
+    });
+
     // Agent listener. Switch on auth_mode (post-v2 / #67):
     // - Bearer (default): plain TCP + axum (M0..M6 behavior).
     // - Mtls / Both: TLS-terminated TCP that verifies client certs at
@@ -422,6 +438,9 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         if let Some(s) = ops_log_sweeper_task {
             let _ = s.await;
         }
+        if let Some(s) = credential_sweeper_task {
+            let _ = s.await;
+        }
         agent_res
     };
 
@@ -518,6 +537,53 @@ async fn operational_log_retention_sweeper(
                     Ok(0) => {}
                     Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "operational-log retention sweep deleted rows"),
                     Err(e) => warn!(error = %e, "operational-log retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
+/// Lower bound on `credential_store.orphan_grace_seconds`.
+const MIN_ORPHAN_GRACE_SECONDS: u64 = 60;
+
+/// Periodically garbage-collect the sealed credential store (Phase J,
+/// ADR-0008). Each tick: tombstone live rows that no registration or
+/// per-agent override references and that are older than the orphan grace
+/// window, then hard-delete tombstoned rows older than the retention
+/// window. `credential_secrets` timestamps are unix SECONDS. Exits cleanly
+/// when the shutdown future resolves.
+async fn credential_store_sweeper(
+    repo: crate::repo::CredentialSecretsRepository,
+    cfg: crate::config::CredentialStoreConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const SECS_PER_DAY: i64 = 24 * 60 * 60;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("credential-store sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let now = now_ms() / 1_000;
+                // Floor the grace window: a near-zero value would let a sweep
+                // tick land between sealing a value and recording its ref.
+                let grace = i64::try_from(cfg.orphan_grace_seconds.max(MIN_ORPHAN_GRACE_SECONDS))
+                    .unwrap_or(i64::MAX);
+                match repo.tombstone_unreferenced(now.saturating_sub(grace)).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(tombstoned = n, "credential-store sweep tombstoned unreferenced sealed values"),
+                    Err(e) => warn!(error = %e, "credential-store orphan sweep failed; will retry next interval"),
+                }
+                let cutoff = now - i64::from(cfg.tombstone_retention_days) * SECS_PER_DAY;
+                match repo.sweep(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.tombstone_retention_days, "credential-store sweep deleted tombstoned rows"),
+                    Err(e) => warn!(error = %e, "credential-store retention sweep failed; will retry next interval"),
                 }
             }
         }
@@ -813,28 +879,24 @@ async fn build_admin_substrate(
     // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
     // Built unconditionally when the admin substrate is up (the table is
     // Phase J / M2 (CCS-8) — `op://` resolver. Built with the real `op`
-    // CLI command, then refreshed once from the catalog so every `op`
-    // registration's reference is resolved into the cache BEFORE traffic
+    // CLI command, then synced from the catalog + per-agent overrides so
+    // every `op` reference in use is resolved into the cache BEFORE traffic
     // starts. A missing `op` binary or a failed read degrades that one
     // reference (logged on the operational-log stream) — the daemon still
-    // boots. Refresh happens here (startup); on catalog change the admin
-    // handlers can re-refresh. Never per request.
+    // boots. Admin handlers resync on every catalog / override change
+    // (T2.2). Never per request.
     let op_resolver = Arc::new(crate::secret::OpResolver::with_cli(Some(
         operational_log.clone(),
     )));
-    {
-        let cat = catalog.load();
-        let op_refs = collect_op_references(&cat);
-        if !op_refs.is_empty() {
-            info!(
-                count = op_refs.len(),
-                "resolving op:// references at startup"
-            );
-            op_resolver.refresh(&op_refs);
-        }
+    let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
+    crate::secret::resync_op_references(&op_resolver, &catalog, Some(&agent_creds_repo)).await;
+    if op_resolver.cached_count() > 0 {
+        info!(
+            count = op_resolver.cached_count(),
+            "resolved op:// references at startup"
+        );
     }
 
-    let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -850,6 +912,7 @@ async fn build_admin_substrate(
             credential_secrets: credential_secrets.clone(),
             operational_log: Some(operational_log.clone()),
             operational_log_store: Some(operational_log_store.clone()),
+            op_resolver: Some(op_resolver.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
@@ -863,26 +926,6 @@ async fn build_admin_substrate(
         operational_log_store,
         op_resolver,
     })
-}
-
-/// Collect every `op://` reference referenced by an enabled registration
-/// in `catalog`, de-duplicated. Feeds [`crate::secret::OpResolver::refresh`]
-/// at startup (and on catalog change). Reads references only — never a
-/// value (CCS-8).
-fn collect_op_references(catalog: &crate::registrations::Catalog) -> Vec<String> {
-    use crate::registrations::Kind;
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
-        for r in catalog.iter_enabled_by_kind(kind) {
-            if let Some(reference) = r.auth.op_reference()
-                && seen.insert(reference.to_string())
-            {
-                out.push(reference.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// Convenience for tests: pre-construct a coordinator with the given

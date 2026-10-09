@@ -11,8 +11,11 @@
 //! `get` returns the sealed bytes + `set_at` only; the caller unseals.
 //! Rotation = [`insert`](CredentialSecretsRepository::insert) a fresh row
 //! (new `secret_ref`) then [`tombstone`](CredentialSecretsRepository::tombstone)
-//! the old one — the prior plaintext is never re-fetchable. `sweep`
-//! hard-deletes tombstoned rows past a grace cutoff.
+//! the old one — the prior plaintext is never re-fetchable. The daemon's
+//! credential-store sweeper calls
+//! [`tombstone_unreferenced`](CredentialSecretsRepository::tombstone_unreferenced)
+//! to collect rows nothing points at any more, then `sweep` to hard-delete
+//! tombstoned rows past the retention cutoff.
 
 use super::agent::RepoError;
 use sqlx::Row;
@@ -113,12 +116,70 @@ impl CredentialSecretsRepository {
         Ok(res.rows_affected())
     }
 
+    /// Tombstone `secret_ref` only if no registration or per-agent override
+    /// still references it. Returns `true` when a live row was tombstoned.
+    ///
+    /// Every explicit tombstone (rotation, clear) goes through this rather
+    /// than [`tombstone`](Self::tombstone): the generic AuthSpec write paths
+    /// accept a caller-supplied `secret_ref`, so a registration and an
+    /// override can legitimately share one sealed value, and dropping one
+    /// reference must not invalidate the other.
+    pub async fn tombstone_if_unreferenced(&self, secret_ref: &str) -> Result<bool, RepoError> {
+        let sql = format!(
+            "UPDATE credential_secrets SET tombstoned_at = ? \
+             WHERE secret_ref = ? AND tombstoned_at IS NULL AND {UNREFERENCED}"
+        );
+        let res = sqlx::query(&sql)
+            .bind(unix_now())
+            .bind(secret_ref)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Tombstone live rows that no registration or per-agent override
+    /// references and whose `set_at` is strictly before `set_before`
+    /// (unix seconds). Returns the number tombstoned.
+    ///
+    /// This is the garbage-collection half of the retention sweep. It
+    /// catches every path that drops a `secret_ref` without an explicit
+    /// tombstone: a generic auth replacement, a registration or agent
+    /// hard-delete (the override FK cascades), or the loser of a
+    /// concurrent rotation. The grace window keeps a freshly inserted row
+    /// safe in the gap between `insert` and the write that records its
+    /// ref.
+    pub async fn tombstone_unreferenced(&self, set_before: i64) -> Result<u64, RepoError> {
+        let sql = format!(
+            "UPDATE credential_secrets SET tombstoned_at = ? \
+             WHERE tombstoned_at IS NULL AND set_at < ? AND {UNREFERENCED}"
+        );
+        let res = sqlx::query(&sql)
+            .bind(unix_now())
+            .bind(set_before)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Test-only accessor for the underlying pool.
     #[cfg(test)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 }
+
+/// SQL predicate: the row's `secret_ref` is referenced by no registration
+/// and no per-agent override. `registrations.auth_json` and
+/// `agent_credential_overrides.auth_spec` are the only persisted AuthSpec
+/// columns. The `IS NOT NULL` filters are load-bearing: a NULL in a
+/// `NOT IN` subquery makes the predicate NULL for every row, which would
+/// silently disable collection.
+const UNREFERENCED: &str = "secret_ref NOT IN ( \
+    SELECT json_extract(auth_json, '$.secret_ref') FROM registrations \
+     WHERE json_extract(auth_json, '$.secret_ref') IS NOT NULL \
+    UNION \
+    SELECT json_extract(auth_spec, '$.secret_ref') FROM agent_credential_overrides \
+     WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL)";
 
 /// Mint an opaque `cs_`-prefixed secret ref from 16 random bytes.
 fn new_secret_ref() -> Result<String, RepoError> {
@@ -235,5 +296,103 @@ mod tests {
         // Cutoff in the distant past → nothing swept (tombstoned_at >= cutoff).
         let removed = repo.sweep(0).await.unwrap();
         assert_eq!(removed, 0);
+    }
+
+    async fn fresh_with_pool() -> (TempDir, SqlitePool, CredentialSecretsRepository) {
+        let dir = TempDir::new().unwrap();
+        let pool = open_and_migrate(&dir.path().join("db.sqlite"))
+            .await
+            .unwrap();
+        (dir, pool.clone(), CredentialSecretsRepository::new(pool))
+    }
+
+    async fn register(pool: &SqlitePool, name: &str, auth: crate::registrations::AuthSpec) {
+        use crate::registrations::{Kind, Registration, RegistrationRepository};
+        let r = Registration::new(
+            name.to_string(),
+            Kind::Tool,
+            String::new(),
+            "https://example.com".to_string(),
+            auth,
+        );
+        RegistrationRepository::new(pool.clone())
+            .upsert(&r)
+            .await
+            .unwrap();
+    }
+
+    fn stored(secret_ref: &str) -> crate::registrations::AuthSpec {
+        crate::registrations::AuthSpec::StoredBearer {
+            secret_ref: secret_ref.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn gc_tombstones_only_unreferenced_rows() {
+        let (_d, pool, repo) = fresh_with_pool().await;
+        let referenced = repo.insert(b"a", b"n").await.unwrap();
+        let orphan = repo.insert(b"b", b"n").await.unwrap();
+        register(&pool, "tavily", stored(&referenced)).await;
+        // A non-stored registration makes json_extract yield NULL — the
+        // NOT-IN NULL trap must not disable collection.
+        register(&pool, "plain", crate::registrations::AuthSpec::None).await;
+
+        let n = repo.tombstone_unreferenced(i64::MAX).await.unwrap();
+        assert_eq!(n, 1);
+        assert!(repo.get(&referenced).await.unwrap().is_some());
+        assert!(repo.get(&orphan).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn gc_respects_override_references() {
+        let (_d, pool, repo) = fresh_with_pool().await;
+        let r = repo.insert(b"a", b"n").await.unwrap();
+        let agents = crate::repo::AgentRepository::new(pool.clone());
+        agents
+            .create("hermes", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = agents.get_by_name("hermes").await.unwrap().unwrap().id;
+        crate::repo::AgentCredentialRepository::new(pool.clone())
+            .set(id, "tavily", &stored(&r))
+            .await
+            .unwrap();
+
+        assert_eq!(repo.tombstone_unreferenced(i64::MAX).await.unwrap(), 0);
+        assert!(repo.get(&r).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn gc_spares_rows_inside_grace_window() {
+        let (_d, _pool, repo) = fresh_with_pool().await;
+        let r = repo.insert(b"a", b"n").await.unwrap();
+        // set_before = 0 → every row is "too new" to collect.
+        assert_eq!(repo.tombstone_unreferenced(0).await.unwrap(), 0);
+        assert!(repo.get(&r).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn gc_ignores_already_tombstoned_rows() {
+        let (_d, _pool, repo) = fresh_with_pool().await;
+        let r = repo.insert(b"a", b"n").await.unwrap();
+        repo.tombstone(&r).await.unwrap();
+        assert_eq!(repo.tombstone_unreferenced(i64::MAX).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn tombstone_if_unreferenced_spares_a_shared_ref() {
+        let (_d, pool, repo) = fresh_with_pool().await;
+        let shared = repo.insert(b"a", b"n").await.unwrap();
+        register(&pool, "tavily", stored(&shared)).await;
+        assert!(!repo.tombstone_if_unreferenced(&shared).await.unwrap());
+        assert!(repo.get(&shared).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn tombstone_if_unreferenced_collects_an_unused_ref() {
+        let (_d, _pool, repo) = fresh_with_pool().await;
+        let r = repo.insert(b"a", b"n").await.unwrap();
+        assert!(repo.tombstone_if_unreferenced(&r).await.unwrap());
+        assert!(repo.get(&r).await.unwrap().is_none());
     }
 }
