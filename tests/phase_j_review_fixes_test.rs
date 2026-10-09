@@ -69,6 +69,8 @@ struct Harness {
     registrations: Arc<RegistrationRepository>,
     agent_creds: AgentCredentialRepository,
     secrets: CredentialSecretsRepository,
+    key: agent_locksmith::secret::CredentialSealingKey,
+    op_resolver: Arc<OpResolver>,
     mock: MockServer,
 }
 
@@ -185,7 +187,7 @@ async fn setup() -> Harness {
         None,
     ));
     // Startup sync, as the daemon does.
-    resync_op_references(&op_resolver, &catalog_arc.load(), Some(&agent_creds)).await;
+    resync_op_references(&op_resolver, &catalog_arc, Some(&agent_creds)).await;
 
     let uds = UdsState {
         admin: admin_service,
@@ -214,10 +216,10 @@ async fn setup() -> Harness {
         catalog_arc,
         None,
         Some(agent_creds.clone()),
-        Some(key),
+        Some(key.clone()),
         Some(secrets.clone()),
         None,
-        Some(op_resolver),
+        Some(op_resolver.clone()),
     ));
 
     Harness {
@@ -232,6 +234,8 @@ async fn setup() -> Harness {
         registrations,
         agent_creds,
         secrets,
+        key,
+        op_resolver,
         mock,
     }
 }
@@ -407,4 +411,112 @@ async fn sealed_value_orphaned_by_generic_override_is_collected() {
 
     assert_eq!(h.secrets.tombstone_unreferenced(i64::MAX).await.unwrap(), 1);
     assert!(h.secrets.get(&secret_ref).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn existing_bearer_override_keeps_its_shape() {
+    let h = setup().await;
+    // An explicit bearer override on a header-auth registration…
+    h.admin
+        .put(&h.override_url("hdr-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "bearer", "env_var": "OVERRIDE_KEY" } }))
+        .await
+        .assert_status_ok();
+    // …stays bearer when its value moves into the store.
+    h.admin
+        .put(&format!("{}/credential", h.override_url("hdr-api")))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "value": "bearer-secret" }))
+        .await
+        .assert_status_ok();
+    let o = h
+        .agent_creds
+        .get(h.agent_id, "hdr-api")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(o.auth_spec.is_stored());
+    assert_eq!(
+        o.auth_spec.header_name(),
+        None,
+        "bearer override stays bearer"
+    );
+}
+
+#[tokio::test]
+async fn clearing_an_override_spares_a_ref_the_registration_shares() {
+    let h = setup().await;
+    let body: serde_json::Value = h
+        .admin
+        .put("/admin/operator/models/shared-api/credential")
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "value": "registration-secret" }))
+        .await
+        .json();
+    let shared = body["secret_ref"].as_str().unwrap().to_string();
+    // Copy the registration's ref into an override, then clear the override.
+    h.admin
+        .put(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "stored_bearer", "secret_ref": shared } }))
+        .await
+        .assert_status_ok();
+    h.admin
+        .delete(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    assert!(
+        h.secrets.get(&shared).await.unwrap().is_some(),
+        "the registration still references the sealed value"
+    );
+}
+
+#[tokio::test]
+async fn malformed_op_override_reference_is_rejected() {
+    let h = setup().await;
+    h.admin
+        .put(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "op_bearer", "reference": "vault/item/field" } }))
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cleared_op_override_reference_is_evicted() {
+    let h = setup().await;
+    h.admin
+        .put(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "op_bearer", "reference": OVERRIDE_REF } }))
+        .await
+        .assert_status_ok();
+    assert!(h.op_resolver.get(OVERRIDE_REF).is_some());
+    h.admin
+        .delete(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    assert!(h.op_resolver.get(OVERRIDE_REF).is_none());
+}
+
+#[tokio::test]
+async fn non_utf8_stored_value_fails_loud() {
+    let h = setup().await;
+    let (sealed, nonce) = h.key.seal(&[0xff, 0xfe, 0xfd]).unwrap();
+    let secret_ref = h.secrets.insert(&sealed, &nonce).await.unwrap();
+    h.admin
+        .put("/admin/operator/models/shared-api")
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({
+            "upstream": h.mock.uri(),
+            "auth": { "kind": "stored_bearer", "secret_ref": secret_ref },
+        }))
+        .await
+        .assert_status_ok();
+    h.proxy_get("/api/shared-api/any")
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
 }

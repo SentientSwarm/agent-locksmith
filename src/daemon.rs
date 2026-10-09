@@ -543,6 +543,9 @@ async fn operational_log_retention_sweeper(
     }
 }
 
+/// Lower bound on `credential_store.orphan_grace_seconds`.
+const MIN_ORPHAN_GRACE_SECONDS: u64 = 60;
+
 /// Periodically garbage-collect the sealed credential store (Phase J,
 /// ADR-0008). Each tick: tombstone live rows that no registration or
 /// per-agent override references and that are older than the orphan grace
@@ -567,7 +570,10 @@ async fn credential_store_sweeper(
             }
             _ = ticker.tick() => {
                 let now = now_ms() / 1_000;
-                let grace = i64::try_from(cfg.orphan_grace_seconds).unwrap_or(i64::MAX);
+                // Floor the grace window: a near-zero value would let a sweep
+                // tick land between sealing a value and recording its ref.
+                let grace = i64::try_from(cfg.orphan_grace_seconds.max(MIN_ORPHAN_GRACE_SECONDS))
+                    .unwrap_or(i64::MAX);
                 match repo.tombstone_unreferenced(now.saturating_sub(grace)).await {
                     Ok(0) => {}
                     Ok(n) => info!(tombstoned = n, "credential-store sweep tombstoned unreferenced sealed values"),
@@ -883,8 +889,7 @@ async fn build_admin_substrate(
         operational_log.clone(),
     )));
     let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
-    crate::secret::resync_op_references(&op_resolver, &catalog.load(), Some(&agent_creds_repo))
-        .await;
+    crate::secret::resync_op_references(&op_resolver, &catalog, Some(&agent_creds_repo)).await;
     if op_resolver.cached_count() > 0 {
         info!(
             count = op_resolver.cached_count(),

@@ -276,12 +276,10 @@ impl AdminRegistrationsState {
             }
         }
 
-        let new_catalog = Arc::new(new_catalog);
-        catalog.store(new_catalog.clone());
+        catalog.store(Arc::new(new_catalog));
 
         if let Some(resolver) = self.op_resolver.as_ref() {
-            crate::secret::resync_op_references(resolver, &new_catalog, self.agent_creds.as_ref())
-                .await;
+            crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
         }
     }
 }
@@ -566,7 +564,7 @@ pub async fn op_put_credential(
     // Tombstone the rotated ref only after the upsert succeeds, so a
     // failed write never orphans the live secret.
     if let Some(old) = old_ref
-        && let Err(e) = secrets.tombstone(&old).await
+        && let Err(e) = secrets.tombstone_if_unreferenced(&old).await
     {
         tracing::warn!(error = %e, "tombstone of rotated credential ref failed");
     }
@@ -619,7 +617,7 @@ pub async fn op_delete_credential(
         if let Err(e) = state.repo.upsert(&updated).await {
             return registration_error_response(&e);
         }
-        if let Err(e) = secrets.tombstone(&old).await {
+        if let Err(e) = secrets.tombstone_if_unreferenced(&old).await {
             tracing::warn!(error = %e, "tombstone of cleared credential ref failed");
         }
         state.refresh_runtime().await;

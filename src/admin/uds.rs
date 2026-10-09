@@ -100,12 +100,7 @@ impl UdsState {
     async fn resync_op_references(&self) {
         if let (Some(resolver), Some(catalog)) = (self.op_resolver.as_ref(), self.catalog.as_ref())
         {
-            crate::secret::resync_op_references(
-                resolver,
-                &catalog.load(),
-                self.agent_creds.as_ref(),
-            )
-            .await;
+            crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
         }
     }
 }
@@ -864,6 +859,16 @@ async fn op_set_agent_credential(
             "agent_credential_overrides not wired".into(),
         ));
     };
+    // An `op` override reference is resolved by `op read` on the next
+    // resync — reject a malformed one up front, as registration writes do
+    // (CCS-2).
+    if let Err(msg) = body.auth_spec.validate_op_reference() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "code": "invalid_op_reference", "message": msg } })),
+        )
+            .into_response();
+    }
     let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
         Ok(a) => a,
         Err(e) => return admin_err_response(e),
@@ -945,28 +950,25 @@ async fn op_set_agent_stored_credential(
         Err(e) => return admin_err_response(e),
     };
 
-    // Capture the prior override's stored ref (for tombstoning). The header
-    // shape comes from the body, else the prior override, else the
-    // registration itself — so a header-auth registration (`x-api-key`)
-    // stays header-shaped instead of silently injecting `Authorization`.
+    // Capture the prior override's stored ref (for tombstoning). Header
+    // shape: an explicit `header` in the body wins; else an existing
+    // override keeps its own shape (bearer stays bearer); else — no
+    // override yet — inherit the registration's header, so a header-auth
+    // registration (`x-api-key`) doesn't silently start injecting
+    // `Authorization`.
     let existing = creds.get(agent.id, &registration).await.ok().flatten();
     let old_ref = existing
         .as_ref()
         .and_then(|o| o.auth_spec.stored_secret_ref().map(|s| s.to_string()));
-    let registration_header = state.catalog.as_ref().and_then(|c| {
-        c.load()
-            .lookup_any(&registration)
-            .and_then(|r| r.auth.header_name().map(str::to_string))
-    });
-    let header_name = body
-        .header
-        .clone()
-        .or_else(|| {
-            existing
-                .as_ref()
-                .and_then(|o| o.auth_spec.header_name().map(str::to_string))
-        })
-        .or(registration_header);
+    let header_name = match (body.header.clone(), existing.as_ref()) {
+        (Some(header), _) => Some(header),
+        (None, Some(o)) => o.auth_spec.header_name().map(str::to_string),
+        (None, None) => state.catalog.as_ref().and_then(|c| {
+            c.load()
+                .lookup_any(&registration)
+                .and_then(|r| r.auth.header_name().map(str::to_string))
+        }),
+    };
 
     // Seal the cleartext; the SecretString zeroizes on drop. Never logged /
     // echoed (CCS-1).
@@ -1006,7 +1008,7 @@ async fn op_set_agent_stored_credential(
     // Tombstone the rotated ref only after the override write succeeds so a
     // failed write never orphans the live secret.
     if let Some(old) = old_ref
-        && let Err(e) = secrets.tombstone(&old).await
+        && let Err(e) = secrets.tombstone_if_unreferenced(&old).await
     {
         tracing::warn!(error = %e, "tombstone of rotated agent-override credential ref failed");
     }
@@ -1052,7 +1054,7 @@ async fn op_unset_agent_credential(
         )));
     }
     if let (Some(old), Some(secrets)) = (old_ref, state.credential_secrets.as_ref())
-        && let Err(e) = secrets.tombstone(&old).await
+        && let Err(e) = secrets.tombstone_if_unreferenced(&old).await
     {
         tracing::warn!(error = %e, "tombstone of cleared agent-override credential ref failed");
     }

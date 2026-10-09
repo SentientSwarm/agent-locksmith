@@ -164,7 +164,8 @@ pub struct CredentialStoreConfig {
     pub tombstone_retention_days: u32,
     /// Seconds a live row must exist before the sweeper may tombstone it
     /// as unreferenced. Covers the gap between sealing a value and
-    /// recording its ref on the registration / override. Default 3600.
+    /// recording its ref on the registration / override. Default 3600;
+    /// values below 60 are raised to 60.
     #[serde(default = "default_credential_orphan_grace_seconds")]
     pub orphan_grace_seconds: u64,
     /// Sweep cadence in seconds. Default 3600 (hourly).

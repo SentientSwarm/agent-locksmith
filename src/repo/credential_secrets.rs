@@ -116,6 +116,27 @@ impl CredentialSecretsRepository {
         Ok(res.rows_affected())
     }
 
+    /// Tombstone `secret_ref` only if no registration or per-agent override
+    /// still references it. Returns `true` when a live row was tombstoned.
+    ///
+    /// Every explicit tombstone (rotation, clear) goes through this rather
+    /// than [`tombstone`](Self::tombstone): the generic AuthSpec write paths
+    /// accept a caller-supplied `secret_ref`, so a registration and an
+    /// override can legitimately share one sealed value, and dropping one
+    /// reference must not invalidate the other.
+    pub async fn tombstone_if_unreferenced(&self, secret_ref: &str) -> Result<bool, RepoError> {
+        let sql = format!(
+            "UPDATE credential_secrets SET tombstoned_at = ? \
+             WHERE secret_ref = ? AND tombstoned_at IS NULL AND {UNREFERENCED}"
+        );
+        let res = sqlx::query(&sql)
+            .bind(unix_now())
+            .bind(secret_ref)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Tombstone live rows that no registration or per-agent override
     /// references and whose `set_at` is strictly before `set_before`
     /// (unix seconds). Returns the number tombstoned.
@@ -126,27 +147,17 @@ impl CredentialSecretsRepository {
     /// hard-delete (the override FK cascades), or the loser of a
     /// concurrent rotation. The grace window keeps a freshly inserted row
     /// safe in the gap between `insert` and the write that records its
-    /// ref. `registrations.auth_json` and `agent_credential_overrides.auth_spec`
-    /// are the only persisted AuthSpec columns.
+    /// ref.
     pub async fn tombstone_unreferenced(&self, set_before: i64) -> Result<u64, RepoError> {
-        let now = unix_now();
-        // The `IS NOT NULL` filters are load-bearing: a NULL in a `NOT IN`
-        // subquery makes the predicate NULL for every row, which would
-        // silently disable collection.
-        let res = sqlx::query(
+        let sql = format!(
             "UPDATE credential_secrets SET tombstoned_at = ? \
-             WHERE tombstoned_at IS NULL AND set_at < ? \
-               AND secret_ref NOT IN ( \
-                 SELECT json_extract(auth_json, '$.secret_ref') FROM registrations \
-                  WHERE json_extract(auth_json, '$.secret_ref') IS NOT NULL \
-                 UNION \
-                 SELECT json_extract(auth_spec, '$.secret_ref') FROM agent_credential_overrides \
-                  WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL)",
-        )
-        .bind(now)
-        .bind(set_before)
-        .execute(&self.pool)
-        .await?;
+             WHERE tombstoned_at IS NULL AND set_at < ? AND {UNREFERENCED}"
+        );
+        let res = sqlx::query(&sql)
+            .bind(unix_now())
+            .bind(set_before)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected())
     }
 
@@ -156,6 +167,19 @@ impl CredentialSecretsRepository {
         &self.pool
     }
 }
+
+/// SQL predicate: the row's `secret_ref` is referenced by no registration
+/// and no per-agent override. `registrations.auth_json` and
+/// `agent_credential_overrides.auth_spec` are the only persisted AuthSpec
+/// columns. The `IS NOT NULL` filters are load-bearing: a NULL in a
+/// `NOT IN` subquery makes the predicate NULL for every row, which would
+/// silently disable collection.
+const UNREFERENCED: &str = "secret_ref NOT IN ( \
+    SELECT json_extract(auth_json, '$.secret_ref') FROM registrations \
+     WHERE json_extract(auth_json, '$.secret_ref') IS NOT NULL \
+    UNION \
+    SELECT json_extract(auth_spec, '$.secret_ref') FROM agent_credential_overrides \
+     WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL)";
 
 /// Mint an opaque `cs_`-prefixed secret ref from 16 random bytes.
 fn new_secret_ref() -> Result<String, RepoError> {
@@ -353,5 +377,22 @@ mod tests {
         let r = repo.insert(b"a", b"n").await.unwrap();
         repo.tombstone(&r).await.unwrap();
         assert_eq!(repo.tombstone_unreferenced(i64::MAX).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn tombstone_if_unreferenced_spares_a_shared_ref() {
+        let (_d, pool, repo) = fresh_with_pool().await;
+        let shared = repo.insert(b"a", b"n").await.unwrap();
+        register(&pool, "tavily", stored(&shared)).await;
+        assert!(!repo.tombstone_if_unreferenced(&shared).await.unwrap());
+        assert!(repo.get(&shared).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn tombstone_if_unreferenced_collects_an_unused_ref() {
+        let (_d, _pool, repo) = fresh_with_pool().await;
+        let r = repo.insert(b"a", b"n").await.unwrap();
+        assert!(repo.tombstone_if_unreferenced(&r).await.unwrap());
+        assert!(repo.get(&r).await.unwrap().is_none());
     }
 }

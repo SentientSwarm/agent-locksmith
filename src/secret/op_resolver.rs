@@ -71,9 +71,12 @@ pub struct OpResolver {
     /// the hot-path `get` never shells out (invocations happen only in
     /// `refresh` / `sync`).
     invocations: AtomicU64,
-    /// Serializes cache rebuilds so two concurrent admin writes can't each
-    /// build from the same snapshot and drop the other's resolutions.
+    /// Serializes cache swaps (`refresh` / `sync`).
     rebuild: Mutex<()>,
+    /// Held by [`resync_op_references`] across the whole collect → resolve
+    /// → publish cycle, so a resync that snapshotted older state can never
+    /// publish after (and evict references added by) a newer one.
+    resync: tokio::sync::Mutex<()>,
 }
 
 impl OpResolver {
@@ -86,6 +89,7 @@ impl OpResolver {
             emitter,
             invocations: AtomicU64::new(0),
             rebuild: Mutex::new(()),
+            resync: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -95,9 +99,10 @@ impl OpResolver {
     }
 
     /// Resolve every reference in `references` and atomically swap the
-    /// cache. Called at startup — NEVER on the hot path. Each reference
-    /// that fails to resolve is omitted from the new cache and logged
-    /// (degrade-not-crash, CCS-8). Duplicate references are resolved once.
+    /// cache. NEVER on the hot path. Each reference that fails to resolve
+    /// is omitted from the new cache and logged (degrade-not-crash, CCS-8).
+    /// Duplicate references are attempted once, whether or not they
+    /// resolve.
     pub fn refresh(&self, references: &[String]) {
         self.rebuild(references, false);
     }
@@ -116,9 +121,10 @@ impl OpResolver {
         let _guard = self.rebuild.lock().unwrap_or_else(|e| e.into_inner());
         let current = self.cache.load();
         let mut next: HashMap<String, SecretString> = HashMap::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         let mut degraded = 0usize;
         for reference in references {
-            if next.contains_key(reference) {
+            if !seen.insert(reference.as_str()) {
                 continue;
             }
             if reuse_cached && let Some(value) = current.get(reference) {
@@ -204,18 +210,23 @@ pub fn catalog_op_references(catalog: &Catalog) -> Vec<String> {
 }
 
 /// Reconcile `resolver` with every `op://` reference currently in use:
-/// enabled registrations in `catalog` plus every per-agent override.
-/// Called at startup, after each catalog refresh, and after each override
-/// mutation, so an `op` credential added at runtime — or referenced only
-/// by an override — resolves without a restart (T2.2). The `op` reads run
-/// on the blocking pool. If the override table can't be read, the cache
-/// is left untouched rather than shrunk to a partial reference set.
+/// enabled registrations in the current catalog plus every per-agent
+/// override. Called at startup, after each catalog refresh, and after each
+/// override mutation, so an `op` credential added at runtime — or
+/// referenced only by an override — resolves without a restart (T2.2).
+///
+/// The whole cycle runs under the resolver's resync lock and reads the
+/// catalog from `catalog` *inside* it, so concurrent admin writes publish
+/// in order: the last resync to run always saw the newest state. The `op`
+/// reads run on the blocking pool. If the override table can't be read,
+/// the cache is left untouched rather than shrunk to a partial set.
 pub async fn resync_op_references(
     resolver: &Arc<OpResolver>,
-    catalog: &Catalog,
+    catalog: &ArcSwap<Catalog>,
     overrides: Option<&AgentCredentialRepository>,
 ) {
-    let mut references = catalog_op_references(catalog);
+    let _cycle = resolver.resync.lock().await;
+    let mut references = catalog_op_references(&catalog.load());
     if let Some(repo) = overrides {
         match repo.list_all().await {
             Ok(rows) => references.extend(
@@ -389,5 +400,20 @@ mod tests {
         resolver.sync(&["op://v/a".to_string(), "op://v/a".to_string()]);
         assert_eq!(resolver.invocation_count(), 1);
         assert_eq!(resolver.cached_count(), 1);
+    }
+
+    #[test]
+    fn failing_duplicate_reference_is_attempted_once() {
+        let resolver = OpResolver::new(Box::new(FakeOp::new(&[])), None);
+        resolver.sync(&[
+            "op://v/missing".to_string(),
+            "op://v/missing".to_string(),
+            "op://v/missing".to_string(),
+        ]);
+        assert_eq!(
+            resolver.invocation_count(),
+            1,
+            "a reference shared by several overrides is tried once per sync"
+        );
     }
 }

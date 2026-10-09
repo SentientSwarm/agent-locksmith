@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 + per-agent credential overrides + OAuth session labels + complete
 codex transparent integration through Phase G2/G3/G4/G5 + Phase J
 credential custody backends and operational-log stream). `main` tracks
-releases (promoted from `develop` at release time; currently at v2.8.0).
+releases (promoted from `develop` at release time; see the latest tag).
 Cut feature branches from `develop`.
 
 Recent phase shipments on develop:
