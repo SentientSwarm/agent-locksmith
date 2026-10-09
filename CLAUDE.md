@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working branch
 
-`develop` is the default working branch — currently at **v2.7.1**
+`develop` is the default working branch — currently at **v2.8.0**
 (catalog substrate + per-agent ACL + mTLS + OAuth credential variant
 + per-agent credential overrides + OAuth session labels + complete
-codex transparent integration through Phase G2/G3/G4/G5). `main` tracks
-releases (promoted from `develop` at release time; currently at v2.7.1).
+codex transparent integration through Phase G2/G3/G4/G5 + Phase J
+credential custody backends and operational-log stream). `main` tracks
+releases (promoted from `develop` at release time; currently at v2.8.0).
 Cut feature branches from `develop`.
 
 Recent phase shipments on develop:
@@ -57,6 +58,23 @@ Recent phase shipments on develop:
   `{*path}` capture excludes it, so query-driven GETs (ComfyUI
   `/view?filename=...`, paginated/filtered REST APIs) reached the upstream
   stripped and 404'd. Regression test `test_proxy_forwards_query_string`.
+- **Phase J** (v2.8.0, agents-stack ADR-0008 / spec v0.6.0): credential
+  custody backends + operational-log stream.
+  - `stored_header` / `stored_bearer` — locksmith seals the value at rest
+    (`credential_secrets`, migration 0007) under a second, independent
+    key `LOCKSMITH_CREDENTIAL_SEALING_KEY`. Set via
+    `PUT /admin/operator/{kind}/{name}/credential` or the per-agent
+    `.../credentials/{registration}/credential`; reveal-never (reads
+    return `secret_ref` + `set_at` only). Unresolvable → loud
+    `503 credential_unresolved`, never a stripped forward.
+  - `op_header` / `op_bearer` — `op://` references resolved by
+    `secret::OpResolver` at startup and resynced (incrementally) after
+    every catalog or per-agent-override change; never per request.
+  - `operational_logs` (migration 0008) — secret-free operational
+    events, separate from audit, queried via `GET /admin/operator/logs`.
+  - Credential-store sweeper GCs sealed values nothing references
+    (after `credential_store.orphan_grace_seconds`) and hard-deletes
+    tombstoned rows past `credential_store.tombstone_retention_days`.
 
 The authoritative stack-level docs live at `agents-stack/docs/`:
 
@@ -123,7 +141,7 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
 
    Tools whose secrets fail to resolve are inactive (degraded per INF-4) but the daemon still boots.
 3. **Admin substrate** (built only when `listen.admin_socket` is set) — opens the SQLite pool (`migrations::open_and_migrate`), constructs `AgentRepository`, `BootstrapTokenRepository`, `AuditRepository`, `RegistrationRepository` (Phase E), `OauthSessionRepository` (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set), the `BearerAuthenticator` (for agents), the `OperatorAuthenticator` (loaded from `operator_credentials_path`), and the `AdminService`. Runs the seed loader (Phase E.7) and the `legacy_bootstrap` shim (config.tools → registrations migration). The audit repository is **shared** with the agent listener so proxy and admin writes hit the same SQLite pool and JSONL mirror.
-4. **Audit retention sweeper** — bounded `DELETE WHERE ts < cutoff` on a tokio interval; co-terminates with the shutdown signal.
+4. **Retention sweepers** — independent tokio intervals that co-terminate with the shutdown signal: audit (bounded `DELETE WHERE ts < cutoff`), operational logs (Phase J), and the credential store (Phase J — tombstones unreferenced sealed values past the orphan grace window, then hard-deletes tombstoned rows past retention; runs only when `LOCKSMITH_CREDENTIAL_SEALING_KEY` is set). The Phase J `OpResolver` is also built here and synced from the catalog + per-agent overrides before traffic starts.
 5. **Agent listener** — switches on `listen.auth_mode`:
    - `Bearer`: plain TCP + axum.
    - `Mtls` / `Both`: TLS-terminated TCP via `agent_listener::bind_and_serve_mtls`. The handshake verifies client certs against `listen.mtls.ca_bundle_path`; the resolved peer cert is stamped into request extensions for `auth::auth_middleware` to consume. `MtlsAuthenticator` (in `src/mtls/`) maps cert identity (CN → SAN_DNS → SAN_URI) to an agent row, applies CRL + local blocklist, and emits `auth_method=mtls` audit rows.
@@ -156,6 +174,7 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 3. **Phase E.6 target resolution**: `state.catalog.lookup_active(name)` (registrations table, in-memory cache). Falls back to `config.active_tools()` for M0/M1 / pre-Phase-E test paths. `ProxyTarget::from_registration` or `from_tool_config`.
 4. **Phase G per-agent override**: `apply_agent_credential_override` looks up `agent_credential_overrides[agent_id, name]`. If present, swaps in the override's AuthSpec (header/bearer reads env var directly; OAuth records the `session_label` for downstream resolution). `target.auth_source` flips to `agent_override`.
 5. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` with `target.oauth_session_label` (defaults to `DEFAULT_SESSION_LABEL`) to materialize the access token from `oauth_sessions(name, label)` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
+5a. **Phase J custody resolution**: `stored_*` targets fetch + unseal from `credential_secrets` (`resolve_stored_credential`); `op_*` targets read the `OpResolver` cache. Any failure → 503 `credential_unresolved` with a distinct audit cause and an operational-log warn.
 6. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
 7. Injects credentials per `ProxyAuth` variant: `None` skips; `Header { override_value, .. }` and `Bearer { override_value }` use the override value when set, else fall back to `resolved_creds[name]`; `Oauth` injects access token from the OAuth cache.
 7a. **Phase G2 codex header injection**: when `ProxyAuth::Oauth.account_id` is `Some(_)` and `is_chatgpt_codex_upstream(target.upstream)` matches (`/backend-api/codex` substring, case-insensitive), adds `ChatGPT-Account-ID: <account_id>`. Silent skip otherwise. The account_id was extracted from the access-token JWT at bootstrap/refresh by `oauth::jwt::extract_chatgpt_account_id` and stored in `oauth_sessions.account_id`.

@@ -26,7 +26,7 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.7.1)
+## Highlights (v2.8.0)
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
@@ -90,6 +90,18 @@ middleware (`kind=infra`) is operator-only.
   inbound query string to the upstream URL. Query-driven GETs (e.g.
   ComfyUI `/view?filename=...`, paginated/filtered REST APIs) previously
   reached the upstream stripped and 404'd.
+- **Credential custody backends (Phase J, v2.8.0)** — besides env vars,
+  a registration or per-agent override can hold its credential as
+  `stored_*` (locksmith seals the value at rest under
+  `LOCKSMITH_CREDENTIAL_SEALING_KEY`; write-once, reveal-never — no
+  1Password needed) or `op_*` (an `op://` reference resolved by the
+  1Password CLI at startup and on change, never per request). An
+  unresolvable credential fails the request loudly (503) instead of
+  forwarding it stripped.
+- **Operational-log stream (Phase J, v2.8.0)** — secret-free operational
+  events (config, registry, OAuth, proxy, credential resolution) in their
+  own table with independent retention, queried via
+  `GET /admin/operator/logs?level=&component=`.
 
 ## Two-binary layout
 
@@ -212,6 +224,13 @@ GET    /admin/operator/{tools,models,infra}/{name}
 PUT    /admin/operator/{tools,models,infra}/{name}
 DELETE /admin/operator/{tools,models,infra}/{name}
 POST   /admin/operator/{tools,models,infra}/{name}/enable
+PUT    /admin/operator/{tools,models,infra}/{name}/credential   seal a stored value (Phase J)
+DELETE /admin/operator/{tools,models,infra}/{name}/credential   clear it
+
+GET    /admin/operator/agents/{public_id}/credentials           per-agent overrides (Phase G)
+PUT    /admin/operator/agents/{public_id}/credentials/{reg}     set an override AuthSpec
+DELETE /admin/operator/agents/{public_id}/credentials/{reg}     clear it
+PUT    /admin/operator/agents/{public_id}/credentials/{reg}/credential   stored override value (Phase J)
 
 POST   /admin/operator/oauth/{name}/bootstrap    OAuth session (Phase F)
 GET    /admin/operator/oauth/{name}              session status
@@ -222,6 +241,7 @@ POST   /admin/operator/bootstrap_tokens
 POST   /admin/operator/bootstrap_tokens/{public_id}/revoke
 
 GET    /admin/operator/audit                     audit query
+GET    /admin/operator/logs                      operational-log query (Phase J)
 ```
 
 ### Error envelope (§4.7.9)
@@ -270,6 +290,15 @@ audit:
   jsonl_max_bytes: 104857600
   jsonl_keep_files: 7
 
+operational_log:              # Phase J; defaults shown
+  retention_days: 30
+  sweep_interval_seconds: 3600
+
+credential_store:             # Phase J; needs LOCKSMITH_CREDENTIAL_SEALING_KEY
+  tombstone_retention_days: 7
+  orphan_grace_seconds: 3600
+  sweep_interval_seconds: 3600
+
 egress_proxy: "http://127.0.0.1:8888"
 
 logging:
@@ -298,7 +327,9 @@ tools: []
   bearer / oauth_*), `oauth_session_id` for forensic correlation.
 - **Sealed creds at rest**: provider keys via `SecretRef::FromFileSealed`
   (systemd-creds / openssl-sealed); OAuth refresh tokens via AES-GCM
-  with `LOCKSMITH_OAUTH_SEALING_KEY`.
+  with `LOCKSMITH_OAUTH_SEALING_KEY`; `stored_*` credentials via AES-GCM
+  with the independent `LOCKSMITH_CREDENTIAL_SEALING_KEY` (separate
+  blast radius; values are never returned on any read).
 - **Header stripping**: agent-sent `Authorization` / `x-api-key` are
   stripped before forwarding, defense-in-depth even when the
   registration is `auth: none`.
