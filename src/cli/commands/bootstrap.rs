@@ -25,6 +25,7 @@ pub enum BootstrapCmd {
     /// Revoke a bootstrap token by public_id.
     Revoke {
         /// Bootstrap token public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
     },
 }
