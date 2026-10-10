@@ -13,6 +13,7 @@ pub mod deprecation;
 pub mod migrations;
 pub mod mtls;
 pub mod oauth;
+pub mod operational_log_sink;
 pub mod proxy;
 pub mod registrations;
 pub mod repo;

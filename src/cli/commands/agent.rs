@@ -17,6 +17,7 @@ pub enum AgentCmd {
     /// Show one agent by public_id or name.
     Get {
         /// Agent public_id (preferred) or name.
+        #[arg(allow_hyphen_values = true)]
         id: String,
     },
     /// Register a new agent and return its token (operator path).
@@ -37,6 +38,7 @@ pub enum AgentCmd {
     /// Modify an agent's policy in place.
     Modify {
         /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
         /// Replace allowlist with this set (comma-separated). Use `-` to clear.
         #[arg(long, value_delimiter = ',')]
@@ -48,6 +50,7 @@ pub enum AgentCmd {
     /// Revoke an agent (soft-delete; future auth attempts fail 401).
     Revoke {
         /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
         /// Reason recorded in the audit trail (M3).
         #[arg(long)]
@@ -57,6 +60,7 @@ pub enum AgentCmd {
     /// the M6 onboarding-runbook SQL workaround.
     SetCertIdentity {
         /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
         /// Cert identity to bind (CN, SAN_DNS, or SAN_URI string).
         /// Required unless `--clear` is set.
@@ -75,6 +79,7 @@ pub enum AgentCmd {
     /// Idempotent.
     UnsetCredential {
         /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
         /// Registration name.
         registration: String,
@@ -91,6 +96,7 @@ pub enum AgentCredentialsCmd {
     /// List all credential overrides for `<id>`.
     List {
         /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
     },
 }
@@ -98,6 +104,7 @@ pub enum AgentCredentialsCmd {
 #[derive(Args)]
 pub struct SetCredentialArgs {
     /// Agent public_id.
+    #[arg(allow_hyphen_values = true)]
     pub id: String,
     /// Registration name (e.g., `lmstudio`, `codex`).
     pub registration: String,

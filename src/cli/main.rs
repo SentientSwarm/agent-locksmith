@@ -173,3 +173,63 @@ async fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// About 1 in 64 public ids start with `-` (URL-safe base64), so every
+    /// positional id must parse as a value, never as a flag (#98).
+    #[test]
+    fn public_ids_starting_with_a_dash_parse_as_values() {
+        let cases: &[&[&str]] = &[
+            &["locksmith", "agent", "get", "-Oabc"],
+            &["locksmith", "agent", "modify", "-Oabc"],
+            &["locksmith", "agent", "revoke", "-Oabc"],
+            &["locksmith", "agent", "set-cert-identity", "-Oabc", "cn=x"],
+            &[
+                "locksmith",
+                "agent",
+                "set-credential",
+                "-Oabc",
+                "lmstudio",
+                "--no-auth",
+            ],
+            &[
+                "locksmith",
+                "agent",
+                "unset-credential",
+                "-Oabc",
+                "lmstudio",
+            ],
+            &["locksmith", "agent", "credentials", "list", "-Oabc"],
+            &["locksmith", "bootstrap", "revoke", "-Oabc"],
+        ];
+        for args in cases {
+            if let Err(e) = Cli::try_parse_from(*args) {
+                panic!("{args:?} failed to parse: {e}");
+            }
+        }
+    }
+
+    /// Accepting a leading `-` must not swallow real flags.
+    #[test]
+    fn hyphen_tolerant_ids_still_honor_flags() {
+        let help = Cli::try_parse_from(["locksmith", "agent", "revoke", "--help"]);
+        assert_eq!(
+            help.err().map(|e| e.kind()),
+            Some(clap::error::ErrorKind::DisplayHelp)
+        );
+        let cli =
+            Cli::try_parse_from(["locksmith", "agent", "revoke", "-Oabc", "--reason", "gone"])
+                .expect("id then flag parses");
+        let Cmd::Agent {
+            cmd: agent::AgentCmd::Revoke { id, reason },
+        } = cli.cmd
+        else {
+            panic!("expected agent revoke");
+        };
+        assert_eq!(id, "-Oabc");
+        assert_eq!(reason.as_deref(), Some("gone"));
+    }
+}

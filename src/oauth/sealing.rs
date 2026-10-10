@@ -27,31 +27,33 @@ const KEY_LEN: usize = 32;
 /// operations.
 #[derive(Debug, thiserror::Error)]
 pub enum SealingKeyError {
-    /// `LOCKSMITH_OAUTH_SEALING_KEY` env var is absent or empty.
-    /// Without it the OAuth session table cannot be sealed; daemon
-    /// configures itself with `oauth = None` and OAuth registrations
-    /// fail at proxy time with a clear `oauth_sealing_key_unset`
-    /// envelope code (Phase F.5 surfaces this).
-    #[error("LOCKSMITH_OAUTH_SEALING_KEY env var not set or empty")]
-    EnvVarUnset,
+    /// The sealing-key env var is absent or empty. The offending var
+    /// name is carried so the message is accurate for either sealing
+    /// domain (`LOCKSMITH_OAUTH_SEALING_KEY` for OAuth sessions;
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` for the stored-credential
+    /// substrate, ADR-0008). Callers decide whether absence is fatal:
+    /// OAuth boots with `oauth = None` (routes unmounted → 404); the
+    /// credential store likewise boots without stored-credential routes.
+    #[error("sealing key env var {var} not set or empty")]
+    EnvVarUnset { var: String },
 
     /// Env var is set but doesn't decode as base64.
-    #[error("LOCKSMITH_OAUTH_SEALING_KEY is not valid base64: {0}")]
+    #[error("sealing key is not valid base64: {0}")]
     InvalidBase64(String),
 
     /// Decoded length isn't exactly 32 bytes.
-    #[error("LOCKSMITH_OAUTH_SEALING_KEY must decode to 32 bytes, got {0}")]
+    #[error("sealing key must decode to 32 bytes, got {0}")]
     InvalidLength(usize),
 
     /// Nonce bytes weren't exactly 12 bytes during unseal.
-    #[error("OAuth ciphertext nonce must be 12 bytes, got {0}")]
+    #[error("sealed ciphertext nonce must be 12 bytes, got {0}")]
     InvalidNonce(usize),
 
     /// AES-GCM rejected the ciphertext. Likely cause: wrong sealing key
     /// (operator rotated it without re-bootstrapping), tampering, or
-    /// corruption. The proxy hot path treats this as a degraded
-    /// session.
-    #[error("OAuth ciphertext failed authentication (wrong key or tampered)")]
+    /// corruption. The OAuth hot path treats this as a degraded session;
+    /// the credential path fails the request loud (ADR-0008).
+    #[error("sealed ciphertext failed authentication (wrong key or tampered)")]
     Decrypt,
 
     /// Random nonce generation failed at the OS level. Extremely
@@ -81,9 +83,23 @@ impl SealingKey {
     /// acceptable (no OAuth registrations → boot without OAuth
     /// sealing).
     pub fn from_env() -> Result<Self, SealingKeyError> {
-        let raw = std::env::var(SEALING_KEY_ENV).map_err(|_| SealingKeyError::EnvVarUnset)?;
+        Self::from_env_var(SEALING_KEY_ENV)
+    }
+
+    /// Load a sealing key from an arbitrary env var holding a base64
+    /// 32-byte key. Generalizes `from_env` so a second, independent
+    /// sealing domain — the stored-credential substrate keyed on
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` (ADR-0008 D2) — can reuse the
+    /// exact AES-256-GCM / per-row-nonce primitive with its own key and
+    /// its own blast radius. See `secret::CredentialSealingKey`.
+    pub fn from_env_var(var: &str) -> Result<Self, SealingKeyError> {
+        let raw = std::env::var(var).map_err(|_| SealingKeyError::EnvVarUnset {
+            var: var.to_string(),
+        })?;
         if raw.is_empty() {
-            return Err(SealingKeyError::EnvVarUnset);
+            return Err(SealingKeyError::EnvVarUnset {
+                var: var.to_string(),
+            });
         }
         Self::from_b64(&raw)
     }

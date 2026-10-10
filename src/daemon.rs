@@ -110,6 +110,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         catalog_for_app,
         oauth_runtime_for_app,
         agent_creds_for_app,
+        credential_sealing_key_for_app,
+        credential_secrets_for_app,
+        operational_log_for_app,
+        operational_log_store_for_sweeper,
+        op_resolver_for_app,
     ) = if admin_enabled {
         let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
         (
@@ -135,9 +140,20 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             setup.oauth_runtime,
             // Phase G: per-agent credential override repo.
             Some(setup.agent_creds),
+            // Phase J: credential-store sealing key + sealed secrets repo.
+            setup.credential_sealing_key,
+            setup.credential_secrets,
+            // Phase J / M2: operational-log emitter (proxy hot path) +
+            // store (retention sweeper).
+            Some(setup.operational_log),
+            Some(setup.operational_log_store),
+            // Phase J / M2: op:// resolver cache (proxy hot path, T2.3).
+            Some(setup.op_resolver),
         )
     } else {
-        (None, None, None, None, None, None, None, None)
+        (
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
+        )
     };
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
@@ -149,6 +165,39 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         drop(snapshot);
         let shutdown = coord.shutdown_signal();
         tokio::spawn(audit_retention_sweeper(audit, cfg, shutdown))
+    });
+
+    // Operational-log retention sweeper (T2.8). A SEPARATE interval task
+    // from the audit sweeper, with its own retention window — sweeping the
+    // operational-log stream never touches the audit table (LOG-1). Runs
+    // only when the operational-log substrate is up; co-terminates with
+    // shutdown like the audit sweeper.
+    let ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot
+            .operational_log
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(operational_log_retention_sweeper(store, cfg, shutdown))
+    });
+
+    // Credential-store sweeper (Phase J, ADR-0008). Collects sealed values
+    // nothing references any more, then hard-deletes tombstoned rows past
+    // retention. Runs only when the sealing key is configured (the store
+    // exists only then).
+    let credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
+        let snapshot = shared_config.load();
+        let cfg = snapshot
+            .credential_store
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        drop(snapshot);
+        let shutdown = coord.shutdown_signal();
+        tokio::spawn(credential_store_sweeper(repo, cfg, shutdown))
     });
 
     // Agent listener. Switch on auth_mode (post-v2 / #67):
@@ -202,8 +251,25 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // state without a daemon restart. Pre-Phase-E test paths that
     // skip the substrate get an empty catalog default from
     // `build_app_full_with_registrations`.
+    // Phase J / M2 (LOG-1, config emit site): record that the daemon
+    // loaded its configuration on the operational-log stream. Non-secret
+    // context only (tool count + admin flag) — never a credential value.
+    if let Some(emitter) = operational_log_for_app.as_ref() {
+        let snap = shared_config.load();
+        emitter.emit(
+            crate::repo::LogLevel::Info,
+            crate::repo::LogComponent::Config,
+            "config_loaded",
+            "daemon configuration loaded",
+            Some(serde_json::json!({
+                "tools": snap.tools.len(),
+                "admin": admin_enabled,
+            })),
+        );
+    }
+
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_g(
+        Some(catalog) => crate::app::build_app_full_with_phase_k(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -213,6 +279,10 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             catalog,
             oauth_runtime_for_app,
             agent_creds_for_app,
+            credential_sealing_key_for_app,
+            credential_secrets_for_app,
+            operational_log_for_app,
+            op_resolver_for_app,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -365,6 +435,12 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         if let Some(s) = sweeper_task {
             let _ = s.await;
         }
+        if let Some(s) = ops_log_sweeper_task {
+            let _ = s.await;
+        }
+        if let Some(s) = credential_sweeper_task {
+            let _ = s.await;
+        }
         agent_res
     };
 
@@ -434,6 +510,86 @@ async fn audit_retention_sweeper(
     }
 }
 
+/// Periodically sweep operational-log rows older than `now -
+/// retention_days` (T2.8, LOG-1/LOG-4). Independent of the audit sweeper:
+/// its own interval, its own retention window, and a bounded `DELETE`
+/// that only touches the `operational_logs` table. Exits cleanly when
+/// the shutdown future resolves.
+async fn operational_log_retention_sweeper(
+    store: crate::repo::OperationalLogStore,
+    cfg: crate::config::OperationalLogConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const MS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("operational-log sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let cutoff = now_ms() - i64::from(cfg.retention_days) * MS_PER_DAY;
+                match store.sweep(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.retention_days, "operational-log retention sweep deleted rows"),
+                    Err(e) => warn!(error = %e, "operational-log retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
+/// Lower bound on `credential_store.orphan_grace_seconds`.
+const MIN_ORPHAN_GRACE_SECONDS: u64 = 60;
+
+/// Periodically garbage-collect the sealed credential store (Phase J,
+/// ADR-0008). Each tick: tombstone live rows that no registration or
+/// per-agent override references and that are older than the orphan grace
+/// window, then hard-delete tombstoned rows older than the retention
+/// window. `credential_secrets` timestamps are unix SECONDS. Exits cleanly
+/// when the shutdown future resolves.
+async fn credential_store_sweeper(
+    repo: crate::repo::CredentialSecretsRepository,
+    cfg: crate::config::CredentialStoreConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const SECS_PER_DAY: i64 = 24 * 60 * 60;
+    let interval = Duration::from_secs(cfg.sweep_interval_seconds.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("credential-store sweeper: shutdown signal observed; exiting cleanly");
+                return;
+            }
+            _ = ticker.tick() => {
+                let now = now_ms() / 1_000;
+                // Floor the grace window: a near-zero value would let a sweep
+                // tick land between sealing a value and recording its ref.
+                let grace = i64::try_from(cfg.orphan_grace_seconds.max(MIN_ORPHAN_GRACE_SECONDS))
+                    .unwrap_or(i64::MAX);
+                match repo.tombstone_unreferenced(now.saturating_sub(grace)).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(tombstoned = n, "credential-store sweep tombstoned unreferenced sealed values"),
+                    Err(e) => warn!(error = %e, "credential-store orphan sweep failed; will retry next interval"),
+                }
+                let cutoff = now - i64::from(cfg.tombstone_retention_days) * SECS_PER_DAY;
+                match repo.sweep(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => info!(deleted = n, retention_days = cfg.tombstone_retention_days, "credential-store sweep deleted tombstoned rows"),
+                    Err(e) => warn!(error = %e, "credential-store retention sweep failed; will retry next interval"),
+                }
+            }
+        }
+    }
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -469,6 +625,27 @@ struct AdminSetup {
     /// schema after migration 0005). Empty rows mean every lookup
     /// returns `None` and the registration default applies.
     agent_creds: crate::repo::AgentCredentialRepository,
+    /// Phase J (ADR-0008) — credential-store sealing key. `None` when
+    /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset (stored-credential
+    /// routes not mounted; `stored_*` registrations fail loud at proxy
+    /// time).
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    /// Phase J (ADR-0008) — sealed `credential_secrets` store. `Some`
+    /// only when `credential_sealing_key` is present, so "no key" cleanly
+    /// means "feature off".
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    /// Phase J / M2 (LOG-2) — operational-log emitter, shared across the
+    /// proxy hot path (via `AppState`), the admin handlers (registry /
+    /// agent emit sites), and the OAuth refresh task. Always present when
+    /// the admin substrate is wired.
+    operational_log: Arc<crate::operational_log_sink::OperationalLogEmitter>,
+    /// Phase J / M2 — operational-log store, handed to the retention
+    /// sweeper (T2.8). Same pool as the emitter's drain task.
+    operational_log_store: crate::repo::OperationalLogStore,
+    /// Phase J / M2 (CCS-8) — `op://` resolver cache, refreshed from the
+    /// catalog at startup. Always present when the admin substrate is up;
+    /// the cache is empty when no `op` registrations exist.
+    op_resolver: Arc<crate::secret::OpResolver>,
 }
 
 async fn build_admin_substrate(
@@ -569,6 +746,20 @@ async fn build_admin_substrate(
     }
     drop(snapshot);
 
+    // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
+    // Built unconditionally when the admin substrate is up (the table is
+    // part of the base schema after migration 0008). The emitter is
+    // shared across the proxy hot path (via `AppState`), the admin
+    // handlers (registry / agent emit sites), and the OAuth refresh task;
+    // the store is handed to the retention sweeper (T2.8). Constructed
+    // here — ahead of `AdminService` + the refresh task — so both can take
+    // a clone.
+    let operational_log_store = crate::repo::OperationalLogStore::new(pool.clone());
+    let operational_log = Arc::new(crate::operational_log_sink::OperationalLogEmitter::spawn(
+        operational_log_store.clone(),
+        crate::operational_log_sink::DEFAULT_CAPACITY,
+    ));
+
     // Construct once as a concrete Arc so `UdsState` (which holds the
     // concrete type) and the agent listener (which takes the trait
     // object via `AppState.agent_auth`) share the same authenticator
@@ -588,7 +779,8 @@ async fn build_admin_substrate(
         config,
         Some(audit.clone()),
         resolved_creds.clone(),
-    );
+    )
+    .with_operational_log(operational_log.clone());
 
     let agent_auth_dyn: Arc<dyn crate::auth_v2::AgentAuthenticator> = bearer.clone();
 
@@ -624,6 +816,7 @@ async fn build_admin_substrate(
                 catalog.clone(),
                 key.clone(),
                 locks.clone(),
+                Some(operational_log.clone()),
                 std::future::pending::<()>(),
             ));
             info!("oauth: sealing key loaded; refresh task spawned");
@@ -646,7 +839,7 @@ async fn build_admin_substrate(
             };
             (Some(admin), Some(runtime))
         }
-        Err(crate::oauth::SealingKeyError::EnvVarUnset) => {
+        Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
             info!("oauth: LOCKSMITH_OAUTH_SEALING_KEY unset; OAuth admin routes not mounted");
             (None, None)
         }
@@ -655,7 +848,55 @@ async fn build_admin_substrate(
         }
     };
 
+    // Phase J (ADR-0008) — credential-store sealing key. Built only when
+    // the operator supplies `LOCKSMITH_CREDENTIAL_SEALING_KEY` — distinct
+    // from the OAuth key so the two sealing domains have independent
+    // blast radius. When absent, the stored-credential admin routes 404
+    // (feature off) and any `stored_*` registration fails loud with a
+    // `503 credential_unresolved` at proxy time (T1.6). The sealed store
+    // is constructed only when the key is present so "no key" cleanly
+    // means "feature off".
+    let (credential_sealing_key, credential_secrets) =
+        match crate::secret::CredentialSealingKey::from_env() {
+            Ok(key) => {
+                info!("credential store: sealing key loaded; stored-credential routes mounted");
+                let secrets = crate::repo::CredentialSecretsRepository::new(pool.clone());
+                (Some(key), Some(secrets))
+            }
+            Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
+                info!(
+                    "credential store: LOCKSMITH_CREDENTIAL_SEALING_KEY unset; stored-credential routes not mounted"
+                );
+                (None, None)
+            }
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "credential sealing key: {e}"
+                )));
+            }
+        };
+
+    // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
+    // Built unconditionally when the admin substrate is up (the table is
+    // Phase J / M2 (CCS-8) — `op://` resolver. Built with the real `op`
+    // CLI command, then synced from the catalog + per-agent overrides so
+    // every `op` reference in use is resolved into the cache BEFORE traffic
+    // starts. A missing `op` binary or a failed read degrades that one
+    // reference (logged on the operational-log stream) — the daemon still
+    // boots. Admin handlers resync on every catalog / override change
+    // (T2.2). Never per request.
+    let op_resolver = Arc::new(crate::secret::OpResolver::with_cli(Some(
+        operational_log.clone(),
+    )));
     let agent_creds_repo = crate::repo::AgentCredentialRepository::new(pool.clone());
+    crate::secret::resync_op_references(&op_resolver, &catalog, Some(&agent_creds_repo)).await;
+    if op_resolver.cached_count() > 0 {
+        info!(
+            count = op_resolver.cached_count(),
+            "resolved op:// references at startup"
+        );
+    }
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -667,6 +908,11 @@ async fn build_admin_substrate(
             resolved_creds: Some(resolved_creds.clone()),
             oauth: oauth_admin,
             agent_creds: Some(agent_creds_repo.clone()),
+            credential_sealing_key: credential_sealing_key.clone(),
+            credential_secrets: credential_secrets.clone(),
+            operational_log: Some(operational_log.clone()),
+            operational_log_store: Some(operational_log_store.clone()),
+            op_resolver: Some(op_resolver.clone()),
         },
         audit,
         agent_auth: agent_auth_dyn,
@@ -674,6 +920,11 @@ async fn build_admin_substrate(
         catalog,
         oauth_runtime,
         agent_creds: agent_creds_repo,
+        credential_sealing_key,
+        credential_secrets,
+        operational_log,
+        operational_log_store,
+        op_resolver,
     })
 }
 
