@@ -211,8 +211,15 @@ async fn ts222_degraded_session_returns_503() {
     seed_session(&h, "rt", Some("at"), Some(unix_now() + 3600)).await;
     h.sessions
         .mark_degraded(
-            "codex",
-            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+            &h.sessions
+                .get(
+                    &h.sealing_key,
+                    "codex",
+                    agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+                )
+                .await
+                .unwrap()
+                .unwrap(),
         )
         .await
         .unwrap();

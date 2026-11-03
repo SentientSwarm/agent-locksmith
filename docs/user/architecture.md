@@ -6,6 +6,12 @@ of what happens when you start the daemon and send it a request.
 For the engineering view (every task, every callsite),
 see [`docs/v2/SPEC.md`](../v2/SPEC.md).
 
+OAuth exchanges persist against a non-reused incarnation and token version;
+late results cannot overwrite a replacement or return uncommitted credentials.
+Revoke invalidates pending writers without waiting for their network lock.
+See the [custody contract](../development/oauth-custody.md) and
+[recovery/0010 upgrade](operator/oauth-recovery.md); crash-safe rotation remains separate.
+
 ## The daemon
 
 `locksmithd` runs one process with two concurrent surfaces:

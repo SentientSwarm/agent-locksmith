@@ -4,6 +4,9 @@
 
 ### Internal
 
+- Box finished internal OAuth bootstrap error responses for current-stable
+  Clippy; handlers return the same responses and retain conditional cleanup.
+
 - Give the migration expiry test a ten-second preview setup margin and wait
   from its recorded expiry before apply, retaining the post-expiry conflict
   and unchanged-binding assertions.
@@ -15,6 +18,31 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### Native MCP prerequisite safety
+
+- Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
+  cumulative SSE response bounds precede collector/JSON decoding; event,
+  depth/work, timeout and cleanup checks apply with explicit unsupported modes.
+  Compression, redirects and automatic replay/resumption are disabled. See
+  [configuration, diagnostics and limits](docs/development/mcp-transport.md).
+  Actual SDK/TLS receiving-process checks distinguish rejected replies from
+  already-arrived tool effects. One GET attempt per transport prevents SDK
+  renewal from resetting limits; conflicting transfer framing is refused and
+  bare CR event delimiters count before parser admission.
+  This separate library needs AGENT-202 daemon
+  integration and independent acceptance; it does not ship native MCP, clear
+  all G1 requirements, bump the root version or change installed services.
+
+### OAuth lifecycle safety
+
+- Reject stale OAuth success, degradation and bootstrap cleanup after revoke,
+  recreation or a newer token write. Tokens become usable only after
+  the intended sealed row commits. Migration 0010 preserves existing custody,
+  grants and selections and prevents older binaries from opening upgraded state.
+  Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
+  Already-admitted work may finish; this does not establish crash-safe rotating
+  refresh, provider proof or release readiness. No version bump.
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an

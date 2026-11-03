@@ -57,6 +57,9 @@ impl Fixture {
         f
     }
     pub async fn start(&mut self) {
+        self.start_with_env(&[]).await;
+    }
+    pub async fn start_with_env(&mut self, env: &[(&str, &str)]) {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(&self.socket);
         let log = self.path().join(format!("daemon-{}.log", self.starts));
@@ -65,6 +68,7 @@ impl Fixture {
         c.env("SMOKE_X", super::upstream::X)
             .env("SMOKE_Y", super::upstream::Y)
             .env("SMOKE_EMPTY", "");
+        c.envs(env.iter().copied());
         c.stdout(Stdio::from(std::fs::File::create(&log).unwrap()));
         c.stderr(Stdio::from(
             std::fs::OpenOptions::new().append(true).open(log).unwrap(),
