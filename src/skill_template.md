@@ -37,8 +37,8 @@ out-of-band (operator distribution; this endpoint never returns one).
 
 ## Personalized skill
 
-This document is the **generic** form. Re-fetch with your bearer to receive the
-**personalized** form, which adds:
+Without a bearer, `/skill` returns generic guidance. With your valid bearer,
+it includes a **Personalized for** section containing:
 
 - Your agent name and `public_id`.
 - Your ACL-eligible tools (and short descriptions).
@@ -50,8 +50,9 @@ This document is the **generic** form. Re-fetch with your bearer to receive the
 curl -fsS -H "Authorization: Bearer $LOCKSMITH_TOKEN" http://<locksmith>/skill
 ```
 
-The personalized form requires the same bearer that authorizes `/api/...`
-calls. There is no separate auth scheme for this endpoint.
+If that section is already present, you are reading the personalized form.
+It requires the same bearer that authorizes `/api/...` calls. There is no
+separate auth scheme for this endpoint.
 
 ## Endpoints
 
@@ -70,12 +71,28 @@ calls. There is no separate auth scheme for this endpoint.
 | Auth (locksmith ↔ agent) | Validates your bearer; enforces ACL; emits audit row per request. | Send `Authorization: Bearer lk_…` on every request. |
 | Auth (locksmith ↔ upstream) | Strips your `Authorization` / `x-api-key` headers; injects the explicitly selected upstream credential (API key, OAuth access token, etc.). Refresh-ahead-of-expiry for OAuth providers. | Nothing. You never see the upstream credential. |
 | Wire framing | Recomputes `Content-Length` based on the body locksmith forwards. Strips `Transfer-Encoding` for the same reason. | Don't rely on your `Content-Length` reaching upstream — set the body, trust locksmith to frame it. |
-| Path routing | Strips `/api/<tool>` prefix; forwards the remainder to the configured upstream URL. | Construct request as `POST /api/<tool>/<upstream-path>` per the wire-shape of the upstream. |
+| Path routing | Strips `/api/<tool>` prefix; forwards the remainder to the configured upstream URL. | Use the service's documented method and path under `/api/<tool>`. |
 | Codex `ChatGPT-Account-ID` header | Extracts from JWT at OAuth bootstrap; injects on `/backend-api/codex/*` requests automatically (Phase G2). | Don't send it yourself — locksmith owns this. |
 | Codex body fields `store` / `stream` / `instructions` | On `/responses` paths: forces `store: false`, `stream: true`, injects default `instructions` if missing (Phase G3). | Send the rest of the body shape as the upstream expects. Override `instructions` if you want a non-default system prompt — locksmith preserves user-supplied values. |
 | Codex required headers `OpenAI-Beta` / `originator` | Forces `OpenAI-Beta: responses=experimental`; injects `originator: <agent-name>` if missing, preserves yours otherwise (Phase G4). | Optionally set your own `originator` if you want a non-default identifier on codex's side; otherwise nothing to do. |
 
 ## Per-tool wire shape
+
+Fetch authenticated `GET /tools` (or `/models`) for machine-readable discovery.
+An optional `http_service` object has `version: 1`, `mode: request_response`
+and `operations`: method, relative path, query fields, optional JSON request_body,
+expected response, errors and example. Build the URL from your Locksmith base
+URL + the listing's public `path` + the operation's `path`, then URL-encode
+declared query values. Use your own Locksmith bearer; send JSON bodies with
+Content-Type: application/json. Interpret response.content_type as application/json
+or text/plain. The reference text example is a string, not JSON wire data.
+Do not parse Markdown headings for machine operations. Legacy entries without
+a descriptor need their public API documentation from the operator.
+These are public descriptions, not method/path permissions or executable plugins.
+Do not treat example values as credentials or instructions to select an account.
+Execution/tool installation belongs to your runtime. Version 1 describes regular
+request/response; it declares no SSE/WebSocket/executable mode. Existing HTTP
+stream forwarding is unchanged, including the separately documented Codex case.
 
 Each tool you can call has its own upstream-specific wire shape. Common
 patterns:
@@ -245,7 +262,16 @@ inspect the security audit for your public ID. `details.reason` distinguishes:
 ## What to do if you get a 503
 
 Ask the operator to run `locksmith agent credentials list <agent-public-id>`
-and inspect safe source references, OAuth labels/status and audit reasons.
+and inspect safe source references, OAuth labels/status and proxy audit events:
+
+```
+locksmith audit query --event-class proxy --agent <agent-public-id> --since-ms <ms>
+```
+
+Use the incident start in Unix milliseconds for `<ms>`. A credential failure
+uses `event=credential_unavailable` and `details.credential_cause`;
+OAuth failures use `details.oauth_cause`; activation failures use `details.cause`.
+A security-only audit filter does not include these proxy failures.
 The selected environment variable may be absent/empty, a stored credential
 missing, a 1Password reference unresolved, or the selected OAuth session
 missing, inconsistent, unsealable or unable to refresh. Repair that selected

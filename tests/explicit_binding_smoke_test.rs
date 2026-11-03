@@ -1,5 +1,7 @@
 //! Saved SM01–SM05: actual disposable daemon, CLI, SQLite and receiving upstream.
 //! No installed service, provider credentials or application database is used.
+#[path = "explicit_binding_smoke/connector_validation.rs"]
+mod connector_validation;
 #[path = "explicit_binding_smoke/customer.rs"]
 mod customer;
 #[path = "explicit_binding_smoke/docs.rs"]
@@ -18,12 +20,24 @@ mod migration;
 mod process;
 #[path = "explicit_binding_smoke/safety.rs"]
 mod safety;
+#[path = "explicit_binding_smoke/service_description.rs"]
+mod service_description;
 #[path = "explicit_binding_smoke/setup.rs"]
 mod setup;
 #[path = "explicit_binding_smoke/upstream.rs"]
 mod upstream;
 #[path = "explicit_binding_smoke/workflow.rs"]
 mod workflow;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_daemon_http_service_descriptions() {
+    service_description::exercise().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_daemon_connector_validation_preserves_authority() {
+    connector_validation::exercise().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actual_daemon_agent_token_lifecycle() {

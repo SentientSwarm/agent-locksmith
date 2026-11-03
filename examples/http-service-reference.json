@@ -1,0 +1,19 @@
+{
+  "http_service": {
+    "version": 1,
+    "mode": "request_response",
+    "operations": [
+      {
+        "id": "check-account",
+        "summary": "Identify the selected synthetic account without modifying it",
+        "method": "GET",
+        "path": "/check",
+        "response": {"status": 200, "content_type": "text/plain"},
+        "errors": [
+          {"status": 401, "description": "Upstream account rejected; ask the operator to repair the selected source"}
+        ],
+        "example": {"response": "X"}
+      }
+    ]
+  }
+}

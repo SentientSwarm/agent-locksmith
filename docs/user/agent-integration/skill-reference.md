@@ -29,7 +29,7 @@ Content-Type: text/markdown; charset=utf-8
 Cache-Control: public, max-age=86400          ← when no bearer
 Cache-Control: private, no-cache, no-store    ← when bearer
 
-# layer8-proxy
+# Locksmith — agent skill
 ...
 ```
 
@@ -42,27 +42,20 @@ list, no version detail beyond what `/version` provides).
 Sample (illustrative; the bundled content evolves with releases):
 
 ```markdown
-# layer8-proxy
+# Locksmith — agent skill
 
-This is a **layer8-proxy** deployment — a credential proxy + ACL +
-audit layer for AI agents.
+Without a bearer, `/skill` returns generic guidance. With your valid bearer,
+it includes a **Personalized for** section containing:
 
-To call a provider through this proxy, your agent needs a bearer
-token. Operators issue bearers via:
-
-  locksmith agent register --name <agent-name> --allowlist <tools>
-
-With a valid bearer, the proxy exposes:
-
-  GET  /tools                         — kind=tool catalog (ACL-filtered)
-  GET  /models                        — kind=model catalog (ACL-filtered)
-  ANY  /api/{tool_name}/{*path}       — proxy hot path
-
-See your operator for an agent registration. The full operator-side
-recipe lives at <https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/getting-started.md>.
-
-— layer8-proxy v1.0.0 / agent-locksmith v2.0.0
+- Your agent name and `public_id`.
+- Your ACL-eligible tools (and short descriptions).
+- Per-tool integration guidance.
+- An audit-debug recipe scoped to your `public_id` for your operator.
 ```
+
+The protocol examples describe common API shapes; they do not advertise
+configured services or promise that an arbitrary service supports chat.
+The generic response contains no deployment catalog or agent identity.
 
 The generic form serves as a self-describing landing page. Useful
 for human visitors hitting the URL in a browser, or for agents that
@@ -76,110 +69,100 @@ agent's specific tool catalog, ACL, audit-debug hints. Sample
 (illustrative):
 
 ```markdown
-# layer8-proxy: hermes-mini-m1
+## Personalized for `reference-consumer`
 
-You are agent **hermes-mini-m1** (`yN2vR6jFKNYfIwNjFU2MSA`).
+You're authenticated as **reference-consumer** (`public_id=<agent-public-id>`).
 
-## Your allowlist
+### Tools eligible under your ACL
 
-ACL-eligible tools (not proof of binding existence or source health):
+| Tool | Description |
+|---|---|
+| `accounts` | Reference account check |
+| `customer-jobs` | Customer job API |
 
-  - **anthropic** — Anthropic Messages API
-    POST /api/anthropic/v1/messages
-  - **openai** — OpenAI Responses + Chat Completions API
-    POST /api/openai/v1/chat/completions
-  - **lmstudio** — LM Studio (on-host inference; optional bearer auth)
-    POST /api/lmstudio/v1/chat/completions
-  - **tavily** — Tavily search API
-    POST /api/tavily/search
-
-An ACL denial or missing explicit binding returns 403 tool_not_allowed.
-Listing a tool does not prove it has a usable selected account.
-
-## Wire contract
-
-Send your bearer in the Authorization header:
-
-  Authorization: Bearer lk_yN2vR6jFKNYfIwNjFU2MSA.<secret>
-
-DO NOT send provider API keys. They're injected by the proxy.
-
-## Audit & debugging
-
-Operators can see your calls via:
-
-  locksmith audit query --agent yN2vR6jFKNYfIwNjFU2MSA
-
-For 403 tool_not_allowed, inspect security audit details.reason:
-account_binding_missing needs selection; not_in_allowlist/in_denylist need policy review.
-
-  locksmith agent credentials list <agent-public-id>
-  locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'
-
-For 503, diagnose the selected environment/stored/1Password reference or OAuth
-label/status without exposing values. Repair that source or deliberately select
-an approved account. Never retry an alternate/default/unauthenticated call.
-OAuth bootstrap alone grants no use authority; explicitly select a nonempty
-label, including literal default when intended.
-
-— hermes-mini-m1 / layer8-proxy v1.0.0
+This list shows ACL eligibility, not account binding existence or source health.
+A listed tool can still return 403 for missing selection or 503 for an unavailable source.
 ```
+
+Names/descriptions come from the same catalog listing as authenticated `/tools`.
+Database-backed discovery requires current runtime activation; disabled, missing
+or pending registrations are omitted. Generic output exposes no deployment catalog; other agents receive only
+their own eligible services. A personalized section means the request
+was authenticated; it does not ask an already authenticated caller to refetch.
+
+Fetch `/tools` for each service's optional typed `http_service` descriptor.
+Use its actual method/path, query/body and response content type; the reference
+`GET /check` returns plain text, while the example customer `GET /v2/jobs`
+returns JSON. Do not assume a listed service supports `/v1/chat/completions`.
+Legacy entries without descriptors need their public API documentation.
+
+JSON discovery also reports `activation`, `account_selected` and
+`credential_readiness: not_checked`. An active registration is not proof that
+this agent has a selected or usable account. `/readyz` does not attest each
+selected source. Config-only legacy listings say `configuration_only`.
+
+For a 403, the personalized document supplies these operator commands with
+the caller's actual public ID:
+
+```sh
+locksmith audit query --agent <agent-public-id> \
+  --since-ms <ms>
+locksmith agent credentials list <agent-public-id>
+locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'
+```
+
+Replace `<ms>` with the start of the incident window in Unix milliseconds.
+Inspect `details.reason` first: `account_binding_missing` needs a deliberate
+selection, whereas `not_in_allowlist`/`in_denylist` need intended policy review.
+Widening a grant does not repair a missing binding. The source reference is an
+operator-chosen example, never a credential value to send to the agent.
+
+For a selected-source 503, inspect that same safe selection list and audit.
+The query includes security and proxy events: 403s use `details.reason`;
+503 `credential_unavailable` uses `details.credential_cause`, while
+OAuth failures use `details.oauth_cause` and activation failures use
+`details.cause`. Do not filter out proxy events
+when diagnosing source failures.
+Diagnose the selected environment/stored/1Password reference or OAuth label;
+repair it or deliberately select an approved account. An unavailable source
+must not trigger alternate/default/unauthenticated retries. OAuth bootstrap
+repairs custody; a separate explicit nonempty label selection grants its use.
+On `connection_not_active`, inspect the saved registration and restore runtime
+activation; a failed activation can leave a saved write pending. See
+[operator troubleshooting](../operator/account-binding-troubleshooting.md).
 
 The personalized form is what agentskills.io–compatible tools can
 ingest at startup to build their tool catalog without static config.
 
 ## Shape stability
 
-The wire format (`Content-Type: text/markdown`) is stable across
-v1.x. The content shape (headings, sections) is **not** stable — it
+The endpoint returns `Content-Type: text/markdown; charset=utf-8`.
+The content shape (headings, sections) is **not** stable — it
 evolves as new features land. Agents that consume `/skill` should
-parse it for "is this a layer8-proxy?" / "what can I call?" but
-should NOT depend on specific markdown structure for parsing.
+read it as guidance; they should not depend on specific Markdown
+structure for machine parsing.
 
 For machine-readable tool catalogs, use `GET /tools` + `GET /models`
 (JSON, stable contract). `/skill` is the human / LLM-ingestible
 overlay.
 
+Optional typed `http_service` descriptors in JSON discovery provide the
+[versioned operation contract](http-services.md). Fetch them with your own bearer
+and build calls in your runtime; use the described method, public path, query,
+body and response type. Do not derive machine operations from Markdown headings.
+
 ## Use cases
-
-### LLM-driven agents
-
-An agent's system prompt can include `GET /skill` output as
-context — the LLM then knows what tools are available without
-hardcoded config.
-
-```python
-# Pseudocode:
-skill_md = httpx.get(
-    "http://layer8.lan:9200/skill",
-    headers={"Authorization": f"Bearer {locksmith_token}"}
-).text
-
-system_prompt = f"""
-You are an AI agent. Your available tools and constraints:
-
-{skill_md}
-
-When you need a provider, call it through the proxy at the path
-shown above.
-"""
-```
 
 ### Agent bootstrap discovery
 
 A fresh agent at startup can:
 
-1. `GET /skill` (no auth) → confirm this is a layer8-proxy + grab
+1. `GET /skill` (no auth) → identify Locksmith and read
    the generic info.
 2. Look up its bearer (from env / token file).
 3. `GET /skill` (with bearer) → grab the personalized catalog.
-4. Use that catalog to populate its tool registry.
-
-### Static documentation generation
-
-Operators can run `curl http://localhost:9200/skill` against the
-running daemon to generate up-to-date documentation for their
-agent population — useful for runbooks.
+4. Fetch authenticated `/tools` (or `/models`) for machine-readable
+   operations and construct calls in its own runtime. Locksmith installs no tools.
 
 ## Cache headers
 
@@ -195,9 +178,7 @@ fetch reflects the change — no 24-hour cache to wait through.
 
 ## Streaming
 
-`/skill` returns a complete markdown body (no streaming). Typical
-size is 1–10 KB. For very large personalized catalogs (hundreds of
-tools), consider whether you actually need them all in the agent's
+`/skill` returns a complete Markdown body (no streaming). For large catalogs, consider whether you actually need them all in the agent's
 context — `/tools` + `/models` JSON is more efficient for
 machine-only consumers.
 

@@ -102,6 +102,13 @@ Returns ONLY `kind=tool` registrations the calling agent's allowlist
 permits. `kind=model` and `kind=infra` are filtered out (use `/models`
 for models; infra is operator-only).
 
+Active database entries also report `activation: active`, `account_selected`
+and `credential_readiness: not_checked`. An optional validated `http_service`
+describes methods, paths, query/body fields, response types, errors and examples.
+Use the [versioned HTTP service contract](http-services.md) to construct calls;
+its descriptions do not enforce method/path grants. Unrelated metadata stays
+private. Legacy entries without a descriptor retain their existing behavior.
+
 ### `GET /models` — kind=model discovery
 
 ```

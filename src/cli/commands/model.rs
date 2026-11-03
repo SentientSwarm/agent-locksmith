@@ -18,7 +18,7 @@ pub enum ModelCmd {
         /// Registration name.
         name: String,
     },
-    /// Register or update a model. `--auth` is required and must be non-`none`.
+    /// Register or update a model. `--auth` is required (use `none` for authless).
     Put {
         /// Registration name.
         name: String,

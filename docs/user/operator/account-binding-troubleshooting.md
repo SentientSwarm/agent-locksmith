@@ -35,6 +35,10 @@ locksmith audit query --agent "$AGENT_ID" --tool accounts --limit 100
 ```
 
 Commands require `LOCKSMITH_OP_TOKEN` and the configured admin UDS/HTTPS endpoint.
+The audit command includes both security and proxy events. For 403, inspect
+`details.reason`. For 503, `credential_unavailable` uses
+`details.credential_cause`, OAuth failures use `details.oauth_cause`, and pending
+activation uses `details.cause`. A security-only filter omits these proxy failures.
 Inspect references, `auth_source`, selected OAuth label, outcome and error class;
 never paste bearer tokens, provider values, sealed blobs, database backups or
 operator-bootstrap output into a report. Reference metadata can also be private.

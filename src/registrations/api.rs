@@ -18,6 +18,7 @@
 use crate::auth_v2::AgentIdentity;
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository, validate_name,
+    validate_upstream,
 };
 use axum::Json;
 use axum::extract::State;
@@ -35,7 +36,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Filters to the requested kind, drops `disabled=true` rows, applies the
 /// agent's ACL via [`AgentIdentity::allows_tool`], and emits the minimal
 /// agent-facing JSON shape — name + path + description, no auth shape, no
-/// upstream URL, no metadata.
+/// upstream URL or private metadata. Only validated http_service is projected.
 pub async fn list_public(
     repo: &RegistrationRepository,
     catalog: &crate::registrations::Catalog,
@@ -53,7 +54,7 @@ pub async fn list_public(
         .into_iter()
         .filter(|r| r.discoverable(kind, catalog))
         .map(|r| {
-            json!({
+            let mut value = json!({
                 "name": r.registration.name,
                 "type": "api",
                 "path": format!("/api/{}", r.registration.name),
@@ -61,7 +62,12 @@ pub async fn list_public(
                 "activation": "active",
                 "account_selected": r.account.is_some(),
                 "credential_readiness": "not_checked",
-            })
+            });
+            if let Ok(Some(service)) = super::http_service::from_metadata(&r.registration.metadata)
+            {
+                value["http_service"] = json!(service);
+            }
+            value
         })
         .collect())
 }
@@ -138,6 +144,14 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
 /// envelope stays uniform across all locksmith error sources.
 fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static str, &'static str) {
     match err {
+        RegistrationError::InvalidHttpService => (
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "invalid_http_service",
+        ),
+        RegistrationError::InvalidUpstream => {
+            (StatusCode::BAD_REQUEST, "bad_request", "invalid_upstream")
+        }
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
         RegistrationError::ReservedName => {
@@ -355,7 +369,7 @@ pub async fn op_get(
 
 /// `PUT /admin/operator/<kind>/<name>` — upsert. On insert: validates
 /// name (charset, length, reserved) and per-kind auth requirements
-/// (kind=tool needs explicit auth, kind=model rejects none). On existing
+/// (tool/model need explicit auth, including none). On existing
 /// row: enforces kind immutability (URL kind must match existing). Sets
 /// `seed=false` (operator-owned). Preserves `disabled` flag — operator
 /// uses DELETE (or set_disabled) to flip it.
@@ -367,6 +381,14 @@ pub async fn op_put(
 ) -> Response {
     // Name validation runs first — most likely cheap rejection point.
     if let Err(e) = validate_name(&name) {
+        return registration_error_response(&e);
+    }
+    if let Err(e) = validate_upstream(kind, &body.upstream) {
+        return registration_error_response(&e);
+    }
+    if let Some(metadata) = &body.metadata
+        && let Err(e) = super::http_service::from_metadata(metadata)
+    {
         return registration_error_response(&e);
     }
 

@@ -4,12 +4,48 @@
 
 ### Internal
 
+- Give the migration expiry test a ten-second preview setup margin and wait
+  from its recorded expiry before apply, retaining the post-expiry conflict
+  and unchanged-binding assertions.
+
 - Box the internal HTTP admission error response for current-stable Clippy;
   the handler returns the original response with unchanged admission behavior.
 
 - Use a guarded match for inherited OAuth default-session selection to satisfy
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
+
+### Connector onboarding
+
+- Tool/model operator writes and newly applied seed catalogs now require an
+  absolute HTTP(S) base URL without userinfo, query or fragment.
+  Localhost/private endpoints, IP literals and normal base paths stay supported;
+  non-HTTP infra is unchanged. Correct invalid URLs before their next update or
+  newer seed apply; this adds no migration or automatic rewrite. Rejected writes
+  preserve existing rows, grants and selections; invalid seed destinations
+  leave every row and the seed version unchanged.
+- [Connector onboarding change notes](docs/user/changes/connector-onboarding.md)
+  collect the operator-to-agent outcome, compatibility/upgrade steps and local
+  verification limits. The saved actual-process smoke and independent
+  discovery-driven consumer evidence remain separate acceptance layers.
+- Personalized `/skill` identifies authenticated guidance without asking the
+  caller to refetch and no longer invents a chat operation for the first listed
+  service. It retains the existing catalog-backed `/tools` agreement,
+  isolation and explicit account/source diagnosis. Use typed JSON discovery for
+  service operations; listing and activation do not prove credential readiness.
+  Rendered diagnosis includes proxy audit events for selected-source 503s.
+  No policy, API, migration or version change.
+- Optional versioned HTTP service descriptions let agents construct requests
+  from authenticated JSON discovery using their own Locksmith token.
+  Operators author nested metadata with `--metadata-file`; only the validated
+  public descriptor is projected. JSON/plain-text response examples describe
+  reference/customer services without new execution or grant authority. Legacy
+  metadata remains compatible; metadata-only changes preserve grants/selections
+  while still requiring runtime activation. No migration or version bump.
+- A focused [operator onboarding recipe](docs/user/operator/connector-onboarding.md)
+  reuses reference/customer setup, inspection, named-agent grants and account
+  selection, with receiving-account checks and truthful readiness/repair guidance
+ . Unsupported modes and narrower authority claims remain rejected.
 
 ### Added
 

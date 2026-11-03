@@ -26,6 +26,7 @@ For the production Docker Compose bundle deployment story, see
 |---|---|
 | [getting-started.md](getting-started.md) | Developer first-contact: build, mint operator credential, register agent, explicitly select an account, make a call. |
 | [cli-reference.md](cli-reference.md) | Complete `locksmith` CLI subcommand and flag reference. |
+| [operator/connector-onboarding.md](operator/connector-onboarding.md) | Operator recipe: validate a reference/customer HTTP service, grant a named agent, select its account and verify the receiving effect. |
 | [architecture.md](architecture.md) | User-level system view: daemon composition, request flow, what state lives where. |
 
 ## Tier 2 — concepts (`concepts/`)
@@ -49,6 +50,7 @@ Wiring an agent through a layer8-proxy deployment:
 | Doc | Topic |
 |---|---|
 | [agent-integration/wire-contract.md](agent-integration/wire-contract.md) | What an agent sees: endpoints, headers, error codes, streaming semantics. |
+| [agent-integration/http-services.md](agent-integration/http-services.md) | Construct HTTP calls from typed discovery using only an agent's Locksmith token. |
 | [agent-integration/openclaw.md](agent-integration/openclaw.md) | Openclaw integration recipe (works out-of-box via `*_BASE_URL`). |
 | [agent-integration/hermes.md](agent-integration/hermes.md) | Hermes integration: provider-config block + `*_BASE_URL` paths, multi-agent topologies, OAuth providers. |
 | [agent-integration/skill-reference.md](agent-integration/skill-reference.md) | `/skill` endpoint spec — generic + personalized forms, cache headers. |
@@ -58,6 +60,7 @@ Wiring an agent through a layer8-proxy deployment:
 
 ## Account cutover
 
+- [Connector onboarding changes](changes/connector-onboarding.md) — public discovery, compatibility, upgrade and verification limits.
 - [D1 change notes](changes/explicit-account-bindings.md) — compatibility and limits.
 - [Reviewed migration](concepts/migrating-account-bindings.md) — backup, preview/apply and restart.
 - [Account troubleshooting](operator/account-binding-troubleshooting.md) — error classes and repair.
