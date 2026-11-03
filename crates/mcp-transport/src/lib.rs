@@ -17,3 +17,6 @@ pub use client::Client;
 pub use error::Error;
 pub use limits::Limits;
 pub use metrics::{Metrics, Snapshot};
+
+/// Scoped SDK session ownership and finite resource budgets.
+pub mod sessions;

@@ -1,12 +1,15 @@
 # Locksmith bounded MCP transport
 
-AGENT-198 prerequisite library; not yet wired into Locksmith's daemon or CLI.
+AGENT-198/199 prerequisite library; not yet wired into Locksmith's daemon or CLI.
 See the [design, configuration and diagnostics](../../docs/development/mcp-transport.md).
 No root version bump, new network listener, migration or native routing is
 introduced. Existing HTTP and selected-account authority are unchanged.
 
 Uses the public rmcp3.7.0 transport hook, reqwest0.13.2 and sse-stream0.2.6,
-matching the accepted S1 lock. No patched registry, vendored SDK or fork.
+matching the accepted S1 lock. AGENT-199 adds a pinned
+[SDK ownership adaptation](vendor/README.md), with upstream provenance and
+reversible authored patch; the registry/cache stays unchanged. See the
+[session scope, budgets and cleanup contract](../../docs/development/mcp-sessions.md).
 The library is MIT. rmcp is Apache-2.0; reqwest and sse-stream are
 MIT OR Apache-2.0. Dependency licenses remain their own; Cargo.lock pins the
 complete graph. The root's existing reqwest0.12 remains independent.

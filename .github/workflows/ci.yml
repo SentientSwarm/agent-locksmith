@@ -41,6 +41,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
+          python3 crates/mcp-transport/vendor/check.py
           cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml
           cargo clippy --locked --manifest-path crates/mcp-transport/Cargo.toml --all-targets -- -D warnings
           cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check
