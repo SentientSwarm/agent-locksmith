@@ -388,7 +388,7 @@ pub async fn proxy_handler(
     let mut target = if state.registrations.is_some() {
         match admission::target(&state, &ctx, req.extensions()).await {
             Ok(target) => target,
-            Err(response) => return response,
+            Err(response) => return *response,
         }
     } else {
         let Some(mut target) = resolve_target(&state, &ctx.tool_name) else {

@@ -4,6 +4,9 @@
 
 ### Internal
 
+- Box the internal HTTP admission error response for current-stable Clippy;
+  the handler returns the original response with unchanged admission behavior.
+
 - Use a guarded match for inherited OAuth default-session selection to satisfy
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
