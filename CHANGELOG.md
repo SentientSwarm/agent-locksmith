@@ -22,3 +22,5 @@
   covers account attribution, zero-dispatch denials, migration and the documented
   setup commands using synthetic accounts. It does not establish live provider
   compatibility, installed-deployment acceptance, a version tag or publication.
+- The binding-repair change guide distinguishes accepted D1 work from remote
+  integration and release status.

@@ -78,4 +78,5 @@ skill-reference and client examples describe that boundary.
 The saved smoke additionally fetches both rendered forms and executes their
 personalized diagnosis/repair commands against its disposable daemon, observes
 account X and confirms clear denies again. Prior D1 acceptance and failure/recovery
-evidence remain historical; this follow-up awaits its own QA then review.
+evidence remain historical. This follow-up was accepted locally in D1; remote
+integration, version tags and publication are tracked separately.
