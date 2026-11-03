@@ -4,6 +4,9 @@
 
 ### Internal
 
+- Box finished internal OAuth bootstrap error responses for current-stable
+  Clippy; handlers return the same responses and retain conditional cleanup.
+
 - Give the migration expiry test a ten-second preview setup margin and wait
   from its recorded expiry before apply, retaining the post-expiry conflict
   and unchanged-binding assertions.
