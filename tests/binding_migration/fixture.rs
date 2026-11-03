@@ -31,6 +31,11 @@ impl Fixture {
         let registrations = RegistrationRepository::new(pool.clone());
         let bindings = AgentCredentialRepository::new(pool.clone());
         initial_routes(&registrations, &bindings, ids[2]).await;
+        // Historical unrestricted policy is inventory input, never live authority.
+        sqlx::query("UPDATE agents SET grants_reviewed=0, tool_allowlist=NULL")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO registrations_meta VALUES ('seed_version','keep'), ('unrelated','keep-too')").execute(&pool).await.unwrap();
         Self {
             dir,

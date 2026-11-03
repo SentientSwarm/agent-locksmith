@@ -7,7 +7,7 @@ use super::{
 };
 use serde_json::Value;
 
-fn sqlite(f: &Fixture, db: &std::path::Path, sql: &str) -> String {
+pub(super) fn sqlite(f: &Fixture, db: &std::path::Path, sql: &str) -> String {
     assert!(
         db.exists(),
         "missing fixture DB {}",
@@ -25,7 +25,7 @@ fn sqlite(f: &Fixture, db: &std::path::Path, sql: &str) -> String {
     );
     String::from_utf8(o.stdout).unwrap()
 }
-fn apply(f: &Fixture, code: i32) -> Value {
+pub(super) fn apply(f: &Fixture, code: i32) -> Value {
     assert!(f.daemon.is_none());
     let o = process::run(super::docs::fixture(f, super::docs::UPGRADE, "apply"));
     assert_eq!(o.status.code(), Some(code));
@@ -35,7 +35,7 @@ fn apply(f: &Fixture, code: i32) -> Value {
     assert!(String::from_utf8_lossy(&o.stderr).contains("migration_conflict"));
     Value::Null
 }
-fn preview(f: &Fixture) -> Value {
+pub(super) fn preview(f: &Fixture) -> Value {
     let before = std::fs::read(&f.db).unwrap();
     let first = run_preview(f);
     let second = run_preview(f);

@@ -406,6 +406,7 @@ fn admin_err_response(e: AdminError) -> Response {
         AdminError::RotationInProgress => (StatusCode::CONFLICT, "rotation_in_progress"),
         AdminError::AgentNotFound => (StatusCode::NOT_FOUND, "agent_not_found"),
         AdminError::NotAuthorized => (StatusCode::FORBIDDEN, "forbidden"),
+        AdminError::InvalidGrantTarget => (StatusCode::BAD_REQUEST, "grant_target_invalid"),
         AdminError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backend_error"),
     };
     (
@@ -503,6 +504,7 @@ async fn op_list_agents(
                         "registered_at": a.registered_at,
                         "last_used_at": a.last_used_at,
                         "expires_at": a.expires_at,
+                        "grants_reviewed": a.grants_reviewed,
                         "revoked_at": a.revoked_at,
                         "cert_identity": a.cert_identity,
                     })
@@ -531,6 +533,7 @@ async fn op_get_agent(
                 "registered_at": a.registered_at,
                 "last_used_at": a.last_used_at,
                 "expires_at": a.expires_at,
+                "grants_reviewed": a.grants_reviewed,
                 "revoked_at": a.revoked_at,
                 "cert_identity": a.cert_identity,
             })),
@@ -626,6 +629,7 @@ async fn op_list_bootstrap(
                         "used_at": t.used_at,
                         "used_by_agent_id": t.used_by_agent_id,
                         "revoked_at": t.revoked_at,
+                        "grants_reviewed": t.grants_reviewed,
                     })
                 })
                 .collect();
@@ -842,6 +846,7 @@ async fn op_query_logs(
 // ─── Phase G — per-agent credential overrides ──────────────────────────────
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetCredentialBody {
     /// Full AuthSpec JSON. Validated by serde via the AuthSpec
     /// `deny_unknown_fields` shape.
@@ -905,9 +910,7 @@ async fn op_set_agent_credential(
             )
                 .into_response()
         }
-        Err(e) => admin_err_response(crate::admin::service::AdminError::Backend(format!(
-            "agent_credential_overrides.set: {e}"
-        ))),
+        Err(e) => admin_err_response(e.into()),
     }
 }
 
@@ -1018,9 +1021,7 @@ async fn op_set_agent_stored_credential(
     };
 
     if let Err(e) = creds.set(agent.id, &registration, &new_auth).await {
-        return admin_err_response(crate::admin::service::AdminError::Backend(format!(
-            "agent_credential_overrides.set: {e}"
-        )));
+        return admin_err_response(e.into());
     }
 
     // Tombstone the rotated ref only after the override write succeeds so a

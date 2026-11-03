@@ -66,9 +66,9 @@ impl MtlsAuthenticator {
         match self.repo.get_by_cert_identity(&identity.value).await {
             Ok(Some(agent)) => Ok(AgentIdentity {
                 id: agent.id,
+                tool_allowlist: agent.effective_allowlist(),
                 public_id: agent.public_id,
                 name: agent.name,
-                tool_allowlist: agent.tool_allowlist,
                 tool_denylist: agent.tool_denylist,
             }),
             Ok(None) => {

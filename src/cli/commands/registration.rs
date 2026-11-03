@@ -225,7 +225,7 @@ pub async fn do_delete(
     let token = CliClient::op_token()?;
     let path = format!("/admin/operator/{}/{}", kind.url_segment(), name);
     client
-        .json::<Value>("DELETE", &path, Auth::Operator(&token), None)
+        .unit("DELETE", &path, Auth::Operator(&token), None)
         .await?;
     Ok(())
 }
@@ -239,7 +239,7 @@ pub async fn do_enable(
     let token = CliClient::op_token()?;
     let path = format!("/admin/operator/{}/{}/enable", kind.url_segment(), name);
     client
-        .json::<Value>("POST", &path, Auth::Operator(&token), None)
+        .unit("POST", &path, Auth::Operator(&token), None)
         .await?;
     Ok(())
 }

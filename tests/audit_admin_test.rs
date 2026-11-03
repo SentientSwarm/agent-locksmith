@@ -148,7 +148,7 @@ async fn mint_bootstrap_emits_audit_row() {
         .mint_bootstrap_token(
             &op(),
             MintBootstrapInput {
-                tool_allowlist: Some(vec!["github".into()]),
+                tool_allowlist: Some(vec![]),
                 expires_at: None,
                 single_use: true,
             },

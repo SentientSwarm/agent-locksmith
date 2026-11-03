@@ -29,6 +29,10 @@ async fn admin(
         )
         .await
         .unwrap();
+    if method == "PATCH" {
+        assert_eq!(status, 204);
+        return Value::Null;
+    }
     assert_eq!(status, 200);
     serde_json::from_slice(&bytes).unwrap()
 }
@@ -57,6 +61,25 @@ pub async fn import_snapshot(socket: &Path, op: &str, file: &Path, upstream: &st
     let secret_ref = result["secret_ref"].as_str().unwrap();
     admin(&client, op, "PUT", "/admin/operator/agents/ping-agent/credentials/ping",
         Some(json!({"auth_spec": {"kind": "stored_header", "header": "authorization", "secret_ref": secret_ref}}))).await;
+    let agent = admin(
+        &client,
+        op,
+        "GET",
+        "/admin/operator/agents/ping-agent",
+        None,
+    )
+    .await;
+    admin(
+        &client,
+        op,
+        "PATCH",
+        &format!(
+            "/admin/operator/agents/{}",
+            agent["public_id"].as_str().unwrap()
+        ),
+        Some(json!({"allowlist":["ping"]})),
+    )
+    .await;
     assert_safe_reads(&client, op, secret_ref, value.expose_secret()).await;
 }
 

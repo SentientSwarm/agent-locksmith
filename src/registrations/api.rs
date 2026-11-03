@@ -38,20 +38,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// upstream URL, no metadata.
 pub async fn list_public(
     repo: &RegistrationRepository,
+    catalog: &crate::registrations::Catalog,
     kind: Kind,
     identity: Option<&AgentIdentity>,
 ) -> Result<Vec<Value>, RegistrationError> {
-    let rows = repo.list(Some(kind)).await?;
+    let Some(identity) = identity else {
+        return Ok(Vec::new());
+    };
+    let rows = repo
+        .http_admissions(identity, None)
+        .await
+        .map_err(|_| RegistrationError::Backend("admission state unavailable".into()))?;
     Ok(rows
         .into_iter()
-        .filter(|r| !r.disabled)
-        .filter(|r| identity.is_none_or(|id| id.allows_tool(&r.name).is_ok()))
+        .filter(|r| r.discoverable(kind, catalog))
         .map(|r| {
             json!({
-                "name": r.name,
+                "name": r.registration.name,
                 "type": "api",
-                "path": format!("/api/{}", r.name),
-                "description": r.description,
+                "path": format!("/api/{}", r.registration.name),
+                "description": r.registration.description,
+                "activation": "active",
+                "account_selected": r.account.is_some(),
+                "credential_readiness": "not_checked",
             })
         })
         .collect())
@@ -246,18 +255,22 @@ impl AdminRegistrationsState {
     /// Phase E.6 — refresh the in-memory catalog from the repo and
     /// extend `resolved_creds` with any new env-var references. Called
     /// after every successful admin write so the proxy hot path sees
-    /// the new state immediately. Failures are logged and swallowed —
-    /// the admin write itself succeeded; a stale cache will heal at
-    /// the next refresh or daemon restart.
-    pub async fn refresh_runtime(&self) {
+    /// the new state immediately. A failed refresh reports persisted-but-failed
+    /// activation. Admission independently denies any changed stale row.
+    pub async fn refresh_runtime(
+        &self,
+    ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
         let Some(catalog) = self.catalog.as_ref() else {
-            return;
+            return Ok(()); // Admin-only configuration surface; reads report pending.
         };
         let new_catalog = match crate::registrations::Catalog::from_repo(self.repo.as_ref()).await {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(error = ?e, "catalog refresh failed; runtime cache stale");
-                return;
+                let _ = e; // Raw parse errors can contain stored source input.
+                tracing::error!(
+                    "catalog refresh failed; saved configuration is pending activation"
+                );
+                return Err(crate::registrations::admission::AdmissionUnavailable);
             }
         };
 
@@ -281,7 +294,29 @@ impl AdminRegistrationsState {
         if let Some(resolver) = self.op_resolver.as_ref() {
             crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
         }
+        Ok(())
     }
+
+    fn describe(&self, registration: &Registration) -> Value {
+        let mut value = registration_to_admin_json(registration);
+        let catalog = self.catalog.as_ref().map(|c| c.load());
+        value["configured"] = true.into();
+        value["activation"] = crate::registrations::admission::activation(
+            registration,
+            catalog.as_deref().map(|c| c.as_ref()),
+        )
+        .into();
+        value["credential_readiness"] = "not_checked".into();
+        value
+    }
+}
+
+fn activation_failed() -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+        "saved": true, "activation": "failed", "credential_readiness": "not_checked",
+        "error": {"type":"availability_error", "code":"connection_activation_failed",
+            "message":"configuration saved; runtime activation failed. Inspect the registration, repair invalid catalog data, then repeat the intended write or restart the deployment. Current authority remains enforced."}
+    }))).into_response()
 }
 
 /// `GET /admin/operator/<kind>` — list all of `kind`. Always includes
@@ -290,7 +325,7 @@ impl AdminRegistrationsState {
 pub async fn op_list(State(state): State<AdminRegistrationsState>, kind: Kind) -> Response {
     match state.repo.list(Some(kind)).await {
         Ok(rows) => {
-            let items: Vec<Value> = rows.iter().map(registration_to_admin_json).collect();
+            let items: Vec<Value> = rows.iter().map(|r| state.describe(r)).collect();
             (StatusCode::OK, Json(json!({ format!("{kind}s"): items }))).into_response()
         }
         Err(e) => registration_error_response(&e),
@@ -311,7 +346,7 @@ pub async fn op_get(
                     requested_kind: kind,
                 });
             }
-            (StatusCode::OK, Json(registration_to_admin_json(&r))).into_response()
+            (StatusCode::OK, Json(state.describe(&r))).into_response()
         }
         Ok(None) => unknown_name_response(&name),
         Err(e) => registration_error_response(&e),
@@ -399,10 +434,12 @@ pub async fn op_put(
     if let Err(e) = state.repo.upsert(&r).await {
         return registration_error_response(&e);
     }
-    state.refresh_runtime().await;
+    if state.refresh_runtime().await.is_err() {
+        return activation_failed();
+    }
     state.emit_registry(if is_update { "updated" } else { "created" }, kind, &name);
 
-    (StatusCode::OK, Json(registration_to_admin_json(&r))).into_response()
+    (StatusCode::OK, Json(state.describe(&r))).into_response()
 }
 
 /// `DELETE /admin/operator/<kind>/<name>`. For seed rows: sets `disabled=1`
@@ -427,7 +464,9 @@ pub async fn op_delete(
             };
             match result {
                 Ok(_) => {
-                    state.refresh_runtime().await;
+                    if state.refresh_runtime().await.is_err() {
+                        return activation_failed();
+                    }
                     state.emit_registry("deleted", kind, &name);
                     StatusCode::NO_CONTENT.into_response()
                 }
@@ -456,7 +495,9 @@ pub async fn op_enable(
             }
             match state.repo.set_disabled(&name, false).await {
                 Ok(_) => {
-                    state.refresh_runtime().await;
+                    if state.refresh_runtime().await.is_err() {
+                        return activation_failed();
+                    }
                     StatusCode::NO_CONTENT.into_response()
                 }
                 Err(e) => registration_error_response(&e),
@@ -569,7 +610,9 @@ pub async fn op_put_credential(
         tracing::warn!(error = %e, "tombstone of rotated credential ref failed");
     }
 
-    state.refresh_runtime().await;
+    if state.refresh_runtime().await.is_err() {
+        return activation_failed();
+    }
 
     (
         StatusCode::OK,
@@ -620,7 +663,9 @@ pub async fn op_delete_credential(
         if let Err(e) = secrets.tombstone_if_unreferenced(&old).await {
             tracing::warn!(error = %e, "tombstone of cleared credential ref failed");
         }
-        state.refresh_runtime().await;
+        if state.refresh_runtime().await.is_err() {
+            return activation_failed();
+        }
     }
 
     (StatusCode::OK, Json(json!({ "cleared": true }))).into_response()

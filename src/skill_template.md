@@ -10,7 +10,9 @@ format: agentskills.io
 You're talking to **agent-locksmith**, a credential proxy that:
 
 - Authenticates the calling agent (per-agent bearer token).
-- Enforces a per-agent ACL on every tool call.
+- Enforces a reviewed finite per-agent grant on every HTTP connection call.
+  Missing/null/empty grants permit nothing; new connections require explicit approval.
+  Grants cover the entire connection. Narrow method/resource/operation selectors are unsupported.
 - Requires an explicit account binding for every authenticated proxy call,
   including a deliberate `none` binding for an authless registration.
 - Injects only the selected upstream provider credentials at the proxy layer (your code never sees them).
@@ -91,8 +93,15 @@ patterns:
   upstream's own docs.
 
 The personalized `/skill` (re-fetched with your bearer) lists the tools
-eligible under your ACL. These listings show **ACL eligibility**, not binding
-existence or selected source health. A listed tool may still return 403 or 503.
+eligible under your ACL. These listings show **ACL eligibility**, not selected source health.
+Database listings require current runtime activation; JSON also reports
+`account_selected` and `credential_readiness: not_checked`. A listed tool may
+still return 403 for no selection or 503 for an unavailable selected source.
+Config-only legacy listings say `configuration_only`. `/readyz` does not attest
+every per-agent source. On `connection_not_active`, ask the operator to inspect
+the saved connection and restore runtime activation. A saved admin write may
+return `connection_activation_failed`; it is not rolled back. Never retry another
+account or widen a grant automatically.
 
 ## Codex (OpenAI ChatGPT plan auth) — special case
 

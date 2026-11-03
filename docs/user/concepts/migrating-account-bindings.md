@@ -1,4 +1,4 @@
-# Upgrade shared accounts to explicit selections
+# Upgrade to finite HTTP grants and explicit accounts
 
 `locksmith migrate-bindings` is an **offline owner tool** for an existing,
 current-schema SQLite database. It uses filesystem access as authority and does
@@ -6,9 +6,12 @@ not use an operator token or contact the admin listener. Run it on the daemon's
 host with the daemon stopped for cutover. It does not stop services for you.
 Rehearse on a disposable SQLite backup with synthetic credentials first.
 
-The workflow freezes known current routes into explicit selections. It never
-changes ACLs, creates agents, imports files, copies credential values or supplies
-runtime fallback. Existing explicit selections are preserved, including broken
+The `--grants` workflow freezes current eligible HTTP routes into a reviewed finite
+allowlist and explicit account selections in one transaction. It never creates
+agents, imports files, copies credential values or supplies runtime fallback.
+Existing agents are marked unreviewed by schema migration and cannot call HTTP
+connections until reviewed. Old bootstrap tokens must be re-minted with current
+finite grants; they cannot enroll under inherited unrestricted scopes. Existing explicit selections are preserved, including broken
 ones. Unmapped credentialed callers remain denied.
 
 ## Back up a consistent database
@@ -46,7 +49,13 @@ it does not create/migrate databases, change journal mode or write application
 rows. SQLite may use its normal WAL reader coordination files. Apply uses one
 `BEGIN IMMEDIATE` transaction, including all drift checks and writes. The tool
 requires the existing schema; upgrade schema through the normal deployment
-procedure separately if it reports `migration_database`.
+procedure separately if it reports `migration_database`. The new daemon applies
+embedded migrations on startup; the offline CLI does not. After the backup,
+keep agent traffic closed, start the new compatible daemon with the deployment's
+configuration/custody, confirm schema startup completes, then stop it before
+preview/apply. Historical agents are denied during this interval. Rehearse this
+sequence on a copy first; do not point the rehearsal at the live database.
+Keep the pre-schema backup separate from any later cutover backup.
 
 ## Preview, review and select
 
@@ -56,7 +65,7 @@ deployment's configuration path. Keep `DATABASE` from the backup step.
 <!-- smoke:preview -->
 ```sh
 umask 077
-"$LOCKSMITH_BIN" migrate-bindings preview \
+"$LOCKSMITH_BIN" migrate-bindings preview --grants \
   --database "$DATABASE" \
   --legacy-config "$CONFIG" > bindings-plan.json
 cp bindings-plan.json bindings-reviewed.json
@@ -72,13 +81,17 @@ No config entry is imported. Keep configuration writers stopped during apply;
 its reference inventory is read and checked inside the SQLite write transaction.
 
 Review the JSON's agent IDs/names, allowlists/denylists, registration names/kinds,
-source references and reasons. The production ACL rule applies: deny wins, an
-empty allowlist denies everything, and absent lists permit current entries only
-for purposes of proposing this frozen mapping. Review destination registration
+source references and reasons. Deny wins and an empty allowlist denies everything.
+Only historical unreviewed rows with absent lists treat current entries as eligible
+for this offline proposal. Live missing/null lists grant nothing. Restricted
+unknown names and future entries are excluded. Review destination registration
 configuration separately before accepting its reference.
 
 Change **only** `selected: false` to `selected: true` on desired entries whose
-`action` is `propose`. Select at least one. Leave `preserve` and `skip` entries,
+`action` is `propose`. Also mark each reviewed agent in `grants` as selected.
+The grant list is finite, includes no unknown names, and can be empty. You may
+select only grant rows when all bindings are already preserved or no entry is
+eligible. Select at least one grant or binding proposal. Leave `preserve` and `skip` entries,
 all source metadata, inventory, snapshot and format fields unchanged. The tool
 rejects other edits. To select a different source, repair/reselect it through the
 existing operator commands and generate a fresh preview; do not hand-edit the
@@ -111,7 +124,9 @@ They cannot attest that an env/op value, sealing key or provider account works.
 ```
 
 First output is `{"inserted":N}` for the selected proposals. An unchanged repeat
-prints `{"inserted":0}`. Binding rows and a narrow receipt/revision in existing
+prints `{"inserted":0}`. This count covers newly inserted bindings, so a successful
+review-only or empty-grant cutover also prints zero. Selected finite allowlists,
+reviewed-policy markers, binding rows and a narrow receipt/revision in existing
 `registrations_meta` commit together. Seed-version and unrelated metadata are
 untouched. These bookkeeping entries have no proxy/runtime authority.
 
@@ -132,7 +147,7 @@ revision to retry an old plan. Generate and review a fresh plan instead.
 Invalid inputs exit **2** (`migration_invalid`); database/schema/permission or
 write failures exit **1** (`migration_database`). Errors omit SQL and source
 contents. A failed insertion, including a failed receipt write, rolls back all
-bindings and bookkeeping.
+grants, bindings and bookkeeping.
 
 Start your deployment normally. Use existing
 [`agent credentials list` / `set-credential`](../cli-reference.md) commands and
@@ -140,8 +155,12 @@ real authenticated agent requests to verify receiving-account attribution. Check
 that two intentionally shared callers reach X and a distinct caller reaches Y;
 unmapped callers must return 403 with zero upstream requests. Broken selected
 sources must return 503 without trying another account. Changing a template
-must not repoint migrated rows. New registrations/accounts require new explicit
+must not repoint migrated rows. New registrations/accounts require new finite grants and explicit
 reviewed selections; this tool installs no automatic mapping job.
+
+Without `--grants`, preview retains the older account-only format. Applying that
+format does not review an old agent policy; run the finite grant cutover before
+expecting HTTP access.
 
 The migration regression command is `cargo test --test binding_migration_test`.
 
@@ -188,7 +207,10 @@ prefer deliberately clearing/replacing individual selections through normal
 operator commands. Clearing denies subsequent access; it never restores a
 registration default.
 
-For a full rollback, stop all writers and restore the complete consistent backup
+For recovery, use a binary compatible with the current migrated schema and
+explicit-grant enforcement. Never roll back to a binary that ignores the reviewed
+marker or restores implicit grants. For a full state restore, stop all writers
+and restore the complete consistent backup
 using your deployment's SQLite-safe restore procedure, including its matching
 configuration and custody requirements. Preserve the failed/current database
 securely for diagnosis. Restoring an old database can also restore revoked

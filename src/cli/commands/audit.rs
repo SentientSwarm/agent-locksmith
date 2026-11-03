@@ -12,7 +12,7 @@ pub enum AuditCmd {
     /// Query the audit log.
     Query {
         /// Filter by agent public_id.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         agent: Option<String>,
         /// Filter by tool name.
         #[arg(long)]

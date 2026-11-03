@@ -70,7 +70,7 @@ impl Registration {
 /// Repository for the `registrations` and `registrations_meta` tables.
 #[derive(Clone)]
 pub struct RegistrationRepository {
-    pool: SqlitePool,
+    pub(super) pool: SqlitePool,
 }
 
 impl RegistrationRepository {
@@ -266,7 +266,9 @@ impl RegistrationRepository {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn row_to_registration(row: sqlx::sqlite::SqliteRow) -> Result<Registration, RegistrationError> {
+pub(super) fn row_to_registration(
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<Registration, RegistrationError> {
     let kind_str: String = row.get(1);
     let kind = match kind_str.as_str() {
         "model" => Kind::Model,

@@ -64,8 +64,9 @@ async fn relevant_drift_or_edited_mapping_rejects_without_partial_bindings() {
         let mut p = f.preview();
         select(&mut p, f.ids[0]);
         f.exec(sql).await;
+        let after_change = f.count().await;
         conflict(&f.apply(&p));
-        assert_eq!(f.count().await, 1, "{sql}");
+        assert_eq!(f.count().await, after_change, "{sql}");
     }
     let f = Fixture::new().await;
     let mut p = f.preview();

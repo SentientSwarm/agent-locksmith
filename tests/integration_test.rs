@@ -78,5 +78,5 @@ tools:
         .get("/api/unknown/test")
         .add_header("Authorization", &h.bearer)
         .await;
-    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
 }

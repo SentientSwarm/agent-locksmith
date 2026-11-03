@@ -63,7 +63,8 @@ async fn setup(upstream: &str, auth: AuthSpec, tool_allowlist: Option<Vec<String
     );
     registrations.create(&r).await.unwrap();
 
-    let allow_ref = tool_allowlist.as_deref();
+    let tool_allowlist = tool_allowlist.unwrap_or_else(|| vec!["public-search".into()]);
+    let allow_ref = Some(tool_allowlist.as_slice());
     let (pid, secret) = agents
         .create("authless-test", None, allow_ref, None, None, None)
         .await

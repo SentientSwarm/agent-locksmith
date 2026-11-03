@@ -13,6 +13,7 @@ pub struct Agent {
     pub registered_at: i64,
     pub expires_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    pub grants_reviewed: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Registration {
@@ -64,6 +65,16 @@ pub struct Plan {
     pub entries: Vec<Entry>,
     pub legacy: Vec<Legacy>,
     pub notice: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<GrantReview>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantReview {
+    pub agent_id: i64,
+    pub allowlist: Vec<String>,
+    pub selected: bool,
 }
 #[derive(Debug, Serialize)]
 pub(super) struct Binding {

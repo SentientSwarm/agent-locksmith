@@ -57,10 +57,12 @@ Local synthetic upstreams establish account isolation, not compatibility with
 live providers, Kamiwaza, remote deployments or provider grant policies. Existing
 focused tests cover env/header/bearer, stored, op and both OAuth mechanisms. Four
 optional provider tests can return early without their endpoints/credentials;
-reported passes are not provider coverage. The local diagnostic retains two
-known D4 findings: legacy unrestricted ACL growth and disabled-row stale catalog
-activation. D1 does not redesign those semantics, cancel active streams or change
-pool replay/egress policy. Final acceptance belongs to the lead after independent
+reported passes are not provider coverage. At the D1 baseline, the local
+diagnostic recorded two later D4 findings: legacy unrestricted ACL growth and
+disabled-row stale catalog activation. Those are historical probes;
+[explicit HTTP grants](explicit-http-grants.md) defines their replacement
+contract and saved verification. Active-stream cancellation and pool replay/egress
+policy remain outside this change. Final acceptance belongs to the lead after independent
 QA/review of the delivered candidate; these notes alone do not claim acceptance.
 
 ## AGENT-180 shipped guidance follow-up

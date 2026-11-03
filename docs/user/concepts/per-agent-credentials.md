@@ -6,11 +6,28 @@ registrations. Phase G feature, paired with OAuth session labels.
 
 ## Explicit account selection
 
-An authenticated agent needs both its current registration ACL and an explicit
+An authenticated agent needs both a reviewed finite allowlist of current HTTP
+connection names and an explicit
 account binding. The existing `agent_credential_overrides` row keyed by
 `(agent_id, registration)` is that binding. Several agents may explicitly select
 the same env reference or account. No row means **403 tool_not_allowed**; the
 registration's credential template is never an implicit selection.
+
+Omitting/nulling the allowlist grants nothing. Create the tool/model registration
+first, then use `agent register --allowlist accounts` or
+`agent modify "$AGENT_ID" --allowlist accounts`. Modification replaces the whole
+set; `--allowlist -` clears it. Denylist entries still win. Unknown, disabled and
+infra names cannot be newly granted or bound. Grants cover the entire ordinary
+HTTP connection; operation, resource and method selectors are unsupported and
+rejected.
+
+A connection is identified by its registration name. Disabling/re-enabling keeps
+its grants and selections but denies while disabled. Hard deletion removes both
+in the same database write; recreating the name requires deliberate reapproval.
+Changing upstream or egress also removes grants and bindings transactionally.
+Description, timeout and credential-template edits retain identity. Reapprove the
+finite allowlist and account after a destination replacement. Old bootstrap
+scopes are also cleaned so enrollment cannot recover removed authority.
 
 A selection-store failure or corrupt AuthSpec returns **503
 credential_unresolved** before upstream dispatch. Missing or empty selected
@@ -34,6 +51,38 @@ Use the [reviewed migration](migrating-account-bindings.md) for existing shared
 account users. Rehearse the [saved actual-daemon smoke](../../development/explicit-account-bindings-smoke.md)
 before cutover. See the [D1 change notes](../changes/explicit-account-bindings.md)
 for the compatibility break and verification limits.
+
+## Configuration, activation and admission
+
+Operator `tool get/list` and `model get/list` report `configured`, `activation`
+and `credential_readiness`. `active` means the full persisted registration
+matches the runtime configuration. It does not mean any agent's selected account
+is healthy; credential readiness remains `not_checked`. Disabled rows report
+`disabled`; a saved row awaiting refresh reports `pending`.
+
+A mutation whose database write succeeded but runtime refresh failed returns
+HTTP 503 `connection_activation_failed`, with `saved: true` and
+`activation: failed`. Inspect the saved registration before retrying. Repair the
+catalog issue, then repeat the intended write or restart your deployment normally.
+Changed stale connections deny with 503 `connection_not_active`; unrelated rows
+whose contents still match can continue. Missing and disabled DB registrations
+never fall back to same-name YAML configuration.
+
+For each authenticated HTTP admission, one SQLite statement reads current agent
+lifecycle/policy, registration and account reference. The proxy checks runtime
+configuration against that snapshot before resolving only the selected source.
+A revoke, disable, grant removal or binding change committed before this read
+controls the request. Work admitted before a later change may finish, including
+streaming responses; there is no stream-cancellation feature. Bearer rotation
+rejects future authentication with the old token and does not cancel requests
+already authenticated. Authenticated admission still rechecks revocation/expiry.
+
+`/tools`, `/models` and personalized `/skill` show current granted, active DB
+connections. JSON includes `account_selected`; selected source health is still
+`not_checked`. An active listed connection may deny an absent account (403) or a
+broken source (503). Config-only legacy discovery and `/admin/agent/tools` report
+`configuration_only`, never per-agent credential readiness. `/readyz` remains an
+instance/startup dependency probe and does not attest every agent's account.
 
 ## Setting an explicit binding
 

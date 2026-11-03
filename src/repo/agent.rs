@@ -24,6 +24,8 @@ pub enum RepoError {
     Sqlx(#[from] sqlx::Error),
     #[error("stored account binding is invalid")]
     InvalidAccountBinding,
+    #[error("grant_target_invalid: select a currently configured HTTP tool or model")]
+    InvalidGrantTarget,
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("rng: {0}")]
@@ -38,6 +40,7 @@ pub struct AgentRecord {
     pub description: Option<String>,
     pub secret_hash: String,
     pub tool_allowlist: Option<Vec<String>>,
+    pub grants_reviewed: bool,
     pub tool_denylist: Option<Vec<String>>,
     pub metadata: Option<Json>,
     pub cert_identity: Option<String>,
@@ -48,6 +51,14 @@ pub struct AgentRecord {
 }
 
 impl AgentRecord {
+    pub fn effective_allowlist(&self) -> Option<Vec<String>> {
+        Some(if self.grants_reviewed {
+            self.tool_allowlist.clone().unwrap_or_default()
+        } else {
+            Vec::new()
+        })
+    }
+
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
     }
@@ -61,6 +72,17 @@ pub struct AgentRepository {
 impl AgentRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub async fn validate_grants(&self, names: &[String]) -> Result<(), RepoError> {
+        for name in names {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM registrations WHERE name = ? AND kind IN ('tool', 'model') AND disabled = 0)")
+                .bind(name).fetch_one(&self.pool).await?;
+            if !exists {
+                return Err(RepoError::InvalidGrantTarget);
+            }
+        }
+        Ok(())
     }
 
     /// Create an agent. Returns the issued public_id and the cleartext
@@ -78,13 +100,54 @@ impl AgentRepository {
         metadata: Option<&Json>,
         expires_at: Option<i64>,
     ) -> Result<(String, SecretString), RepoError> {
+        self.create_inner(
+            name,
+            description,
+            allowlist,
+            denylist,
+            metadata,
+            expires_at,
+            false,
+        )
+        .await
+    }
+
+    pub async fn create_reviewed(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        allowlist: Option<&[String]>,
+        denylist: Option<&[String]>,
+        metadata: Option<&Json>,
+        expires_at: Option<i64>,
+    ) -> Result<(String, SecretString), RepoError> {
+        self.create_inner(
+            name,
+            description,
+            allowlist,
+            denylist,
+            metadata,
+            expires_at,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_inner(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        allowlist: Option<&[String]>,
+        denylist: Option<&[String]>,
+        metadata: Option<&Json>,
+        expires_at: Option<i64>,
+        checked: bool,
+    ) -> Result<(String, SecretString), RepoError> {
         let token = StructuredToken::generate(TokenNamespace::Agent);
         let secret_hash =
             argon2_helper::hash(&SecretString::from(token.secret.expose().to_string()))?;
-        let allowlist_json = allowlist
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(RepoError::Json)?;
+        let allowlist_json = serde_json::to_string(allowlist.unwrap_or_default())?;
         let denylist_json = denylist
             .map(serde_json::to_string)
             .transpose()
@@ -101,22 +164,27 @@ impl AgentRepository {
         let res = sqlx::query(
             "INSERT INTO agents \
              (public_id, name, description, secret_hash, tool_allowlist, tool_denylist, \
-              metadata, registered_at, expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              metadata, registered_at, expires_at, grants_reviewed) \
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 1 \
+             WHERE ? = 0 OR NOT EXISTS (SELECT 1 FROM json_each(?) n \
+                 WHERE NOT EXISTS (SELECT 1 FROM registrations r WHERE r.name=n.value AND r.kind IN ('tool','model') AND r.disabled=0))",
         )
         .bind(&public_id)
         .bind(name)
         .bind(description)
         .bind(&secret_hash)
-        .bind(allowlist_json)
+        .bind(&allowlist_json)
         .bind(denylist_json)
         .bind(metadata_str)
         .bind(now)
         .bind(expires_at)
+        .bind(checked)
+        .bind(&allowlist_json)
         .execute(&self.pool)
         .await;
 
         match res {
+            Ok(result) if result.rows_affected() == 0 => Err(RepoError::InvalidGrantTarget),
             Ok(_) => Ok((public_id, secret)),
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
                 Err(RepoError::AgentNameConflict(name.to_string()))
@@ -132,7 +200,7 @@ impl AgentRepository {
         let row = sqlx::query_as::<_, AgentRow>(
             "SELECT id, public_id, name, description, secret_hash, tool_allowlist, \
              tool_denylist, metadata, cert_identity, registered_at, last_used_at, \
-             expires_at, revoked_at \
+             expires_at, revoked_at, grants_reviewed \
              FROM agents WHERE public_id = ? AND revoked_at IS NULL",
         )
         .bind(public_id)
@@ -145,7 +213,7 @@ impl AgentRepository {
         let row = sqlx::query_as::<_, AgentRow>(
             "SELECT id, public_id, name, description, secret_hash, tool_allowlist, \
              tool_denylist, metadata, cert_identity, registered_at, last_used_at, \
-             expires_at, revoked_at \
+             expires_at, revoked_at, grants_reviewed \
              FROM agents WHERE name = ?",
         )
         .bind(name)
@@ -161,7 +229,7 @@ impl AgentRepository {
         let row = sqlx::query_as::<_, AgentRow>(
             "SELECT id, public_id, name, description, secret_hash, tool_allowlist, \
              tool_denylist, metadata, cert_identity, registered_at, last_used_at, \
-             expires_at, revoked_at \
+             expires_at, revoked_at, grants_reviewed \
              FROM agents WHERE cert_identity = ? AND revoked_at IS NULL",
         )
         .bind(identity)
@@ -174,12 +242,12 @@ impl AgentRepository {
         let sql = if include_revoked {
             "SELECT id, public_id, name, description, secret_hash, tool_allowlist, \
              tool_denylist, metadata, cert_identity, registered_at, last_used_at, \
-             expires_at, revoked_at \
+             expires_at, revoked_at, grants_reviewed \
              FROM agents ORDER BY registered_at DESC"
         } else {
             "SELECT id, public_id, name, description, secret_hash, tool_allowlist, \
              tool_denylist, metadata, cert_identity, registered_at, last_used_at, \
-             expires_at, revoked_at \
+             expires_at, revoked_at, grants_reviewed \
              FROM agents WHERE revoked_at IS NULL ORDER BY registered_at DESC"
         };
         let rows = sqlx::query_as::<_, AgentRow>(sql)
@@ -290,15 +358,51 @@ impl AgentRepository {
         metadata: Option<Option<Json>>,
         expires_at: Option<Option<i64>>,
     ) -> Result<(), RepoError> {
+        self.update_policy_inner(public_id, allowlist, denylist, metadata, expires_at, false)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_policy_reviewed(
+        &self,
+        public_id: &str,
+        allowlist: Option<Option<Vec<String>>>,
+        denylist: Option<Option<Vec<String>>>,
+        metadata: Option<Option<Json>>,
+        expires_at: Option<Option<i64>>,
+    ) -> Result<(), RepoError> {
+        self.update_policy_inner(public_id, allowlist, denylist, metadata, expires_at, true)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_policy_inner(
+        &self,
+        public_id: &str,
+        allowlist: Option<Option<Vec<String>>>,
+        denylist: Option<Option<Vec<String>>>,
+        metadata: Option<Option<Json>>,
+        expires_at: Option<Option<i64>>,
+        checked: bool,
+    ) -> Result<(), RepoError> {
+        let check_targets = checked && allowlist.is_some();
+        let targets = serde_json::to_string(
+            &allowlist
+                .as_ref()
+                .and_then(|v| v.as_ref())
+                .cloned()
+                .unwrap_or_default(),
+        )?;
         let mut sets: Vec<&str> = Vec::new();
         let mut allowlist_str: Option<Option<String>> = None;
         let mut denylist_str: Option<Option<String>> = None;
         let mut metadata_str: Option<Option<String>> = None;
         if let Some(a) = allowlist {
             sets.push("tool_allowlist = ?");
+            sets.push("grants_reviewed = 1");
             allowlist_str = Some(match a {
                 Some(v) => Some(serde_json::to_string(&v)?),
-                None => None,
+                None => Some("[]".into()),
             });
         }
         if let Some(d) = denylist {
@@ -321,7 +425,10 @@ impl AgentRepository {
         if sets.is_empty() {
             return Ok(());
         }
-        let sql = format!("UPDATE agents SET {} WHERE public_id = ?", sets.join(", "));
+        let sql = format!(
+            "UPDATE agents SET {} WHERE public_id = ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM json_each(?) n WHERE NOT EXISTS (SELECT 1 FROM registrations r WHERE r.name=n.value AND r.kind IN ('tool','model') AND r.disabled=0)))",
+            sets.join(", ")
+        );
         let mut q = sqlx::query(&sql);
         if let Some(v) = allowlist_str {
             q = q.bind(v);
@@ -335,9 +442,12 @@ impl AgentRepository {
         if let Some(v) = expires_at {
             q = q.bind(v);
         }
-        q = q.bind(public_id);
+        q = q.bind(public_id).bind(check_targets).bind(targets);
         let res = q.execute(&self.pool).await?;
         if res.rows_affected() == 0 {
+            if check_targets && self.get_active_by_public_id(public_id).await?.is_some() {
+                return Err(RepoError::InvalidGrantTarget);
+            }
             return Err(RepoError::AgentNotFound);
         }
         Ok(())
@@ -359,6 +469,7 @@ struct AgentRow {
     last_used_at: Option<i64>,
     expires_at: Option<i64>,
     revoked_at: Option<i64>,
+    grants_reviewed: bool,
 }
 
 impl AgentRow {
@@ -382,6 +493,7 @@ impl AgentRow {
             description: self.description,
             secret_hash: self.secret_hash,
             tool_allowlist,
+            grants_reviewed: self.grants_reviewed,
             tool_denylist,
             metadata,
             cert_identity: self.cert_identity,

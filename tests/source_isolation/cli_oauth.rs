@@ -50,6 +50,13 @@ async fn explicit_oauth_selection_snapshots_metadata_via_cli() {
                 "selected",
             ]);
             let output = run(select);
+            if catalog_kind == "infra" {
+                assert!(
+                    !output.status.success(),
+                    "infra is not an HTTP grant target"
+                );
+                continue;
+            }
             assert!(
                 output.status.success(),
                 "OAuth selection for {catalog_kind}/{kind} exited {:?}",

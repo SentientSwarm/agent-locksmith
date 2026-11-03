@@ -26,6 +26,8 @@ pub enum AdminError {
     AgentNotFound,
     #[error("not authorized")]
     NotAuthorized,
+    #[error("grant_target_invalid: select a currently configured HTTP tool or model")]
+    InvalidGrantTarget,
     #[error("backend: {0}")]
     Backend(String),
 }
@@ -37,12 +39,14 @@ impl From<RepoError> for AdminError {
             RepoError::RotationInProgress(_) => AdminError::RotationInProgress,
             RepoError::AgentNotFound => AdminError::AgentNotFound,
             RepoError::InvalidCredential => AdminError::InvalidBootstrap,
+            RepoError::InvalidGrantTarget => AdminError::InvalidGrantTarget,
             other => AdminError::Backend(other.to_string()),
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegisterInput {
     pub bootstrap_token: SecretString,
     pub name: String,
@@ -67,6 +71,7 @@ pub struct AgentStatusOutput {
     pub registered_at: i64,
     pub last_used_at: Option<i64>,
     pub expires_at: Option<i64>,
+    pub grants_reviewed: bool,
 }
 
 impl From<AgentRecord> for AgentStatusOutput {
@@ -80,6 +85,7 @@ impl From<AgentRecord> for AgentStatusOutput {
             registered_at: r.registered_at,
             last_used_at: r.last_used_at,
             expires_at: r.expires_at,
+            grants_reviewed: r.grants_reviewed,
         }
     }
 }
@@ -91,6 +97,7 @@ pub struct RotateOutput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateAgentInput {
     pub name: String,
     pub description: Option<String>,
@@ -101,14 +108,28 @@ pub struct CreateAgentInput {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ModifyAgentInput {
+    #[serde(default, deserialize_with = "nullable")]
     pub allowlist: Option<Option<Vec<String>>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub denylist: Option<Option<Vec<String>>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub metadata: Option<Option<Json>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub expires_at: Option<Option<i64>>,
 }
 
+fn nullable<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MintBootstrapInput {
     pub tool_allowlist: Option<Vec<String>>,
     pub expires_at: Option<i64>,
@@ -133,6 +154,8 @@ pub struct ToolInfo {
     pub description: String,
     pub egress: String,
     pub credential_present: bool,
+    pub activation: &'static str,
+    pub credential_readiness: &'static str,
 }
 
 #[derive(Clone)]
@@ -361,7 +384,7 @@ impl AdminService {
 
         let (agent_pid, agent_secret) = self
             .agents
-            .create(
+            .create_reviewed(
                 &input.name,
                 input.description.as_deref(),
                 allowlist_slice,
@@ -381,9 +404,17 @@ impl AdminService {
             .bootstrap
             .consume(public_id.as_str(), &secret_str, agent.id)
             .await;
-        if let Err(e) = consumed {
-            let _ = self.agents.revoke(&agent_pid).await;
-            return Err(e.into());
+        match consumed {
+            Ok(scope) if scope == scope_preview => {}
+            changed => {
+                // Creation used the preview. Never return a credential if
+                // lifecycle cleanup removed that scope before consumption.
+                let _ = self.agents.revoke(&agent_pid).await;
+                return Err(changed
+                    .err()
+                    .map(AdminError::from)
+                    .unwrap_or(AdminError::InvalidBootstrap));
+            }
         }
 
         Ok(RegisterOutput {
@@ -471,17 +502,7 @@ impl AdminService {
         let tools = cfg
             .tools
             .iter()
-            .filter(|t| {
-                let allowed = match &agent.tool_allowlist {
-                    None => true,
-                    Some(list) => list.iter().any(|n| n == &t.name),
-                };
-                let not_denied = match &agent.tool_denylist {
-                    None => true,
-                    Some(list) => !list.iter().any(|n| n == &t.name),
-                };
-                allowed && not_denied
-            })
+            .filter(|t| agent.allows_tool(&t.name).is_ok())
             .map(|t| ToolInfo {
                 name: t.name.clone(),
                 description: t.description.clone(),
@@ -489,7 +510,10 @@ impl AdminService {
                     crate::config::EgressMode::Direct => "direct".into(),
                     crate::config::EgressMode::Proxied => "proxied".into(),
                 },
-                credential_present: self.credential_present(t) || t.auth.is_none(),
+                // Legacy config listing cannot attest the selected per-agent source.
+                credential_present: false,
+                activation: "configuration_only",
+                credential_readiness: "not_checked",
             })
             .collect();
         Ok(tools)
@@ -526,13 +550,14 @@ impl AdminService {
     pub async fn create_agent_as_operator(
         &self,
         op: &OperatorIdentity,
-        input: CreateAgentInput,
+        mut input: CreateAgentInput,
     ) -> Result<RegisterOutput, AdminError> {
+        input.allowlist = Some(input.allowlist.unwrap_or_default());
         let allowlist_slice = input.allowlist.as_deref();
         let denylist_slice = input.denylist.as_deref();
         let result = self
             .agents
-            .create(
+            .create_reviewed(
                 &input.name,
                 input.description.as_deref(),
                 allowlist_slice,
@@ -587,7 +612,7 @@ impl AdminService {
     ) -> Result<(), AdminError> {
         let result = self
             .agents
-            .update_policy(
+            .update_policy_reviewed(
                 public_id,
                 input.allowlist,
                 input.denylist,
@@ -696,14 +721,15 @@ impl AdminService {
     pub async fn mint_bootstrap_token(
         &self,
         op: &OperatorIdentity,
-        input: MintBootstrapInput,
+        mut input: MintBootstrapInput,
     ) -> Result<MintBootstrapOutput, AdminError> {
+        input.tool_allowlist = Some(input.tool_allowlist.unwrap_or_default());
         let scope = BootstrapScope {
             tool_allowlist: input.tool_allowlist,
             expires_at: input.expires_at,
             single_use: input.single_use,
         };
-        let result = self.bootstrap.mint(scope.clone(), &op.name).await;
+        let result = self.bootstrap.mint_reviewed(scope.clone(), &op.name).await;
         let event = match &result {
             Ok((pid, _)) => AuditEvent {
                 ts_ms: now_ms(),
@@ -801,6 +827,8 @@ impl AdminService {
                     crate::config::EgressMode::Proxied => "proxied".into(),
                 },
                 credential_present: self.credential_present(t) || t.auth.is_none(),
+                activation: "configuration_only",
+                credential_readiness: "not_checked",
             })
             .collect())
     }

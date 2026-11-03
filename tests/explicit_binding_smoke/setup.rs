@@ -34,8 +34,7 @@ pub fn config(f: &Fixture) {
 }
 pub fn register(f: &Fixture, name: &str) -> Agent {
     let mut c = super::docs::fixture(f, super::docs::SETUP, "register");
-    c.env("AGENT_NAME", name)
-        .env("ALLOWLIST", "accounts,future,legacy-prefixed,public");
+    c.env("AGENT_NAME", name).env("ALLOWLIST", "accounts");
     let v = process::json(process::run(c));
     f.tokens
         .borrow_mut()

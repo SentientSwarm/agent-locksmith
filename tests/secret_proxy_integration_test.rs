@@ -42,7 +42,7 @@ fn write_operators_yaml(p: &std::path::Path) -> String {
 /// Pre-register an agent in the database before the daemon opens it.
 /// M9: admin substrate enabled implies per-agent bearer auth on the
 /// proxy hot path, so daemon-driven tests need a real lk_ token to
-/// reach `/api/...` endpoints. Allowlist `None` means "all tools."
+/// reach `/api/...` endpoints. Omitted grants authorize no tools.
 async fn pre_register_agent(db: &std::path::Path, name: &str) -> String {
     let pool = open_and_migrate(db).await.expect("migrate");
     let agents = AgentRepository::new(pool.clone());
@@ -214,6 +214,21 @@ tools:
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    // Deliberately grant the now-configured authless entry.
+    let pool = open_and_migrate(&db).await.unwrap();
+    let agents = AgentRepository::new(pool.clone());
+    let id = agents
+        .get_by_name("discovery-agent")
+        .await
+        .unwrap()
+        .unwrap()
+        .public_id;
+    agents
+        .update_policy(&id, Some(Some(vec!["open".into()])), None, None, None)
+        .await
+        .unwrap();
+    pool.close().await;
 
     // /tools must include the `open` tool (no auth) but NOT `broken`
     // (credential failed to resolve).

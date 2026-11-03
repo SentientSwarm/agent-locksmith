@@ -27,6 +27,7 @@ async fn lossy_legacy_mapping_denies_without_dispatch_and_other_mappings_still_w
     assert_eq!(other["action"], "propose");
     other["selected"] = true.into();
     success(&apply(&f, &p, &config));
+    super::runtime::review_grants(&f).await;
     let server = application(&f.pool, &CredentialSealingKey::generate().unwrap()).await;
     let denied = call(&server, &f, 0, "api").await;
     assert_eq!(denied.status_code().as_u16(), 403);

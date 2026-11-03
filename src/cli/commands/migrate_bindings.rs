@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct ArgsOffline {
+    /// Review finite HTTP grants as well as account references (D4 cutover).
+    #[arg(long, global = true)]
+    grants: bool,
     #[command(subcommand)]
     cmd: Command,
 }
@@ -33,8 +36,11 @@ struct Database {
 pub async fn run(args: ArgsOffline) -> Result<(), Error> {
     match args.cmd {
         Command::Preview(db) => {
-            let plan =
-                binding_migration::preview(&db.database, db.legacy_config.as_deref()).await?;
+            let plan = if args.grants {
+                binding_migration::preview_grants(&db.database, db.legacy_config.as_deref()).await?
+            } else {
+                binding_migration::preview(&db.database, db.legacy_config.as_deref()).await?
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&plan).map_err(|_| Error::Invalid)?

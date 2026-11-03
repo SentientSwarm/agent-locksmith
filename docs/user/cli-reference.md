@@ -58,7 +58,11 @@ locksmith agent revoke <public_id>
 | `agent set-cert-identity <public_id> <identity>` | Bind an mTLS certificate identity. |
 
 `register` returns the bearer once. `revoke` sets the agent's row
-to revoked; subsequent calls 401.
+to revoked; subsequent calls 401. Omitted/null/empty allowlists grant nothing.
+Names must be existing enabled tool/model registrations. `modify --allowlist`
+replaces the full set; `--allowlist -` clears it. Omitted modify fields stay
+unchanged. `grants_reviewed` distinguishes old policies needing offline review;
+it does not attest activation or credential readiness. Denylist still wins.
 
 #### Explicit account bindings
 
@@ -88,7 +92,9 @@ explicit binding is set again.
 
 ### `bootstrap` — bootstrap-token management (operator)
 
-For pre-seeding agents that self-register via the bootstrap listener:
+For pre-seeding agents that self-register via the bootstrap listener. Omitted
+allowlist means no grants. Historical unreviewed tokens cannot enroll; re-mint
+with current finite names after upgrade:
 
 ```bash
 locksmith bootstrap mint [--allowlist X,Y] [--reusable] [--expires-at <unix-secs>]
@@ -113,6 +119,15 @@ locksmith {tool,model,infra} put <name> --upstream URL --auth <spec> [opts]
 locksmith {tool,model,infra} delete <name>
 locksmith {tool,model,infra} enable <name>
 ```
+
+Catalog reads report `configured`, `activation` (`active`, `pending`, `disabled`)
+and `credential_readiness: not_checked`. A saved write whose runtime refresh
+fails returns 503 `connection_activation_failed` / CLI exit 1. Inspect the saved
+entry before retrying; repair and repeat the intended write or restart normally.
+Changing upstream/egress or deleting/recreating a name clears grants and account
+selections; disable/re-enable retains them. `delete` on a seeded entry disables
+it; on an operator-created entry it hard-deletes. No active entry alone proves an
+agent's selected account works.
 
 `put` flags:
 
@@ -301,9 +316,11 @@ locksmith oauth status codex
 
 ## Offline account-binding migration
 
-`locksmith migrate-bindings preview --database EXISTING_DB [--legacy-config YAML]`
+`locksmith migrate-bindings preview --grants --database EXISTING_DB [--legacy-config YAML]`
 prints a deterministic reference-only JSON plan. Review it privately and change
-only `selected` flags on proposed rows. Then run
+only `selected` flags on desired binding proposals and reviewed finite `grants`
+rows. A review-only or empty-grant apply can insert zero bindings. Without
+`--grants`, the account-only format does not review historical policy. Then run
 `locksmith migrate-bindings apply --database EXISTING_DB --plan REVIEWED_JSON`
 with the same optional `--legacy-config`. The daemon must be stopped for cutover;
 back up SQLite safely, including committed WAL contents. No operator token,

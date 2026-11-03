@@ -35,6 +35,13 @@ pub async fn exercise(f: &Fixture, r: &Receiver, a: &[Agent]) {
     setup::put(f, "accounts", "bearer=SMOKE_Y");
     shared(f, r, a).await;
     setup::put(f, "public", "none");
+    f.op(&[
+        "agent",
+        "modify",
+        &a[0].id,
+        "--allowlist",
+        "accounts,public",
+    ]);
     f.op(&["agent", "set-credential", &a[0].id, "public", "--no-auth"]);
     upstream::allowed(f, r, &a[0].token, "public/noauth", "NONE").await;
     println!("SM03 clear/broken/repaired/replaced/revoked/template/noauth controls PASS");

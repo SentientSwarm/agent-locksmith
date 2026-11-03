@@ -41,7 +41,7 @@ impl AgentIdentity {
     /// M9 / B1 ACL check. Both lists optional. Allowlist `Some([...])`
     /// → tool must be IN the list. Denylist `Some([...])` → tool must
     /// NOT be in the list. If both are set and a tool appears in both,
-    /// deny wins (deny is always explicit). Both `None` → unrestricted.
+    /// deny wins (deny is always explicit). Missing/empty allowlist → no authority.
     ///
     /// Auth-method-agnostic: bearer-derived (`BearerAuthenticator`) and
     /// mTLS-derived (`MtlsAuthenticator`) identities both flow through
@@ -53,8 +53,10 @@ impl AgentIdentity {
         {
             return Err("in_denylist");
         }
-        if let Some(allow) = self.tool_allowlist.as_ref()
-            && !allow.iter().any(|t| t == tool_name)
+        if !self
+            .tool_allowlist
+            .as_ref()
+            .is_some_and(|allow| allow.iter().any(|t| t == tool_name))
         {
             return Err("not_in_allowlist");
         }
@@ -185,9 +187,9 @@ impl BearerAuthenticator {
 
         Ok(AgentIdentity {
             id: record.id,
+            tool_allowlist: record.effective_allowlist(),
             public_id: record.public_id,
             name: record.name,
-            tool_allowlist: record.tool_allowlist,
             tool_denylist: record.tool_denylist,
         })
     }
@@ -254,8 +256,11 @@ mod identity_tests {
     // Identity constructed by the mTLS authenticator (post-v2 / #67)
     // flows through the same `allows_tool` as bearer-derived identity.
     #[test]
-    fn allows_tool_when_no_lists() {
-        assert!(ident(None, None).allows_tool("anything").is_ok());
+    fn allows_tool_denies_when_no_lists() {
+        assert_eq!(
+            ident(None, None).allows_tool("anything"),
+            Err("not_in_allowlist")
+        );
     }
 
     #[test]
@@ -267,7 +272,7 @@ mod identity_tests {
 
     #[test]
     fn allows_tool_enforces_denylist_exclusion() {
-        let id = ident(None, Some(&["dangerous"]));
+        let id = ident(Some(&["safe", "dangerous"]), Some(&["dangerous"]));
         assert!(id.allows_tool("safe").is_ok());
         assert_eq!(id.allows_tool("dangerous"), Err("in_denylist"));
     }
@@ -299,7 +304,7 @@ mod identity_tests {
     // Symmetric edge: empty denylist is a no-op.
     #[test]
     fn allows_tool_empty_denylist_is_noop() {
-        let id = ident(None, Some(&[]));
+        let id = ident(Some(&["anything"]), Some(&[]));
         assert!(id.allows_tool("anything").is_ok());
     }
 }
