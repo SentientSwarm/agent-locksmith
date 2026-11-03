@@ -1,0 +1,2 @@
+crates/mcp-transport/vendor/ownership.patch -whitespace
+crates/mcp-transport/vendor/rmcp/tests/test_json_schema_detection.rs -whitespace

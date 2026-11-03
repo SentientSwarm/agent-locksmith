@@ -22,6 +22,29 @@ pub async fn refresh_selected_session(
     client: &reqwest::Client,
     session: &OauthSession,
 ) -> Result<OauthSession, RefreshError> {
+    let token_response = request_tokens(selection, client, session).await?;
+    let lifetime = token_response.expires_in.unwrap_or(3600);
+    let committed = repo
+        .update_tokens(
+            key,
+            session,
+            &token_response.access_token,
+            unix_now() + lifetime,
+            token_response.refresh_token.as_deref(),
+        )
+        .await
+        .map_err(|_| RefreshError::Persist("session changed or custody write failed".into()))?;
+    info!(name = %session.name, session_label = %session.session_label,
+        oauth_session_id = %session.audit_session_id(), new_lifetime_secs = lifetime,
+        "oauth refresh succeeded");
+    Ok(committed)
+}
+
+async fn request_tokens(
+    selection: &AuthSpec,
+    client: &reqwest::Client,
+    session: &OauthSession,
+) -> Result<TokenResponse, RefreshError> {
     let (token_url, client_id) = selected_parameters(selection)
         .ok_or_else(|| RefreshError::BadResponse("selected OAuth metadata is unusable".into()))?;
 
@@ -42,18 +65,17 @@ pub async fn refresh_selected_session(
         .await
         .map_err(|_| RefreshError::Network("token endpoint unavailable".into()))?;
 
+    parse_tokens(response).await
+}
+
+async fn parse_tokens(response: reqwest::Response) -> Result<TokenResponse, RefreshError> {
     let status = response.status();
     if !status.is_success() {
-        // 4xx (especially 400 invalid_grant / 401 invalid_client) means
-        // the refresh token is no longer valid. Operator-action recovery.
         if status.is_client_error() {
             return Err(RefreshError::Revoked {
                 status: status.as_u16(),
             });
         }
-        // 5xx is provider-side; same outcome (mark degraded) since we
-        // don't auto-retry. Operator can re-bootstrap when provider
-        // recovers.
         return Err(RefreshError::ProviderError {
             status: status.as_u16(),
         });
@@ -72,33 +94,5 @@ pub async fn refresh_selected_session(
     {
         return Err(RefreshError::BadResponse("empty token response".into()));
     }
-    // expires_in is RFC-optional but in practice always present. If
-    // missing, default to 1 hour — common provider default.
-    let lifetime = token_response.expires_in.unwrap_or(3600);
-    let new_expires_at = unix_now() + lifetime;
-
-    repo.update_tokens(
-        key,
-        &session.name,
-        &session.session_label,
-        &token_response.access_token,
-        new_expires_at,
-        token_response.refresh_token.as_deref(),
-    )
-    .await
-    .map_err(|e| RefreshError::Persist(e.to_string()))?;
-
-    info!(
-        name = %session.name,
-        session_label = %session.session_label,
-        oauth_session_id = %session.audit_session_id(),
-        new_lifetime_secs = lifetime,
-        "oauth refresh succeeded"
-    );
-
-    // Read back the canonical state.
-    repo.get(key, &session.name, &session.session_label)
-        .await
-        .map_err(|e| RefreshError::Persist(e.to_string()))?
-        .ok_or_else(|| RefreshError::Persist("session vanished after update".to_string()))
+    Ok(token_response)
 }

@@ -16,6 +16,32 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Check out pinned pre-0010 source
+        uses: actions/checkout@v4
+        with:
+          ref: fa2f4d5835a053bf2377e09948d8458017302835
+          path: prior-source
+          persist-credentials: false
+      - name: Preserve the pinned pre-0010 daemon
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/prior-source" rev-parse HEAD)" = "fa2f4d5835a053bf2377e09948d8458017302835"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd
+          mkdir -p "$RUNNER_TEMP/pre-0010-fa2f4d5"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd"
+          printf 'source_commit=fa2f4d5835a053bf2377e09948d8458017302835\n' > "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd" >> "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
       - run: cargo test --all
+      - name: Verify OAuth upgrade and prior-binary refusal
+        run: |
+          LOCKSMITH_PRIOR_DAEMON="$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_oauth_upgrade_and_prior_binary_refusal -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
+      - name: Bounded MCP transport (separate integration prerequisite)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          python3 crates/mcp-transport/vendor/check.py
+          cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml
+          cargo clippy --locked --manifest-path crates/mcp-transport/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check
