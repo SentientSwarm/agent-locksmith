@@ -1,5 +1,4 @@
 use super::{Error, digest, legacy, now, sources, types::*};
-use crate::auth_v2::AgentIdentity;
 
 // ponytail: offline scans of current routes; add lookup maps if inventory size makes preview costly.
 pub(super) fn plan(s: &Snapshot, legacy: Vec<Legacy>) -> Result<Plan, Error> {
@@ -29,13 +28,34 @@ pub(super) fn plan(s: &Snapshot, legacy: Vec<Legacy>) -> Result<Plan, Error> {
 }
 fn finish(s: &Snapshot, entries: Vec<Entry>, legacy: Vec<Legacy>) -> Result<Plan, Error> {
     Ok(Plan {
-        format_version: 1, snapshot: digest(s)?, agents: s.agents.clone(), entries, legacy,
+        format_version: 1, snapshot: digest(s)?, agents: s.agents.clone(), entries, legacy, grants: Vec::new(),
         registrations: s.registrations.iter().map(|r| RegistrationSummary {
             name: r.name.clone(), kind: r.kind.clone(), disabled: r.disabled,
             auth_spec: r.auth.clone(),
         }).collect(),
         notice: "Offline reference metadata only; stop daemon for cutover. Credential values, keys and provider availability have NOT been verified. Change only selected flags on proposed rows; unresolved/config-only routes require owner mapping and real agent authentication.".into(),
     })
+}
+
+pub(super) fn grant_plan(s: &Snapshot, legacy: Vec<Legacy>) -> Result<Plan, Error> {
+    let mut p = plan(s, legacy)?;
+    p.format_version = 2;
+    p.grants = s
+        .agents
+        .iter()
+        .map(|a| GrantReview {
+            agent_id: a.id,
+            allowlist: s
+                .registrations
+                .iter()
+                .filter(|r| r.kind != "infra" && route_reason(a, r).is_none())
+                .map(|r| r.name.clone())
+                .collect(),
+            selected: false,
+        })
+        .collect();
+    p.notice = "Offline finite HTTP grant review. Stop daemon; first run this binary's schema migration on isolated or stopped traffic. Change only selected flags: grants selects an agent's entire listed finite policy (including empty); entries selects additional proposed account bindings. Existing source references are preserved. Legacy bootstrap tokens must be minted anew. No credential/provider readiness is asserted. Current revocations and drift are authoritative; no rollback resurrection.".into();
+    Ok(p)
 }
 
 fn entry(s: &Snapshot, a: &Agent, r: &Registration, legacy: &[Legacy]) -> Entry {
@@ -77,14 +97,22 @@ pub(super) fn route_reason(a: &Agent, r: &Registration) -> Option<&'static str> 
     if r.disabled {
         return Some("registration_disabled");
     }
-    let identity = AgentIdentity {
-        id: a.id,
-        public_id: a.public_id.clone(),
-        name: a.name.clone(),
-        tool_allowlist: a.tool_allowlist.clone(),
-        tool_denylist: a.tool_denylist.clone(),
-    };
-    identity.allows_tool(&r.name).err()
+    // Preview legacy eligibility explicitly: the live gate intentionally no
+    // longer treats a null allowlist as unrestricted.
+    if a.tool_denylist
+        .as_ref()
+        .is_some_and(|list| list.contains(&r.name))
+    {
+        return Some("in_denylist");
+    }
+    if a.tool_allowlist
+        .as_ref()
+        .is_some_and(|list| !list.contains(&r.name))
+        || (a.grants_reviewed && a.tool_allowlist.is_none())
+    {
+        return Some("not_in_allowlist");
+    }
+    None
 }
 pub(super) fn validate_selected(s: &Snapshot, p: &Plan) -> Result<(), Error> {
     for row in p.entries.iter().filter(|e| e.selected) {

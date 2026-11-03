@@ -13,7 +13,7 @@ pub(super) async fn load(c: &mut SqliteConnection) -> Result<Snapshot, Error> {
     })
 }
 async fn agents(c: &mut SqliteConnection) -> Result<Vec<Agent>, Error> {
-    let rows = sqlx::query("SELECT id, public_id, name, tool_allowlist, tool_denylist, cert_identity, registered_at, expires_at, revoked_at FROM agents ORDER BY id").fetch_all(c).await?;
+    let rows = sqlx::query("SELECT id, public_id, name, tool_allowlist, tool_denylist, cert_identity, registered_at, expires_at, revoked_at, grants_reviewed FROM agents ORDER BY id").fetch_all(c).await?;
     rows.iter()
         .map(|r| {
             Ok(Agent {
@@ -26,6 +26,7 @@ async fn agents(c: &mut SqliteConnection) -> Result<Vec<Agent>, Error> {
                 registered_at: r.try_get("registered_at")?,
                 expires_at: r.try_get("expires_at")?,
                 revoked_at: r.try_get("revoked_at")?,
+                grants_reviewed: r.try_get("grants_reviewed")?,
             })
         })
         .collect()

@@ -17,15 +17,15 @@ The bearer token issued to the agent encodes the `public_id`; the daemon resolve
 
 ## What ACL means
 
-ACL is **flat**: an agent has a single allowlist + denylist that applies uniformly across all kinds of registration (tool, model, infra). Pre-Phase E the only kind is `tool`; from v2.0.0 the agent doesn't need to know whether `anthropic` is a model or a tool — it just has `anthropic` in its allowlist.
+ACL is **flat**: an agent has a single allowlist + denylist that applies uniformly across HTTP tool/model registrations; infra remains operator-only. Pre-Phase E the only kind is `tool`; from v2.0.0 the agent doesn't need to know whether `anthropic` is a model or a tool — it just has `anthropic` in its allowlist.
 
 **Resolution order on every request:**
 
 1. **Authenticate the bearer** → `AgentIdentity` or 401.
 2. **Extract the requested registration name** from the URL: `/api/<name>/...`.
 3. **Apply denylist** — if name is in denylist → 403 `tool_not_allowed`.
-4. **Apply allowlist** — if an allowlist is set and name isn't in it → 403 `tool_not_allowed`.
-5. **Absent allowlist** = unrestricted by allowlist; an explicitly empty list permits no names. Denylist still wins.
+4. **Apply allowlist** — if the reviewed allowlist does not contain the name → 403 `tool_not_allowed`.
+5. **Absent/null/empty allowlist** permits no names. Old unreviewed policies also deny until the [finite grant cutover](migrating-account-bindings.md). Denylist still wins.
 6. **Require explicit account selection** for the authenticated registration, including deliberate `none`. Missing binding → 403; selected source unavailable → 503; neither dispatches upstream or inherits the registration template.
 
 ACL decisions are emitted as `EventClass::Security` audit rows with the `agent_public_id` so security review can grep for "what did agent X try to call?" or "who tried to call denied tool Y?".
@@ -38,7 +38,7 @@ Agents can ask locksmith which registrations are eligible under their ACL:
 - `GET /models` — (v2.0.0+) JSON catalog of allowed models, filtered by ACL.
 - `GET /skill` — agentskills.io-format markdown describing locksmith. Without a bearer it returns a generic form (no tool/model leakage); with a valid bearer it returns a personalized form listing the agent's ACL-eligible catalog entries.
 
-Discovery respects ACL eligibility; it does not check binding existence or selected source health. A listed entry may still return 403 for missing selection or 503 for an unavailable selected source.
+Database discovery shows ACL eligibility and matching active runtime configuration. JSON also reports whether an account is selected; it does not attest selected source health. A listed entry may still return 403 for missing selection or 503 for an unavailable selected source. Config-only legacy discovery is labelled `configuration_only`.
 
 ## What goes in the audit log
 

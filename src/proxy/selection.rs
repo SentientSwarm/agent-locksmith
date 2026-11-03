@@ -46,7 +46,7 @@ fn selected_env(name: &str) -> Result<secrecy::SecretString, Failure> {
         .ok_or(Failure::CredentialUnavailable)
 }
 
-fn apply_spec(target: &mut ProxyTarget, spec: AuthSpec) -> Result<(), Failure> {
+pub(super) fn apply_spec(target: &mut ProxyTarget, spec: AuthSpec) -> Result<(), Failure> {
     target.auth = match spec {
         AuthSpec::None => ProxyAuth::None,
         AuthSpec::Header { header, env_var } => ProxyAuth::Header {

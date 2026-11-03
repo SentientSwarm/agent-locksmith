@@ -29,6 +29,7 @@ struct Fixture {
     audit: AuditRepository,
     agents: AgentRepository,
     bindings: AgentCredentialRepository,
+    registrations: agent_locksmith::registrations::RegistrationRepository,
 }
 
 async fn fixture() -> Fixture {
@@ -38,12 +39,14 @@ async fn fixture() -> Fixture {
         .unwrap();
     let agents = AgentRepository::new(pool.clone());
     let bindings = AgentCredentialRepository::new(pool.clone());
+    let registrations = agent_locksmith::registrations::RegistrationRepository::new(pool.clone());
     let audit = AuditRepository::new(pool);
     Fixture {
         _dir: dir,
         audit,
         agents,
         bindings,
+        registrations,
     }
 }
 
@@ -102,6 +105,16 @@ async fn server_with_acl(
     allowlist: Option<Vec<String>>,
     denylist: Option<Vec<String>>,
 ) -> (TestServer, Fixture, String) {
+    fx.registrations
+        .create(&agent_locksmith::registrations::Registration::new(
+            "things".into(),
+            agent_locksmith::registrations::Kind::Tool,
+            "fixture".into(),
+            upstream.into(),
+            AuthSpec::None,
+        ))
+        .await
+        .unwrap();
     let allow = allowlist.as_deref();
     let deny = denylist.as_deref();
     let (pid, secret) = fx
@@ -270,9 +283,9 @@ async fn ts3_tool_in_denylist_returns_403_authz_denied() {
     );
 }
 
-// TS-4: Valid lk_ token + neither list set → 200 (unrestricted). AC-3, AC-5.
+// D4: omitted grants deny even when an account is explicitly selected.
 #[tokio::test]
-async fn ts4_no_acl_allows_request() {
+async fn ts4_no_acl_denies_request() {
     let mock = MockServer::start().await;
     mount_things(&mock).await;
     let fx = fixture().await;
@@ -282,7 +295,8 @@ async fn ts4_no_acl_allows_request() {
         .get("/api/things/v1/things/42")
         .add_header("Authorization", header)
         .await;
-    resp.assert_status_ok();
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
+    assert!(mock.received_requests().await.unwrap().is_empty());
 }
 
 /// Pull all `auth_failure` security audit rows. BearerAuthenticator
@@ -777,7 +791,7 @@ tools:
         .create(
             "deny-agent",
             None,
-            None,
+            Some(&["safe".into(), "dangerous".into()]),
             Some(&["dangerous".to_string()]),
             None,
             None,

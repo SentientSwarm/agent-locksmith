@@ -242,6 +242,16 @@ Codes include `name_in_use`, `reserved_name`, `auth_required`,
 existence-leak avoidance (Q-8): admin errors never reveal whether a
 name exists; per-agent errors are generic.
 
+## Explicit HTTP grants
+
+Use [the standalone setup](docs/user/getting-started.md) for a runnable local
+reference API and an ordinary customer HTTP service. New agents start with no
+HTTP grants. Explicitly grant current connections and select accounts; new
+registrations never inherit authority. Existing installations need the
+[reviewed finite migration](docs/user/concepts/migrating-account-bindings.md).
+[Activation and lifecycle changes](docs/user/changes/explicit-http-grants.md)
+explain saved-but-pending writes, destination reapproval and denial repair.
+
 ## Configuration reference
 
 ```yaml

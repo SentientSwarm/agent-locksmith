@@ -349,3 +349,26 @@ fn _use_config(f: &E2eFixture) -> &Path {
 
 #[path = "source_isolation/cli_oauth.rs"]
 mod oauth_isolation;
+
+#[test]
+fn audit_filter_accepts_hyphen_prefixed_public_id() {
+    let f = start_daemon();
+    let mut c = cli(&f.socket_path);
+    c.env("LOCKSMITH_OP_TOKEN", &f.op_token_wire).args([
+        "audit",
+        "query",
+        "--agent",
+        "-synthetic-id",
+        "--limit",
+        "1",
+    ]);
+    let output = run(c);
+    assert!(
+        output.status.success(),
+        "issued ID syntax must reach authenticated audit query"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        serde_json::json!([])
+    );
+}

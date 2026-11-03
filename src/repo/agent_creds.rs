@@ -47,10 +47,10 @@ impl AgentCredentialRepository {
     ) -> Result<(), RepoError> {
         let auth_json = serde_json::to_string(auth_spec)?;
         let now = unix_now();
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO agent_credential_overrides \
                 (agent_id, registration, auth_spec, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?) \
+             SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM registrations WHERE name = ? AND kind IN ('tool', 'model') AND disabled = 0) \
              ON CONFLICT(agent_id, registration) DO UPDATE SET \
                 auth_spec = excluded.auth_spec, \
                 updated_at = excluded.updated_at",
@@ -60,8 +60,12 @@ impl AgentCredentialRepository {
         .bind(&auth_json)
         .bind(now)
         .bind(now)
+        .bind(registration)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(RepoError::InvalidGrantTarget);
+        }
         Ok(())
     }
 
@@ -174,6 +178,19 @@ mod tests {
         let pool = open_and_migrate(&dir.path().join("db.sqlite"))
             .await
             .unwrap();
+        let registrations = crate::registrations::RegistrationRepository::new(pool.clone());
+        for name in ["lmstudio", "tavily", "codex"] {
+            registrations
+                .create(&crate::registrations::Registration::new(
+                    name.into(),
+                    crate::registrations::Kind::Tool,
+                    "fixture".into(),
+                    "http://127.0.0.1:1".into(),
+                    AuthSpec::None,
+                ))
+                .await
+                .unwrap();
+        }
         let agents = AgentRepository::new(pool.clone());
         let creds = AgentCredentialRepository::new(pool);
         (dir, agents, creds)

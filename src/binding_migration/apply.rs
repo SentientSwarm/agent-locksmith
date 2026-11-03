@@ -16,7 +16,10 @@ pub(super) async fn run(
 ) -> Result<usize, Error> {
     let current = snapshot::load(c).await?;
     inventory::validate_selected(&current, p)?;
-    if p.format_version != 1 || p.legacy != legacy || !p.entries.iter().any(|e| e.selected) {
+    if !matches!(p.format_version, 1 | 2)
+        || p.legacy != legacy
+        || !(p.entries.iter().any(|e| e.selected) || p.grants.iter().any(|g| g.selected))
+    {
         return Err(Error::Conflict);
     }
     let key = format!("{PREFIX}{}", p.snapshot);
@@ -30,10 +33,26 @@ pub(super) async fn run(
     for e in &mut reviewed.entries {
         e.selected = false;
     }
-    if reviewed != inventory::plan(&current, legacy)? {
+    for g in &mut reviewed.grants {
+        g.selected = false;
+    }
+    let expected = if p.format_version == 2 {
+        inventory::grant_plan(&current, legacy)?
+    } else {
+        inventory::plan(&current, legacy)?
+    };
+    if reviewed != expected {
         return Err(Error::Conflict);
     }
     insert_bindings(c, p).await?;
+    for grant in p.grants.iter().filter(|g| g.selected) {
+        let names = serde_json::to_string(&grant.allowlist).map_err(|_| Error::Invalid)?;
+        sqlx::query("UPDATE agents SET tool_allowlist = ?, grants_reviewed = 1 WHERE id = ?")
+            .bind(names)
+            .bind(grant.agent_id)
+            .execute(&mut *c)
+            .await?;
+    }
     record(c, &key, &current, p).await?;
     Ok(p.entries.iter().filter(|e| e.selected).count())
 }

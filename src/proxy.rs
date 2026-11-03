@@ -11,6 +11,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod admission;
 mod selection;
 
 use crate::app::AppState;
@@ -384,20 +385,20 @@ pub async fn proxy_handler(
             .await;
     }
 
-    // Phase E.6: catalog lookup first; legacy `config.tools` fallback
-    // for M0/M1 / M9 test paths that haven't wired registrations.
-    let target = resolve_target(&state, &ctx.tool_name);
-    let mut target = match target {
-        Some(t) => t,
-        None => return record_tool_not_found(&state.audit, &ctx).await,
+    let mut target = if state.registrations.is_some() {
+        match admission::target(&state, &ctx, req.extensions()).await {
+            Ok(target) => target,
+            Err(response) => return *response,
+        }
+    } else {
+        let Some(mut target) = resolve_target(&state, &ctx.tool_name) else {
+            return record_tool_not_found(&state.audit, &ctx).await;
+        };
+        if let Err(failure) = selection::apply(&state, &mut target, req.extensions()).await {
+            return selection::record_failure(&state.audit, &ctx, failure).await;
+        }
+        target
     };
-
-    // D1.1: an authenticated allowed agent must explicitly select its account
-    // before credential resolution. Absent/unavailable selections never inherit
-    // the registration template or dispatch an unauthenticated upstream call.
-    if let Err(failure) = selection::apply(&state, &mut target, req.extensions()).await {
-        return selection::record_failure(&state.audit, &ctx, failure).await;
-    }
 
     // Phase F.5: for OAuth registrations, materialize the access token
     // before building the upstream request. Returns a 503 envelope if
@@ -1067,6 +1068,7 @@ async fn record_tool_not_found(audit: &Option<AuditRepository>, ctx: &RequestCtx
         Json(json!({
             "error": {
                 "message": format!("Unknown tool: {}", ctx.tool_name),
+                "code": "tool_not_found",
                 "type": "not_found",
             }
         })),

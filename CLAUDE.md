@@ -170,8 +170,8 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 
 1. Reads `auth_method` + `agent_public_id` from request extensions stamped by `auth::auth_middleware`. `AgentIdentity` carries `id: i64` (Phase G — used for the agent-credential override lookup).
 2. **M9 ACL gate**: when `AgentIdentity` is in extensions, calls `identity.allows_tool(name)`. Failure → 403 `tool_not_allowed` + `authz_denied` audit row (M9 / B1).
-3. **Phase E.6 target resolution**: `state.catalog.lookup_active(name)` (registrations table, in-memory cache). Falls back to `config.active_tools()` for M0/M1 / pre-Phase-E test paths. `ProxyTarget::from_registration` or `from_tool_config`.
-4. **D1 explicit account admission**: `proxy::selection::apply` requires the current authenticated agent's `agent_credential_overrides[agent_id, name]` row after the ACL check. Missing selection returns 403; unavailable/corrupt selection or missing/empty selected env returns 503 before dispatch. It materializes only the selected AuthSpec and sets `auth_source=agent_override`. Credentialed identityless legacy calls return 401 `agent_identity_required`; no synthetic agent or template fallback. Explicit `None` still needs the registered agent's ACL and selection.
+3. **D4 authoritative admission**: DB-backed requests read current agent lifecycle/finite reviewed ACL, registration and account selection in one joined SQLite snapshot (`registrations::admission`). Missing/disabled rows return 404 and never use YAML. Full persisted/runtime row mismatch returns 503 `connection_not_active`. Legacy config resolution exists only without a registration repository.
+4. **D1 selected account**: `proxy::admission` materializes only the binding from that snapshot via `selection::apply_spec`; missing binding returns 403, unavailable metadata/source returns 503. No template fallback. Explicit None still needs a reviewed finite grant and selection. New authority writes validate current enabled HTTP targets atomically. Migration 0009 clears grants/bindings on registration delete/recreate or upstream/egress change. The successful read is the admission boundary; already-admitted work may finish.
 5. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` with `target.oauth_session_label` (from the explicit selection, including a literal `default` label) to materialize the access token from `oauth_sessions(name, label)` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
 5a. **Phase J custody resolution**: `stored_*` targets fetch + unseal from `credential_secrets` (`resolve_stored_credential`); `op_*` targets read the `OpResolver` cache. Any failure → 503 `credential_unresolved` with a distinct audit cause and an operational-log warn.
 6. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
@@ -245,5 +245,8 @@ disposable daemon/CLI SM01–SM05, executes marked user setup/upgrade blocks, ch
 receiving X/X/Y and zero-dispatch failures, and stops/restarts for offline
 migration. See [smoke contract](docs/development/explicit-account-bindings-smoke.md)
 and [change notes](docs/user/changes/explicit-account-bindings.md). Full source
-matrices remain in focused Rust tests. Provider compatibility and the two D4
-ACL-growth/stale-activation findings are outside this local smoke.
+matrices remain in focused Rust tests. The same target covers D4 finite migration,
+activation failure/restart, name lifecycle and an independently configured customer
+API. It runs the shipped Python reference API (Python 3 required). See
+[HTTP grant changes](docs/user/changes/explicit-http-grants.md). Provider
+compatibility remains outside local smoke; the two baseline D4 findings are historical.

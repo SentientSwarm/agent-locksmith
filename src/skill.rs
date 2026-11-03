@@ -58,7 +58,7 @@ pub fn render_authenticated(
         .tool_allowlist
         .as_ref()
         .map(|v| format!("`[{}]`", v.join(", ")))
-        .unwrap_or_else(|| "`(unrestricted — no allowlist set)`".to_string());
+        .unwrap_or_else(|| "`(no HTTP grants)`".to_string());
     let denylist_str = identity
         .tool_denylist
         .as_ref()

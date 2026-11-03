@@ -48,6 +48,16 @@ async fn setup() -> Harness {
     let pool = open_and_migrate(&dir.path().join("locksmith.db"))
         .await
         .unwrap();
+    agent_locksmith::registrations::RegistrationRepository::new(pool.clone())
+        .create(&agent_locksmith::registrations::Registration::new(
+            "github".into(),
+            agent_locksmith::registrations::Kind::Tool,
+            "fixture".into(),
+            "http://127.0.0.1:1".into(),
+            agent_locksmith::registrations::AuthSpec::None,
+        ))
+        .await
+        .unwrap();
     let agents = AgentRepository::new(pool.clone());
     let bootstrap = BootstrapTokenRepository::new(pool.clone());
 

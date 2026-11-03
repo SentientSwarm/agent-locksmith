@@ -132,7 +132,7 @@ tools:
 }
 
 #[tokio::test]
-async fn test_proxy_unknown_tool_404() {
+async fn test_proxy_unknown_tool_denied() {
     let yaml = r#"
 listen:
   host: "127.0.0.1"
@@ -145,13 +145,13 @@ tools: []
     let server = &h.server;
 
     let resp: TestResponse = server.get("/api/unknown/test").await;
-    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
     let body: serde_json::Value = resp.json();
     assert!(
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("Unknown tool")
+            .contains("tool access denied")
     );
 }
 

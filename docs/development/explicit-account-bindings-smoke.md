@@ -9,11 +9,11 @@ separate from the detailed in-process custody/refresh matrices.
 
 The smoke was tested on Unix with Rust 1.94.0 and the committed `Cargo.lock`;
 this is a tested toolchain, not a claim that earlier Rust versions are supported.
-Use a C toolchain, Bash, `kill` and `sqlite3` on PATH, from this checkout:
+Use a C toolchain, Bash, `kill`, `sqlite3`, Python 3 and `curl` on PATH, from this checkout:
 
 ```sh
-cargo build --bins
-cargo test --test explicit_binding_smoke_test -- --nocapture
+cargo build --locked --bins
+cargo test --locked --test explicit_binding_smoke_test -- --nocapture
 ```
 
 No accounts, login, installed daemon, external API or application DB is needed.
@@ -32,6 +32,10 @@ actual daemon's `/version`; the CLI is the same built crate.
 | SM02 | Actual HTTP receiver sees X/X/Y for A/B/C. Each success adds exactly one accepted operation for that account and one received request. Caller Authorization and API key cannot reach it. |
 | SM03 | Generic/personalized actual `/skill` preserves cache/isolation, explains audit reasons and source health, and its rendered operator list/set commands diagnose and repair an unbound agent to X; clear denies again. Missing/wrong/revoked caller 401; absent/cleared selection 403; missing/empty selected env 503. Every denial asserts class plus unchanged receiving-request **and** operation counts. Replacement, repair, catalog-template change, revoke-after-use and explicit no-auth controls exercise normal CLI paths. |
 | SM04 | Stop/reap actual daemon; execute SQLite backup/integrity, deterministic reference preview and reviewed apply; supplied-reference drift fails with no insert; apply 2/repeat 0; start new daemon with same DB and observe X/X/Y. Preserve C, skip unsupported prefix, deny unmapped/new entry. Later clear plus old-plan refusal cannot recreate authority; deliberate rebind succeeds. |
+| D4 lifecycle | Actual issuance/bootstrap enrollment/replay denial, own-token rotation preserving ID/expiry/policy/binding, old/wrong/expired/revoked token and cross-agent admin denial; X/Y receiving attribution. |
+| D4 finite cutover | Explicit historical restricted/unrestricted/empty policies in a disposable stopped DB; before-review denial; actual preview/review/apply/repeat with zero inserts and preserved bindings; restart X/X/Y. New authless and credentialed names remain denied even after setting bindings. Stale reviewed-plan replay conflicts. |
+| D4 activation/lifecycle | Corrupt an unrelated disposable registration; actual CLI write saves but exits 1 on refresh failure. Pending route503/zero arrivals, healthy route200, honest catalog and readiness. Stop, repair isolated row, restart activates saved state. Seed disable/re-enable preserves choices; operator destination replacement and hard-delete/recreate remove them and require deliberate reapproval. Revoke denies next admission. |
+| D4 customer | Launch shipped Python reference API and observe X/X/Y plus unbound zero arrivals. Independently configured customer API uses a different path/header; execute shipped catalog/bind/grant/call blocks, diagnose missing finite grant via actual audit, inspect generic/personalized skill, observe customer-beta account. After receiving a delayed admitted request, clear selection; it completes but the next request is denied with no new arrival. |
 | SM05 | Execute marked shell blocks from getting-started and migration guides, not copied shell recipes. Parse the marked empty-catalog YAML and substitute private fixture paths/unused port; add the unsupported-prefix legacy fixture during a separate stopped-process restart. Check CLI help, safe reads/audits/operational output and daemon logs. |
 
 The receiver counts all arrivals separately from accepted operations. An upstream
@@ -51,7 +55,7 @@ early-return branch.
 
 Marked examples are executable test inputs: operator bootstrap, catalog put,
 agent register/bind/status/clear/list, daemon start, SQLite backup, migration
-preview/apply. CLI help checks cover the corresponding supported flags. Local
+preview/apply, reference API and customer-service setup/grant/call. CLI help checks cover the corresponding supported flags. Local
 Markdown link validation is a separate delivery check; external URLs and actual
 provider instructions are not live-tested by this target.
 
@@ -64,12 +68,19 @@ See [setup](../user/getting-started.md),
 [contract](../design/2026-10-18-d1-explicit-account-bindings.md) and
 [acceptance matrix](../design/2026-10-18-d1-acceptance-tests.md).
 
-Run full `cargo test --all`, strict all-target Clippy and fmt as separate checks.
+Run full `cargo test --locked --all`, `cargo clippy --locked --all-targets -- -D warnings`,
+`cargo fmt --check` and `cargo build --locked --bins` as separate checks.
 Optional provider tests may return early; disclose them rather than claiming
-provider compatibility. `local_risk_proofs` remains a diagnostic with two known
-D4 failures (legacy unrestricted ACL growth and disabled-row stale activation),
-not a passing conformance target. This smoke does not verify installed deployments,
-real OAuth/op services, TLS/mTLS transport, live provider behavior, active-stream
-cancellation or pool replay safety. Focused tests retain those D1 source variants
-that need distinct failure/refresh coverage. Independent QA then reviewer execute
-the saved smoke and inspect docs at the delivered commit before lead acceptance.
+provider compatibility. `local_risk_proofs` records the older baseline's two D4
+findings (legacy unrestricted ACL growth and stale activation); that historical
+diagnostic is not the current acceptance oracle. Focused `http_grants_test` and
+`http_activation_test` cover strict DTOs, atomic issuance/cleanup races, coherent
+admission, YAML fallback denial and unreadable-row discovery.
+
+This smoke does not verify installed deployments, real OAuth/op services,
+TLS/mTLS transport, live provider behavior, active-stream cancellation or pool
+replay safety. Focused tests retain the D1 custody/refresh variants. Independent
+QA first exercises the shipped consumer docs without private test/setup recipes,
+then checks the exact candidate. Reviewer source review proceeds independently;
+execution is serialized through the team's test slot. Lead acceptance requires
+both verdicts.

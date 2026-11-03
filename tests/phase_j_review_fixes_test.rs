@@ -299,6 +299,12 @@ async fn runtime_added_op_registration_resolves_without_restart() {
         )
         .await
         .unwrap();
+    h.admin
+        .patch(&format!("/admin/operator/agents/{}", h.agent_public_id))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({"allowlist":["late-api", "shared-api"]}))
+        .await
+        .assert_status_no_content();
     let resp = h.proxy_get("/api/late-api/late/ping").await;
     resp.assert_status_ok();
 }

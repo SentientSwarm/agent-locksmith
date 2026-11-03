@@ -218,9 +218,39 @@ async fn agent_listener_mtls_authenticates_via_client_cert() {
     repo.set_cert_identity(&public_id, Some("agent-7"))
         .await
         .unwrap();
+    // Mock upstream that asserts the credential header (proves the
+    // proxy injected the agent's resolved credential after mTLS
+    // authentication).
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/ping"))
+        .and(header("authorization", "Bearer fixed-test-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&mock)
+        .await;
+
     let pool = migrations::open_and_migrate(&scaffold.db_path)
         .await
         .unwrap();
+    agent_locksmith::registrations::RegistrationRepository::new(pool.clone())
+        .create(&agent_locksmith::registrations::Registration::new(
+            "ping".into(),
+            agent_locksmith::registrations::Kind::Tool,
+            "fixture".into(),
+            mock.uri(),
+            agent_locksmith::registrations::AuthSpec::None,
+        ))
+        .await
+        .unwrap();
+    repo.update_policy(
+        &public_id,
+        Some(Some(vec!["ping".into()])),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let id = repo.get_by_name("agent-7").await.unwrap().unwrap().id;
     agent_locksmith::repo::AgentCredentialRepository::new(pool)
         .set(
@@ -232,18 +262,6 @@ async fn agent_listener_mtls_authenticates_via_client_cert() {
         )
         .await
         .unwrap();
-    drop(repo);
-
-    // Mock upstream that asserts the credential header (proves the
-    // proxy injected the agent's resolved credential after mTLS
-    // authentication).
-    let mock = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/ping"))
-        .and(header("authorization", "Bearer fixed-test-secret"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
-        .mount(&mock)
-        .await;
 
     // SAFETY: tests intentionally manipulate env; var name unique.
     unsafe { std::env::set_var("AGENT_LISTENER_MTLS_TEST_KEY", "fixed-test-secret") };

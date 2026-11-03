@@ -48,16 +48,15 @@ When an agent calls `POST /api/anthropic/v1/messages` with
 3. M9 ACL gate: identity.allows_tool(name)
      Failure → 403 tool_not_allowed + audit row
    ↓
-4. Phase E.6 target resolution:
-     state.catalog.lookup_active(name)   — registrations table cache
-       (fallback to config.active_tools()
-        for M0/M1 / pre-Phase-E test paths)
-     Failure → 404 unknown tool + audit row
+4. Current HTTP admission (DB-backed):
+     Read agent lifecycle, reviewed finite grants, registration and selection
+     in one SQLite snapshot. Missing/null/unreviewed policy grants nothing.
+     Missing/disabled registration → 404; never fall through to YAML.
+     Persisted/runtime registration mismatch → 503 connection_not_active.
    ↓
-5. Explicit account admission (authenticated requests):
-     Look up (agent id, registration name) in agent_credential_overrides.
-     Missing → 403 tool_not_allowed; audit account_binding_missing.
-     Select only this binding, never the registration template.
+5. Explicit account admission:
+     Missing selection → 403 tool_not_allowed; audit account_binding_missing.
+     Use only this snapshot's selected binding, never the template.
      Unavailable selected source → 503; no upstream dispatch.
      For selected OAuth, require a nonempty session label and consistent
      metadata across bindings sharing that registration/label.
@@ -86,8 +85,12 @@ When an agent calls `POST /api/anthropic/v1/messages` with
 
 Steps 1–11 happen per request. The audit row is the operator's
 single source of truth for who-called-what-when. `/tools`, `/models` and
-personalized `/skill` show ACL eligibility; they do not prove binding existence
-or source health. Identityless legacy requests require `auth: none`; they
+personalized `/skill` show current finite eligibility and runtime activation.
+They can report `account_selected`, but never attest source health. A saved
+admin write whose refresh fails reports failure/pending and denies the affected
+route; unrelated matching routes remain usable. Config-only discovery is labelled
+`configuration_only`. Already-admitted requests may finish after authority changes;
+new admissions use current persisted state. Identityless legacy requests require `auth: none`; they
 cannot consume a credentialed registration default. See
 [explicit account bindings](changes/explicit-account-bindings.md) for repair.
 
@@ -128,7 +131,7 @@ Anything that needs to outlive `locksmithd` lives in the SQLite DB:
 
 ```
 locksmith.db
-├── agents              — per-agent identity + ACL + revocation
+├── agents              — identity + finite reviewed ACL + expiry/revocation
 ├── bootstrap_tokens    — pre-issued enrollment tokens
 ├── audit               — every request + admin write
 ├── registrations       — kind-discriminated catalog (Phase E)
@@ -172,7 +175,7 @@ The settings are independent.
 - Existence-leak avoidance (Q-8): admin errors don't reveal whether
   a name exists; agent errors are generic.
 - `M5 secret resolution` — sealed-file, Vault, AWS stubs continue to
-  work for `config.tools` entries via the legacy fallback.
+  exist for config-only paths; DB-backed routes do not use YAML fallback.
 - `M7 response controls` — size cap, content-type allowlist, regex
   redaction. Apply uniformly across catalog and legacy paths.
 - Audit shape (additive `auth_mode` + `oauth_session_id` fields).

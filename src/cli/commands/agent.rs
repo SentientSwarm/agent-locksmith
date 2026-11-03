@@ -30,7 +30,7 @@ pub enum AgentCmd {
         /// Optional human-readable description.
         #[arg(long)]
         description: Option<String>,
-        /// Restrict to these tool names (comma-separated). Omit to allow all.
+        /// Restrict to these tool names (comma-separated). Omit for no grants; names must already be configured.
         #[arg(long, value_delimiter = ',')]
         allowlist: Option<Vec<String>>,
         /// Block these tool names (comma-separated).
@@ -188,10 +188,13 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
             allowlist,
             denylist,
         } => {
-            let body = json!({
-                "allowlist": option_replace(allowlist),
-                "denylist": option_replace(denylist),
-            });
+            let mut body = json!({});
+            if let Some(value) = option_replace(allowlist) {
+                body["allowlist"] = json!(value);
+            }
+            if let Some(value) = option_replace(denylist) {
+                body["denylist"] = json!(value);
+            }
             client
                 .unit(
                     "PATCH",
@@ -335,7 +338,7 @@ fn build_auth_spec(args: &SetCredentialArgs) -> Result<Value, CliError> {
 fn option_replace(input: Option<Vec<String>>) -> Option<Option<Vec<String>>> {
     match input {
         None => None,
-        Some(v) if v.len() == 1 && v[0] == "-" => Some(None),
+        Some(v) if v.len() == 1 && v[0] == "-" => Some(Some(vec![])),
         Some(v) => Some(Some(v)),
     }
 }

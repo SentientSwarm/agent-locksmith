@@ -9,7 +9,7 @@ account access. Start with a disposable instance before upgrading a deployment.
 This flow was tested with Rust 1.94.0 and the committed `Cargo.lock`. Lower
 toolchains have not been validated here; edition 2024 alone does not establish
 the locked dependencies' minimum. Use a C toolchain, Bash and `sqlite3` on Unix.
-Manual HTTP checks below also use `curl`. Build from the repository root:
+The saved reference-service smoke and manual checks also use Python 3 and `curl`. Build from the repository root:
 
 ```sh
 cargo build --bins
@@ -78,10 +78,32 @@ through normal secret custody before startup. Never put keys in the plan or YAML
 
 ## Start and check the daemon
 
-Choose a local API you control as `UPSTREAM_URL`. The smoke supplies its own
-receiver. Set `SMOKE_X` and `SMOKE_Y` in the daemon environment to that API's
-account credentials; these variable names are references, not literal credentials.
-Keep this terminal running; the `exec` replaces its shell:
+For a complete local example, start the shipped reference API in a separate
+terminal from this checkout. It uses only Python's standard library, binds
+loopback and accepts synthetic X/Y accounts. Keep it running:
+
+```sh
+export REPO_ROOT="$PWD"
+export REFERENCE_PORT=9300
+```
+
+<!-- smoke:reference -->
+```sh
+exec python3 "$REPO_ROOT/examples/http-account-service.py" --port "$REFERENCE_PORT"
+```
+
+It prints its URL. In the daemon terminal, set:
+
+```sh
+export UPSTREAM_URL=http://127.0.0.1:9300
+export SMOKE_X=synthetic-private-account-x
+export SMOKE_Y=synthetic-private-account-y
+```
+
+These values belong only to this disposable example. Real deployments use their
+normal secret custody. The env names in selections are references; Locksmith
+reads their values in the daemon process. Keep the daemon terminal running; the
+`exec` replaces its shell:
 
 <!-- smoke:start -->
 ```sh
@@ -114,6 +136,10 @@ Create a tool pointing to your local API. Export `UPSTREAM_URL` first:
 For example set `REGISTRATION=accounts` and `AUTH_SOURCE=bearer=SMOKE_X`.
 Set `AGENT_NAME=shared-a` and `ALLOWLIST=accounts` before registering:
 
+Omitted grants authorize no connections. Register the connection first; choose
+only current tool/model names. Later additions need a deliberate allowlist update
+and explicit account selection, including authless connections.
+
 <!-- smoke:register -->
 ```sh
 "$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent register \
@@ -141,8 +167,10 @@ curl --fail --silent --show-error \
   http://127.0.0.1:9200/api/accounts/check
 ```
 
-The receiver's endpoint/path determines the useful response. It must observe
-account X, never the caller token. Repeat registration/selection for `shared-b`
+The reference API returns `X`. Its `GET /counts` reports received requests
+and accepted X/Y/NONE operations; the counts endpoint itself is not counted.
+Use `curl http://127.0.0.1:9300/counts` before and after a denied request to
+confirm both counts stay unchanged. An upstream 401 is not a zero-dispatch denial. Repeat registration/selection for `shared-b`
 with `bearer=SMOKE_X` to share X, and `distinct-c` with `bearer=SMOKE_Y` to select Y.
 Use `header=x-api-key:ENV_NAME` for a per-agent header selection. The catalog's
 syntax differs: `header:x-api-key=ENV_NAME`.
@@ -170,10 +198,78 @@ are intentional one-time credential deliveries; keep those private. See
 [explicit selections](concepts/per-agent-credentials.md) and the
 [unversioned D1 change notes](changes/explicit-account-bindings.md).
 
+## Configure your own HTTP service
+
+The same flow supports an ordinary service without provider-specific code.
+For example, suppose your API serves `GET /v2/jobs`, authenticates
+`x-customer-key`, and returns its own account identity. Set `CUSTOMER_URL` to
+its base URL (no `/v2/jobs` suffix). Put its intended account credential in
+`SMOKE_Y` in the daemon environment **before startup** (restart your disposable
+daemon to change that environment). For a real deployment choose your own env
+name and custody. The synthetic reference API above does not implement this
+customer endpoint; use an API you control or implement that small contract.
+
+<!-- smoke:customer-catalog -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json tool put customer-jobs \
+  --upstream "$CUSTOMER_URL" --auth header:x-customer-key=SMOKE_Y --egress direct
+```
+
+Choose `AGENT_ID` from the registered caller. Select its intended account:
+
+<!-- smoke:customer-bind -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent set-credential \
+  "$AGENT_ID" customer-jobs --auth header=x-customer-key:SMOKE_Y
+```
+
+With the earlier `accounts`-only grant, a call is still 403. Read the generic
+`GET /skill`, then the same endpoint with the agent's bearer for personalized
+instructions. The operator can diagnose using
+`locksmith --socket "$SOCKET" audit query --agent "$AGENT_ID" --tool customer-jobs`:
+`not_in_allowlist` requires a deliberate grant. Inspect `agent get` first;
+`modify --allowlist` replaces the whole list, so retain every intended existing
+name. For this example the complete list is:
+
+<!-- smoke:customer-grant -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent modify "$AGENT_ID" \
+  --allowlist accounts,customer-jobs
+```
+
+Set `LOCKSMITH_URL=http://127.0.0.1:9200` (or your chosen agent listener). Retry:
+
+<!-- smoke:customer-call -->
+```sh
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $LOCKSMITH_AGENT_TOKEN" \
+  "$LOCKSMITH_URL/api/customer-jobs/v2/jobs"
+```
+
+Verify the receiving service identifies the selected account and receives one
+operation. `GET /tools` and personalized `/skill` show current allowed, active
+connections; `account_selected` is metadata, never a successful credential test.
+Operator `tool get customer-jobs` distinguishes `activation: active` from
+`pending` or `disabled`, and reports `credential_readiness: not_checked`.
+A saved write with failed activation returns 503 `connection_activation_failed`
+(CLI exit 1); inspect the saved entry, repair the catalog error, and retry the
+intended write or restart normally. The affected connection stays denied while
+pending; unrelated healthy entries can still work.
+
+Changing upstream/egress or deleting/recreating a name clears its grants and
+account selections. Review the new destination and explicitly grant/select
+again. Disable/re-enable preserves choices. `tool delete` disables seeded entries
+and hard-deletes operator-created entries. Removing a grant or account, or
+revoking the agent, denies the next admission; requests already admitted can
+finish. No active-stream cancellation is promised. See
+[HTTP grant changes](changes/explicit-http-grants.md) and
+[denial repair](operator/account-binding-troubleshooting.md).
+
 ## Stop and clean up
 
 For this manual disposable instance, send SIGTERM/Control-C to its daemon and
-wait for exit before deleting its private directory. Keep actual deployment
+wait for exit before deleting its private directory. Stop the separate reference
+API with Control-C too. Keep actual deployment
 state and sealing keys under their normal backup policy. Use SQLite `.backup`
 for databases with WAL; copying only `.db` can omit committed state. For an
 existing installation follow the [reviewed migration](concepts/migrating-account-bindings.md)

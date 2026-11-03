@@ -36,11 +36,25 @@ impl From<sqlx::Error> for Error {
     }
 }
 pub async fn preview(database: &Path, legacy_config: Option<&Path>) -> Result<Plan, Error> {
+    preview_mode(database, legacy_config, false).await
+}
+pub async fn preview_grants(database: &Path, legacy_config: Option<&Path>) -> Result<Plan, Error> {
+    preview_mode(database, legacy_config, true).await
+}
+async fn preview_mode(
+    database: &Path,
+    legacy_config: Option<&Path>,
+    grants: bool,
+) -> Result<Plan, Error> {
     let mut c = connect(database, true).await?;
     let mut tx = c.begin().await?;
     let legacy = legacy::inventory(legacy_config)?;
     let snapshot = snapshot::load(&mut tx).await?;
-    let plan = inventory::plan(&snapshot, legacy)?;
+    let plan = if grants {
+        inventory::grant_plan(&snapshot, legacy)?
+    } else {
+        inventory::plan(&snapshot, legacy)?
+    };
     tx.rollback().await?;
     c.close().await?;
     Ok(plan)

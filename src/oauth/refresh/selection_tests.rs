@@ -24,6 +24,16 @@ async fn fixture() -> (
     let pool = open_and_migrate(&dir.path().join("selection.db"))
         .await
         .unwrap();
+    crate::registrations::RegistrationRepository::new(pool.clone())
+        .create(&crate::registrations::Registration::new(
+            "api".into(),
+            crate::registrations::Kind::Tool,
+            "fixture".into(),
+            "http://127.0.0.1:1".into(),
+            crate::registrations::AuthSpec::None,
+        ))
+        .await
+        .unwrap();
     let agents = AgentRepository::new(pool.clone());
     let mut ids = Vec::new();
     for name in ["one", "two"] {

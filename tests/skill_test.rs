@@ -197,11 +197,11 @@ async fn legacy_agent_skill_route_is_removed() {
 //
 // The fixture below mirrors phase_e_discovery_test::setup_with_seed:
 // wires a populated RegistrationRepository through
-// build_app_full_with_registrations and leaves config.tools empty,
+// build_app_full_with_catalog and leaves config.tools empty,
 // matching the production catalog deployment shape.
 #[tokio::test]
 async fn skill_personalized_lists_catalog_tools_not_config_tools() {
-    use agent_locksmith::app::build_app_full_with_registrations;
+    use agent_locksmith::app::build_app_full_with_catalog;
     use agent_locksmith::registrations::{AuthSpec, Kind, Registration, RegistrationRepository};
 
     let dir = TempDir::new().unwrap();
@@ -257,13 +257,17 @@ listen:
     .unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&cfg);
     let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_full_with_registrations(
+    let catalog = agent_locksmith::registrations::Catalog::from_repo(&registrations)
+        .await
+        .unwrap();
+    let app = build_app_full_with_catalog(
         shared,
         Some(audit),
         Arc::new(ArcSwap::from_pointee(resolved)),
         None,
         Some(bearer),
         Some(registrations),
+        Arc::new(ArcSwap::from_pointee(catalog)),
     );
     let server = TestServer::new(app);
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());

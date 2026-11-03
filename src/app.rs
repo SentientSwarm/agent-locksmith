@@ -624,10 +624,18 @@ async fn catalog_listing(
     kind: crate::registrations::Kind,
 ) -> Vec<Value> {
     if let Some(repo) = state.registrations.as_ref() {
-        match crate::registrations::api::list_public(repo.as_ref(), kind, identity).await {
+        match crate::registrations::api::list_public(
+            repo.as_ref(),
+            &state.catalog.load(),
+            kind,
+            identity,
+        )
+        .await
+        {
             Ok(items) => return items,
             Err(e) => {
-                tracing::error!(error = ?e, "registrations list_public failed; returning empty");
+                let _ = e;
+                tracing::error!("registrations discovery unavailable; returning empty");
                 return Vec::new();
             }
         }
@@ -651,6 +659,8 @@ async fn catalog_listing(
                 "type": "api",
                 "path": format!("/api/{}", t.name),
                 "description": t.description,
+                "activation": "configuration_only",
+                "credential_readiness": "not_checked",
             })
         })
         .collect()

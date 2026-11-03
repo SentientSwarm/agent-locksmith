@@ -39,10 +39,21 @@ async fn application(config: AppConfig) -> (axum::Router, String, TempDir) {
         .unwrap()
         .id;
     let selections = AgentCredentialRepository::new(pool.clone());
+    let registrations = agent_locksmith::registrations::RegistrationRepository::new(pool.clone());
     let secrets = CredentialSecretsRepository::new(pool);
     let key = CredentialSealingKey::generate().unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&config);
     for tool in &config.tools {
+        registrations
+            .create(&agent_locksmith::registrations::Registration::new(
+                tool.name.clone(),
+                agent_locksmith::registrations::Kind::Tool,
+                tool.description.clone(),
+                tool.upstream.clone(),
+                AuthSpec::None,
+            ))
+            .await
+            .unwrap();
         let spec = if let Some(auth) = &tool.auth {
             let value = resolved
                 .get(&tool.name)
@@ -58,6 +69,11 @@ async fn application(config: AppConfig) -> (axum::Router, String, TempDir) {
         };
         selections.set(id, &tool.name, &spec).await.unwrap();
     }
+    let names: Vec<_> = config.tools.iter().map(|t| t.name.clone()).collect();
+    agents
+        .update_policy(&pid, Some(Some(names)), None, None, None)
+        .await
+        .unwrap();
     let app = build_app_full_with_phase_j(
         Arc::new(ArcSwap::from_pointee(config)),
         None,

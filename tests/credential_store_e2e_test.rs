@@ -203,6 +203,13 @@ async fn full_stored_credential_slice_without_op() {
         .await
         .assert_status_ok();
 
+    h.admin
+        .patch(&format!("/admin/operator/agents/{}", h.agent_public_id))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({"allowlist":["store-api"]}))
+        .await
+        .assert_status_no_content();
+
     // 2. Agent proxies through → upstream sees the injected bearer.
     Mock::given(method("GET"))
         .and(path("/v1/ping"))

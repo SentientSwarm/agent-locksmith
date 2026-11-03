@@ -20,7 +20,7 @@ pub enum BootstrapStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootstrapScope {
     pub tool_allowlist: Option<Vec<String>>,
     pub expires_at: Option<i64>,
@@ -38,6 +38,7 @@ pub struct BootstrapTokenRecord {
     pub used_at: Option<i64>,
     pub used_by_agent_id: Option<i64>,
     pub revoked_at: Option<i64>,
+    pub grants_reviewed: bool,
 }
 
 #[derive(Clone)]
@@ -55,17 +56,37 @@ impl BootstrapTokenRepository {
         scope: BootstrapScope,
         created_by: &str,
     ) -> Result<(String, SecretString), RepoError> {
+        self.mint_inner(scope, created_by, false).await
+    }
+
+    pub async fn mint_reviewed(
+        &self,
+        scope: BootstrapScope,
+        created_by: &str,
+    ) -> Result<(String, SecretString), RepoError> {
+        self.mint_inner(scope, created_by, true).await
+    }
+
+    async fn mint_inner(
+        &self,
+        mut scope: BootstrapScope,
+        created_by: &str,
+        checked: bool,
+    ) -> Result<(String, SecretString), RepoError> {
         let token = StructuredToken::generate(TokenNamespace::Bootstrap);
         let secret_hash =
             argon2_helper::hash(&SecretString::from(token.secret.expose().to_string()))?;
+        scope.tool_allowlist = Some(scope.tool_allowlist.unwrap_or_default());
         let scope_json = serde_json::to_string(&scope)?;
         let now = unix_now();
         let public_id = token.public_id.as_str().to_string();
         let secret = SecretString::from(token.secret.expose().to_string());
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO bootstrap_tokens \
-             (public_id, secret_hash, scope, created_by, created_at, expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+             (public_id, secret_hash, scope, created_by, created_at, expires_at, grants_reviewed) \
+             SELECT ?, ?, ?, ?, ?, ?, 1 \
+             WHERE ? = 0 OR NOT EXISTS (SELECT 1 FROM json_each(?, '$.tool_allowlist') n \
+                 WHERE NOT EXISTS (SELECT 1 FROM registrations r WHERE r.name=n.value AND r.kind IN ('tool','model') AND r.disabled=0))",
         )
         .bind(&public_id)
         .bind(&secret_hash)
@@ -73,8 +94,12 @@ impl BootstrapTokenRepository {
         .bind(created_by)
         .bind(now)
         .bind(scope.expires_at)
+        .bind(checked).bind(&scope_json)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(RepoError::InvalidGrantTarget);
+        }
         Ok((public_id, secret))
     }
 
@@ -85,7 +110,7 @@ impl BootstrapTokenRepository {
     pub async fn diagnose(&self, public_id: &str) -> Result<BootstrapStatus, RepoError> {
         let row = sqlx::query_as::<_, PreviewRow>(
             "SELECT scope, expires_at, used_at, revoked_at \
-             FROM bootstrap_tokens WHERE public_id = ?",
+             FROM bootstrap_tokens WHERE public_id = ? AND grants_reviewed = 1",
         )
         .bind(public_id)
         .fetch_optional(&self.pool)
@@ -121,7 +146,7 @@ impl BootstrapTokenRepository {
     pub async fn preview_scope(&self, public_id: &str) -> Result<BootstrapScope, RepoError> {
         let row = sqlx::query_as::<_, PreviewRow>(
             "SELECT scope, expires_at, used_at, revoked_at \
-             FROM bootstrap_tokens WHERE public_id = ?",
+             FROM bootstrap_tokens WHERE public_id = ? AND grants_reviewed = 1",
         )
         .bind(public_id)
         .fetch_optional(&self.pool)
@@ -148,7 +173,7 @@ impl BootstrapTokenRepository {
     pub async fn list(&self) -> Result<Vec<BootstrapTokenRecord>, RepoError> {
         let rows = sqlx::query_as::<_, BootstrapRow>(
             "SELECT id, public_id, scope, created_by, created_at, expires_at, used_at, \
-             used_by_agent_id, revoked_at FROM bootstrap_tokens ORDER BY created_at DESC",
+             used_by_agent_id, revoked_at, grants_reviewed FROM bootstrap_tokens ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -182,7 +207,7 @@ impl BootstrapTokenRepository {
     ) -> Result<BootstrapScope, RepoError> {
         let row = sqlx::query_as::<_, ConsumeRow>(
             "SELECT secret_hash, scope, expires_at, used_at, revoked_at \
-             FROM bootstrap_tokens WHERE public_id = ?",
+             FROM bootstrap_tokens WHERE public_id = ? AND grants_reviewed = 1",
         )
         .bind(public_id)
         .fetch_optional(&self.pool)
@@ -209,27 +234,17 @@ impl BootstrapTokenRepository {
         }
         let scope: BootstrapScope = serde_json::from_str(&scope_json)?;
 
-        // Atomic guard: only mark used if used_at is still NULL. If
-        // another caller raced us, affected_rows == 0 → InvalidCredential.
-        let mark_used = if scope.single_use {
-            sqlx::query(
-                "UPDATE bootstrap_tokens SET used_at = ?, used_by_agent_id = ? \
-                 WHERE public_id = ? AND used_at IS NULL",
-            )
-            .bind(now)
-            .bind(agent_id)
-            .bind(public_id)
-            .execute(&self.pool)
-            .await?
-        } else {
-            // Reusable token: do NOT mark used_at; record last consumption agent.
-            sqlx::query("UPDATE bootstrap_tokens SET used_by_agent_id = ? WHERE public_id = ?")
-                .bind(agent_id)
-                .bind(public_id)
-                .execute(&self.pool)
-                .await?
-        };
-        if scope.single_use && mark_used.rows_affected() == 0 {
+        // The scope may be pruned by destination/delete cleanup during secret
+        // verification. Compare that snapshot and lifecycle in the committing
+        // statement for both single-use and reusable tokens.
+        let mark_used = sqlx::query(
+            "UPDATE bootstrap_tokens SET used_at = CASE WHEN ? THEN ? ELSE used_at END, used_by_agent_id = ? \
+             WHERE public_id = ? AND used_at IS NULL AND revoked_at IS NULL AND grants_reviewed = 1 \
+             AND scope = ? AND (expires_at IS NULL OR expires_at > ?)",
+        )
+        .bind(scope.single_use).bind(now).bind(agent_id).bind(public_id).bind(&scope_json).bind(unix_now())
+        .execute(&self.pool).await?;
+        if mark_used.rows_affected() == 0 {
             return Err(RepoError::InvalidCredential);
         }
         Ok(scope)
@@ -264,6 +279,7 @@ struct BootstrapRow {
     used_at: Option<i64>,
     used_by_agent_id: Option<i64>,
     revoked_at: Option<i64>,
+    grants_reviewed: bool,
 }
 
 impl BootstrapRow {
@@ -278,6 +294,7 @@ impl BootstrapRow {
             used_at: self.used_at,
             used_by_agent_id: self.used_by_agent_id,
             revoked_at: self.revoked_at,
+            grants_reviewed: self.grants_reviewed,
         })
     }
 }

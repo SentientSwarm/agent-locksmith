@@ -4,7 +4,7 @@
 //! kind-discriminated split that reads from the registrations table when
 //! wired and falls back to `config.tools` for M0/M1 / M9 test paths.
 
-use agent_locksmith::app::build_app_full_with_registrations;
+use agent_locksmith::app::build_app_full_with_catalog;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
@@ -51,7 +51,9 @@ async fn setup_with_seed(
     }
 
     // Register the test agent.
-    let allow_ref = tool_allowlist.as_deref();
+    let tool_allowlist =
+        tool_allowlist.unwrap_or_else(|| seed.iter().map(|r| r.name.clone()).collect());
+    let allow_ref = Some(tool_allowlist.as_slice());
     let (pid, secret) = agents
         .create("disc-test", None, allow_ref, None, None, None)
         .await
@@ -63,13 +65,17 @@ async fn setup_with_seed(
     let cfg = parse_config_str(YAML).unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&cfg);
     let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_full_with_registrations(
+    let catalog = agent_locksmith::registrations::Catalog::from_repo(&registrations)
+        .await
+        .unwrap();
+    let app = build_app_full_with_catalog(
         shared,
         Some(audit),
         Arc::new(ArcSwap::from_pointee(resolved)),
         None,
         Some(bearer),
         Some(registrations),
+        Arc::new(ArcSwap::from_pointee(catalog)),
     );
     let server = TestServer::new(app);
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());

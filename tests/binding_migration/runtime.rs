@@ -129,6 +129,7 @@ async fn migrate(f: &Fixture, mock: &MockServer, key: &CredentialSealingKey) -> 
         select(&mut plan, *id);
     }
     success(&f.apply(&plan));
+    review_grants(f).await;
     f.pool.close().await;
     open_and_migrate(&f.db).await.unwrap()
 }
@@ -171,4 +172,16 @@ async fn future_template(pool: &SqlitePool, key: &CredentialSealingKey) {
     registrations.upsert(&r).await.unwrap();
     r.name = "future".into();
     registrations.create(&r).await.unwrap();
+}
+
+pub(super) async fn review_grants(f: &Fixture) {
+    let mut plan = agent_locksmith::binding_migration::preview_grants(&f.db, None)
+        .await
+        .unwrap();
+    for grant in &mut plan.grants {
+        grant.selected = true;
+    }
+    agent_locksmith::binding_migration::apply(&f.db, &plan, None)
+        .await
+        .unwrap();
 }

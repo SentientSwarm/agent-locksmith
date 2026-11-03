@@ -347,6 +347,7 @@ mod tests {
     async fn gc_respects_override_references() {
         let (_d, pool, repo) = fresh_with_pool().await;
         let r = repo.insert(b"a", b"n").await.unwrap();
+        register(&pool, "tavily", crate::registrations::AuthSpec::None).await;
         let agents = crate::repo::AgentRepository::new(pool.clone());
         agents
             .create("hermes", None, None, None, None, None)
