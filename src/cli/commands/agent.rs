@@ -1,5 +1,7 @@
 //! `locksmith agent ...` operator subcommands.
 
+mod oauth;
+
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
@@ -74,9 +76,8 @@ pub enum AgentCmd {
     /// One of `--auth bearer=ENV`, `--auth header=H:ENV`, `--no-auth`,
     /// or `--oauth-session LABEL` is required.
     SetCredential(SetCredentialArgs),
-    /// Phase G: remove a per-agent credential override; the agent
-    /// returns to using the registration's default credential.
-    /// Idempotent.
+    /// Remove an agent's explicit account binding. Subsequent requests to
+    /// this registration are denied until a binding is set again. Idempotent.
     UnsetCredential {
         /// Agent public_id.
         #[arg(allow_hyphen_values = true)]
@@ -124,8 +125,8 @@ pub struct SetCredentialArgs {
         conflicts_with_all = ["auth", "oauth_session"],
     )]
     pub no_auth: bool,
-    /// Pin the agent to a non-default OAuth session label under the
-    /// registration. Operator must have already bootstrapped the
+    /// Select a nonempty explicit OAuth session label under the
+    /// registration (use `default` literally). Operator must have bootstrapped the
     /// session: `locksmith oauth bootstrap <reg> --label <label> ...`.
     #[arg(
         long,
@@ -235,7 +236,11 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                 .await?;
         }
         AgentCmd::SetCredential(args) => {
-            let auth_spec = build_auth_spec(&args)?;
+            let auth_spec = if let Some(label) = &args.oauth_session {
+                oauth::selection(client, &token, &args.registration, label).await?
+            } else {
+                build_auth_spec(&args)?
+            };
             let body = json!({"auth_spec": auth_spec});
             let resp: Value = client
                 .json(
@@ -294,31 +299,6 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
 fn build_auth_spec(args: &SetCredentialArgs) -> Result<Value, CliError> {
     if args.no_auth {
         return Ok(json!({"kind": "none"}));
-    }
-    if let Some(label) = &args.oauth_session {
-        if !label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(CliError::Usage(format!(
-                "session label must be ascii alphanumeric / '-' / '_'; got: {label:?}"
-            )));
-        }
-        // The override carries `session_label` only — the rest of the
-        // OAuth metadata (client_id / scopes / urls) lives on the
-        // registration's default auth_spec. The override merging
-        // happens at the daemon side; we just need to signal the
-        // session pointer here. Use the OauthDeviceCode shape with
-        // empty placeholders since the override path on the daemon
-        // ignores everything but session_label.
-        return Ok(json!({
-            "kind": "oauth_device_code",
-            "client_id": "",
-            "scopes": [],
-            "device_url": "",
-            "token_url": "",
-            "session_label": label,
-        }));
     }
     let auth = args.auth.as_deref().ok_or_else(|| {
         CliError::Usage(

@@ -7,7 +7,10 @@
 //! 3. Still pass through the per-agent ACL gate — `auth: none` does
 //!    not make a tool universally callable.
 
-use agent_locksmith::app::build_app_full_with_catalog;
+#[path = "support/bindings.rs"]
+mod bindings;
+
+use agent_locksmith::app::build_app_full_with_phase_g;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
@@ -48,7 +51,7 @@ async fn setup(upstream: &str, auth: AuthSpec, tool_allowlist: Option<Vec<String
         .unwrap();
     let agents = AgentRepository::new(pool.clone());
     let audit = AuditRepository::new(pool.clone());
-    let registrations = Arc::new(RegistrationRepository::new(pool));
+    let registrations = Arc::new(RegistrationRepository::new(pool.clone()));
 
     // Seed the registration under test.
     let r = Registration::new(
@@ -66,6 +69,8 @@ async fn setup(upstream: &str, auth: AuthSpec, tool_allowlist: Option<Vec<String
         .await
         .unwrap();
 
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("public-search", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
 
@@ -78,7 +83,7 @@ async fn setup(upstream: &str, auth: AuthSpec, tool_allowlist: Option<Vec<String
     let catalog = Catalog::from_repo(registrations.as_ref()).await.unwrap();
     let catalog_arc = Arc::new(ArcSwap::from_pointee(catalog));
 
-    let app = build_app_full_with_catalog(
+    let app = build_app_full_with_phase_g(
         shared,
         Some(audit.clone()),
         Arc::new(ArcSwap::from_pointee(resolved)),
@@ -86,6 +91,8 @@ async fn setup(upstream: &str, auth: AuthSpec, tool_allowlist: Option<Vec<String
         Some(bearer),
         Some(registrations),
         catalog_arc,
+        None,
+        Some(account_bindings),
     );
     let server = TestServer::new(app);
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());

@@ -59,6 +59,7 @@ impl OpCommand for CountingFakeOp {
 
 struct Harness {
     _dir: TempDir,
+    pool: sqlx::SqlitePool,
     admin: TestServer,
     agent: TestServer,
     op_bearer: String,
@@ -224,6 +225,7 @@ async fn setup() -> Harness {
 
     Harness {
         _dir: dir,
+        pool,
         admin,
         agent,
         op_bearer,
@@ -287,6 +289,16 @@ async fn runtime_added_op_registration_resolves_without_restart() {
 
     h.expect_upstream("/late/ping", "authorization", "Bearer late-value")
         .await;
+    h.agent_creds
+        .set(
+            h.agent_id,
+            "late-api",
+            &AuthSpec::OpBearer {
+                reference: LATE_REF.into(),
+            },
+        )
+        .await
+        .unwrap();
     let resp = h.proxy_get("/api/late-api/late/ping").await;
     resp.assert_status_ok();
 }
@@ -516,7 +528,68 @@ async fn non_utf8_stored_value_fails_loud() {
         }))
         .await
         .assert_status_ok();
+    h.agent_creds
+        .set(
+            h.agent_id,
+            "shared-api",
+            &AuthSpec::StoredBearer { secret_ref },
+        )
+        .await
+        .unwrap();
     h.proxy_get("/api/shared-api/any")
         .await
         .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn corrupt_binding_admin_read_never_echoes_stored_input() {
+    let h = setup().await;
+    let spec = r#"{"kind":"private-corrupt-spec-sentinel"}"#;
+    sqlx::query("INSERT INTO agent_credential_overrides (agent_id, registration, auth_spec, created_at, updated_at) VALUES (?, 'shared-api', ?, 1, 1)")
+        .bind(h.agent_id).bind(spec).execute(&h.pool).await.unwrap();
+    let response = h
+        .admin
+        .get(&format!(
+            "/admin/operator/agents/{}/credentials",
+            h.agent_public_id
+        ))
+        .add_header("authorization", &h.op_bearer)
+        .await;
+    response.assert_status(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        !response.text().contains("private-corrupt-spec-sentinel"),
+        "admin read exposed corrupt selection bytes"
+    );
+    h.proxy_get("/api/shared-api/check")
+        .await
+        .assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn selected_oauth_write_requires_explicit_label() {
+    let h = setup().await;
+    for label in [serde_json::Value::Null, json!(""), json!(" ")] {
+        for kind in ["oauth_pkce", "oauth_device_code"] {
+            let mut spec = json!({"kind":kind,"client_id":"selected","scopes":[],
+                "token_url":"http://127.0.0.1/token","session_label":label});
+            if kind == "oauth_pkce" {
+                spec["auth_url"] = json!("http://127.0.0.1/auth");
+                spec["redirect_uri"] = json!("http://127.0.0.1/cb");
+            } else {
+                spec["device_url"] = json!("http://127.0.0.1/device");
+            }
+            let response = h
+                .admin
+                .put(&h.override_url("api"))
+                .add_header("authorization", &h.op_bearer)
+                .json(&json!({"auth_spec":spec}))
+                .await;
+            response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response.json::<serde_json::Value>()["error"]["code"],
+                "oauth_session_label_required"
+            );
+        }
+    }
 }

@@ -24,9 +24,8 @@ use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default OAuth session label. Used when the operator doesn't pass
-/// `--label` on `oauth bootstrap` and when overrides don't carry
-/// a `session_label`. Single-session deployments (the common case)
-/// see `"default"` everywhere and never have to think about labels.
+/// `--label` on `oauth bootstrap`. Account bindings must explicitly carry
+/// a nonempty label, including the literal `"default"` when intended.
 pub const DEFAULT_SESSION_LABEL: &str = "default";
 
 /// In-memory OAuth session record. Tokens are unsealed on read,

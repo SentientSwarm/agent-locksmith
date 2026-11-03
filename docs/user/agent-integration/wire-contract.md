@@ -50,7 +50,7 @@ HTTP 503 application/json
 ```
 
 Unauthenticated. Use as a Kubernetes readiness probe / orchestrator
-gate.
+gate. It is not a per-agent binding/source-health probe.
 
 ### `GET /version` — build metadata
 
@@ -74,7 +74,7 @@ Cache-Control: private, no-cache, no-store        (personalised)
 Cache-Control: public, max-age=86400              (generic)
 
 # locksmith — agent: my-first-agent
-You can call:
+ACL-eligible tools (binding/source health checked at admission):
   - anthropic at /api/anthropic/...
   - openai    at /api/openai/...
   - tavily    at /api/tavily/...
@@ -116,7 +116,8 @@ Authorization: Bearer lk_...
 }
 ```
 
-Same shape as `/tools`, but `kind=model` only.
+Same shape as `/tools`, but `kind=model` only. Both lists and personalized
+`/skill` show ACL eligibility, not proof of explicit selection or source health.
 
 ### `ANY /api/{tool_name}/{*path}` — proxy hot path
 
@@ -125,8 +126,10 @@ The provider call. Locksmith:
 1. Validates the bearer.
 2. Checks the agent's ACL against `tool_name`.
 3. Looks up the registration in the catalog.
-4. Strips agent-supplied auth headers.
-5. Injects the configured credential.
+4. Requires an explicit `(agent, registration)` binding, including `none`.
+   Missing selection denies with 403 before dispatch; no registration default.
+5. Resolves only the selected source; unavailable sources deny with 503.
+   Strips agent-supplied auth and injects only that selected credential.
 6. Forwards to the registration's `upstream + /{*path}`.
 7. Streams the response back.
 8. Audits.
@@ -155,10 +158,14 @@ segments after `tool_name` are forwarded as-is. So calling
 
 - For `AuthSpec::Header { header, env_var }`: `<header>: <env-var-value>`
 - For `AuthSpec::Bearer { env_var }`: `Authorization: Bearer <env-var-value>`
-- For OAuth: `Authorization: Bearer <access_token-from-cache>`
+- For OAuth: `Authorization: Bearer <access_token-from-explicitly-selected-session>`
 - For `AuthSpec::None`: nothing.
 
-The agent never sees the injected credential.
+The selected Header/Bearer source may reference environment, stored credentials
+or 1Password. OAuth requires a nonempty session label and complete, consistent
+provider metadata; bootstrap alone does not authorize use. The agent never sees
+the injected credential. Identityless legacy calls cannot use credentialed
+registration defaults; only explicitly authless registrations are supported.
 
 #### Streaming
 
@@ -194,18 +201,27 @@ Common codes:
 
 | HTTP | type | code | When |
 |---|---|---|---|
-| 401 | `auth_error` | `invalid_credential` | Bearer doesn't match a registered agent. |
-| 401 | `auth_error` | `missing_credential` | No `Authorization` header. |
-| 403 | `authz_error` | `tool_not_allowed` | Agent's ACL doesn't permit this tool. |
+| 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code). |
+| 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
 | 404 | `not_found` | (no code) | Tool name not registered. |
 | 400 | `bad_request` | (varies) | Malformed body / param. |
 | 502 | `upstream_error` | (varies) | Upstream provider returned 5xx or unreachable. |
 | 504 | `timeout` | `timeout` | Upstream took longer than configured timeout. |
+| 503 | `auth_error` | `credential_unresolved` | Selected source unavailable; no alternate/default dispatch. |
+| 401 | `auth_error` | `agent_identity_required` | Identityless request to a credentialed registration. |
 | 503 | `auth_error` | `oauth_session_missing` | OAuth tool but no session bootstrapped. |
 | 503 | `auth_error` | `oauth_refresh_failed` | OAuth session degraded; operator action required. |
 | 503 | `auth_error` | `oauth_sealing_key_unset` | OAuth tool but daemon has no sealing key. |
 | 502 | `upstream_error` | `response_content_type_disallowed` | M7 content-type allowlist rejected the response. |
 | 502 | `upstream_error` | `response_size_exceeded` | M7 size cap exceeded. |
+
+For 403, the operator checks audit `details.reason`: `account_binding_missing`
+requires `locksmith agent credentials list <agent-public-id>` then deliberate
+`locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'`
+(or an approved supported source). Only `not_in_allowlist` / `in_denylist`
+justify reviewing ACL policy. For 503, inspect selected references/labels/status,
+repair that source, and never retry with an alternate account/default/no auth.
+See [binding troubleshooting](../operator/account-binding-troubleshooting.md).
 
 **Existence-leak avoidance (Q-8)**: agent-facing errors don't reveal
 whether a name exists in the catalog. A request to `/api/nonexistent/...`

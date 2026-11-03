@@ -1,6 +1,7 @@
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered;
 use agent_locksmith::config::parse_config_str;
-use axum_test::{TestResponse, TestServer};
+use axum_test::TestResponse;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -39,8 +40,8 @@ tools:
     );
 
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let h = registered::setup(config).await;
+    let server = &h.server;
 
     // 1. Liveness works without auth (health alias preserved for M0)
     let resp: TestResponse = server.get("/livez").await;
@@ -58,14 +59,14 @@ tools:
     // 3. Discovery works with correct auth
     let resp: TestResponse = server
         .get("/tools")
-        .add_header("Authorization", "Bearer agent-token")
+        .add_header("Authorization", &h.bearer)
         .await;
     resp.assert_status_ok();
 
     // 4. Proxy injects credentials
     let resp: TestResponse = server
         .post("/api/tavily/v1/search")
-        .add_header("Authorization", "Bearer agent-token")
+        .add_header("Authorization", &h.bearer)
         .json(&serde_json::json!({"query": "rust proxy"}))
         .await;
     resp.assert_status_ok();
@@ -75,7 +76,7 @@ tools:
     // 5. Unknown tool returns 404
     let resp: TestResponse = server
         .get("/api/unknown/test")
-        .add_header("Authorization", "Bearer agent-token")
+        .add_header("Authorization", &h.bearer)
         .await;
     resp.assert_status(axum::http::StatusCode::NOT_FOUND);
 }

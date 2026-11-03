@@ -12,19 +12,19 @@
 //!
 //! Covers: UC-6, R-F12, R-N6.
 
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered;
 use agent_locksmith::config::parse_config_str;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
-use tokio::net::TcpListener;
 
 async fn spawn_locksmith_for_cloud(
     name: &str,
     upstream: &str,
     auth_header: &str,
     auth_value: &str,
-) -> String {
+) -> (String, String) {
     // SAFETY: tests serialize via tokio runtime and we're setting unique
     // env-var names per cloud provider; no concurrent writes.
     unsafe {
@@ -53,13 +53,7 @@ tools:
         name.to_uppercase()
     );
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    format!("http://{addr}")
+    registered::spawn(config).await
 }
 
 #[tokio::test]
@@ -69,7 +63,7 @@ async fn anthropic_streams_completion_through_locksmith() {
         return;
     };
 
-    let proxy =
+    let (proxy, bearer) =
         spawn_locksmith_for_cloud("anthropic", "https://api.anthropic.com", "x-api-key", &key)
             .await;
 
@@ -78,6 +72,7 @@ async fn anthropic_streams_completion_through_locksmith() {
         .post(format!("{proxy}/api/anthropic/v1/messages"))
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
+        .header("authorization", &bearer)
         .json(&serde_json::json!({
             "model": "claude-haiku-4-5",
             "max_tokens": 4,
@@ -112,7 +107,7 @@ async fn openai_streams_completion_through_locksmith() {
         return;
     };
 
-    let proxy = spawn_locksmith_for_cloud(
+    let (proxy, bearer) = spawn_locksmith_for_cloud(
         "openai",
         "https://api.openai.com",
         "Authorization",
@@ -124,6 +119,7 @@ async fn openai_streams_completion_through_locksmith() {
     let resp = client
         .post(format!("{proxy}/api/openai/v1/chat/completions"))
         .header("content-type", "application/json")
+        .header("authorization", &bearer)
         .json(&serde_json::json!({
             "model": "gpt-4o-mini",
             "max_tokens": 4,

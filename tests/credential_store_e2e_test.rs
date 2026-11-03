@@ -43,6 +43,7 @@ struct E2E {
     agent: TestServer,
     op_bearer: String,
     agent_bearer: String,
+    agent_public_id: String,
     secrets: CredentialSecretsRepository,
     mock: MockServer,
 }
@@ -79,6 +80,7 @@ async fn setup(wire_key: bool) -> E2E {
     let audit = agent_locksmith::repo::audit::AuditRepository::new(pool.clone());
     let registrations = Arc::new(RegistrationRepository::new(pool.clone()));
     let secrets = CredentialSecretsRepository::new(pool.clone());
+    let bindings = agent_locksmith::repo::AgentCredentialRepository::new(pool.clone());
     let key = CredentialSealingKey::generate().unwrap();
 
     let mock = MockServer::start().await;
@@ -127,7 +129,7 @@ async fn setup(wire_key: bool) -> E2E {
         catalog: Some(catalog_arc.clone()),
         resolved_creds: Some(resolved_arc.clone()),
         oauth: None,
-        agent_creds: None,
+        agent_creds: Some(bindings.clone()),
         credential_sealing_key: app_key.clone(),
         credential_secrets: app_secrets.clone(),
         operational_log: None,
@@ -146,7 +148,7 @@ async fn setup(wire_key: bool) -> E2E {
         Some(registrations),
         catalog_arc,
         None,
-        None,
+        Some(bindings),
         app_key,
         app_secrets,
     );
@@ -158,6 +160,7 @@ async fn setup(wire_key: bool) -> E2E {
         agent,
         op_bearer,
         agent_bearer,
+        agent_public_id: pid,
         secrets,
         mock,
     }
@@ -190,6 +193,16 @@ async fn full_stored_credential_slice_without_op() {
     assert!(first_ref.starts_with("cs_"));
     assert!(set["set_at"].as_i64().unwrap() > 0);
 
+    h.admin
+        .put(&format!(
+            "/admin/operator/agents/{}/credentials/store-api",
+            h.agent_public_id
+        ))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "stored_bearer", "secret_ref": first_ref } }))
+        .await
+        .assert_status_ok();
+
     // 2. Agent proxies through → upstream sees the injected bearer.
     Mock::given(method("GET"))
         .and(path("/v1/ping"))
@@ -218,7 +231,7 @@ async fn full_stored_credential_slice_without_op() {
     assert!(reg["auth"].get("value").is_none());
     assert!(reg["updated_at"].as_i64().unwrap() > 0);
 
-    // 4. Rotate: set again → new ref, old row tombstoned.
+    // 4. Rotate the template: old ref remains live until its explicit binding is replaced.
     let rot: serde_json::Value = h
         .admin
         .put("/admin/operator/models/store-api/credential")
@@ -228,10 +241,23 @@ async fn full_stored_credential_slice_without_op() {
         .json();
     let second_ref = rot["secret_ref"].as_str().unwrap().to_string();
     assert_ne!(first_ref, second_ref);
-    assert!(h.secrets.get(&first_ref).await.unwrap().is_none());
+    assert!(
+        h.secrets.get(&first_ref).await.unwrap().is_some(),
+        "explicit binding still references the old secret"
+    );
     assert!(h.secrets.get(&second_ref).await.unwrap().is_some());
 
-    // The proxy now injects the rotated value (shared catalog refreshed).
+    h.admin
+        .put(&format!(
+            "/admin/operator/agents/{}/credentials/store-api",
+            h.agent_public_id
+        ))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "stored_bearer", "secret_ref": second_ref } }))
+        .await
+        .assert_status_ok();
+
+    // The explicit replacement selects the rotated value on the next admission.
     Mock::given(method("GET"))
         .and(path("/v1/pong"))
         .and(header("authorization", "Bearer e2e-rotated-secret"))

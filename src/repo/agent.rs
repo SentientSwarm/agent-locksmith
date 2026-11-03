@@ -22,6 +22,8 @@ pub enum RepoError {
     Hash(#[from] crate::argon2_helper::HashError),
     #[error("sqlx: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("stored account binding is invalid")]
+    InvalidAccountBinding,
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("rng: {0}")]

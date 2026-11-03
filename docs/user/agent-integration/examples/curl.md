@@ -166,15 +166,28 @@ curl -sS -X POST -H "Authorization: Bearer $OP_TOKEN" \
 
 ### OAuth bootstrap
 
+`private-oauth-bootstrap.json` is a permission-restricted file containing a
+`refresh_token` field from the provider's flow; never echo it or commit it.
+These operator-authenticated calls address the literal `default` session.
+
 ```bash
 curl -sS -X POST -H "Authorization: Bearer $OP_TOKEN" \
     -H "Content-Type: application/json" \
     --unix-socket /var/run/locksmith/admin.sock \
-    -d '{"refresh_token": "<paste-from-providers-oauth-flow>"}' \
-    http://_/admin/operator/oauth/codex/bootstrap | jq
+    --data-binary @private-oauth-bootstrap.json \
+    "http://_/admin/operator/oauth/codex/bootstrap?label=default" | jq
 
 curl -sS -H "Authorization: Bearer $OP_TOKEN" --unix-socket /var/run/locksmith/admin.sock \
-    http://_/admin/operator/oauth/codex | jq
+    "http://_/admin/operator/oauth/codex?label=default" | jq
+```
+
+Bootstrap is custody only. Select the intended label explicitly after checking
+the registration's complete provider metadata. `AGENT_ID` is the public ID from
+registration, and the operator CLI uses the same admin transport:
+
+```bash
+locksmith agent credentials list "$AGENT_ID"
+locksmith agent set-credential "$AGENT_ID" codex --oauth-session default
 ```
 
 ### Audit query
@@ -205,7 +218,7 @@ What you'll see when things go wrong (each with the §4.7.9 envelope):
 ```bash
 # No bearer:
 curl -sS "$LOCKSMITH_URL/api/anthropic/v1/messages" -X POST -d '{}'
-# {"error":{"type":"auth_error","code":"missing_credential","message":"missing credential"}}
+# {"error":{"type":"auth_error","code":"invalid_credential","message":"invalid credential"}}
 
 # Bad bearer:
 curl -sS -H "Authorization: Bearer lk_bad.bad" "$LOCKSMITH_URL/api/anthropic/v1/messages" -X POST -d '{}'
@@ -219,6 +232,14 @@ curl -sS -H "Authorization: Bearer $AGENT_TOKEN" "$LOCKSMITH_URL/api/notin-allow
 curl -sS -H "Authorization: Bearer $AGENT_TOKEN" "$LOCKSMITH_URL/api/totally-fake/anything"
 # {"error":{"type":"not_found","message":"Unknown tool: totally-fake"}}
 ```
+
+A 403 `tool_not_allowed` also occurs for an ACL-eligible agent without an
+explicit account binding. Ask the operator to inspect audit `account_binding_missing`
+versus `not_in_allowlist` / `in_denylist`, diagnose with `agent credentials list`,
+then deliberately select the intended source with `agent set-credential`.
+Listings show ACL eligibility, not binding existence or source health. Selected
+source 503s need safe reference/label/status diagnosis; never retry an alternate
+account, registration default or unauthenticated call.
 
 ## See also
 

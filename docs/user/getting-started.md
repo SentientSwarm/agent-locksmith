@@ -1,210 +1,180 @@
-# Getting started (developer first-contact)
+# Run a standalone development instance
 
-This doc is for developers who want to run **agent-locksmith
-standalone** — no Docker bundle, no site repo, just the Rust crate and
-the daemon. Useful for evaluation, embedding in your own deployment
-system, or exercising the codebase.
+Locksmith authenticates a registered agent, checks its ACL, then uses that
+agent's explicit account selection. Creating a catalog entry alone grants no
+account access. Start with a disposable instance before upgrading a deployment.
 
-For the production layer8-proxy bundle deployment story, see
-[`layer8-proxy/docs/user/getting-started.md`](https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/getting-started.md).
+## Prerequisites and saved smoke
 
-## Prerequisites
+This flow was tested with Rust 1.94.0 and the committed `Cargo.lock`. Lower
+toolchains have not been validated here; edition 2024 alone does not establish
+the locked dependencies' minimum. Use a C toolchain, Bash and `sqlite3` on Unix.
+Manual HTTP checks below also use `curl`. Build from the repository root:
 
-- Rust toolchain (1.85+ — agent-locksmith uses edition 2024).
-- A C toolchain (cargo + libssl-dev / openssl).
-- Optional: `jq`, `curl`.
-
-## Step 1: Build
-
-```bash
-git clone git@github.com:SentientSwarm/agent-locksmith.git
-cd agent-locksmith
-cargo build --release
+```sh
+cargo build --bins
+cargo test --test explicit_binding_smoke_test -- --nocapture
 ```
 
-Two binaries land in `target/release/`:
+The saved SM01–SM05 test starts actual debug `locksmithd` and `locksmith`
+processes with temporary configuration, database, operator credentials and
+loopback listeners. It supplies a synthetic receiving API, executes the marked
+command examples below and in the [migration guide](concepts/migrating-account-bindings.md),
+checks X/X/Y accounts and zero-dispatch failures, stops/restarts the process for
+migration and removes fixture state. No provider account, installed service,
+`op` login or owner database is used. Failure exits nonzero. See the
+[cutover smoke contract](../development/explicit-account-bindings-smoke.md)
+for counters, prerequisites and limits. A live provider deployment needs its own
+receiving-account verification.
 
-- **`locksmithd`** — the daemon. Reads `--config <path>`, binds the
-  agent listener + admin UDS, runs.
-- **`locksmith`** — the operator + agent self-service CLI. Talks to
-  a running daemon via the admin UDS (default) or admin HTTPS.
+## Create an operator and configuration
 
-## Step 2: Mint an operator credential
+For a manual instance, choose a private directory and unused loopback port.
+Keep these variables in each terminal that uses the CLI; substitute your paths:
 
-The operator credential is what proves you're the operator when
-calling admin endpoints (registering agents, putting tool entries,
-querying audit, etc.).
-
-```bash
-./target/release/locksmith bootstrap-operator --name dev > operators.yaml
+```sh
+umask 077
+export LOCKSMITH_BIN="$PWD/target/debug/locksmith"
+export LOCKSMITHD_BIN="$PWD/target/debug/locksmithd"
+export FIXTURE_DIR="$(mktemp -d)"
+export CONFIG="$FIXTURE_DIR/config.yaml"
+export SOCKET="$FIXTURE_DIR/admin.sock"
+export DATABASE="$FIXTURE_DIR/locksmith.db"
 ```
 
-Output goes to two streams:
-
-- **stdout** — `operators.yaml` content (one operator entry, with
-  the secret argon2-hashed). Pipe to a file.
-- **stderr** — the cleartext wire token, printed ONCE. Save it now;
-  the daemon validates against the hash, never the cleartext.
-
-Sample stderr:
-
-```
-✓ Operator credential minted.
-
-  Wire token (save this NOW — cannot be recovered):
-
-    lkop_JJzZehsZbxC41cYZoPFrlg.DkhOj8p7mNbyIOd7xErWBDKSgE3zEnCPPVNMdDbDOn0
-
-  Install on the operator's host:
-
-    export LOCKSMITH_OP_TOKEN='lkop_JJzZehsZbxC41cYZoPFrlg.DkhOj8p7mNbyIOd7xErWBDKSgE3zEnCPPVNMdDbDOn0'
+<!-- smoke:operator -->
+```sh
+"$LOCKSMITH_BIN" bootstrap-operator --name smoke > "$FIXTURE_DIR/operators.yaml"
 ```
 
-Save the token to your shell environment (or sealed-cred store) —
-you'll need it in step 5+.
+Stdout contains the operator's Argon2 hash; stderr displays its wire token once.
+Save that token privately as `LOCKSMITH_OP_TOKEN`. Do not paste it into reports
+or commit it. Replacing the operators file rotates credentials when the daemon
+next loads it; minting alone does not change a running daemon's authenticator.
 
-`bootstrap-operator` is offline — it doesn't talk to a daemon. You can
-re-run it at any time, but doing so mints a fresh token; the prior
-wire token stops working as soon as you replace `operators.yaml`.
+Write this YAML to `$CONFIG`, replacing the three relative paths with paths
+inside your private directory and choosing an unused port:
 
-## Step 3: Configure the daemon
-
-`config.example.yaml` in this repo is a working minimal config. Copy
-it and adjust `operator_credentials_path` to point at your
-`operators.yaml` from step 2:
-
-```bash
-cp config.example.yaml config.yaml
-```
-
-Edit `config.yaml` so it has at least:
-
+<!-- smoke:config -->
 ```yaml
 listen:
   host: "127.0.0.1"
   port: 9200
   auth_mode: bearer
   admin_socket:
-    path: "/tmp/locksmith.sock"
-
+    path: "./admin.sock"
 operator_credentials_path: "./operators.yaml"
-
 database:
   path: "./locksmith.db"
-
-audit:
-  retention_days: 90
-  sweep_interval_seconds: 3600
+shutdown:
+  drain_window_seconds: 1
+tools: []
 ```
 
-## Step 4: Start the daemon
+This intentionally starts with an empty catalog. `config.example.yaml` contains
+legacy/provider examples; copying it is not required for this local flow.
+For stored or OAuth sources, supply the corresponding independent sealing key
+through normal secret custody before startup. Never put keys in the plan or YAML.
 
-```bash
-./target/release/locksmithd --config config.yaml
+## Start and check the daemon
+
+Choose a local API you control as `UPSTREAM_URL`. The smoke supplies its own
+receiver. Set `SMOKE_X` and `SMOKE_Y` in the daemon environment to that API's
+account credentials; these variable names are references, not literal credentials.
+Keep this terminal running; the `exec` replaces its shell:
+
+<!-- smoke:start -->
+```sh
+LOCKSMITH_SEED_PATH="" exec "$LOCKSMITHD_BIN" --config "$CONFIG"
 ```
 
-You should see structured-JSON logs on stdout. Leave it running in
-this terminal; open a new one for the next steps.
+The empty seed path prevents an installed seed catalog from being imported.
+In another terminal, check the configured port:
 
-```bash
-# In another terminal:
-curl -sS http://127.0.0.1:9200/livez
-# {"status":"live","uptime_seconds":N}
-
-curl -sS http://127.0.0.1:9200/version
-# {"name":"agent-locksmith","version":"2.0.0"}
+```sh
+curl --fail --silent --show-error http://127.0.0.1:9200/livez
+curl --fail --silent --show-error http://127.0.0.1:9200/readyz
+curl --fail --silent --show-error http://127.0.0.1:9200/version
 ```
 
-## Step 5: Register an agent
+Expect HTTP 200; `/version` reports the built crate version. `/readyz` describes
+configured startup dependencies, not every agent's selected source. A ready
+instance can still reject an individual unavailable binding with 503.
 
-```bash
-export LOCKSMITH_OP_TOKEN="lkop_..."  # from step 2
+## Register, explicitly select, then call
 
-./target/release/locksmith --socket /tmp/locksmith.sock \
-    agent register --name dev-agent --allowlist anthropic
+Create a tool pointing to your local API. Export `UPSTREAM_URL` first:
+
+<!-- smoke:catalog -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json tool put "$REGISTRATION" \
+  --upstream "$UPSTREAM_URL" --auth "$AUTH_SOURCE" --egress direct
 ```
 
-The CLI prints the agent's bearer token:
+For example set `REGISTRATION=accounts` and `AUTH_SOURCE=bearer=SMOKE_X`.
+Set `AGENT_NAME=shared-a` and `ALLOWLIST=accounts` before registering:
 
-```
-public_id: yN2vR6jFKNYfIwNjFU2MSA
-token:     lk_yN2vR6jFKNYfIwNjFU2MSA.1TJlTmOgmswZYZx_aQHyjaNiugeJjudytNPFJgT9aqM
-allowlist: ["anthropic"]
-```
-
-Save the bearer for step 6.
-
-## Step 6: Make a call
-
-The seed catalog at `/etc/locksmith/seed/catalog.yaml` has 16 default
-providers. Standalone runs pick that path up automatically if it's
-present in the filesystem; for a dev box without it, point at the
-in-repo `seed/catalog.yaml`:
-
-```bash
-LOCKSMITH_SEED_PATH="$PWD/seed/catalog.yaml" \
-    ./target/release/locksmithd --config config.yaml &
+<!-- smoke:register -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent register \
+  --name "$AGENT_NAME" --allowlist "$ALLOWLIST"
 ```
 
-Then call Anthropic (set `ANTHROPIC_API_KEY` in the daemon's env first):
+Save its returned `public_id` as `AGENT_ID` and its one-time `token` privately as
+`LOCKSMITH_AGENT_TOKEN`. Do not send the operator token to the agent listener.
+With `AUTH_SOURCE=bearer=SMOKE_X`, select the account:
 
-```bash
-AGENT_TOKEN="lk_yN2v..."
-curl -sS -H "Authorization: Bearer $AGENT_TOKEN" http://127.0.0.1:9200/models
-# {"models":[{"name":"anthropic","path":"/api/anthropic","type":"api","description":"..."}, ...]}
-
-curl -sS -X POST http://127.0.0.1:9200/api/anthropic/v1/messages \
-    -H "Authorization: Bearer $AGENT_TOKEN" \
-    -H "anthropic-version: 2023-06-01" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"claude-haiku-4-5","max_tokens":40,"messages":[{"role":"user","content":"hi"}]}'
+<!-- smoke:bind -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent set-credential \
+  "$AGENT_ID" accounts --auth "$AUTH_SOURCE"
 ```
 
-If you see a real Anthropic completion, the standalone setup is working.
+<!-- smoke:status -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json status
+```
 
-## What you've actually exercised
+```sh
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $LOCKSMITH_AGENT_TOKEN" \
+  http://127.0.0.1:9200/api/accounts/check
+```
 
-The standalone flow above hits all the v2.0.0 invariants:
+The receiver's endpoint/path determines the useful response. It must observe
+account X, never the caller token. Repeat registration/selection for `shared-b`
+with `bearer=SMOKE_X` to share X, and `distinct-c` with `bearer=SMOKE_Y` to select Y.
+Use `header=x-api-key:ENV_NAME` for a per-agent header selection. The catalog's
+syntax differs: `header:x-api-key=ENV_NAME`.
 
-- **Per-agent bearer + ACL**: the agent's `--allowlist anthropic`
-  means it can only reach `/api/anthropic/...`. Try `/api/openai/...`
-  with the same bearer — you'll get 403 `tool_not_allowed`.
-- **Catalog substrate**: `/models` returns kind=model only, ACL-
-  filtered. `/tools` returns kind=tool only.
-- **Credential injection**: locksmith reads `ANTHROPIC_API_KEY` from
-  its environment at startup and injects `x-api-key: <real-key>` on
-  the wire to Anthropic. Your agent never saw the real key.
-- **Audit**: every request gets one row.
+## Clear, repair and inspect
 
-## What you DON'T get standalone
+<!-- smoke:clear -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent unset-credential "$AGENT_ID" accounts
+```
 
-- **pipelock egress chokepoint** — locksmith goes direct to upstream;
-  no DLP, no allowlist enforcement at the network layer. Production
-  deploys add pipelock via the layer8-proxy compose bundle.
-- **lf-scan prompt/code scanner** — same; opt-in middleware, not
-  bundled standalone.
-- **Sealed-creds at rest** — your `operators.yaml` and `.env` are
-  cleartext on disk (mode 0600 by convention; not enforced). The
-  layer8-proxy-site sealed-cred mechanism (systemd-creds /
-  openssl-AES) is layered on top in the bundle.
-- **Backup automation** — the locksmith DB is just a SQLite file;
-  back up `locksmith.db*` like any other application state.
+The next request is 403 `tool_not_allowed`, with no upstream operation. Re-run
+`set-credential` to repair it. Missing/empty selected env values produce 503
+`credential_unresolved`; missing/wrong/revoked caller identities produce 401.
+Changing the catalog template does not repoint existing selections.
 
-## What's next
+<!-- smoke:list -->
+```sh
+"$LOCKSMITH_BIN" --socket "$SOCKET" --format json agent credentials list "$AGENT_ID"
+```
 
-- **CLI reference**: [cli-reference.md](cli-reference.md) — every
-  subcommand and flag.
-- **Architecture**: [architecture.md](architecture.md) — user-level
-  view of the daemon's runtime composition.
-- **Concepts**: [concepts/](concepts/) — kind taxonomy, agent
-  identity + ACL, error envelope, trust boundary.
-- **Agent integration recipes**: [agent-integration/](agent-integration/)
-  — wiring openclaw, hermes, or a custom agent through locksmith.
-- **Production bundle**: [`layer8-proxy`](https://github.com/SentientSwarm/layer8-proxy)
-  — Docker Compose with pipelock + lf-scan + sealed-creds infrastructure.
+Reads show references and timestamps. Agent registration and bootstrap output
+are intentional one-time credential deliveries; keep those private. See
+[account troubleshooting](operator/account-binding-troubleshooting.md),
+[explicit selections](concepts/per-agent-credentials.md) and the
+[unversioned D1 change notes](changes/explicit-account-bindings.md).
 
-## See also
+## Stop and clean up
 
-- [`agents-stack/docs/spec/v0.2.0.md`](https://github.com/SentientSwarm/agents-stack/blob/main/docs/spec/v0.2.0.md) — formal stack spec.
-- [`docs/v2/HANDOFF.md`](../v2/HANDOFF.md) — engineering cold-start
-  handoff (read before contributing code).
+For this manual disposable instance, send SIGTERM/Control-C to its daemon and
+wait for exit before deleting its private directory. Keep actual deployment
+state and sealing keys under their normal backup policy. Use SQLite `.backup`
+for databases with WAL; copying only `.db` can omit committed state. For an
+existing installation follow the [reviewed migration](concepts/migrating-account-bindings.md)
+and verify account attribution before reopening traffic.

@@ -9,14 +9,16 @@ The keystone component of the [layer8-proxy][layer8] stack.
 
 [layer8]: https://github.com/SentientSwarm/layer8-proxy
 
-**Current version: v2.7.1** ([release notes](https://github.com/SentientSwarm/agent-locksmith/releases/tag/v2.7.1))
+See [Cargo.toml](Cargo.toml) for the crate version and
+[unversioned D1 change notes](docs/user/changes/explicit-account-bindings.md)
+for the explicit-account compatibility change.
 
 ## What it does
 
 - **Agent sends:** `POST /api/anthropic/v1/messages` with the agent's per-agent
   bearer token (no provider API key).
 - **Locksmith validates:** the bearer is registered + the agent's ACL allows
-  `anthropic`.
+  `anthropic` and its explicit account binding is available.
 - **Locksmith forwards:** `POST https://api.anthropic.com/v1/messages` with
   `x-api-key: <real provider key>` injected from sealed-at-rest creds.
 - **Locksmith audits:** one row per request — agent identity, tool, status,
@@ -40,12 +42,12 @@ middleware (`kind=infra`) is operator-only.
   `AuthSpec::OauthDeviceCode` for codex / copilot / anthropic-oauth /
   google-gemini-cli / qwen-cli. Refresh tokens sealed at rest with
   AES-GCM (`LOCKSMITH_OAUTH_SEALING_KEY`); access tokens auto-refresh.
-- **Per-agent credential overrides + OAuth labels (Phase G)** —
-  `agent_credential_overrides(agent_id, registration) → AuthSpec`
-  swaps the default credential on a per-agent basis. OAuth sessions
-  gain a `session_label` dimension so one registration can hold N
-  sessions (one per ChatGPT account, GitHub account, etc.). Default
-  behavior unchanged when no overrides are set.
+- **Explicit account bindings (D1)** — each authenticated agent must select an
+  account for each permitted registration. Agents can intentionally share X or
+  select distinct Y. Missing bindings deny with 403; unavailable selected sources
+  fail with 503. Clearing denies the next request; catalog templates never supply
+  fallback authority. OAuth labels require consistent explicit metadata.
+  See [upgrade and change notes](docs/user/changes/explicit-account-bindings.md).
 - **codex `ChatGPT-Account-ID` injection (Phase G2)** — locksmith
   decodes the access-token JWT at OAuth bootstrap/refresh, extracts
   `chatgpt_account_id`, and injects the required
@@ -154,38 +156,19 @@ flow); no per-tool YAML required for the 16 default providers.
 
 ### Run (standalone)
 
-```bash
-# 1. Mint an operator credential. Writes operators.yaml to stdout
-#    (with the argon2-hashed token) + prints the cleartext wire
-#    token to stderr ONCE.
-target/release/locksmith bootstrap-operator --name dev > operators.yaml
-# Save the printed wire token. Conventionally:
-#   export LOCKSMITH_OP_TOKEN=lkop_<public_id>.<secret>
+Follow [getting started](docs/user/getting-started.md) for a private config,
+operator bootstrap, real agent registration and explicit selection. An ACL alone
+no longer enables calls. Run the repeatable local cutover smoke:
 
-# 2. Start the daemon. config.example.yaml in this repo is a working
-#    minimal config; point operator_credentials_path at the
-#    operators.yaml from step 1.
-target/release/locksmithd --config config.example.yaml
-
-# 3. Register an agent.
-LOCKSMITH_OP_TOKEN=lkop_... \
-  target/release/locksmith agent register \
-    --name dev-agent --allowlist anthropic,openai,tavily
-# The printed bearer (lk_...) goes in the agent's environment as
-#   LOCKSMITH_AGENT_TOKEN=lk_...
-
-# 4. Operator commands (catalog, audit, OAuth):
-LOCKSMITH_OP_TOKEN=lkop_... target/release/locksmith model list
-LOCKSMITH_OP_TOKEN=lkop_... target/release/locksmith audit query --since-ms $(($(date +%s) * 1000 - 3600000))
-
-# 5. Agent self-service.
-LOCKSMITH_AGENT_TOKEN=lk_... target/release/locksmith status
+```sh
+cargo build --bins
+cargo test --test explicit_binding_smoke_test -- --nocapture
 ```
 
-`bootstrap-operator` is offline — it doesn't talk to a daemon. The
-operator credential it produces is what the daemon validates incoming
-admin-API requests against. Re-running `bootstrap-operator` mints a
-fresh token; the prior wire token stops working immediately.
+It starts disposable actual daemon/CLI processes and verifies receiving accounts,
+denials, reviewed migration, restart and cleanup. Existing installations need the
+[offline migration procedure](docs/user/concepts/migrating-account-bindings.md).
+Live providers and installed deployments are separate verification.
 
 ### Run (production, layer8-proxy bundle)
 

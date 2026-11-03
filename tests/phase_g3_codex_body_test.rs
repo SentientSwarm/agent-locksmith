@@ -13,7 +13,10 @@
 //! Mirrors the harness pattern from `tests/phase_f_oauth_proxy_test.rs`
 //! G2 tests.
 
-use agent_locksmith::app::{OauthRuntime, build_app_full_with_oauth};
+#[path = "support/bindings.rs"]
+mod bindings;
+
+use agent_locksmith::app::{OauthRuntime, build_app_full_with_phase_g};
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
@@ -165,6 +168,16 @@ async fn setup() -> Harness {
         )
         .await
         .unwrap();
+    let account_bindings = bindings::select(
+        &agents,
+        &pool,
+        &pid,
+        &[
+            ("codex", codex_reg.auth.clone()),
+            ("noncodex", noncodex_reg.auth.clone()),
+        ],
+    )
+    .await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());
@@ -179,7 +192,7 @@ async fn setup() -> Harness {
         refresh_client: reqwest::Client::new(),
     };
 
-    let app = build_app_full_with_oauth(
+    let app = build_app_full_with_phase_g(
         cfg_arc,
         Some(audit.clone()),
         Arc::new(ArcSwap::from_pointee(Default::default())),
@@ -188,6 +201,7 @@ async fn setup() -> Harness {
         Some(registrations),
         catalog_arc,
         Some(runtime),
+        Some(account_bindings),
     );
     let server = TestServer::new(app);
 

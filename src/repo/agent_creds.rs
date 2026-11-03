@@ -1,20 +1,9 @@
 //! `agent_credential_overrides` repository — Phase G.
 //!
-//! Per-agent credential overrides. Default behavior with no rows in
-//! this table is unchanged from Phase F: agents resolve credentials
-//! from their registration's default `auth_spec` and (for OAuth) the
-//! `default` session label.
-//!
-//! When an override row exists for `(agent_id, registration)`, the
-//! proxy hot path swaps in the override's `auth_spec` BEFORE static-
-//! credential resolution / OAuth session lookup. This lets a deployment
-//! pin specific agents to their own upstream credentials (separate API
-//! keys, separate ChatGPT subscriptions, etc.) without proliferating
-//! registrations.
-//!
-//! Override `auth_spec` is always a complete [`AuthSpec`] — never a
-//! partial diff. Storage cost is small (≤256 bytes per row in the
-//! typical case) and resolution is one in-memory cache lookup.
+//! Explicit per-agent account selections. Each row is a complete [`AuthSpec`]
+//! keyed by `(agent_id, registration)`. The authenticated proxy requires a row
+//! before resolving credentials; an absent row denies access, and failed reads
+//! fail closed. Several allowed agents may explicitly select the same source.
 //!
 //! See `agents-stack/docs/spec/v0.2.0.md` "Per-agent credential
 //! overrides + OAuth session labels (Phase G)" for the full design.
@@ -77,8 +66,8 @@ impl AgentCredentialRepository {
     }
 
     /// Look up the override for `(agent_id, registration)`. Returns
-    /// `Ok(None)` when no override exists — the proxy hot path then
-    /// falls back to the registration's default auth_spec.
+    /// `Ok(None)` when no binding exists — the authenticated proxy denies
+    /// access rather than inheriting the registration's auth_spec.
     ///
     /// This is the single hot-path call. Hits the SQLite page cache
     /// after the first request per (agent, registration) tuple, sub-ms.
@@ -154,7 +143,8 @@ impl AgentCredentialRepository {
 
 fn row_to_override(row: &sqlx::sqlite::SqliteRow) -> Result<AgentCredentialOverride, RepoError> {
     let auth_json: String = row.get("auth_spec");
-    let auth_spec: AuthSpec = serde_json::from_str(&auth_json)?;
+    let auth_spec: AuthSpec =
+        serde_json::from_str(&auth_json).map_err(|_| RepoError::InvalidAccountBinding)?;
     Ok(AgentCredentialOverride {
         agent_id: row.get("agent_id"),
         registration: row.get("registration"),

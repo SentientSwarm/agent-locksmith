@@ -148,8 +148,8 @@ impl AuthSpec {
 
     /// Phase G: the OAuth session label this AuthSpec resolves to.
     /// `None` for non-OAuth variants. For OAuth variants, returns the
-    /// custom label if one was set on the spec, else `None` to signal
-    /// "fall back to [`crate::oauth::session::DEFAULT_SESSION_LABEL`]".
+    /// selected label when present. Explicit account admission rejects
+    /// missing/empty labels; bootstrap/template callers may choose a default.
     /// Callers should resolve via `.session_label_or_default()`.
     pub fn oauth_session_label(&self) -> Option<&str> {
         match self {
@@ -159,8 +159,8 @@ impl AuthSpec {
         }
     }
 
-    /// OAuth session label to actually use at hot-path resolution
-    /// time, with `DEFAULT_SESSION_LABEL` as the fallback. Returns
+    /// Bootstrap/template label with `DEFAULT_SESSION_LABEL` as the fallback.
+    /// Explicit account admission does not use this fallback. Returns
     /// `None` for non-OAuth variants.
     pub fn session_label_or_default(&self) -> Option<&str> {
         if !self.is_oauth() {

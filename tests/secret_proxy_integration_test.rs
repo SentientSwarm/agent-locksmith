@@ -1,13 +1,8 @@
-//! M5 acceptance: a `from_file_sealed:` tool credential gets resolved
-//! at daemon startup and injected on the proxy hot path.
-//!
-//! End-to-end shape:
-//! 1. Write a chmod-0600 sealed file with the credential bytes.
-//! 2. Start `daemon::run` with a config that references it via
-//!    `from_file_sealed: { path: ... }`.
-//! 3. Make a proxy request through the agent listener.
-//! 4. Assert the upstream received the configured header value (proves
-//!    the resolved credential reached the hot path).
+//! M5 file custody with D1 explicit owner upgrade: legacy file cache alone
+//! cannot authorize dispatch. Import the real resolver's synthetic bytes through
+//! the existing stored credential API and explicitly select that snapshot.
+#[path = "support/file_sealed_upgrade.rs"]
+mod upgrade;
 
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
@@ -26,7 +21,7 @@ fn pick_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-fn write_operators_yaml(p: &std::path::Path) {
+fn write_operators_yaml(p: &std::path::Path) -> String {
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let op_hash = argon2_helper::hash(&secrecy::SecretString::from(
         op_tok.secret.expose().to_string(),
@@ -41,6 +36,7 @@ fn write_operators_yaml(p: &std::path::Path) {
         ),
     )
     .unwrap();
+    format!("Bearer {}", op_tok.wire_format())
 }
 
 /// Pre-register an agent in the database before the daemon opens it.
@@ -59,7 +55,8 @@ async fn pre_register_agent(db: &std::path::Path, name: &str) -> String {
 }
 
 #[tokio::test]
-async fn from_file_sealed_credential_reaches_proxy_hot_path() {
+async fn file_sealed_owner_snapshot_import_requires_explicit_binding() {
+    upgrade::enable_stored_source();
     let dir = TempDir::new().unwrap();
 
     // Step 1 — sealed file with chmod-0600.
@@ -71,14 +68,14 @@ async fn from_file_sealed_credential_reaches_proxy_hot_path() {
     let sock = dir.path().join("admin.sock");
     let ops = dir.path().join("operators.yaml");
     let db = dir.path().join("locksmith.db");
-    write_operators_yaml(&ops);
+    let operator = write_operators_yaml(&ops);
 
     // Mock upstream that asserts the credential header.
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/ping"))
         .and(header("authorization", "Bearer s3cr3t"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("file-account-X"))
         .mount(&mock)
         .await;
 
@@ -129,21 +126,24 @@ tools:
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // Make a proxy request — wiremock asserts the upstream header on
-    // its end. The agent-side `Authorization` carries the per-agent
-    // bearer token; locksmith strips it and re-injects the resolved
-    // sealed credential before forwarding.
+    let url = format!("http://127.0.0.1:{agent_port}/api/ping/v1/ping");
+    // The real daemon resolved the legacy file at startup; that cached value
+    // must not authorize an unbound caller or reach the upstream.
+    upgrade::assert_denied(&url, &agent_bearer, &mock).await;
+    upgrade::import_snapshot(&sock, &operator, &sealed_path, &mock.uri()).await;
+    // This is a deliberate snapshot import, not an ongoing file-backed binding.
+    std::fs::write(&sealed_path, "Bearer different-file-account").unwrap();
     let resp = reqwest::Client::new()
-        .get(format!("http://127.0.0.1:{agent_port}/api/ping/v1/ping"))
+        .get(&url)
         .header("authorization", &agent_bearer)
         .send()
         .await
-        .expect("proxy request reaches daemon");
-    assert!(
-        resp.status().is_success(),
-        "expected 200, got {}",
-        resp.status()
-    );
+        .unwrap();
+    assert!(resp.status().is_success());
+    assert_eq!(resp.text().await.unwrap(), "file-account-X");
+    assert_eq!(mock.received_requests().await.unwrap().len(), 1);
+    upgrade::clear(&sock, &operator).await;
+    upgrade::assert_denied(&url, &agent_bearer, &mock).await;
 
     coord.trigger();
     timeout(Duration::from_secs(6), handle)

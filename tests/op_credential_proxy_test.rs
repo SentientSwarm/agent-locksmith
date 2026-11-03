@@ -8,6 +8,9 @@
 //!     refresh time);
 //!   - a cache miss → loud 503 `credential_unresolved`.
 
+#[path = "support/bindings.rs"]
+mod bindings;
+
 use agent_locksmith::app::build_app_full_with_phase_k;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
@@ -52,6 +55,8 @@ struct Harness {
     agent_bearer: String,
     mock: MockServer,
     op_calls: Arc<AtomicU64>,
+    bindings: agent_locksmith::repo::AgentCredentialRepository,
+    audit: AuditRepository,
 }
 
 /// Build a proxy harness with a single `op-api` registration carrying
@@ -59,6 +64,10 @@ struct Harness {
 /// `op` will resolve at refresh time; None leaves the cache empty (cache
 /// miss path).
 async fn setup(auth: AuthSpec, resolve: Option<(&str, &str)>) -> Harness {
+    setup_sources(auth, &resolve.into_iter().collect::<Vec<_>>()).await
+}
+
+async fn setup_sources(auth: AuthSpec, sources: &[(&str, &str)]) -> Harness {
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("locksmith.db"))
         .await
@@ -98,6 +107,8 @@ async fn setup(auth: AuthSpec, resolve: Option<(&str, &str)>) -> Harness {
         .unwrap();
     let agent_bearer = format!("Bearer lk_{pid}.{}", secret.expose_secret());
 
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("op-api", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
 
@@ -105,7 +116,7 @@ async fn setup(auth: AuthSpec, resolve: Option<(&str, &str)>) -> Harness {
     let op_calls = Arc::new(AtomicU64::new(0));
     let mut values = HashMap::new();
     let mut refs = Vec::new();
-    if let Some((reference, value)) = resolve {
+    for (reference, value) in sources {
         values.insert(reference.to_string(), value.to_string());
         refs.push(reference.to_string());
     }
@@ -121,14 +132,14 @@ async fn setup(auth: AuthSpec, resolve: Option<(&str, &str)>) -> Harness {
 
     let app: Router = build_app_full_with_phase_k(
         cfg_arc,
-        Some(audit),
+        Some(audit.clone()),
         resolved_arc,
         None,
         Some(bearer),
         Some(registrations),
         catalog_arc,
         None,
-        None,
+        Some(account_bindings.clone()),
         None,
         None,
         None,
@@ -142,6 +153,8 @@ async fn setup(auth: AuthSpec, resolve: Option<(&str, &str)>) -> Harness {
         agent_bearer,
         mock,
         op_calls,
+        bindings: account_bindings,
+        audit,
     }
 }
 
@@ -231,3 +244,6 @@ async fn op_cache_miss_returns_503_credential_unresolved() {
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"]["code"], "credential_unresolved");
 }
+
+#[path = "source_isolation/op.rs"]
+mod isolation;

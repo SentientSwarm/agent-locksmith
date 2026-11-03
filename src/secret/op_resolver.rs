@@ -153,18 +153,18 @@ impl OpResolver {
     fn resolve_one(&self, reference: &str) -> Option<SecretString> {
         self.invocations.fetch_add(1, Ordering::Relaxed);
         match self.command.read(reference) {
-            Ok(value) => Some(value),
-            Err(e) => {
-                // Non-secret: the reference is a path (vault/item/field),
-                // not a value; the error is a CLI status, not a secret.
-                warn!(reference = %reference, error = %e, "op reference resolution failed; degraded");
+            Ok(value) if !secrecy::ExposeSecret::expose_secret(&value).is_empty() => Some(value),
+            _ => {
+                // Dependency errors can echo credential material; retain only
+                // the selected reference and a classified cause.
+                warn!(reference = %reference, cause = "op_read_failed", "op reference resolution failed; degraded");
                 if let Some(emitter) = self.emitter.as_ref() {
                     emitter.emit(
                         crate::repo::LogLevel::Warn,
                         crate::repo::LogComponent::Config,
                         "op_resolution_degraded",
                         "op:// reference could not be resolved; credential degraded",
-                        Some(serde_json::json!({ "reference": reference, "error": e })),
+                        Some(serde_json::json!({ "reference": reference, "cause": "op_read_failed" })),
                     );
                 }
                 None

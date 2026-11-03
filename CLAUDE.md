@@ -4,15 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working branch
 
-`develop` is the default working branch — currently at **v2.8.0**
-(catalog substrate + per-agent ACL + mTLS + OAuth credential variant
-+ per-agent credential overrides + OAuth session labels + complete
-codex transparent integration through Phase G2/G3/G4/G5 + Phase J
-credential custody backends and operational-log stream). `main` tracks
-releases (promoted from `develop` at release time; see the latest tag).
-Cut feature branches from `develop`.
+`main` is the integration branch. Create short-lived feature/fix/docs branches
+from current `origin/main`, targeting `main`. `develop` is retired. Optional
+`release/<major>.<minor>` branches stabilize a release while new work continues
+on `main`. See [Branching and releases](docs/development/branching.md); historical
+`docs/v2/` branch instructions are superseded. Read Cargo.toml and tags for
+version/release state. This policy does not authorize publication.
 
-Recent phase shipments on develop:
+Recent phase shipments:
 
 - **Phase G** (v2.1.0): per-agent credential overrides + OAuth
   session labels. `agent_credential_overrides(agent_id, registration)`
@@ -172,19 +171,19 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 1. Reads `auth_method` + `agent_public_id` from request extensions stamped by `auth::auth_middleware`. `AgentIdentity` carries `id: i64` (Phase G — used for the agent-credential override lookup).
 2. **M9 ACL gate**: when `AgentIdentity` is in extensions, calls `identity.allows_tool(name)`. Failure → 403 `tool_not_allowed` + `authz_denied` audit row (M9 / B1).
 3. **Phase E.6 target resolution**: `state.catalog.lookup_active(name)` (registrations table, in-memory cache). Falls back to `config.active_tools()` for M0/M1 / pre-Phase-E test paths. `ProxyTarget::from_registration` or `from_tool_config`.
-4. **Phase G per-agent override**: `apply_agent_credential_override` looks up `agent_credential_overrides[agent_id, name]`. If present, swaps in the override's AuthSpec (header/bearer reads env var directly; OAuth records the `session_label` for downstream resolution). `target.auth_source` flips to `agent_override`.
-5. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` with `target.oauth_session_label` (defaults to `DEFAULT_SESSION_LABEL`) to materialize the access token from `oauth_sessions(name, label)` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
+4. **D1 explicit account admission**: `proxy::selection::apply` requires the current authenticated agent's `agent_credential_overrides[agent_id, name]` row after the ACL check. Missing selection returns 403; unavailable/corrupt selection or missing/empty selected env returns 503 before dispatch. It materializes only the selected AuthSpec and sets `auth_source=agent_override`. Credentialed identityless legacy calls return 401 `agent_identity_required`; no synthetic agent or template fallback. Explicit `None` still needs the registered agent's ACL and selection.
+5. **Phase F.5 OAuth resolution**: when `target.auth` is `ProxyAuth::Oauth`, calls `resolve_oauth_token` with `target.oauth_session_label` (from the explicit selection, including a literal `default` label) to materialize the access token from `oauth_sessions(name, label)` (with inline refresh on expiry). Failures map to 503 envelope codes (`oauth_session_missing`, `oauth_refresh_failed`, `oauth_sealing_key_unset`).
 5a. **Phase J custody resolution**: `stored_*` targets fetch + unseal from `credential_secrets` (`resolve_stored_credential`); `op_*` targets read the `OpResolver` cache. Any failure → 503 `credential_unresolved` with a distinct audit cause and an operational-log warn.
 6. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
-7. Injects credentials per `ProxyAuth` variant: `None` skips; `Header { override_value, .. }` and `Bearer { override_value }` use the override value when set, else fall back to `resolved_creds[name]`; `Oauth` injects access token from the OAuth cache.
+7. Injects only the explicitly selected credential for authenticated agent requests. Header/bearer values were read from the selected env, stored values unsealed from the selected handle, and op values read from the selected cache. OAuth uses the selected mechanism/client/endpoints/label, with full cross-binding consensus before cached-token use or refresh. Missing/degraded/conflicting sources fail with 503 and never try another account. The legacy cache is not agent authority.
 7a. **Phase G2 codex header injection**: when `ProxyAuth::Oauth.account_id` is `Some(_)` and `is_chatgpt_codex_upstream(target.upstream)` matches (`/backend-api/codex` substring, case-insensitive), adds `ChatGPT-Account-ID: <account_id>`. Silent skip otherwise. The account_id was extracted from the access-token JWT at bootstrap/refresh by `oauth::jwt::extract_chatgpt_account_id` and stored in `oauth_sessions.account_id`.
 7b. **Phase G3 codex body fixup**: when `is_chatgpt_codex_upstream(target.upstream)` AND `request_path_ends_with_responses(ctx.request_path)` both match, calls `codex_body::fixup` on the request body. Injects `store: false`, `stream: true`, `instructions: <default>` if missing; overrides `store`/`stream` if set wrong; preserves user-supplied `instructions`. 1 MiB body cap (413 over via `record_codex_body_too_large`). Non-JSON bodies pass through. `RequestCtx.codex_body_fixup` records what changed; surfaces in audit `details.codex_body_fixup` when non-noop.
 7c. **Phase G4 codex required headers**: when `is_chatgpt_codex_upstream(target.upstream)` matches (any path, not just `/responses`), forces `OpenAI-Beta: responses=experimental` (agent's value stripped during forward loop). Injects `originator: <agent-name>` from `AgentIdentity.name` if the agent didn't supply their own; falls back to `"locksmith-proxy"` for identityless paths. Preserves agent-supplied `originator`.
 8. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
 9. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
-10. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id`; Phase G adds `details.auth_source` (`registration_default` | `agent_override`) and `details.oauth_session_label`. `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`. Audit query results LEFT JOIN `agents` to surface `agent_name` alongside `agent_public_id` (G.0).
+10. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id`; Phase G adds `details.auth_source` (`agent_override` on authenticated selected requests; legacy authless paths may retain `registration_default`) and `details.oauth_session_label`. `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`. Audit query results LEFT JOIN `agents` to surface `agent_name` alongside `agent_public_id` (G.0).
 
-`/readyz` is the source-of-truth liveness check for orchestrators: it returns 503 if any tool with an `auth` block has no resolved credential. `/livez` is liveness only. `/health` is an M0 alias for `/livez`.
+`/livez` is liveness (`/health` is its legacy alias). `/readyz` checks startup tool dependencies and denies credentialed identityless setups. It does not attest every per-agent binding; selected source failures can return 503 on a ready instance.
 
 ## Module map
 
@@ -238,3 +237,13 @@ docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineeri
 ## Stack-root context
 
 The parent `agents-stack/AGENTS.md` and `agents-stack/CLAUDE.md` apply at the meta-repo level (cross-repo orchestration, `stack.py`). Implementation work belongs in this sub-repo; this CLAUDE.md takes precedence over the stack root for everything inside `agent-locksmith/`.
+
+## Explicit account cutover verification
+
+`cargo test --test explicit_binding_smoke_test -- --nocapture` runs actual
+disposable daemon/CLI SM01–SM05, executes marked user setup/upgrade blocks, checks
+receiving X/X/Y and zero-dispatch failures, and stops/restarts for offline
+migration. See [smoke contract](docs/development/explicit-account-bindings-smoke.md)
+and [change notes](docs/user/changes/explicit-account-bindings.md). Full source
+matrices remain in focused Rust tests. Provider compatibility and the two D4
+ACL-growth/stale-activation findings are outside this local smoke.

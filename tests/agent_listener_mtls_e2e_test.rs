@@ -218,6 +218,20 @@ async fn agent_listener_mtls_authenticates_via_client_cert() {
     repo.set_cert_identity(&public_id, Some("agent-7"))
         .await
         .unwrap();
+    let pool = migrations::open_and_migrate(&scaffold.db_path)
+        .await
+        .unwrap();
+    let id = repo.get_by_name("agent-7").await.unwrap().unwrap().id;
+    agent_locksmith::repo::AgentCredentialRepository::new(pool)
+        .set(
+            id,
+            "ping",
+            &agent_locksmith::registrations::AuthSpec::Bearer {
+                env_var: "AGENT_LISTENER_MTLS_TEST_KEY".into(),
+            },
+        )
+        .await
+        .unwrap();
     drop(repo);
 
     // Mock upstream that asserts the credential header (proves the

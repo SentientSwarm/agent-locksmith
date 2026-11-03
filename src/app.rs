@@ -15,7 +15,7 @@ use crate::mtls::MtlsAuthenticator;
 use crate::proxy;
 use crate::repo::AuditRepository;
 use crate::response_controls::ResponseControls;
-use crate::secret::{ResolvedCreds, resolve_tool_creds_sync_env_only};
+use crate::secret::ResolvedCreds;
 use std::collections::HashMap;
 
 pub struct AppState {
@@ -157,18 +157,21 @@ pub fn build_app_with_shared_config(config: Arc<ArcSwap<AppConfig>>) -> Router {
 }
 
 /// Build the agent router with an optional audit sink. M3 calls this so
-/// the proxy hot path emits one audit row per request. Eager-resolves
-/// `tool.auth.value` SecretRefs synchronously (env + legacy paths only) —
-/// daemon callers that need sealed/Vault/AWS go through
-/// `build_app_with_audit_and_creds`.
+/// the proxy hot path emits one audit row per request. This convenience
+/// entry has no real agent authenticator and does not resolve credentials.
+/// Credentialed deployments use the full constructor with registered-agent
+/// authentication and an explicit selection repository.
 pub fn build_app_with_audit(
     config: Arc<ArcSwap<AppConfig>>,
     audit: Option<AuditRepository>,
 ) -> Router {
-    let snapshot = config.load();
-    let resolved = resolve_tool_creds_sync_env_only(&snapshot);
-    drop(snapshot);
-    build_app_with_audit_and_creds(config, audit, Arc::new(ArcSwap::from_pointee(resolved)))
+    // This convenience entry has no real agent authenticator. Credentialed
+    // routes are denied before resolution; no shared account needs reading.
+    build_app_with_audit_and_creds(
+        config,
+        audit,
+        Arc::new(ArcSwap::from_pointee(Default::default())),
+    )
 }
 
 /// Full-power constructor used by the daemon: caller supplies an
@@ -471,6 +474,17 @@ async fn livez_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
 /// are considered required. M2 introduces per-tool `on_secret_failure:
 /// degraded` to opt out of the readiness check.
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let incompatible = crate::legacy_admission::incompatible_tools(&state);
+    if !incompatible.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status":"not_ready", "reason":"agent_identity_required", "tools":incompatible,
+                "upgrade":crate::legacy_admission::UPGRADE_MESSAGE,
+            })),
+        )
+            .into_response();
+    }
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
     let unconfigured: Vec<&str> = config
@@ -529,6 +543,7 @@ async fn skill_handler(
         .cloned();
     match identity {
         Some(ref id) => {
+            // ACL eligibility only, not binding existence/source health.
             // Source of truth: same path /tools uses (catalog_listing
             // over the registrations table when wired, fallback to
             // legacy config.tools when not). Pre-Phase-E this returned

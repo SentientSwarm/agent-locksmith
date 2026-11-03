@@ -24,7 +24,7 @@ For the production Docker Compose bundle deployment story, see
 
 | Doc | Audience |
 |---|---|
-| [getting-started.md](getting-started.md) | Developer first-contact: build, mint operator credential, register agent, make a call. |
+| [getting-started.md](getting-started.md) | Developer first-contact: build, mint operator credential, register agent, explicitly select an account, make a call. |
 | [cli-reference.md](cli-reference.md) | Complete `locksmith` CLI subcommand and flag reference. |
 | [architecture.md](architecture.md) | User-level system view: daemon composition, request flow, what state lives where. |
 
@@ -55,3 +55,10 @@ Wiring an agent through a layer8-proxy deployment:
 | [agent-integration/examples/curl.md](agent-integration/examples/curl.md) | Copy-paste curl recipes for every common operation. |
 | [agent-integration/examples/python.md](agent-integration/examples/python.md) | Python recipes — anthropic / openai SDKs, httpx, aiohttp, error handling. |
 | [agent-integration/examples/typescript.md](agent-integration/examples/typescript.md) | TypeScript / Node recipes — anthropic / openai SDKs, fetch, axios, streaming. |
+
+## Account cutover
+
+- [D1 change notes](changes/explicit-account-bindings.md) — compatibility and limits.
+- [Reviewed migration](concepts/migrating-account-bindings.md) — backup, preview/apply and restart.
+- [Account troubleshooting](operator/account-binding-troubleshooting.md) — error classes and repair.
+- [Saved local smoke](../development/explicit-account-bindings-smoke.md) — actual daemon/CLI SM01–SM05.

@@ -346,3 +346,6 @@ fn write(path: &Path, body: &str) {
 fn _use_config(f: &E2eFixture) -> &Path {
     &f.config_path
 }
+
+#[path = "source_isolation/cli_oauth.rs"]
+mod oauth_isolation;

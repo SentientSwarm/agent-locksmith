@@ -22,11 +22,14 @@ Three fields, every error response, every time. The `code` field is the stable c
 |------|------|------|------|
 | 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed, unknown public_id, wrong-namespace, expired, revoked, secret-mismatch — any reason at all. The wire **does not** distinguish between these (see Q-8 below). |
 | 401 | `auth_error` | `internal_error` | Internal failure during auth (DB unreachable, etc.). The audit log carries the discriminating cause. |
-| 403 | `authz_error` | `tool_not_allowed` | Bearer is valid; the requested tool/model isn't in the agent's allowlist (or is in the denylist). |
-| 403 | `authz_error` | `wrong_kind` | (v2.0.0+) Operation references a name registered under a different kind (e.g., `PUT /admin/models/anthropic` when anthropic is `kind=tool`). |
+| 403 | `authz_error` | `tool_not_allowed` | Valid identity, but ACL denies or the explicit account binding is missing; inspect the operator audit reason. |
+| 409 | `conflict` | `wrong_kind` | (v2.0.0+) Operation references a name registered under a different kind (e.g., `PUT /admin/models/anthropic` when anthropic is `kind=tool`). |
 | 400 | `bad_request` | `reserved_name` | (v2.0.0+) Admin operation tried to register a name on the reserved list (`livez`, `readyz`, `version`, `health`, `skill`, `tools`, `models`, `admin`, `api`). |
 | 400 | `bad_request` | `auth_required` | (v2.0.0+) Admin operation registered `kind=tool` without `auth:` — must state `auth: none` explicitly for authless tools. |
 | 409 | `conflict` | `name_in_use` | (v2.0.0+) Cross-kind name reuse (e.g., a name already exists with a different kind). |
+| 503 | `auth_error` | `credential_unresolved` | Selected environment/stored/1Password source unavailable or selection unreadable. No alternate/default dispatch. |
+| 503 | `auth_error` | `oauth_session_missing` / `oauth_refresh_failed` / `oauth_sealing_key_unset` | Selected OAuth session unavailable; operator diagnosis required. |
+| 401 | `auth_error` | `agent_identity_required` | Identityless legacy request to a credentialed registration. |
 | 429 | `auth_error` | `rate_limited` | Token validation rate-limited. Includes `Retry-After` header (seconds). |
 | 5xx | `auth_error` | `backend_error` | Backend persistence error during auth. The wire message is generic; the operator's logs carry the discriminator. |
 
@@ -83,16 +86,16 @@ Content-Type: application/json
 
 - **Read `code`, not `message`.** Codes are the stable contract; messages may evolve.
 - **Don't try to parse 401 sub-reasons from the wire.** They aren't there. If you persistently 401, ask the operator to grep the audit log for your `public_id`.
-- **403 `tool_not_allowed` is permanent for the current bearer.** Don't retry; don't downgrade. Either request a broader ACL or change which tool you're calling.
+- **403 `tool_not_allowed` needs operator diagnosis.** Audit `account_binding_missing` means select the intended account; `not_in_allowlist` / `in_denylist` mean review intended ACL policy. A deliberate repair can work with the same bearer. Never broaden ACLs as a universal repair or downgrade authentication.
 - **429 `rate_limited` honors `Retry-After`.** Back off for the indicated seconds.
-- **5xx is "the proxy itself is in trouble".** Bubble up; don't loop.
+- **503 requires selected-source diagnosis.** Ask the operator to inspect safe references/labels/status and repair the selected source. Never retry an alternate account, registration default or unauthenticated call. Other 5xx errors should also be surfaced without tight loops.
 
 ## Operator practical guidance
 
 For 401 troubleshooting, the audit log is the discriminator:
 
 ```bash
-locksmith audit query --event-class security --agent-public-id <pid> --limit 20
+locksmith audit query --event-class security --agent <pid> --limit 20
 ```
 
 Look at `details.reason`:
@@ -107,6 +110,20 @@ Look at `details.reason`:
 | `expired` | Token TTL elapsed (when expirations are configured) | Re-register and redistribute |
 
 Same code on the wire (`invalid_credential`); different reason in the log; different fix.
+
+For `tool_not_allowed`, distinguish policy from missing selection:
+
+| Audit reason | Operator action |
+| --- | --- |
+| `account_binding_missing` | Run `locksmith agent credentials list <agent-public-id>`; deliberately select an approved source with `locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'` or another supported source. |
+| `not_in_allowlist` / `in_denylist` | Review whether an ACL change is intended; account selection does not override policy. |
+
+For 503, diagnose the selected environment reference, stored credential,
+1Password cache reference or OAuth session before repair. Reads and reports
+must contain references/status only, never credential values. Clearing a
+binding denies the next admission. Catalog discovery proves ACL eligibility,
+not binding existence or source health. See
+[binding troubleshooting](../operator/account-binding-troubleshooting.md).
 
 ## See also
 
