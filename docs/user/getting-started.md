@@ -127,6 +127,12 @@ instance can still reject an individual unavailable binding with 503.
 
 Create a tool pointing to your local API. Export `UPSTREAM_URL` first:
 
+Use an absolute HTTP(S) base URL without userinfo, query or fragment. Localhost,
+IP addresses and normal path prefixes are supported. Invalid destinations are
+rejected before saving; existing grants and selections remain unchanged. See the
+[operator onboarding recipe](operator/connector-onboarding.md) for validation,
+inspection and the account/grant handoff.
+
 <!-- smoke:catalog -->
 ```sh
 "$LOCKSMITH_BIN" --socket "$SOCKET" --format json tool put "$REGISTRATION" \

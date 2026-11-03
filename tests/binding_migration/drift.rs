@@ -52,7 +52,7 @@ async fn expiry_after_preview_denies_without_database_edits() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
-        + 1;
+        + 10;
     sqlx::query("UPDATE agents SET expires_at=? WHERE name='shared-a'")
         .bind(expiry)
         .execute(&f.pool)
@@ -60,7 +60,18 @@ async fn expiry_after_preview_denies_without_database_edits() {
         .unwrap();
     let mut p = f.preview();
     select(&mut p, f.ids[0]);
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    // Wait strictly beyond expiry, capped at 11 seconds if wall time moves back.
+    let wait = expiry.saturating_sub(now).clamp(0, 10) as u64 + 1;
+    tokio::time::sleep(Duration::from_secs(wait)).await;
+    let after = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    assert!(
+        after.as_secs() > expiry as u64,
+        "wall clock must be strictly past the recorded expiry before apply"
+    );
     conflict(&f.apply(&p));
     assert_eq!(f.count().await, 1);
 }

@@ -26,6 +26,8 @@ Three fields, every error response, every time. The `code` field is the stable c
 | 409 | `conflict` | `wrong_kind` | (v2.0.0+) Operation references a name registered under a different kind (e.g., `PUT /admin/models/anthropic` when anthropic is `kind=tool`). |
 | 400 | `bad_request` | `reserved_name` | (v2.0.0+) Admin operation tried to register a name on the reserved list (`livez`, `readyz`, `version`, `health`, `skill`, `tools`, `models`, `admin`, `api`). |
 | 400 | `bad_request` | `auth_required` | (v2.0.0+) Admin operation registered `kind=tool` without `auth:` — must state `auth: none` explicitly for authless tools. |
+| 400 | `bad_request` | `invalid_upstream` | Operator tool/model destination is not an absolute HTTP(S) base URL, or contains userinfo, query or fragment. Validation does not echo the URL; no row, grant or selection changes. See [operator onboarding](../operator/connector-onboarding.md). |
+| 400 | `bad_request` | `invalid_http_service` | Optional service metadata fails the strict versioned [HTTP descriptor contract](../agent-integration/http-services.md). Static error does not echo authored content; no row, grant or selection changes. |
 | 409 | `conflict` | `name_in_use` | (v2.0.0+) Cross-kind name reuse (e.g., a name already exists with a different kind). |
 | 503 | `auth_error` | `credential_unresolved` | Selected environment/stored/1Password source unavailable or selection unreadable. No alternate/default dispatch. |
 | 503 | `auth_error` | `oauth_session_missing` / `oauth_refresh_failed` / `oauth_sealing_key_unset` | Selected OAuth session unavailable; operator diagnosis required. |

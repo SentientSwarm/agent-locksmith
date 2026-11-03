@@ -1,0 +1,29 @@
+{
+  "http_service": {
+    "version": 1,
+    "mode": "request_response",
+    "operations": [
+      {
+        "id": "list-jobs",
+        "summary": "List jobs visible to the selected account",
+        "method": "GET",
+        "path": "/v2/jobs",
+        "query": [
+          {"name": "limit", "type": "integer", "required": false, "description": "Maximum number of jobs to return"}
+        ],
+        "response": {
+          "status": 200,
+          "content_type": "application/json",
+          "fields": [
+            {"name": "account", "type": "string", "required": true, "description": "Account identity reported by the receiving service"},
+            {"name": "jobs", "type": "array", "required": true, "description": "Visible job names"}
+          ]
+        },
+        "errors": [
+          {"status": 400, "description": "Invalid limit; send a positive integer"}
+        ],
+        "example": {"query": {"limit": "2"}, "response": {"account": "example-account", "jobs": ["example-job"]}}
+      }
+    ]
+  }
+}

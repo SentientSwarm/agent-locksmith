@@ -145,6 +145,52 @@ async fn body(response: Response) -> Value {
     .unwrap()
 }
 
+async fn listing(f: &Fixture) -> Vec<Value> {
+    api::list_public(
+        &f.admin.repo,
+        &f.admin.catalog.as_ref().unwrap().load(),
+        Kind::Tool,
+        Some(&f.identity),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn metadata_only_change_preserves_authority_and_requires_activation() {
+    let f = Fixture::new().await;
+    let mut row = f.admin.repo.get("service").await.unwrap().unwrap();
+    row.metadata =
+        serde_json::from_str(include_str!("../examples/http-service-reference.json")).unwrap();
+    row.metadata["private"] = json!("private-marker");
+    f.admin.repo.upsert(&row).await.unwrap();
+    f.denied(503, "connection_not_active").await;
+    let stale = listing(&f).await;
+    assert!(!stale.iter().any(|v| v["name"] == "service"));
+    f.admin.refresh_runtime().await.unwrap();
+    f.get("service").await.assert_status_ok();
+    let active = listing(&f).await;
+    let service = active.iter().find(|v| v["name"] == "service").unwrap();
+    assert_eq!(service["http_service"]["version"], 1);
+    assert_eq!(service["account_selected"], true);
+    assert_eq!(service["credential_readiness"], "not_checked");
+    assert!(!service.to_string().contains("private-marker"));
+}
+
+#[tokio::test]
+async fn malformed_preexisting_descriptor_is_omitted_from_discovery() {
+    let f = Fixture::new().await;
+    let mut row = f.admin.repo.get("service").await.unwrap().unwrap();
+    row.metadata = json!({"http_service":{"private":"private-marker"},"other":"private-marker"});
+    f.admin.repo.upsert(&row).await.unwrap();
+    f.admin.refresh_runtime().await.unwrap();
+    let items = listing(&f).await;
+    let service = items.iter().find(|v| v["name"] == "service").unwrap();
+    assert!(service.get("http_service").is_none());
+    assert!(!service.to_string().contains("private-marker"));
+    f.get("service").await.assert_status_ok();
+}
+
 #[tokio::test]
 async fn persisted_write_failed_activation_denies_changed_row_and_recovers() {
     let f = Fixture::new().await;

@@ -129,20 +129,31 @@ selections; disable/re-enable retains them. `delete` on a seeded entry disables
 it; on an operator-created entry it hard-deletes. No active entry alone proves an
 agent's selected account works.
 
+An invalid tool/model URL returns HTTP 400 `invalid_upstream` / CLI exit 1 before
+saving or activation. The existing row, grant and account selection remain
+unchanged. See [operator onboarding](operator/connector-onboarding.md) for seed
+validation and compatibility details.
+
 `put` flags:
 
 | Flag | Description |
 |---|---|
-| `--upstream <url>` | Upstream URL the registration proxies to. Required. |
+| `--upstream <url>` | Required base URL. Tool/model require absolute HTTP(S), with no userinfo, query or fragment; localhost/IP/private hosts and path prefixes are supported. Infra retains its existing contract. |
 | `--auth <spec>` | Auth shape — see "Auth spec syntax" below. |
 | `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `proxied` server-side. |
 | `--timeout-request <secs>` | Per-request timeout. Defaults server-side. |
 | `--timeout-idle <secs>` | Per-read idle timeout. Defaults server-side. |
 | `--body-limit <bytes>` | Max upstream response body size. Defaults 10 MiB. |
 | `--metadata k=v` | Per-kind metadata. Repeatable. |
+| `--metadata-file <path>` | Complete JSON metadata value, replacing existing metadata without merging. Mutually exclusive with `--metadata`. Supports nested `http_service` descriptions. |
 | `--description '...'` | Free-form description. |
 
 `enable` un-disables a previously-deleted seed row.
+
+The optional public `metadata.http_service` member is validated before saving;
+malformed descriptions return HTTP 400 `invalid_http_service` / CLI exit 1.
+File read/JSON syntax failures are local CLI exit 2. See
+[HTTP service authoring](operator/connector-onboarding.md#publish-a-service-description).
 
 ### Auth spec syntax (`--auth`)
 

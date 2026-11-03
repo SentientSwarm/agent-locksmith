@@ -39,17 +39,16 @@ impl CliKind {
 /// verbatim by `tool put`, `model put`, `infra put`.
 #[derive(Args, Debug)]
 pub struct PutOpts {
-    /// Upstream URL the registration proxies to. Required.
+    /// Base URL. Tool/model require HTTP(S), without userinfo, query or fragment.
     #[arg(long)]
     pub upstream: String,
 
     /// Auth shape. Accepted forms:
-    ///   `none`                         (kind=tool only — explicit authless;
-    ///                                    field absent on kind=tool → 400)
+    ///   `none`                         explicit authless tool/model
     ///   `header:<HEADER>=<ENV_VAR>`    inject `<HEADER>: <env-var-value>`
     ///   `bearer=<ENV_VAR>`             inject `Authorization: Bearer <env-var-value>`
     ///
-    /// kind=model rejects `none`. kind=infra accepts any (omit for AuthSpec::None).
+    /// Tool/model require auth. Infra may omit it (defaults to None).
     #[arg(long)]
     pub auth: Option<String>,
 
@@ -76,6 +75,10 @@ pub struct PutOpts {
     #[arg(long, value_parser = parse_metadata_kv)]
     pub metadata: Vec<(String, String)>,
 
+    /// Replace metadata with the complete JSON value from a file (no merge).
+    #[arg(long, conflicts_with = "metadata")]
+    pub metadata_file: Option<std::path::PathBuf>,
+
     /// Optional description. Empty by default.
     #[arg(long)]
     pub description: Option<String>,
@@ -89,6 +92,13 @@ fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
         return Err(format!("metadata key empty in: {s}"));
     }
     Ok((k.to_string(), v.to_string()))
+}
+
+fn read_metadata_file(path: &std::path::Path) -> Result<Value, CliError> {
+    let contents =
+        std::fs::read(path).map_err(|_| CliError::Usage("unable to read metadata file".into()))?;
+    serde_json::from_slice(&contents)
+        .map_err(|_| CliError::Usage("metadata file must contain valid JSON".into()))
 }
 
 /// Parse an `--auth <spec>` string into the JSON shape expected by the
@@ -205,6 +215,9 @@ pub async fn do_put(
             md.insert(k, json!(v));
         }
         body.insert("metadata".into(), Value::Object(md));
+    }
+    if let Some(path) = opts.metadata_file {
+        body.insert("metadata".into(), read_metadata_file(&path)?);
     }
 
     let path = format!("/admin/operator/{}/{}", kind.url_segment(), name);

@@ -137,13 +137,14 @@ A listed tool can still return 403 for missing selection or 503 for an unavailab
 To call one of these tools:
 
 ```
-curl -fsS -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
+curl -fsS -X <METHOD> -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
   http://<locksmith>/api/<tool>/<upstream-path>
 ```
 
-The `<upstream-path>` is forwarded verbatim to the tool's upstream — for
-example, `/api/{first_tool_or_placeholder}/v1/chat/completions` reaches the
-upstream's `v1/chat/completions` endpoint. Locksmith strips your
+Choose the method and `<upstream-path>` from the tool's `http_service`
+descriptor in authenticated `/tools`, or its public API documentation when
+no descriptor is present. Listing a tool does not imply any particular
+operation or chat endpoint. Locksmith forwards the path, strips your
 `Authorization` header and injects only your explicitly selected upstream credential
 before forwarding.
 {codex_quirks_md}
@@ -158,14 +159,14 @@ change to see the new tool list.
 
 ### Audit-debug recipe (operator-facing)
 
-If you start getting 403 `tool_not_allowed`, your operator can trace:
+For 403 `tool_not_allowed` or a selected-source 503, your operator can trace:
 
 ```
-locksmith audit query --event-class security --agent {public_id} \
+locksmith audit query --agent {public_id} \
   --since-ms <ms>
 ```
 
-Recent denies for you appear with `event=authz_denied` and
+For 403, security denies appear with `event=authz_denied` and
 `details.reason` distinguishes `account_binding_missing` from `not_in_allowlist`
 or `in_denylist`. For a missing binding, diagnose first:
 
@@ -176,7 +177,11 @@ locksmith agent set-credential {public_id} <tool> --auth 'bearer=<ENV_VAR>'
 
 Choose the intended source reference deliberately; do not widen the ACL to
 repair missing selection. Selected-source 503s require source diagnosis as
-explained above, without alternate-account/default/unauthenticated retries. 401s
+explained above, without alternate-account/default/unauthenticated retries.
+For a 503, inspect proxy events: `credential_unavailable` uses
+`details.credential_cause`; OAuth failures use `details.oauth_cause`, and
+activation failures use `details.cause`.
+The query above includes both security and proxy events. 401s
 appear with `event=auth_failure` and `details.reason` carrying the
 specific failure mode (`missing_credential`, `malformed_token`,
 `wrong_namespace`, `unknown_public_id`, `secret_mismatch`, `expired`).
@@ -187,10 +192,6 @@ specific failure mode (`missing_credential`, `malformed_token`,
         codex_quirks_md = codex_quirks_md,
         allowlist = allowlist_str,
         denylist = denylist_str,
-        first_tool_or_placeholder = available_tools
-            .first()
-            .map(|(n, _)| n.as_str())
-            .unwrap_or("<tool>"),
     );
 
     format!("{}{}", SKILL_TEMPLATE, personalized)

@@ -19,6 +19,7 @@ pub mod admission;
 pub mod api;
 pub mod auth_spec;
 pub mod catalog;
+pub mod http_service;
 pub mod kind;
 pub mod legacy_bootstrap;
 pub mod repo;
@@ -29,11 +30,22 @@ pub use auth_spec::AuthSpec;
 pub use catalog::Catalog;
 pub use kind::Kind;
 pub use repo::{Registration, RegistrationRepository};
-pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name};
+pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name, validate_upstream};
 
 /// Registration-layer errors. Wire-rendering happens in `api.rs` (E.3).
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RegistrationError {
+    #[error(
+        "invalid http_service: use the version 1 request_response JSON contract with relative operation paths"
+    )]
+    InvalidHttpService,
+
+    /// Invalid HTTP base URL. Never echo input that may contain credentials.
+    #[error(
+        "invalid upstream: use an absolute HTTP(S) base URL without userinfo, query or fragment"
+    )]
+    InvalidUpstream,
+
     /// Cross-kind name reuse — `name` is already registered under a
     /// different kind. Wire: 409 conflict / `name_in_use`.
     #[error("name in use (existing kind: {existing_kind})")]

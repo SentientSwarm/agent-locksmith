@@ -22,6 +22,7 @@
 use crate::config::{EgressMode, ToolTimeouts};
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository, validate_name,
+    validate_upstream,
 };
 use serde::Deserialize;
 use serde_json::Value as Json;
@@ -150,6 +151,18 @@ async fn apply_catalog_parsed(
     // Validate every entry up-front. Catch malformed catalogs before
     // we touch the DB.
     for entry in &catalog.entries {
+        if let Some(metadata) = &entry.metadata {
+            super::http_service::from_metadata(metadata).map_err(|error| SeedLoadError::Entry {
+                name: entry.name.clone(),
+                kind: entry.kind.to_string(),
+                error,
+            })?;
+        }
+        validate_upstream(entry.kind, &entry.upstream).map_err(|error| SeedLoadError::Entry {
+            name: entry.name.clone(),
+            kind: entry.kind.to_string(),
+            error,
+        })?;
         validate_name(&entry.name).map_err(|e| SeedLoadError::Entry {
             name: entry.name.clone(),
             kind: entry.kind.to_string(),
