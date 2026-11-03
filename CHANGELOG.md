@@ -19,6 +19,21 @@
   their behavior.
 
 
+### Native MCP prerequisite safety
+
+- Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
+  cumulative SSE response bounds precede collector/JSON decoding; event,
+  depth/work, timeout and cleanup checks apply with explicit unsupported modes.
+  Compression, redirects and automatic replay/resumption are disabled. See
+  [configuration, diagnostics and limits](docs/development/mcp-transport.md).
+  Actual SDK/TLS receiving-process checks distinguish rejected replies from
+  already-arrived tool effects. One GET attempt per transport prevents SDK
+  renewal from resetting limits; conflicting transfer framing is refused and
+  bare CR event delimiters count before parser admission.
+  This separate library needs AGENT-202 daemon
+  integration and independent acceptance; it does not ship native MCP, clear
+  all G1 requirements, bump the root version or change installed services.
+
 ### OAuth lifecycle safety
 
 - Reject stale OAuth success, degradation and bootstrap cleanup after revoke,
