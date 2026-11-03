@@ -39,6 +39,13 @@ impl CliKind {
 /// verbatim by `tool put`, `model put`, `infra put`.
 #[derive(Args, Debug)]
 pub struct PutOpts {
+    /// Native MCP is lifecycle-only until tool review/dispatch is implemented.
+    #[arg(long, value_parser = ["http", "mcp_streamable_http"])]
+    pub protocol: Option<String>,
+    /// Strict MCP configuration JSON: protocol_version, allow_private_destination.
+    #[arg(long)]
+    pub mcp_config_file: Option<std::path::PathBuf>,
+
     /// Base URL. Tool/model require HTTP(S), without userinfo, query or fragment.
     #[arg(long)]
     pub upstream: String,
@@ -187,6 +194,12 @@ pub async fn do_put(
     // body_limit=10MiB, etc.).
     let mut body = serde_json::Map::new();
     body.insert("upstream".into(), json!(opts.upstream));
+    if let Some(protocol) = opts.protocol {
+        body.insert("protocol".into(), json!(protocol));
+    }
+    if let Some(path) = opts.mcp_config_file {
+        body.insert("mcp".into(), read_metadata_file(&path)?);
+    }
     if let Some(d) = opts.description {
         body.insert("description".into(), json!(d));
     }

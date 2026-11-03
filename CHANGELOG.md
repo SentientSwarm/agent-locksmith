@@ -4,6 +4,9 @@
 
 ### Internal
 
+- Box finished internal OAuth bootstrap error responses for current-stable
+  Clippy; handlers return the same responses and retain conditional cleanup.
+
 - Give the migration expiry test a ten-second preview setup margin and wait
   from its recorded expiry before apply, retaining the post-expiry conflict
   and unchanged-binding assertions.
@@ -15,6 +18,56 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### Native MCP lifecycle
+
+- Add authenticated stateful MCP2025-11-25 lifecycle at `/mcp/{connection}`
+  (AGENT-202), with native-scoped Host/Origin/input/output limits, current
+  connection authority, bounded joined sessions, replay refusal and shutdown.
+  Tools remain unapproved: empty list and explicit call denial, no upstream
+  credentials or calls. Typed native connections cannot use HTTP `/api`.
+- Migration0011 preserves HTTP accounts/grants/revocations and reviewed receipts,
+  creates zero native/tool authority and makes old binaries refuse upgraded state.
+  Protocol/config changes require connection-grant/account reapproval; one daemon
+  owns each database. See [setup](docs/user/operator/native-mcp.md),
+  [wire contract](docs/user/agent-integration/native-mcp.md) and
+  [backup, recovery and limits](docs/user/changes/native-mcp.md). No version bump.
+
+### Native MCP prerequisite safety
+
+- Reserve MCP session capacity before SDK allocation (AGENT-199). Scoped
+  budgets include initializing and closing sessions; worker/service joins and
+  response cleanup precede release. A pinned SDK ownership patch retains
+  protocol handling and makes stalled-handshake and canceled-close cleanup
+  observable. Absolute lifetime also bounds initialization; dropping its unpolled
+  response retires the session without invalidating consumed final events.
+  See [scope, budgets and limits](docs/development/mcp-sessions.md).
+  Resume/replay are unsupported; already-submitted effects are not rolled back.
+  The prerequisite was accepted at e18da87; AGENT-202 now consumes its pool.
+  Useful authority/dispatch and full G3/release gates remain open.
+
+- Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
+  cumulative SSE response bounds precede collector/JSON decoding; event,
+  depth/work, timeout and cleanup checks apply with explicit unsupported modes.
+  Compression, redirects and automatic replay/resumption are disabled. See
+  [configuration, diagnostics and limits](docs/development/mcp-transport.md).
+  Actual SDK/TLS receiving-process checks distinguish rejected replies from
+  already-arrived tool effects. One GET attempt per transport prevents SDK
+  renewal from resetting limits; conflicting transfer framing is refused and
+  bare CR event delimiters count before parser admission.
+  The library was accepted at f0c4ca8. N1 consumes its session layer but has
+  no reachable outbound operation; later observation/dispatch must use this
+  adapter and prove its actual daemon effects. Full G1 stays open.
+
+### OAuth lifecycle safety
+
+- Reject stale OAuth success, degradation and bootstrap cleanup after revoke,
+  recreation or a newer token write. Tokens become usable only after
+  the intended sealed row commits. Migration 0010 preserves existing custody,
+  grants and selections and prevents older binaries from opening upgraded state.
+  Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
+  Already-admitted work may finish; this does not establish crash-safe rotating
+  refresh, provider proof or release readiness. No version bump.
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an
