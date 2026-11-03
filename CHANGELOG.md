@@ -15,6 +15,16 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### OAuth lifecycle safety
+
+- Reject stale OAuth success, degradation and bootstrap cleanup after revoke,
+  recreation or a newer token write. Tokens become usable only after
+  the intended sealed row commits. Migration 0010 preserves existing custody,
+  grants and selections and prevents older binaries from opening upgraded state.
+  Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
+  Already-admitted work may finish; this does not establish crash-safe rotating
+  refresh, provider proof or release readiness. No version bump.
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an
