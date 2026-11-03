@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Internal
+
+- Use a guarded match for inherited OAuth default-session selection to satisfy
+  current-stable Clippy. Existing explicit labels and non-OAuth sources retain
+  their behavior.
+
 ### Breaking changes
 
 - Credentialed requests require an explicitly selected account for each allowed

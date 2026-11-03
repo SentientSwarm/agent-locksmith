@@ -71,10 +71,10 @@ fn oauth(s: &Snapshot, name: &str, spec: &AuthSpec) -> &'static str {
 pub(super) fn inherited(mut spec: AuthSpec) -> AuthSpec {
     match &mut spec {
         AuthSpec::OauthPkce { session_label, .. }
-        | AuthSpec::OauthDeviceCode { session_label, .. } => {
-            if session_label.is_none() {
-                *session_label = Some(crate::oauth::session::DEFAULT_SESSION_LABEL.into());
-            }
+        | AuthSpec::OauthDeviceCode { session_label, .. }
+            if session_label.is_none() =>
+        {
+            *session_label = Some(crate::oauth::session::DEFAULT_SESSION_LABEL.into());
         }
         _ => {}
     }
