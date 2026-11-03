@@ -10,6 +10,9 @@
 //!     (never a silent forward without the credential);
 //!   - key unset with a stored registration → 503 `credential_unresolved`.
 
+#[path = "support/bindings.rs"]
+mod bindings;
+
 use agent_locksmith::app::build_app_full_with_phase_j;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
@@ -38,6 +41,9 @@ struct Harness {
     /// Sealed-secret store on the same DB the app uses — lets a test seal a
     /// value (minting a live `secret_ref`) that the proxy hot path can see.
     secrets: CredentialSecretsRepository,
+    pool: sqlx::SqlitePool,
+    bindings: agent_locksmith::repo::AgentCredentialRepository,
+    audit: AuditRepository,
 }
 
 /// Build a proxy harness whose single registration `store-api` carries
@@ -87,6 +93,8 @@ async fn setup(auth: AuthSpec, wire_key: bool) -> Harness {
         .unwrap();
     let agent_bearer = format!("Bearer lk_{pid}.{}", secret.expose_secret());
 
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("store-api", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
 
@@ -98,14 +106,14 @@ async fn setup(auth: AuthSpec, wire_key: bool) -> Harness {
 
     let app: Router = build_app_full_with_phase_j(
         cfg_arc,
-        Some(audit),
+        Some(audit.clone()),
         resolved_arc,
         None,
         Some(bearer),
         Some(registrations),
         catalog_arc,
         None,
-        None,
+        Some(account_bindings.clone()),
         app_key,
         app_secrets,
     );
@@ -117,6 +125,9 @@ async fn setup(auth: AuthSpec, wire_key: bool) -> Harness {
         agent_bearer,
         mock,
         secrets,
+        pool,
+        bindings: account_bindings,
+        audit,
     }
 }
 
@@ -183,6 +194,8 @@ async fn build_harness_on(
         .unwrap();
     let agent_bearer = format!("Bearer lk_{pid}.{}", secret.expose_secret());
 
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("store-api", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
 
@@ -194,14 +207,14 @@ async fn build_harness_on(
 
     let app: Router = build_app_full_with_phase_j(
         cfg_arc,
-        Some(audit),
+        Some(audit.clone()),
         resolved_arc,
         None,
         Some(bearer),
         Some(registrations),
         catalog_arc,
         None,
-        None,
+        Some(account_bindings.clone()),
         app_key,
         app_secrets,
     );
@@ -213,6 +226,9 @@ async fn build_harness_on(
         agent_bearer,
         mock,
         secrets,
+        pool,
+        bindings: account_bindings,
+        audit,
     }
 }
 
@@ -348,3 +364,6 @@ async fn key_unset_with_stored_registration_returns_503() {
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"]["code"], "credential_unresolved");
 }
+
+#[path = "source_isolation/stored.rs"]
+mod isolation;

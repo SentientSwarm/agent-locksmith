@@ -13,7 +13,9 @@ tool catalog. Two rendering modes:
 The auth-optional shape exists so a fresh agent can fetch a
 "what is this proxy?" overview at startup without needing
 credentials yet, while authenticated agents get an actionable
-catalog.
+catalog. Listings show ACL eligibility, not binding existence or source health.
+Both forms explain missing-binding 403 diagnosis before deliberate operator
+repair, actual ACL denial, and selected-source 503 diagnosis.
 
 ## Wire shape
 
@@ -48,7 +50,7 @@ audit layer for AI agents.
 To call a provider through this proxy, your agent needs a bearer
 token. Operators issue bearers via:
 
-  locksmith agent register --name <agent> --allowlist <tools>
+  locksmith agent register --name <agent-name> --allowlist <tools>
 
 With a valid bearer, the proxy exposes:
 
@@ -80,7 +82,7 @@ You are agent **hermes-mini-m1** (`yN2vR6jFKNYfIwNjFU2MSA`).
 
 ## Your allowlist
 
-You can call:
+ACL-eligible tools (not proof of binding existence or source health):
 
   - **anthropic** — Anthropic Messages API
     POST /api/anthropic/v1/messages
@@ -91,7 +93,8 @@ You can call:
   - **tavily** — Tavily search API
     POST /api/tavily/search
 
-Tools NOT in your allowlist will return 403 tool_not_allowed.
+An ACL denial or missing explicit binding returns 403 tool_not_allowed.
+Listing a tool does not prove it has a usable selected account.
 
 ## Wire contract
 
@@ -107,8 +110,17 @@ Operators can see your calls via:
 
   locksmith audit query --agent yN2vR6jFKNYfIwNjFU2MSA
 
-If a call returns 503 oauth_refresh_failed, your operator needs to
-re-bootstrap that OAuth session.
+For 403 tool_not_allowed, inspect security audit details.reason:
+account_binding_missing needs selection; not_in_allowlist/in_denylist need policy review.
+
+  locksmith agent credentials list <agent-public-id>
+  locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'
+
+For 503, diagnose the selected environment/stored/1Password reference or OAuth
+label/status without exposing values. Repair that source or deliberately select
+an approved account. Never retry an alternate/default/unauthenticated call.
+OAuth bootstrap alone grants no use authority; explicitly select a nonempty
+label, including literal default when intended.
 
 — hermes-mini-m1 / layer8-proxy v1.0.0
 ```
@@ -208,7 +220,7 @@ content lives in `src/skill_template.md`; personalized rendering is
 To customize the generic content for a forked deployment: edit
 `src/skill_template.md` + rebuild. To customize personalized
 rendering: extend `skill::render_authenticated` (it has access to
-`AgentIdentity` + `AppConfig` + `ResolvedCreds`).
+`AgentIdentity` and the caller's ACL-filtered `(name, description)` list).
 
 ## See also
 

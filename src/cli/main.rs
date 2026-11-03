@@ -72,6 +72,8 @@ enum Cmd {
     /// `bootstrap-operator.py`. Writes operators.yaml content to
     /// stdout; prints the wire token ONCE to stderr.
     BootstrapOperator(bootstrap_operator::BootstrapOperatorArgs),
+    /// Offline reference-only account upgrade. Stop daemon and back up first.
+    MigrateBindings(commands::migrate_bindings::ArgsOffline),
     /// Tool management (operator).
     Tool {
         #[command(subcommand)]
@@ -136,6 +138,21 @@ async fn main() -> ExitCode {
         };
     }
 
+    if let Cmd::MigrateBindings(args) = cli.cmd {
+        return match commands::migrate_bindings::run(args).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                let code = match e {
+                    agent_locksmith::binding_migration::Error::Conflict => 5,
+                    agent_locksmith::binding_migration::Error::Invalid => 2,
+                    _ => 1,
+                };
+                eprintln!("error: {e}");
+                ExitCode::from(code)
+            }
+        };
+    }
+
     let client = match client::CliClient::from_options(
         &cli.socket,
         cli.admin_url.as_deref(),
@@ -151,6 +168,7 @@ async fn main() -> ExitCode {
     let res = match cli.cmd {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
+        Cmd::MigrateBindings(_) => unreachable!("handled before client construction"),
         Cmd::BootstrapOperator(_) => unreachable!("handled before client construction"),
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,

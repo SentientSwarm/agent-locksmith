@@ -207,16 +207,22 @@ if resp.status_code == 401:
     # Bearer rejected — re-fetch from token store, or fail loudly.
     raise RuntimeError("locksmith bearer is invalid; re-register agent")
 elif resp.status_code == 403:
-    # ACL denied — operator hasn't granted this tool. Ask the operator.
+    # ACL denial or missing binding: operator must inspect the audit reason.
     err = resp.json()["error"]
     if err.get("code") == "tool_not_allowed":
-        raise RuntimeError(f"agent's ACL doesn't permit anthropic")
+        raise RuntimeError("operator must diagnose ACL policy or missing account binding")
 elif resp.status_code == 503:
     err = resp.json()["error"]
-    if err.get("code") == "oauth_refresh_failed":
-        # OAuth session degraded — operator must re-bootstrap.
-        raise RuntimeError(f"OAuth session degraded; operator action required")
+    # Environment/stored/1Password/OAuth selected source may be unavailable.
+    # No alternate account/default/unauthenticated retry.
+    raise RuntimeError("operator must diagnose selected source references/labels/status")
 ```
+
+For `account_binding_missing` in the operator audit, first run
+`locksmith agent credentials list <agent-public-id>`, then deliberately select
+the approved account with `agent set-credential`. Only `not_in_allowlist` /
+`in_denylist` justify ACL policy review. Listings show ACL eligibility, not
+binding existence or source health; keep source values out of diagnostics.
 
 ## Token loading from a file (hermes-style convention)
 

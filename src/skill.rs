@@ -20,13 +20,9 @@
 //! so every binary ships with one canonical version. There is no
 //! operator-override path — one source of truth.
 //!
-//! Routing is in `app::build_app_full`:
-//! - Unauthenticated: `GET /skill` → `unauthenticated_skill` (added to
-//!   the auth middleware skip list).
-//! - Authenticated: `GET /agent/skill` → `authenticated_skill` (under
-//!   the same middleware as `/api/...`, so the per-agent bearer is
-//!   enforced and `AgentIdentity` is stamped into request extensions
-//!   before the handler runs).
+//! Routing is in `app::build_app_full`: the same optional-auth `GET /skill`
+//! handler renders the generic form without a bearer and the personalized
+//! form with a valid agent identity. Invalid credentials remain a 401.
 
 use crate::auth_v2::AgentIdentity;
 
@@ -46,7 +42,7 @@ pub fn render_unauthenticated() -> String {
 /// tool's name + description, and an audit-debug recipe.
 ///
 /// `available_tools` is the pre-resolved list of `(name, description)`
-/// pairs the agent may call right now — typically built by the caller
+/// pairs eligible under the agent's ACL (not proof of a usable binding) — typically built by the caller
 /// from the same source `/tools` uses (`catalog_listing` over the
 /// registrations table, with the agent's `AgentIdentity` filter
 /// applied). Keeping the catalog lookup at the caller decouples this
@@ -74,7 +70,7 @@ pub fn render_authenticated(
         tools_md.push_str(
             "_No tools currently available to you._ Either your ACL excludes \
              every active tool, or no tools are active in this deployment. \
-             Ask your operator to widen your allowlist or shrink your denylist.\n",
+             Ask your operator to inspect catalog activation and intended ACL policy.\n",
         );
     } else {
         tools_md.push_str("| Tool | Description |\n|---|---|\n");
@@ -131,9 +127,12 @@ section above for the full integration boundary.
 
 You're authenticated as **{name}** (`public_id={public_id}`).
 
-### Tools available to you right now
+### Tools eligible under your ACL
 
 {tools_md}
+
+This list shows ACL eligibility, not account binding existence or source health.
+A listed tool can still return 403 for missing selection or 503 for an unavailable source.
 
 To call one of these tools:
 
@@ -145,7 +144,7 @@ curl -fsS -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
 The `<upstream-path>` is forwarded verbatim to the tool's upstream — for
 example, `/api/{first_tool_or_placeholder}/v1/chat/completions` reaches the
 upstream's `v1/chat/completions` endpoint. Locksmith strips your
-`Authorization` header and injects the configured upstream credential
+`Authorization` header and injects only your explicitly selected upstream credential
 before forwarding.
 {codex_quirks_md}
 ### Your ACL
@@ -167,7 +166,17 @@ locksmith audit query --event-class security --agent {public_id} \
 ```
 
 Recent denies for you appear with `event=authz_denied` and
-`details.reason` set to either `not_in_allowlist` or `in_denylist`. 401s
+`details.reason` distinguishes `account_binding_missing` from `not_in_allowlist`
+or `in_denylist`. For a missing binding, diagnose first:
+
+```
+locksmith agent credentials list {public_id}
+locksmith agent set-credential {public_id} <tool> --auth 'bearer=<ENV_VAR>'
+```
+
+Choose the intended source reference deliberately; do not widen the ACL to
+repair missing selection. Selected-source 503s require source diagnosis as
+explained above, without alternate-account/default/unauthenticated retries. 401s
 appear with `event=auth_failure` and `details.reason` carrying the
 specific failure mode (`missing_credential`, `malformed_token`,
 `wrong_namespace`, `unknown_public_id`, `secret_mismatch`, `expired`).

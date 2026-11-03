@@ -1,6 +1,7 @@
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered;
 use agent_locksmith::config::parse_config_str;
-use axum_test::{TestResponse, TestServer};
+use axum_test::TestResponse;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -36,8 +37,9 @@ tools:
     );
 
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+    let server = &h.server;
 
     let resp: TestResponse = server.get("/api/github/repos/test").await;
     resp.assert_status_ok();
@@ -78,8 +80,9 @@ tools:
     );
 
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+    let server = &h.server;
 
     let resp: TestResponse = server
         .get("/api/comfyui/view?filename=img_00001_.png&type=output")
@@ -117,12 +120,13 @@ tools:
     );
 
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+    let server = &h.server;
 
     let resp: TestResponse = server
         .get("/api/svc/test")
-        .add_header("Authorization", "Bearer agent-token")
+        .add_header("Authorization", &h.bearer)
         .await;
     resp.assert_status_ok();
 }
@@ -136,8 +140,9 @@ listen:
 tools: []
 "#;
     let config = parse_config_str(yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+    let server = &h.server;
 
     let resp: TestResponse = server.get("/api/unknown/test").await;
     resp.assert_status(axum::http::StatusCode::NOT_FOUND);
@@ -179,8 +184,9 @@ tools:
     );
 
     let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+    let server = &h.server;
 
     let resp: TestResponse = server
         .post("/api/tavily/v1/search")

@@ -1,5 +1,8 @@
 //! T1.11 — /livez, /readyz, /version (split from M0 /health). INF-3 / Q-18.
 
+#[path = "support/registered_legacy.rs"]
+mod registered;
+
 use agent_locksmith::app::build_app;
 use agent_locksmith::config::parse_config_str;
 use axum_test::{TestResponse, TestServer};
@@ -61,8 +64,9 @@ tools: []
 
 #[tokio::test]
 async fn test_readyz_ok_when_tool_credential_present() {
-    let server = server_with_yaml(
-        r#"
+    let h = registered::setup(
+        parse_config_str(
+            r#"
 listen:
   host: "127.0.0.1"
   port: 9200
@@ -75,7 +79,11 @@ tools:
       header: "Authorization"
       value: "Bearer real-token"
 "#,
-    );
+        )
+        .unwrap(),
+    )
+    .await;
+    let server = &h.server;
     let resp: TestResponse = server.get("/readyz").await;
     resp.assert_status_ok();
     let body: serde_json::Value = resp.json();
@@ -87,8 +95,9 @@ async fn test_readyz_503_when_tool_credential_missing() {
     // Tool declares an auth block but the credential resolves to empty
     // (typical when the operator's env var is unset). M1 treats every
     // tool as required (degraded-mode opt-out is M2 / INF-4).
-    let server = server_with_yaml(
-        r#"
+    let h = registered::setup(
+        parse_config_str(
+            r#"
 listen:
   host: "127.0.0.1"
   port: 9200
@@ -101,7 +110,11 @@ tools:
       header: "x-api-key"
       value: ""
 "#,
-    );
+        )
+        .unwrap(),
+    )
+    .await;
+    let server = &h.server;
     let resp: TestResponse = server.get("/readyz").await;
     resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
     let body: serde_json::Value = resp.json();

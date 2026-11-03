@@ -94,10 +94,25 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // includes FileSealedBackend so tools using `from_file_sealed:`
     // get their credentials read from systemd-creds-decrypted files.
     // Vault and AWS variants surface NotImplemented per T5.3.
+    for tool in &shared_config.load().tools {
+        if tool.auth.as_ref().is_some_and(|auth| {
+            matches!(auth.value, crate::secret::SecretRef::FromFileSealed { .. })
+        }) {
+            tracing::warn!(tool = %tool.name,
+                "direct file-backed account bindings are unsupported; owner must import a sealed stored snapshot and explicitly select it for each registered agent");
+        }
+    }
     let resolver = SecretResolver::with_file_sealed(FileSealedBackend::new());
     let resolved_map = {
         let snapshot = shared_config.load();
-        resolve_tool_creds(&snapshot, &resolver).await
+        if admin_enabled {
+            resolve_tool_creds(&snapshot, &resolver).await
+        } else {
+            if snapshot.tools.iter().any(|t| t.auth.is_some()) {
+                tracing::warn!("{}", crate::legacy_admission::UPGRADE_MESSAGE);
+            }
+            Default::default()
+        }
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
 
@@ -814,6 +829,7 @@ async fn build_admin_substrate(
             tokio::spawn(crate::oauth::refresh::run(
                 sessions.clone(),
                 catalog.clone(),
+                crate::repo::AgentCredentialRepository::new(pool.clone()),
                 key.clone(),
                 locks.clone(),
                 Some(operational_log.clone()),

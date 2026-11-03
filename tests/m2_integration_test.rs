@@ -154,6 +154,18 @@ async fn setup() -> M2 {
         .unwrap()
         .public_id;
 
+    let agent_id = agents.get_by_name("agent-1").await.unwrap().unwrap().id;
+    agent_creds
+        .set(
+            agent_id,
+            "op-api",
+            &AuthSpec::OpBearer {
+                reference: OP_REF.into(),
+            },
+        )
+        .await
+        .unwrap();
+
     let bearer_concrete =
         Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer_concrete.clone();

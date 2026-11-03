@@ -23,3 +23,7 @@ pub mod shutdown;
 pub mod skill;
 pub mod telemetry;
 pub mod token;
+
+pub(crate) mod legacy_admission;
+
+pub mod binding_migration;

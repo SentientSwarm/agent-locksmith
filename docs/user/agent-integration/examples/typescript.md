@@ -206,14 +206,13 @@ async function callLocksmith(path: string, body: unknown) {
         throw new Error("locksmith bearer is invalid; re-register agent");
       case 403:
         if (err.error?.code === "tool_not_allowed") {
-          throw new Error("agent's ACL doesn't permit this tool");
+          throw new Error("operator must diagnose ACL policy or missing account binding");
         }
         throw new Error(`locksmith forbidden: ${err.error?.message}`);
       case 503:
-        if (err.error?.code === "oauth_refresh_failed") {
-          throw new Error("OAuth session degraded; operator action required");
-        }
-        throw new Error(`locksmith unavailable: ${err.error?.message}`);
+        // Environment/stored/1Password/OAuth selected source may be unavailable.
+        // No alternate account/default/unauthenticated retry.
+        throw new Error("operator must diagnose selected source references/labels/status");
       default:
         throw new Error(`locksmith ${resp.status}: ${JSON.stringify(err)}`);
     }
@@ -222,6 +221,12 @@ async function callLocksmith(path: string, body: unknown) {
   return resp.json();
 }
 ```
+
+For `account_binding_missing` in the operator audit, first run
+`locksmith agent credentials list <agent-public-id>`, then deliberately select
+the approved account with `agent set-credential`. Only `not_in_allowlist` /
+`in_denylist` justify ACL policy review. Listings show ACL eligibility, not
+binding existence or source health; keep source values out of diagnostics.
 
 ## Token loading from a file
 

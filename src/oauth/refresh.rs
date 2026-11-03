@@ -116,23 +116,10 @@ impl RefreshLockMap {
     }
 }
 
-/// Token-endpoint response shape (RFC 6749 §5.1). `expires_in` is
-/// optional per RFC but in practice all tested providers return it.
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    expires_in: Option<i64>,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)] // we don't yet validate token_type — providers always say "Bearer"
-    token_type: Option<String>,
-}
+mod exchange;
+pub use exchange::refresh_selected_session;
 
-/// Refresh a single session against its provider. Returns the new
-/// `OauthSession` (resealed + persisted) on success, or an error that
-/// marks the session degraded on failure.
+/// Operator bootstrap explicitly uses the current registration metadata.
 pub async fn refresh_session(
     repo: &OauthSessionRepository,
     catalog: &Catalog,
@@ -143,89 +130,7 @@ pub async fn refresh_session(
     let registration = catalog
         .lookup_active(&session.name)
         .ok_or_else(|| RefreshError::RegistrationGone(session.name.clone()))?;
-
-    let (token_url, client_id) = match &registration.auth {
-        AuthSpec::OauthPkce {
-            token_url,
-            client_id,
-            ..
-        }
-        | AuthSpec::OauthDeviceCode {
-            token_url,
-            client_id,
-            ..
-        } => (token_url.as_str(), client_id.as_str()),
-        _ => return Err(RefreshError::NotOauth(session.name.clone())),
-    };
-
-    use secrecy::ExposeSecret;
-    let form = [
-        ("grant_type", "refresh_token"),
-        ("refresh_token", session.refresh_token.expose_secret()),
-        ("client_id", client_id),
-    ];
-
-    let response = client
-        .post(token_url)
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| RefreshError::Network(e.to_string()))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        // 4xx (especially 400 invalid_grant / 401 invalid_client) means
-        // the refresh token is no longer valid. Operator-action recovery.
-        if status.is_client_error() {
-            return Err(RefreshError::Revoked {
-                status: status.as_u16(),
-                body_excerpt: body.chars().take(256).collect(),
-            });
-        }
-        // 5xx is provider-side; same outcome (mark degraded) since we
-        // don't auto-retry. Operator can re-bootstrap when provider
-        // recovers.
-        return Err(RefreshError::ProviderError {
-            status: status.as_u16(),
-            body_excerpt: body.chars().take(256).collect(),
-        });
-    }
-
-    let token_response: TokenResponse = response
-        .json()
-        .await
-        .map_err(|e| RefreshError::BadResponse(e.to_string()))?;
-
-    // expires_in is RFC-optional but in practice always present. If
-    // missing, default to 1 hour — common provider default.
-    let lifetime = token_response.expires_in.unwrap_or(3600);
-    let new_expires_at = unix_now() + lifetime;
-
-    repo.update_tokens(
-        key,
-        &session.name,
-        &session.session_label,
-        &token_response.access_token,
-        new_expires_at,
-        token_response.refresh_token.as_deref(),
-    )
-    .await
-    .map_err(|e| RefreshError::Persist(e.to_string()))?;
-
-    info!(
-        name = %session.name,
-        session_label = %session.session_label,
-        oauth_session_id = %session.audit_session_id(),
-        new_lifetime_secs = lifetime,
-        "oauth refresh succeeded"
-    );
-
-    // Read back the canonical state.
-    repo.get(key, &session.name, &session.session_label)
-        .await
-        .map_err(|e| RefreshError::Persist(e.to_string()))?
-        .ok_or_else(|| RefreshError::Persist("session vanished after update".to_string()))
+    refresh_selected_session(repo, &registration.auth, key, client, session).await
 }
 
 /// Errors from a single refresh attempt. Each variant maps to an
@@ -241,11 +146,11 @@ pub enum RefreshError {
     #[error("network error contacting token endpoint: {0}")]
     Network(String),
 
-    #[error("provider rejected refresh ({status}): {body_excerpt}")]
-    Revoked { status: u16, body_excerpt: String },
+    #[error("provider rejected refresh ({status})")]
+    Revoked { status: u16 },
 
-    #[error("provider error during refresh ({status}): {body_excerpt}")]
-    ProviderError { status: u16, body_excerpt: String },
+    #[error("provider error during refresh ({status})")]
+    ProviderError { status: u16 },
 
     #[error("provider returned malformed token response: {0}")]
     BadResponse(String),
@@ -281,6 +186,7 @@ impl RefreshError {
 pub async fn run(
     repo: OauthSessionRepository,
     catalog: Arc<arc_swap::ArcSwap<Catalog>>,
+    bindings: crate::repo::AgentCredentialRepository,
     key: SealingKey,
     locks: RefreshLockMap,
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
@@ -306,8 +212,8 @@ pub async fn run(
                 match repo.list_pending_refresh(threshold).await {
                     Ok(items) if items.is_empty() => {}
                     Ok(items) => {
-                        let cat = catalog.load();
                         for (name, session_label) in items {
+                            if catalog.load().lookup_active(&name).is_none() { continue; }
                             // Take the per-session lock so concurrent on-
                             // demand refresh from the proxy hot path
                             // can't race us. Phase G: lock keys on
@@ -315,6 +221,15 @@ pub async fn run(
                             let lock = locks.get(&name, &session_label).await;
                             let _guard = lock.lock().await;
 
+                            let selection = match selected_source(&bindings, &name, &session_label).await {
+                                Ok(Some(spec)) => spec,
+                                Ok(None) => continue,
+                                Err(_) => {
+                                    warn!(name = %name, session_label = %session_label,
+                                        "OAuth selection unavailable or conflicting; refresh skipped");
+                                    continue;
+                                }
+                            };
                             // Re-read inside the lock — another caller
                             // (proxy hot path) may have already
                             // refreshed.
@@ -335,7 +250,7 @@ pub async fn run(
                                 continue;
                             }
 
-                            match refresh_session(&repo, &cat, &key, &client, &session).await {
+                            match refresh_selected_session(&repo, &selection, &key, &client, &session).await {
                                 Ok(_) => {}
                                 Err(e) => {
                                     warn!(
@@ -443,3 +358,67 @@ mod tests {
         assert!(!Arc::ptr_eq(&l_default, &l_openclaw));
     }
 }
+
+/// Use only an unambiguous explicit selection for this shared session.
+/// Never substitute a registration template, including after it has been edited.
+pub(crate) async fn selected_source(
+    bindings: &crate::repo::AgentCredentialRepository,
+    name: &str,
+    session_label: &str,
+) -> Result<Option<AuthSpec>, ()> {
+    let rows = bindings.list_all().await.map_err(|_| ())?;
+    consensus(
+        rows.iter()
+            .filter(|row| {
+                row.registration == name
+                    && row.auth_spec.oauth_session_label() == Some(session_label)
+                    && !session_label.trim().is_empty()
+            })
+            .map(|row| &row.auth_spec),
+    )
+}
+
+/// Shared-session metadata rule, also used inside the offline migration transaction.
+pub(crate) fn consensus<'a>(
+    specs: impl Iterator<Item = &'a AuthSpec>,
+) -> Result<Option<AuthSpec>, ()> {
+    let mut selected = None;
+    for spec in specs {
+        if selected_parameters(spec).is_none()
+            || selected.as_ref().is_some_and(|prior| prior != spec)
+        {
+            return Err(());
+        }
+        selected = Some(spec.clone());
+    }
+    Ok(selected)
+}
+
+/// Public OAuth metadata must be usable before a selected session is read.
+pub fn selected_parameters(spec: &AuthSpec) -> Option<(&str, &str)> {
+    let (url, client) = match spec {
+        AuthSpec::OauthPkce {
+            token_url,
+            client_id,
+            ..
+        }
+        | AuthSpec::OauthDeviceCode {
+            token_url,
+            client_id,
+            ..
+        } => (token_url, client_id),
+        _ => return None,
+    };
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if client.trim().is_empty()
+        || !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host().is_none()
+    {
+        return None;
+    }
+    Some((url.as_str(), client.as_str()))
+}
+
+#[cfg(test)]
+#[path = "refresh/selection_tests.rs"]
+mod selection_tests;

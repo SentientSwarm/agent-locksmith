@@ -54,19 +54,23 @@ When an agent calls `POST /api/anthropic/v1/messages` with
         for M0/M1 / pre-Phase-E test paths)
      Failure → 404 unknown tool + audit row
    ↓
-5. Phase F.5 OAuth resolution (only if AuthSpec is OAuth):
-     oauth_runtime.sessions.get(name)
-     If degraded / missing → 503 oauth_refresh_failed + audit
-     If access token expiring → trigger inline refresh
+5. Explicit account admission (authenticated requests):
+     Look up (agent id, registration name) in agent_credential_overrides.
+     Missing → 403 tool_not_allowed; audit account_binding_missing.
+     Select only this binding, never the registration template.
+     Unavailable selected source → 503; no upstream dispatch.
+     For selected OAuth, require a nonempty session label and consistent
+     metadata across bindings sharing that registration/label.
+     Resolve that session; missing/degraded/unsealable → safe 503.
+     Expired access token → inline refresh under the session lock.
    ↓
 6. Header strip: agent's Authorization, x-api-key, host
      plus the target's own auth header (defense-in-depth).
    ↓
-7. Credential injection (per AuthSpec):
-     None     → nothing.
-     Header   → "<header>: <resolved_creds[name]>"
-     Bearer   → "Authorization: Bearer <resolved_creds[name]>"
-     OAuth    → "Authorization: Bearer <oauth_session.access_token>"
+7. Credential injection from the selected binding only:
+     None     → nothing (explicit operator choice).
+     Header/Bearer → resolve selected environment/stored/1Password reference.
+     OAuth    → selected session's access token.
    ↓
 8. Egress route:
      egress: proxied  → HTTP CONNECT through pipelock
@@ -81,7 +85,11 @@ When an agent calls `POST /api/anthropic/v1/messages` with
 ```
 
 Steps 1–11 happen per request. The audit row is the operator's
-single source of truth for who-called-what-when.
+single source of truth for who-called-what-when. `/tools`, `/models` and
+personalized `/skill` show ACL eligibility; they do not prove binding existence
+or source health. Identityless legacy requests require `auth: none`; they
+cannot consume a credentialed registration default. See
+[explicit account bindings](changes/explicit-account-bindings.md) for repair.
 
 ## Composition root: `daemon::run`
 
@@ -124,7 +132,8 @@ locksmith.db
 ├── bootstrap_tokens    — pre-issued enrollment tokens
 ├── audit               — every request + admin write
 ├── registrations       — kind-discriminated catalog (Phase E)
-├── registrations_meta  — seed catalog version pin
+├── agent_credential_overrides — explicit per-agent selected source references
+├── registrations_meta  — seed version + migration receipt/revision bookkeeping
 └── oauth_sessions      — sealed OAuth tokens (Phase F)
 ```
 

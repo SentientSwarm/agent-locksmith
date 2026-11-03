@@ -39,6 +39,7 @@ AuthSpec::OauthPkce {
     scopes: Vec<String>,
     auth_url: String,
     token_url: String,
+    session_label: Option<String>, // binding requires Some(nonempty), even default
 }
 
 AuthSpec::OauthDeviceCode {
@@ -46,6 +47,7 @@ AuthSpec::OauthDeviceCode {
     scopes: Vec<String>,
     device_url: String,
     token_url: String,
+    session_label: Option<String>, // binding requires Some(nonempty), even default
 }
 ```
 
@@ -119,14 +121,14 @@ npm install -g @openai/codex
 codex login                       # opens browser, completes OAuth dance,
                                   # writes ~/.codex/auth.json
 
-# 2. Extract the refresh token from auth.json:
-RT=$(jq -r .OPENAI_API_KEY.refresh_token ~/.codex/auth.json)
-# (path varies slightly per codex version; the field is always
-# "refresh_token" inside an OAuth credentials object.)
+# 2. Use a permission-restricted refresh-token file obtained from that
+# provider flow. Do not echo the token or put it in shell arguments.
+# 3. Hand it to locksmith under an explicit label (operator-authenticated).
+locksmith oauth bootstrap codex --label default --refresh-token-stdin < codex-rt.txt
 
-# 3. Hand it to locksmith.
-docker exec layer8-locksmith /usr/local/bin/locksmith oauth bootstrap codex \
-    --refresh-token "$RT"
+# 4. AGENT_ID is the public_id returned by agent register, not the name.
+locksmith agent credentials list "$AGENT_ID"
+locksmith agent set-credential "$AGENT_ID" codex --oauth-session default
 ```
 
 A successful bootstrap exchange:
@@ -139,27 +141,32 @@ A successful bootstrap exchange:
    `oauth_sessions` row.
 4. Emits `oauth_bootstrap_complete` audit event.
 
-Subsequent calls to `/api/codex/...` work without further human
-interaction. Refresh happens in the background; the agent sees only
-the locksmith bearer.
+Bootstrap stores session custody; it does not authorize any agent to use it.
+Only an ACL-eligible agent with an explicit nonempty label selection can call
+`/api/codex/...`. Even `default` must be selected literally. The CLI copies the
+registration's full OAuth mechanism/client/endpoints/scopes (and redirect URI
+for PKCE) into that binding; an API binding must supply all those fields plus
+`session_label`. Empty placeholders do not inherit the registration metadata.
+Refresh uses consistent selected metadata; the agent sees only its bearer.
 
 ### Other providers
 
 Same shape: get the refresh token via the provider's own CLI/flow,
-hand it to locksmith.
+hand it to locksmith. Then explicitly bind each intended agent as above;
+these bootstrap commands alone do not grant proxy use.
 
 ```bash
 # anthropic-oauth — Claude Code CLI minting flow
-locksmith oauth bootstrap anthropic-oauth --refresh-token-stdin < anthropic-rt.txt
+locksmith oauth bootstrap anthropic-oauth --label default --refresh-token-stdin < anthropic-rt.txt
 
 # copilot — GitHub Copilot CLI flow
-locksmith oauth bootstrap copilot --refresh-token-stdin < copilot-rt.txt
+locksmith oauth bootstrap copilot --label default --refresh-token-stdin < copilot-rt.txt
 
 # google-gemini-cli — Gemini CLI flow
-locksmith oauth bootstrap google-gemini-cli --refresh-token-stdin < gemini-rt.txt
+locksmith oauth bootstrap google-gemini-cli --label default --refresh-token-stdin < gemini-rt.txt
 
 # qwen-cli — Qwen CLI flow
-locksmith oauth bootstrap qwen-cli --refresh-token-stdin < qwen-rt.txt
+locksmith oauth bootstrap qwen-cli --label default --refresh-token-stdin < qwen-rt.txt
 ```
 
 The interactive `locksmith oauth login` (where locksmith itself drives
@@ -172,7 +179,7 @@ D5.
 ## Operator workflow: status / revoke
 
 ```bash
-locksmith oauth status codex
+locksmith oauth status codex --label default
 # name: codex
 # session_label: default
 # present: true
@@ -183,7 +190,7 @@ locksmith oauth status codex
 # access_token_expires_at: 1779061478
 # audit_session_id: b05ad1526f4d238f
 
-locksmith oauth revoke codex      # clears local state; provider-side
+locksmith oauth revoke codex --label default  # clears local state; provider-side
                                   # revoke not yet propagated (v1.1)
 ```
 
@@ -203,30 +210,28 @@ A single registration can hold N OAuth sessions, one per
 locksmith oauth bootstrap codex --label hermes   --refresh-token-stdin < hermes-rt.txt
 locksmith oauth bootstrap codex --label openclaw --refresh-token-stdin < openclaw-rt.txt
 
-# Per-agent override pins each agent to their own label.
-locksmith agent set-credential hermes-mini-1   codex --oauth-session hermes
-locksmith agent set-credential openclaw-mini-1 codex --oauth-session openclaw
+# Use public_id values returned by each agent register command.
+# Explicit bindings pin each agent to the intended label.
+locksmith agent set-credential "$HERMES_AGENT_ID" codex --oauth-session hermes
+locksmith agent set-credential "$OPENCLAW_AGENT_ID" codex --oauth-session openclaw
 ```
 
 Each agent's request resolves the right session by `(name,
 session_label)`. See [`per-agent-credentials.md`](per-agent-credentials.md)
 for the full operator surface.
 
-The default label is `"default"`. Pre-Phase-G deployments that never
-use `--label` see no behavioral change.
+Bootstrap without `--label` addresses `"default"`, but authenticated proxy
+use still requires an explicit `--oauth-session default` selection. Unbound
+agents deny with 403 and audit `account_binding_missing`. Use the
+[reviewed migration](migrating-account-bindings.md) for legacy users.
 
 ## The single-grant trap
 
-**One upstream account cannot back two locksmith labels.** Most
-identity providers — including OpenAI ChatGPT, GitHub, Google —
-enforce a single-active-grant policy per `(user, client_id)`. Logging
-in a second time as the same user **invalidates the prior refresh
-token**.
-
-So if you bootstrap two labels from the same upstream account, the
-**most-recently-bootstrapped one wins** — the other goes degraded
-the next time it tries to refresh (~30 minutes later, when the
-access token expires).
+Some providers invalidate an older refresh grant when the same account
+reauthorizes the same client. Labels alone do not establish distinct accounts
+or independent grants. When agents intentionally share an account, select the
+same label with identical complete provider metadata. Verify grant policies
+with the provider; the synthetic local tests do not prove provider behavior.
 
 `locksmith oauth bootstrap` warns at the time of the trap. When you
 bootstrap a non-default label and other labels already exist for the
@@ -292,9 +297,9 @@ If a refresh attempt fails:
      }
    }
    ```
-5. Operator runs `locksmith oauth bootstrap <name>` again with a fresh
-   refresh token; on success, `degraded` clears and both ciphertext
-   columns are replaced.
+5. Operator runs `locksmith oauth bootstrap <name> --label <selected-label>
+   --refresh-token-stdin < private-refresh-token.txt` with a fresh token.
+   On success, `degraded` clears and both ciphertext columns are replaced.
 
 ADR-0005 D6. Auto-retry was rejected because persistent failure
 (revoked token, provider deprecation) is operator-visible work, and
@@ -306,10 +311,15 @@ When an agent calls `/api/codex/responses` (or any OAuth-backed
 provider), `proxy::proxy_handler` does this:
 
 1. **Resolve target.** Look up the `codex` registration in the
-   in-memory catalog cache; bind to the per-agent override if one
-   exists.
+   in-memory catalog cache after authenticating and checking ACL policy.
+   Require an explicit binding: missing → 403 `tool_not_allowed` with audit
+   `account_binding_missing`, before token exchange or upstream dispatch.
+   The selected AuthSpec supplies the mechanism, full provider metadata and
+   nonempty label. No registration template or alternate label is used.
 2. **Resolve OAuth token.** `resolve_oauth_token` calls
    `OauthSessionRepository::get(name, session_label)`:
+   - Inconsistent/unavailable selected metadata → safe 503 before token exchange,
+     even for a cached token. All bindings sharing a registration/label must agree.
    - Session missing → 503 `oauth_session_missing`.
    - Session degraded → 503 `oauth_refresh_failed`.
    - Sealing key unset → 503 `oauth_sealing_key_unset`.
@@ -338,7 +348,7 @@ provider), `proxy::proxy_handler` does this:
    `details.auth_mode = "oauth_pkce" | "oauth_device_code"`,
    `details.oauth_session_id = <stable-16-hex>`,
    `details.oauth_session_label = <label>`,
-   `details.auth_source = "registration_default" | "agent_override"`.
+   `details.auth_source = "agent_override"` for authenticated selected calls.
 
 ## The codex special case (Phase G2)
 
@@ -426,7 +436,7 @@ Every proxy_request audit row for an OAuth-backed call carries:
 | `details.auth_mode` | `oauth_pkce` / `oauth_device_code` — how locksmith authenticated to the **upstream**. |
 | `details.oauth_session_id` | Stable 16-hex identifier per `(name, session_label, created_at)`. |
 | `details.oauth_session_label` | The label resolved (Phase G). |
-| `details.auth_source` | `registration_default` or `agent_override` (Phase G). |
+| `details.auth_source` | `agent_override` for an authenticated explicitly bound call; no default fallback. |
 
 Audit grep recipes:
 

@@ -11,7 +11,7 @@ or admin HTTPS.
 | `--socket <path>` | `/var/run/locksmith/admin.sock` | Admin UDS path. |
 | `--admin-url <url>` | (none) | Admin HTTPS URL. Overrides `--socket`. |
 | `--ca-bundle <path>` | (none) | PEM CA bundle for verifying admin HTTPS. |
-| `--format <fmt>` | `human` | Output format: `human` (table) / `json` / `yaml`. |
+| `--format <fmt>` | `table` | Output format: `table` / `json` / `yaml`. |
 
 The CLI also reads:
 
@@ -36,17 +36,17 @@ cleartext wire token to **stderr** ONCE.
 | Flag | Default | Description |
 |---|---|---|
 | `--name <name>` | `default` | Operator display name (audit attribution). |
-| `--header / --no-header` | `--header` | YAML comment header in stdout. |
+| `--header true\|false` | `true` | Include YAML comment header in stdout. |
 
-Use `--no-header` for piping into a sealed-cred mechanism.
+Use `--header false` for piping into a sealed-cred mechanism.
 
 ### `agent` — agent management (operator)
 
 ```bash
-locksmith agent register --name <name> [--allowlist X,Y] [--denylist Z] [--cert-identity '...']
+locksmith agent register --name <name> [--allowlist X,Y] [--denylist Z]
 locksmith agent list
 locksmith agent get <public_id>
-locksmith agent modify --name <name> [--allowlist ...] [--denylist ...]
+locksmith agent modify <public_id> [--allowlist ...] [--denylist ...]
 locksmith agent revoke <public_id>
 ```
 
@@ -54,13 +54,13 @@ locksmith agent revoke <public_id>
 |---|---|
 | `--name` | Unique name. |
 | `--allowlist a,b` | Comma-separated tool/model names the agent can call. |
-| `--denylist x,y` | Comma-separated names the agent CANNOT call (use one of allow/deny). |
-| `--cert-identity '...'` | mTLS subject string (CN=..., O=..., etc.). |
+| `--denylist x,y` | Comma-separated names the agent CANNOT call (deny wins when both match). |
+| `agent set-cert-identity <public_id> <identity>` | Bind an mTLS certificate identity. |
 
 `register` returns the bearer once. `revoke` sets the agent's row
 to revoked; subsequent calls 401.
 
-#### Per-agent credential overrides (Phase G)
+#### Explicit account bindings
 
 ```bash
 locksmith agent set-credential <public_id> <reg> --auth bearer=<ENV_VAR>
@@ -71,14 +71,20 @@ locksmith agent unset-credential <public_id> <reg>
 locksmith agent credentials list <public_id>
 ```
 
-`set-credential` upserts an override for one agent on one
-registration. The override replaces the registration's default
-credential on the proxy hot path for that agent only. See
+`set-credential` upserts an explicit account binding for one agent on one
+registration. After the current ACL check, the proxy uses only that selected
+source; an absent binding is denied rather than inheriting the template. See
 [`concepts/per-agent-credentials.md`](concepts/per-agent-credentials.md)
 for the design and the OAuth single-grant trap.
 
-`unset-credential` is idempotent — removing an absent override
-returns success.
+`--oauth-session` requires a nonempty explicit label (`default` is literal). It
+copies the selected registration's current OAuth metadata into the binding.
+Later template changes do not redirect that binding's refresh exchange. Old
+empty-placeholder bindings require deliberate re-selection.
+
+`unset-credential` is idempotent — removing an absent binding returns success.
+After clearing, subsequent requests to that registration are denied until an
+explicit binding is set again.
 
 ### `bootstrap` — bootstrap-token management (operator)
 
@@ -231,11 +237,11 @@ Per SPEC §4.7.2:
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Generic error. |
+| 1 | Generic, transport or other server error (including HTTP 5xx). |
 | 2 | Usage error (missing flag, bad input). |
-| 3 | Network / transport error. |
-| 4 | Authentication / authorization error. |
-| 5 | Server-side error (5xx from admin endpoint). |
+| 3 | Authentication / authorization error (missing credentials or HTTP 401/403). |
+| 4 | Not found (HTTP 404). |
+| 5 | Conflict (HTTP 409), or offline migration drift. |
 
 ## Common workflows
 
@@ -291,3 +297,22 @@ locksmith oauth status codex
   request.
 - [`agent-integration/`](agent-integration/) — wiring agents (hermes,
   openclaw) at the wire level.
+
+
+## Offline account-binding migration
+
+`locksmith migrate-bindings preview --database EXISTING_DB [--legacy-config YAML]`
+prints a deterministic reference-only JSON plan. Review it privately and change
+only `selected` flags on proposed rows. Then run
+`locksmith migrate-bindings apply --database EXISTING_DB --plan REVIEWED_JSON`
+with the same optional `--legacy-config`. The daemon must be stopped for cutover;
+back up SQLite safely, including committed WAL contents. No operator token,
+credential resolution, file import or remote API is used. Relevant drift returns
+exit 5 with no partial changes; an unchanged repeat inserts zero rows.
+
+See the [migration procedure](concepts/migrating-account-bindings.md) for backup,
+review, unavailable-source handling, verification and rollback consequences.
+
+For a runnable local setup see [getting started](getting-started.md). Execute
+the [saved cutover smoke](../development/explicit-account-bindings-smoke.md)
+to verify daemon/CLI setup, selection, clear/repair and offline migration.

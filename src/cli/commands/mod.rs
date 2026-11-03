@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod bootstrap_operator;
 pub mod export;
 pub mod infra;
+pub mod migrate_bindings;
 pub mod model;
 pub mod mtls;
 pub mod oauth;

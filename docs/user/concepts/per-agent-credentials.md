@@ -4,85 +4,140 @@ How to give two agents distinct upstream identities (separate API
 keys, separate ChatGPT subscriptions) without proliferating
 registrations. Phase G feature, paired with OAuth session labels.
 
-## Default mode: shared credential + audit attribution
+## Explicit account selection
 
-The default deployment shape is: **one credential per registration,
-audit attribution per agent.** Every `proxy_request` audit row
-already includes `agent_public_id` (and, post-G.0, `agent_name`),
-so the question "who made this call?" is answered today even when
-both agents share one upstream API key. For most teams this is the
-right answer — it's simpler, cheaper, and audit-correct.
+An authenticated agent needs both its current registration ACL and an explicit
+account binding. The existing `agent_credential_overrides` row keyed by
+`(agent_id, registration)` is that binding. Several agents may explicitly select
+the same env reference or account. No row means **403 tool_not_allowed**; the
+registration's credential template is never an implicit selection.
 
-You only need per-agent credentials when one of these matters:
-
-- **Upstream-side billing or quota separation.** Provider dashboards
-  attribute by API key. Two agents on one OpenAI key are
-  indistinguishable on the OpenAI side; per-agent keys give
-  per-agent dashboards.
-- **Blast radius isolation.** Revoking one agent's leaked key
-  without touching the other agent.
-- **Distinct upstream identities.** Each agent should run under its
-  own ChatGPT account / GitHub account / etc.
-
-If none of those bite, stop reading — shared credential is fine.
-
-## What an override is
-
-A row in `agent_credential_overrides` keyed on `(agent_id,
-registration)`. When present, the proxy hot path replaces the
-registration's default `auth_spec` with the override's BEFORE
-credential injection.
+A selection-store failure or corrupt AuthSpec returns **503
+credential_unresolved** before upstream dispatch. Missing or empty selected
+header/bearer env values also return 503. These cases never use the registration's
+startup-resolved credential or send an unauthenticated upstream request.
 
 ```
-agent             registration       override                              effective
-─────────────────────────────────────────────────────────────────────────────────────
-hermes-mini-1     lmstudio           bearer=LM_STUDIO_API_KEY_HERMES        LM_STUDIO_API_KEY_HERMES
-openclaw-mini-1   lmstudio           (none)                                 LM_STUDIO_API_KEY (registration default)
-hermes-mini-1     codex              oauth_session=hermes                   oauth_sessions(codex, "hermes")
-openclaw-mini-1   codex              oauth_session=openclaw                 oauth_sessions(codex, "openclaw")
+agent             registration       explicit binding                       effective
+hermes-mini-1     lmstudio           bearer=SHARED_LM_KEY                   shared account X
+openclaw-mini-1   lmstudio           bearer=SHARED_LM_KEY                   shared account X
+third-agent      lmstudio           bearer=OTHER_LM_KEY                    account Y
+unbound-agent    lmstudio           (absent)                               denied
 ```
 
-Default agents — those with no override row — see today's behavior
-unchanged.
+Replacing a binding affects the next admission. Clearing it denies the next
+request. Editing the registration credential template cannot repoint an existing
+explicit env selection. Explicit `AuthSpec::None` is an owner-approved selection
+and still obeys the agent's ACL; an absent or broken credential is never no-auth.
 
-## Setting an override
+Use the [reviewed migration](migrating-account-bindings.md) for existing shared
+account users. Rehearse the [saved actual-daemon smoke](../../development/explicit-account-bindings-smoke.md)
+before cutover. See the [D1 change notes](../changes/explicit-account-bindings.md)
+for the compatibility break and verification limits.
+
+## Setting an explicit binding
+
+Use the public IDs returned by `agent register` as `HERMES_AGENT_ID`,
+`OPENCLAW_AGENT_ID` and `DEBUG_AGENT_ID`; display names are not CLI IDs.
 
 ```bash
 # Static credential — different env var for hermes vs openclaw.
-locksmith agent set-credential hermes-mini-1   lmstudio --auth bearer=LM_STUDIO_API_KEY_HERMES
-locksmith agent set-credential openclaw-mini-1 lmstudio --auth bearer=LM_STUDIO_API_KEY_OPENCLAW
+locksmith agent set-credential "$HERMES_AGENT_ID"   lmstudio --auth bearer=LM_STUDIO_API_KEY_HERMES
+locksmith agent set-credential "$OPENCLAW_AGENT_ID" lmstudio --auth bearer=LM_STUDIO_API_KEY_OPENCLAW
 
 # Header injection (for `auth.kind = header` registrations).
-locksmith agent set-credential hermes-mini-1 anthropic --auth header=x-api-key:ANTHROPIC_KEY_HERMES
+locksmith agent set-credential "$HERMES_AGENT_ID" anthropic --auth header=x-api-key:ANTHROPIC_KEY_HERMES
 
 # OAuth — pin to a specific session label (see below).
-locksmith agent set-credential hermes-mini-1 codex --oauth-session hermes
+locksmith agent set-credential "$HERMES_AGENT_ID" codex --oauth-session hermes
 
-# Downgrade to no-auth for a specific agent.
-locksmith agent set-credential debug-bot lmstudio --no-auth
+# Explicitly permit credential-free use for an ACL-allowed agent.
+locksmith agent set-credential "$DEBUG_AGENT_ID" lmstudio --no-auth
 
-# Remove the override (agent goes back to registration default).
-locksmith agent unset-credential hermes-mini-1 lmstudio
+# Remove the binding (next request is denied).
+locksmith agent unset-credential "$HERMES_AGENT_ID" lmstudio
 
 # See all overrides for one agent.
-locksmith agent credentials list hermes-mini-1
+locksmith agent credentials list "$HERMES_AGENT_ID"
 ```
 
-The env var must exist in the daemon's environment at request time;
-overrides read it on the hot path, not at startup. A missing env
-var logs a warning and forwards the request without injection
-(the upstream typically returns 401, surfaced in audit).
+The selected env var must exist and be nonempty in the daemon's environment
+at request time. Bindings read it on the hot path, not at startup. A missing or
+empty selected value fails with 503 before any upstream request. Reads return
+AuthSpec references and timestamps, never the referenced credential value.
+
+## Custody failures and legacy admission
+
+Stored header/bearer bindings unseal only their selected `secret_ref`. Op
+header/bearer bindings read only their selected cached reference; the request
+never runs `op`. Missing, tombstoned, unreadable, wrongly sealed or empty values
+return 503 before dispatch, including when another source is healthy.
+
+Credentialed legacy `config.tools` routes require a real registered-agent
+identity. M0/shared-bearer calls return **401 agent_identity_required** before
+source resolution. `/readyz` returns 503 with the same reason and an upgrade
+instruction when credentialed tools have no agent authenticator. Enable the
+admin database/listener, register an agent, authenticate with that agent's bearer
+or mTLS identity, and explicitly select its account. Credential-free routes
+retain the current admission policy.
+
+## Legacy file-backed credentials
+
+A `config.tools` credential from `from_file_sealed` is not a directly selectable
+AuthSpec source. An authenticated agent without a binding is denied even when
+the daemon has successfully populated its legacy startup credential cache.
+There is no automatic import or compatibility fallback.
+
+An owner can deliberately import a file snapshot into the existing stored source:
+
+1. Resolve the permission-restricted file using `FileSealedBackend` through
+   `SecretResolver`, retaining its permission, read and cache checks.
+2. Configure the corresponding registration with the intended upstream and
+   header shape, then send the resolved bytes directly to the authenticated
+   `PUT /admin/operator/tools/{name}/credential` endpoint over the admin transport.
+   Its response supplies a `secret_ref`, never the value.
+3. Explicitly select that reference with
+   `PUT /admin/operator/agents/{agent}/credentials/{name}` and an
+   `auth_spec` of `stored_header` with that header and returned `secret_ref`.
+   Preserve prefixes: file bytes already containing `Bearer ` belong in a stored
+   `authorization` header; a stored-bearer source would add its own prefix.
+4. Verify the selected account at the upstream and reference-only admin reads.
+
+This imports a snapshot; later file changes do not rotate the stored binding.
+Another deliberate import and selection are required. The migration flags file-backed legacy sources for owner mapping and never
+resolves or copies them. Its preview also skips prefixed env headers and legacy
+strings whose wire transformation cannot be represented exactly. Preserve that
+transformation deliberately in a new env/stored selection and verify the
+receiving account before reopening traffic.
 
 ## OAuth labels
 
 OAuth sessions live in the `oauth_sessions` table keyed on
 `(registration_name, session_label)`. The default label is
-`"default"`. Phase G adds the dimension; pre-Phase-G deployments
-that never use `--label` see no change.
+`"default"` for bootstrap. Every account selection must name a nonempty label;
+select `--oauth-session default` literally to use that session. Missing or empty
+labels reject on operator writes and fail with 503 if already persisted.
+
+`--oauth-session` supports model, tool and infra registrations. It copies the
+registration's current OAuth client and endpoint metadata into the selection. Requests and refreshes use that selected mechanism,
+including across template auth-kind or endpoint edits. Both PKCE and device-code
+selections follow this rule. Old placeholder selections with empty metadata must
+be explicitly selected again; they cannot inherit updated template metadata.
+
+A missing, revoked, degraded, unreadable or empty selected session returns 503
+without using another label. Expired-token requests share the existing
+registration/label refresh lock. Inline admission requires every binding for the
+same registration/label to agree with the admitted selection before using even
+a cached token. Unavailable or conflicting metadata returns 503 with no token
+exchange or upstream operation. Several agents can share a session with identical
+explicit metadata. Background refresh visits only sessions with
+consistent explicit selections; conflicting metadata for one session skips its
+background refresh. Operator bootstrap still performs its explicit initial
+exchange. No response or log includes token endpoint response bodies.
 
 Per-agent OAuth uses two pieces:
 
-1. **A distinct session per agent.** Each agent's owner completes
+1. **A session per selected account.** The account owner completes
    the upstream OAuth flow under their own provider account, then
    the operator bootstraps it under a label:
    ```bash
@@ -90,10 +145,11 @@ Per-agent OAuth uses two pieces:
    locksmith oauth bootstrap codex --label openclaw --refresh-token-stdin < openclaw-rt.txt
    ```
 
-2. **A per-agent override pointing at the label.**
+2. **An explicit binding pointing at the label.** Agents sharing an account
+   should select the same consistent label and OAuth metadata.
    ```bash
-   locksmith agent set-credential hermes-mini-1   codex --oauth-session hermes
-   locksmith agent set-credential openclaw-mini-1 codex --oauth-session openclaw
+   locksmith agent set-credential "$HERMES_AGENT_ID"   codex --oauth-session hermes
+   locksmith agent set-credential "$OPENCLAW_AGENT_ID" codex --oauth-session openclaw
    ```
 
 Now `hermes-mini-1`'s requests resolve `oauth_sessions(codex,
@@ -102,13 +158,11 @@ Now `hermes-mini-1`'s requests resolve `oauth_sessions(codex,
 
 ## The OAuth single-grant trap
 
-**One ChatGPT account cannot back two locksmith labels.** Most
-identity providers — including OpenAI ChatGPT, GitHub, Google —
-enforce a single-active-grant policy per (user, client_id). Logging
-in a second time as the same user invalidates the prior refresh
-token. So if you bootstrap two labels from the same upstream
-account, only the most-recently-bootstrapped one will survive past
-the next refresh cycle (~30 minutes for short-lived access tokens).
+Some providers invalidate an older refresh grant when the same account
+authorizes the same client again. Do not assume separate labels are separate
+accounts or independent grants. If agents intentionally share one account,
+select the same label with identical client/endpoint metadata. Provider grant
+policies must be verified with that provider; the local smoke does not test them.
 
 **`oauth bootstrap` warns at the time of the trap.** When a
 non-default label is bootstrapped and other labels exist under the
@@ -139,7 +193,8 @@ get a chance to step back before the prior session goes degraded.
 Every `proxy_request` audit row carries:
 
 - `agent_public_id` + `agent_name` — who made the call (G.0).
-- `auth_source` — `"registration_default"` or `"agent_override"`.
+- `auth_source` — `"agent_override"` for explicitly bound agent requests.
+  Credentialed identityless calls are denied before dispatch.
 - `auth_mode` — `"bearer"` / `"header"` / `"none"` /
   `"oauth_pkce"` / `"oauth_device_code"` / `"config"`.
 - `oauth_session_id` — present on OAuth requests; SHA-256-based
@@ -164,9 +219,9 @@ locksmith audit query --tool codex --since-ms ... --format json \
     | jq '.[] | {agent: .agent_name, label: .details.oauth_session_label}'
 ```
 
-## Roll-out checklist
+## Binding setup
 
-For a deployment moving from shared to per-agent credentials:
+For local setup (also see [getting started](../getting-started.md)):
 
 1. Generate the new upstream credentials. (For OAuth: each agent
    owner runs the provider's auth flow under their own account.)
@@ -188,3 +243,12 @@ For a deployment moving from shared to per-agent credentials:
   agents authenticate and what audit fields are present today.
 - [`trust-boundary.md`](trust-boundary.md) — operator vs agent
   vs upstream credential boundaries.
+
+
+### Upgrade existing shared-account users
+
+Use the offline [reviewed migration workflow](migrating-account-bindings.md) to
+inventory current allowed routes, preserve existing explicit choices and apply
+only selected reference mappings. It requires a consistent SQLite backup and a
+stopped daemon for cutover. Preview does not verify secret values or provider
+availability; unresolved and identityless paths require deliberate owner mapping.

@@ -152,7 +152,7 @@ fn translate_auth(tool_name: &str, ta: &ToolAuthConfig) -> Option<AuthSpec> {
 /// Extract a single `${VAR}` reference from a legacy-string value.
 /// Returns `None` if the string contains zero or multiple `${...}`
 /// references.
-fn extract_single_env_var(s: &str) -> Option<String> {
+pub(crate) fn extract_single_env_var(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut i = 0;
     let mut found: Option<String> = None;

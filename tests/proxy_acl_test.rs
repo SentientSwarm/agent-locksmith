@@ -7,10 +7,12 @@
 //! `auth_middleware` consults the BearerAuthenticator on every request
 //! and `proxy_handler` enforces the agent's ACL before reaching upstream.
 
-use agent_locksmith::app::build_app_full;
+use agent_locksmith::app::{build_app_full, build_app_full_with_phase_g};
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
+use agent_locksmith::registrations::{AuthSpec, Catalog};
+use agent_locksmith::repo::AgentCredentialRepository;
 use agent_locksmith::repo::AgentRepository;
 use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository, Decision, EventClass};
 use agent_locksmith::secret::resolve_tool_creds_sync_env_only;
@@ -26,6 +28,7 @@ struct Fixture {
     _dir: TempDir,
     audit: AuditRepository,
     agents: AgentRepository,
+    bindings: AgentCredentialRepository,
 }
 
 async fn fixture() -> Fixture {
@@ -34,11 +37,13 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     let agents = AgentRepository::new(pool.clone());
+    let bindings = AgentCredentialRepository::new(pool.clone());
     let audit = AuditRepository::new(pool);
     Fixture {
         _dir: dir,
         audit,
         agents,
+        bindings,
     }
 }
 
@@ -63,16 +68,21 @@ fn build_test_server(
     yaml: &str,
     audit: AuditRepository,
     agent_auth: Arc<dyn AgentAuthenticator>,
+    bindings: AgentCredentialRepository,
 ) -> TestServer {
     let config = parse_config_str(yaml).unwrap();
     let resolved = resolve_tool_creds_sync_env_only(&config);
     let shared = Arc::new(ArcSwap::from_pointee(config));
-    let app = build_app_full(
+    let app = build_app_full_with_phase_g(
         shared,
         Some(audit),
         Arc::new(ArcSwap::from_pointee(resolved)),
         None, // mtls_authenticator
         Some(agent_auth),
+        None,
+        Arc::new(ArcSwap::from_pointee(Catalog::default())),
+        None,
+        Some(bindings),
     );
     TestServer::new(app)
 }
@@ -99,10 +109,20 @@ async fn server_with_acl(
         .create(name, None, allow, deny, None, None)
         .await
         .unwrap();
+    let agent = fx.agents.get_by_name(name).await.unwrap().unwrap();
+    fx.bindings
+        .set(agent.id, "things", &AuthSpec::None)
+        .await
+        .unwrap();
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(upstream), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(upstream),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
     let header = bearer_header(&pid, &secret);
     (server, fx, header)
 }
@@ -310,7 +330,12 @@ async fn ts6_missing_authorization_returns_401_and_audits() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     let resp = server.get("/api/things/v1/things/42").await;
     assert_unauthorized_envelope(&resp, "invalid_credential");
@@ -339,7 +364,12 @@ async fn ts6b_non_ascii_authorization_returns_401_and_audits() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     // axum_test forbids non-ASCII in `add_header`; use a non-Bearer scheme
     // instead — same `to_str().ok().strip_prefix("Bearer ")` failure path.
@@ -371,7 +401,12 @@ async fn ts7_operator_namespace_token_rejected() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     let op_token = agent_locksmith::token::StructuredToken::generate(
         agent_locksmith::token::TokenNamespace::Operator,
@@ -406,7 +441,12 @@ async fn ts8_malformed_token_rejected() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     let resp = server
         .get("/api/things/v1/things/42")
@@ -438,7 +478,12 @@ async fn ts9_unknown_public_id_rejected() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     let bogus = agent_locksmith::token::StructuredToken::generate(
         agent_locksmith::token::TokenNamespace::Agent,
@@ -477,7 +522,12 @@ async fn ts10_wrong_secret_rejected() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
     let bogus_secret = agent_locksmith::token::StructuredToken::generate(
         agent_locksmith::token::TokenNamespace::Agent,
     );
@@ -526,7 +576,12 @@ async fn ts11_expired_agent_rejected() {
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(&yaml_for(&mock.uri()), fx.audit.clone(), bearer);
+    let server = build_test_server(
+        &yaml_for(&mock.uri()),
+        fx.audit.clone(),
+        bearer,
+        fx.bindings.clone(),
+    );
 
     let resp = server
         .get("/api/things/v1/things/42")
@@ -672,7 +727,7 @@ tools:
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(yaml, fx.audit.clone(), bearer);
+    let server = build_test_server(yaml, fx.audit.clone(), bearer, fx.bindings.clone());
     let header = bearer_header(&pid, &secret);
 
     let resp = server
@@ -732,7 +787,7 @@ tools:
     let bearer: Arc<dyn AgentAuthenticator> = Arc::new(
         BearerAuthenticator::with_audit(fx.agents.clone(), Some(fx.audit.clone())).unwrap(),
     );
-    let server = build_test_server(yaml, fx.audit.clone(), bearer);
+    let server = build_test_server(yaml, fx.audit.clone(), bearer, fx.bindings.clone());
     let header = bearer_header(&pid, &secret);
 
     let resp = server

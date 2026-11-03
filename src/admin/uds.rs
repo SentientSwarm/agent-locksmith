@@ -869,6 +869,24 @@ async fn op_set_agent_credential(
         )
             .into_response();
     }
+    if body.auth_spec.is_oauth()
+        && body
+            .auth_spec
+            .oauth_session_label()
+            .is_none_or(|label| label.trim().is_empty())
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":{
+            "code":"oauth_session_label_required",
+            "message":"explicitly select a nonempty OAuth session label; use default literally when intended",
+        }}))).into_response();
+    }
+    if body.auth_spec.is_oauth()
+        && crate::oauth::refresh::selected_parameters(&body.auth_spec).is_none()
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":{
+            "code":"invalid_oauth_selection", "message":"select complete OAuth client and token endpoint metadata",
+        }}))).into_response();
+    }
     let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
         Ok(a) => a,
         Err(e) => return admin_err_response(e),

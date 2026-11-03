@@ -6,7 +6,10 @@
 //!
 //! TS-220..TS-225.
 
-use agent_locksmith::app::{OauthRuntime, build_app_full_with_oauth};
+#[path = "support/bindings.rs"]
+mod bindings;
+
+use agent_locksmith::app::{OauthRuntime, build_app_full_with_phase_g};
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
@@ -41,6 +44,10 @@ struct Harness {
     sessions: OauthSessionRepository,
     sealing_key: SealingKey,
     mock: MockServer,
+    pool: sqlx::SqlitePool,
+    bindings: agent_locksmith::repo::AgentCredentialRepository,
+    catalog: Arc<ArcSwap<Catalog>>,
+    registrations: Arc<RegistrationRepository>,
 }
 
 async fn setup() -> Harness {
@@ -86,6 +93,8 @@ async fn setup() -> Harness {
         )
         .await
         .unwrap();
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("codex", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());
@@ -100,15 +109,16 @@ async fn setup() -> Harness {
         refresh_client: reqwest::Client::new(),
     };
 
-    let app = build_app_full_with_oauth(
+    let app = build_app_full_with_phase_g(
         cfg_arc,
         Some(audit.clone()),
         Arc::new(ArcSwap::from_pointee(Default::default())),
         None,
         Some(bearer),
-        Some(registrations),
-        catalog_arc,
+        Some(registrations.clone()),
+        catalog_arc.clone(),
         Some(runtime),
+        Some(account_bindings.clone()),
     );
     let server = TestServer::new(app);
 
@@ -120,6 +130,10 @@ async fn setup() -> Harness {
         sessions,
         sealing_key,
         mock,
+        pool,
+        bindings: account_bindings,
+        catalog: catalog_arc,
+        registrations,
     }
 }
 
@@ -389,6 +403,8 @@ async fn setup_codex_shaped() -> Harness {
         )
         .await
         .unwrap();
+    let account_bindings =
+        bindings::select(&agents, &pool, &pid, &[("codex", r.auth.clone())]).await;
     let bearer: Arc<dyn AgentAuthenticator> =
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());
@@ -403,15 +419,16 @@ async fn setup_codex_shaped() -> Harness {
         refresh_client: reqwest::Client::new(),
     };
 
-    let app = build_app_full_with_oauth(
+    let app = build_app_full_with_phase_g(
         cfg_arc,
         Some(audit.clone()),
         Arc::new(ArcSwap::from_pointee(Default::default())),
         None,
         Some(bearer),
-        Some(registrations),
-        catalog_arc,
+        Some(registrations.clone()),
+        catalog_arc.clone(),
         Some(runtime),
+        Some(account_bindings.clone()),
     );
     let server = TestServer::new(app);
 
@@ -423,6 +440,10 @@ async fn setup_codex_shaped() -> Harness {
         sessions,
         sealing_key,
         mock,
+        pool,
+        bindings: account_bindings,
+        catalog: catalog_arc,
+        registrations,
     }
 }
 
@@ -541,3 +562,9 @@ async fn g2_proxy_skips_account_id_header_when_upstream_is_not_codex() {
         .await;
     resp.assert_status_ok();
 }
+
+#[path = "source_isolation/oauth.rs"]
+mod isolation;
+
+#[path = "account_bindings/logs.rs"]
+mod logs;

@@ -1,20 +1,8 @@
 //! Phase G integration tests — three end-to-end modes covered by the
 //! per-agent credential override system:
 //!
-//! 1. **Shared credential** (no override) — agent uses the registration's
-//!    default Bearer env var. This is today's default behavior; the
-//!    test pins it so we don't regress.
-//!
-//! 2. **Per-agent header override** — two agents register, the second
-//!    has a credential override pointing at a different env var. Both
-//!    hit the same upstream; the upstream sees two distinct API keys.
-//!
-//! 3. **Override → AuthSpec::None** — an override can downgrade an
-//!    authed registration to no-auth for a specific agent (rare but
-//!    permitted; tests pin the wire-shape outcome).
-//!
-//! Plus audit-fields coverage: every `proxy_request` audit row carries
-//! `auth_source` (registration_default vs agent_override).
+//! Explicit shared and distinct env selections preserve the Phase G account
+//! attribution contract. Unbound agents are covered by the D1 denial tests.
 
 use agent_locksmith::app::build_app_full_with_phase_g;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator};
@@ -115,9 +103,14 @@ async fn setup() -> Harness {
         .unwrap()
         .id;
 
-    // Phase G: hermes gets a per-agent override pointing at a
-    // distinct env var. openclaw has no override → registration
-    // default applies.
+    let o_id = agents
+        .get_by_name("openclaw-mini-1")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    agent_creds.set(o_id, "lmstudio", &r.auth).await.unwrap();
+    // Hermes explicitly selects its distinct account.
     agent_creds
         .set(
             h_id,
@@ -158,10 +151,10 @@ async fn setup() -> Harness {
     }
 }
 
-// ─── G-1: openclaw (no override) → registration_default + LMSTUDIO_DEFAULT_KEY ─
+// G-1: openclaw explicitly selects the shared account.
 
 #[tokio::test]
-async fn shared_credential_path_uses_registration_default() {
+async fn explicit_shared_credential_path_uses_selected_account() {
     let h = setup().await;
     Mock::given(method("GET"))
         .and(path("/v1/health"))
@@ -177,7 +170,7 @@ async fn shared_credential_path_uses_registration_default() {
         .await;
     resp.assert_status_ok();
 
-    // Audit row should record auth_source=registration_default.
+    // Audit row records an explicit binding even when the account is shared.
     let rows = h
         .audit
         .query(
@@ -191,7 +184,7 @@ async fn shared_credential_path_uses_registration_default() {
         .unwrap();
     let r = rows.iter().find(|r| r.event == "proxy_request").unwrap();
     let details = r.details.as_ref().unwrap();
-    assert_eq!(details["auth_source"], "registration_default");
+    assert_eq!(details["auth_source"], "agent_override");
     assert_eq!(details["auth_mode"], "bearer");
 }
 

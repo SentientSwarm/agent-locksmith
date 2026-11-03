@@ -24,20 +24,21 @@ ACL is **flat**: an agent has a single allowlist + denylist that applies uniform
 1. **Authenticate the bearer** → `AgentIdentity` or 401.
 2. **Extract the requested registration name** from the URL: `/api/<name>/...`.
 3. **Apply denylist** — if name is in denylist → 403 `tool_not_allowed`.
-4. **Apply allowlist** — if allowlist is non-empty and name isn't in it → 403 `tool_not_allowed`.
-5. **Empty allowlist + empty denylist** = no agent-side restriction (operator-implicit deny via "we just don't tell the agent it exists" works too).
+4. **Apply allowlist** — if an allowlist is set and name isn't in it → 403 `tool_not_allowed`.
+5. **Absent allowlist** = unrestricted by allowlist; an explicitly empty list permits no names. Denylist still wins.
+6. **Require explicit account selection** for the authenticated registration, including deliberate `none`. Missing binding → 403; selected source unavailable → 503; neither dispatches upstream or inherits the registration template.
 
 ACL decisions are emitted as `EventClass::Security` audit rows with the `agent_public_id` so security review can grep for "what did agent X try to call?" or "who tried to call denied tool Y?".
 
 ## Discovery endpoints
 
-Agents can ask locksmith what they're allowed to use:
+Agents can ask locksmith which registrations are eligible under their ACL:
 
 - `GET /tools` — JSON catalog of allowed tools (filtered by ACL). At v2.0.0 this returns only `kind=tool` entries.
 - `GET /models` — (v2.0.0+) JSON catalog of allowed models, filtered by ACL.
-- `GET /skill` — agentskills.io-format markdown describing locksmith. Without a bearer it returns a generic form (no tool/model leakage); with a valid bearer it returns a personalized form listing the agent's exact allowlist.
+- `GET /skill` — agentskills.io-format markdown describing locksmith. Without a bearer it returns a generic form (no tool/model leakage); with a valid bearer it returns a personalized form listing the agent's ACL-eligible catalog entries.
 
-The discovery endpoints respect the same ACL the proxy hot path uses, so an agent never sees an entry it can't actually call.
+Discovery respects ACL eligibility; it does not check binding existence or selected source health. A listed entry may still return 403 for missing selection or 503 for an unavailable selected source.
 
 ## What goes in the audit log
 
@@ -49,34 +50,33 @@ Every authenticated request emits an audit row with:
 - `auth_method` — bearer / mtls
 - timestamp, request id, etc.
 
-For ACL denials specifically, the audit row's `details.reason` is one of:
-- `tool_not_allowed` — name not in allowlist (or in denylist)
-- `tool_unknown` — name doesn't exist in the registry
+For 403 denials, `details.reason` distinguishes `not_in_allowlist`,
+`in_denylist` and `account_binding_missing` (same wire code `tool_not_allowed`).
+Use `locksmith audit query --event-class security --agent <agent-public-id>`.
+For missing selection, first run `locksmith agent credentials list <agent-public-id>`,
+then deliberately select the intended account with
+`locksmith agent set-credential <agent-public-id> <tool> --auth 'bearer=<ENV_VAR>'`
+or another approved supported source. Only actual ACL reasons justify reviewing
+policy. Do not print credential values or retry an alternate account/default/no auth.
 
-Use `locksmith audit query --event-class security --agent-public-id <pid>` to investigate.
-
-> **"Who made this call?" is already answered today.** Every
-> `proxy_request` audit row carries `agent_public_id` and (post-G.0)
-> `agent_name`. If your only concern about shared upstream
-> credentials is per-agent attribution, you don't need per-agent
-> credentials — the audit log already partitions calls by agent.
-> Reach for [per-agent credentials](per-agent-credentials.md) only
-> when you need upstream-side billing/quota separation, blast-radius
-> isolation, or distinct upstream identities. For most teams the
-> shared-credential default is the right answer.
+Each agent has its own identity and explicit selection. Several agents can
+intentionally select the same source/account, preserving per-agent audit
+attribution; distinct bindings can instead isolate billing/quota and identity.
+See [per-agent credentials](per-agent-credentials.md). Registration defaults
+never supply implicit account authority.
 
 ## Operator practical guidance
 
 - **Start narrow.** New agents register with the smallest viable allowlist. Add as you discover real needs. Denylist is rarely needed if allowlists are tight.
 - **Give each agent its own identity.** Don't reuse a bearer across agents — you lose the audit attribution. The bearer secret is cheap to mint.
-- **Rotate when in doubt.** `locksmith agent revoke <name>` invalidates the bearer immediately; re-register with `--allowlist ...` to mint a new one.
+- **Rotate when in doubt.** `locksmith agent revoke <agent-public-id>` invalidates the bearer immediately; re-register with `--allowlist ...` to mint a new one.
 - **For verify-test agents:** keep them in `agents.test.yaml` (separate manifest) with deliberately-narrow allowlists so verify.sh can prove both allow and deny paths concretely. See `layer8-proxy-site/agents.test.yaml` for the convention.
 
 ## Agent-developer practical guidance
 
 - **Send `Authorization: Bearer lk_<public_id>.<secret>` on every request.** No exceptions; no fallback to "no auth header for some endpoints" except the public probes (`/livez`, `/readyz`, `/version`, unauthenticated `/skill`).
 - **Use `GET /skill` (with your bearer) on startup** to discover what's available. Don't hardcode a list locally — it goes stale.
-- **On 403, look at the `code` field, not the `message`.** The wire intentionally returns generic messages; codes are stable contract.
+- **On 403, read the stable code and ask the operator to inspect the audit reason.** `tool_not_allowed` alone cannot distinguish missing binding from ACL denial. On 503, ask for selected-source diagnosis; discovery is not proof of source health.
 - **On 401, stop and ask the operator.** Re-trying the same request with the same bearer won't succeed. Ask for a fresh bearer or a registration sanity-check.
 
 ## See also

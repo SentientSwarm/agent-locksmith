@@ -6,9 +6,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
+use secrecy::ExposeSecret;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
+
+mod selection;
 
 use crate::app::AppState;
 use crate::config::{EgressMode, ToolConfig, ToolTimeouts};
@@ -115,6 +118,7 @@ struct ProxyTarget {
     /// `Some("hermes")` etc. when the agent has an OAuth override
     /// pointing at a non-default label. `None` for non-OAuth requests.
     oauth_session_label: Option<String>,
+    oauth_selection: Option<AuthSpec>,
 }
 
 /// What the proxy needs to know about auth at injection time. Each
@@ -320,6 +324,7 @@ impl ProxyTarget {
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
+            oauth_selection: None,
         }
     }
 
@@ -346,6 +351,7 @@ impl ProxyTarget {
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
+            oauth_selection: None,
         }
     }
 }
@@ -368,6 +374,16 @@ pub async fn proxy_handler(
         return record_authz_denied(&state.audit, &ctx, reason).await;
     }
 
+    if req
+        .extensions()
+        .get::<crate::auth_v2::AgentIdentity>()
+        .is_none()
+        && crate::legacy_admission::credentialed(&state, &ctx.tool_name)
+    {
+        return selection::record_failure(&state.audit, &ctx, selection::Failure::IdentityRequired)
+            .await;
+    }
+
     // Phase E.6: catalog lookup first; legacy `config.tools` fallback
     // for M0/M1 / M9 test paths that haven't wired registrations.
     let target = resolve_target(&state, &ctx.tool_name);
@@ -376,23 +392,26 @@ pub async fn proxy_handler(
         None => return record_tool_not_found(&state.audit, &ctx).await,
     };
 
-    // Phase G: per-agent credential override. When an override row
-    // exists for (agent_id, registration), swap in the override's
-    // AuthSpec BEFORE OAuth resolution / static-credential injection.
-    // Default behavior (no override) leaves target unchanged.
-    apply_agent_credential_override(&state, &mut target, req.extensions()).await;
+    // D1.1: an authenticated allowed agent must explicitly select its account
+    // before credential resolution. Absent/unavailable selections never inherit
+    // the registration template or dispatch an unauthenticated upstream call.
+    if let Err(failure) = selection::apply(&state, &mut target, req.extensions()).await {
+        return selection::record_failure(&state.audit, &ctx, failure).await;
+    }
 
     // Phase F.5: for OAuth registrations, materialize the access token
     // before building the upstream request. Returns a 503 envelope if
     // the session is missing, degraded, or the sealing key isn't
     // configured — operator fixes via re-bootstrap.
     if matches!(target.auth, ProxyAuth::Oauth { .. }) {
-        // Phase G: session_label was set during apply_agent_credential_override
-        // (defaults to DEFAULT_SESSION_LABEL when no override is in effect).
-        let session_label = target
-            .oauth_session_label
-            .clone()
-            .unwrap_or_else(|| crate::oauth::session::DEFAULT_SESSION_LABEL.to_string());
+        let Some(session_label) = target.oauth_session_label.clone() else {
+            return selection::record_failure(
+                &state.audit,
+                &ctx,
+                selection::Failure::CredentialUnavailable,
+            )
+            .await;
+        };
         match resolve_oauth_token(&state, &target, &session_label).await {
             Ok(updated_auth) => target.auth = updated_auth,
             Err(envelope) => {
@@ -453,12 +472,12 @@ pub async fn proxy_handler(
     };
     if let Some(reference) = op_ref {
         match state.op_resolver.as_ref().and_then(|r| r.get(&reference)) {
-            Some(value) => {
+            Some(value) if !value.expose_secret().is_empty() => {
                 if let ProxyAuth::Op { resolved_value, .. } = &mut target.auth {
                     *resolved_value = Some(value);
                 }
             }
-            None => {
+            _ => {
                 record_stored_unavailable(&state.audit, &ctx, "op_reference_unresolved").await;
                 if let Some(emitter) = state.operational_log.as_ref() {
                     emitter.emit(
@@ -1169,10 +1188,10 @@ async fn record_proxy_request_success(
 
 /// Build audit `details` JSON with `auth_mode` always present,
 /// `oauth_session_id` populated for OAuth requests, Phase G
-/// fields (`auth_source`, `oauth_session_label`) tracking whether
-/// the credential came from the registration default or a per-agent
-/// override and which OAuth session label was used, and the Phase G3
-/// `codex_body_fixup` field when locksmith modified the request body
+/// fields (`auth_source`, `oauth_session_label`) recording explicit
+/// agent selection (`agent_override`) and the selected OAuth label.
+/// Credentialed identityless requests cannot inherit defaults. The Phase G3
+/// `codex_body_fixup` field records when locksmith modified the request body
 /// for a codex `/responses` call.
 fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
     let mut v = json!({
@@ -1371,140 +1390,6 @@ fn url_host(url: &str) -> Option<String> {
     }
 }
 
-// ─── Phase G: per-agent credential override ──────────────────────────────
-
-/// Apply the per-agent credential override (if any) onto `target`,
-/// updating `target.auth`, `target.auth_source`, and (for OAuth)
-/// `target.oauth_session_label`. No-op when:
-///   - the agent_creds repo isn't wired (M0/M1 / pre-Phase-G test path),
-///   - no `AgentIdentity` is in extensions (unauthenticated request),
-///   - no override row exists for (agent_id, registration).
-///
-/// Override `auth_spec` shapes:
-///   - `AuthSpec::None` → `ProxyAuth::None`
-///   - `AuthSpec::Header { header, env_var }` → reads `env_var` directly
-///     and stashes the value in `ProxyAuth::Header.override_value`.
-///     Bypasses `resolved_creds` because per-agent overrides don't
-///     participate in the startup-resolved creds map.
-///   - `AuthSpec::Bearer { env_var }` → same as Header but for the
-///     `Authorization: Bearer ...` injection path.
-///   - `AuthSpec::OauthPkce` / `OauthDeviceCode` → records the
-///     `session_label` so `resolve_oauth_token` reads from a non-default
-///     label (or "default" when the override doesn't specify a label).
-async fn apply_agent_credential_override(
-    state: &AppState,
-    target: &mut ProxyTarget,
-    extensions: &axum::http::Extensions,
-) {
-    let Some(agent_creds) = state.agent_creds.as_ref() else {
-        return; // No repo wired: keep registration default.
-    };
-    let Some(identity) = extensions.get::<crate::auth_v2::AgentIdentity>() else {
-        return; // No AgentIdentity (M0 shared-bearer path).
-    };
-    let override_row = match agent_creds.get(identity.id, &target.name).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return, // No override: keep registration default.
-        Err(e) => {
-            tracing::warn!(
-                agent_id = identity.id,
-                tool = %target.name,
-                error = %e,
-                "agent_credential_overrides lookup failed; falling back to registration default",
-            );
-            return;
-        }
-    };
-
-    target.auth_source = "agent_override";
-
-    match override_row.auth_spec {
-        AuthSpec::None => {
-            target.auth = ProxyAuth::None;
-        }
-        AuthSpec::Header { header, env_var } => {
-            let value = std::env::var(&env_var)
-                .ok()
-                .map(secrecy::SecretString::from);
-            if value.is_none() {
-                tracing::warn!(
-                    agent_id = identity.id,
-                    tool = %target.name,
-                    env_var = %env_var,
-                    "agent_override env var not set; forwarding without injection (will likely 401)",
-                );
-            }
-            target.auth = ProxyAuth::Header {
-                header,
-                audit_mode: "header",
-                override_value: value,
-            };
-        }
-        AuthSpec::Bearer { env_var } => {
-            let value = std::env::var(&env_var)
-                .ok()
-                .map(secrecy::SecretString::from);
-            if value.is_none() {
-                tracing::warn!(
-                    agent_id = identity.id,
-                    tool = %target.name,
-                    env_var = %env_var,
-                    "agent_override env var not set; forwarding without injection (will likely 401)",
-                );
-            }
-            target.auth = ProxyAuth::Bearer {
-                override_value: value,
-            };
-        }
-        AuthSpec::StoredHeader { header, secret_ref } => {
-            // T1.6 unseals `secret_ref` from credential_secrets before
-            // build_upstream_request; here we only carry the shape.
-            target.auth = ProxyAuth::Stored {
-                header: Some(header),
-                audit_mode: "stored_header",
-                secret_ref,
-                resolved_value: None,
-            };
-        }
-        AuthSpec::StoredBearer { secret_ref } => {
-            target.auth = ProxyAuth::Stored {
-                header: None,
-                audit_mode: "stored_bearer",
-                secret_ref,
-                resolved_value: None,
-            };
-        }
-        AuthSpec::OpHeader { header, reference } => {
-            // T2.3 fills the value from the OpResolver cache before
-            // build_upstream_request; here we only carry the shape.
-            target.auth = ProxyAuth::Op {
-                header: Some(header),
-                audit_mode: "op_header",
-                reference,
-                resolved_value: None,
-            };
-        }
-        AuthSpec::OpBearer { reference } => {
-            target.auth = ProxyAuth::Op {
-                header: None,
-                audit_mode: "op_bearer",
-                reference,
-                resolved_value: None,
-            };
-        }
-        AuthSpec::OauthPkce { session_label, .. }
-        | AuthSpec::OauthDeviceCode { session_label, .. } => {
-            // Don't replace target.auth for OAuth — the registration's
-            // ProxyAuth::Oauth placeholder is correct (resolve_oauth_token
-            // will fill in audit_mode + access token). We only need to
-            // tell that resolver which label to use.
-            let label = session_label
-                .unwrap_or_else(|| crate::oauth::session::DEFAULT_SESSION_LABEL.to_string());
-            target.oauth_session_label = Some(label);
-        }
-    }
-}
-
 // ─── Phase F.5: OAuth resolution helpers ─────────────────────────────────
 
 /// Wrapped error returned by [`resolve_oauth_token`] when the session
@@ -1553,6 +1438,17 @@ async fn resolve_oauth_token(
     let lock = rt.locks.get(&target.name, session_label).await;
     let _guard = lock.lock().await;
 
+    if !selection::oauth_consistent(state, target, session_label).await {
+        return Err(OauthUnavailable {
+            response: oauth_unavailable_envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "oauth_selection_unavailable",
+                "OAuth session requires consistent explicit selections",
+            ),
+            audit_cause: "selection_unavailable",
+        });
+    }
+
     let session = match rt
         .sessions
         .get(&rt.sealing_key, &target.name, session_label)
@@ -1573,7 +1469,7 @@ async fn resolve_oauth_token(
             tracing::warn!(name = %target.name, error = %e, "oauth session read failed");
             return Err(OauthUnavailable {
                 response: oauth_unavailable_envelope(
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                     "oauth_session_read_failed",
                     "OAuth session unavailable (sealing failure)",
                 ),
@@ -1593,6 +1489,21 @@ async fn resolve_oauth_token(
         });
     }
 
+    if session
+        .access_token
+        .as_ref()
+        .is_some_and(|t| t.expose_secret().is_empty())
+        || session.refresh_token.expose_secret().is_empty()
+    {
+        return Err(OauthUnavailable {
+            response: oauth_unavailable_envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "oauth_session_empty",
+                "selected OAuth session contains an empty token",
+            ),
+            audit_cause: "session_empty",
+        });
+    }
     let now = now_secs();
     let needs_refresh = match (&session.access_token, session.access_token_expires_at) {
         (None, _) => true,
@@ -1601,10 +1512,19 @@ async fn resolve_oauth_token(
     };
 
     let active_session = if needs_refresh {
-        let cat = state.catalog.load();
-        match crate::oauth::refresh::refresh_session(
+        let Some(selected) = target.oauth_selection.as_ref() else {
+            return Err(OauthUnavailable {
+                response: oauth_unavailable_envelope(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "oauth_selection_unavailable",
+                    "explicit OAuth selection is unavailable",
+                ),
+                audit_cause: "selection_unavailable",
+            });
+        };
+        match crate::oauth::refresh::refresh_selected_session(
             &rt.sessions,
-            &cat,
+            selected,
             &rt.sealing_key,
             &rt.refresh_client,
             &session,
@@ -1744,9 +1664,9 @@ async fn resolve_stored_credential(
             // loud instead of being lossily rewritten.
             let plain = secrecy::zeroize::Zeroizing::new(plain);
             match std::str::from_utf8(&plain) {
-                Ok(s) => Ok(secrecy::SecretString::from(s)),
-                Err(_) => {
-                    tracing::warn!(secret_ref = %secret_ref, "stored credential is not valid UTF-8");
+                Ok(s) if !s.is_empty() => Ok(secrecy::SecretString::from(s)),
+                _ => {
+                    tracing::warn!(secret_ref = %secret_ref, "stored credential is empty or not valid UTF-8");
                     Err(StoredUnavailable {
                         response: stored_unavailable_envelope(
                             "stored credential could not be decoded",

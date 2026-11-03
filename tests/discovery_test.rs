@@ -1,6 +1,7 @@
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered;
 use agent_locksmith::config::parse_config_str;
-use axum_test::{TestResponse, TestServer};
+use axum_test::TestResponse;
 
 #[tokio::test]
 async fn test_tools_returns_active_tools() {
@@ -26,10 +27,13 @@ tools:
     timeout_seconds: 15
 "#;
     let config = parse_config_str(yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let h = registered::setup(config).await;
+    let server = &h.server;
 
-    let resp: TestResponse = server.get("/tools").await;
+    let resp: TestResponse = server
+        .get("/tools")
+        .add_header("authorization", &h.bearer)
+        .await;
     resp.assert_status_ok();
     let body: serde_json::Value = resp.json();
     let tools = body["tools"].as_array().unwrap();
@@ -56,10 +60,14 @@ tools:
     timeout_seconds: 30
 "#;
     let config = parse_config_str(yaml).unwrap();
-    let app = build_app(config);
-    let server = TestServer::new(app);
+    let h = registered::setup(config).await;
+    let server = &h.server;
 
-    let resp: TestResponse = server.get("/tools").await;
+    let resp: TestResponse = server
+        .get("/tools")
+        .add_header("authorization", &h.bearer)
+        .await;
+    resp.assert_status_ok();
     let body_str = resp.text();
     assert!(!body_str.contains("super-secret-token"));
 }
