@@ -1,9 +1,11 @@
 # Locksmith bounded MCP transport
 
-AGENT-198/199 prerequisite library; not yet wired into Locksmith's daemon or CLI.
+AGENT-198/199 bounded transport and session library. AGENT-202 consumes the
+session pool in the [native daemon lifecycle](../../docs/development/native-mcp.md);
+its outbound client remains unreachable until later reviewed dispatch work.
 See the [design, configuration and diagnostics](../../docs/development/mcp-transport.md).
-No root version bump, new network listener, migration or native routing is
-introduced. Existing HTTP and selected-account authority are unchanged.
+The separate library introduced no root version bump. Native migration/routing
+now belong to AGENT-202; existing HTTP selected-account authority is preserved.
 
 Uses the public rmcp3.7.0 transport hook, reqwest0.13.2 and sse-stream0.2.6,
 matching the accepted S1 lock. AGENT-199 adds a pinned
@@ -48,9 +50,9 @@ cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check
 cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml --test sdk_smoke -- --nocapture --test-threads=1
 ```
 
-The separate manifest keeps native prerequisites out of the daemon dependency
-graph until AGENT-202 integrates them. Consequently root `cargo test --all`
-does not run these tests; CI runs both manifests explicitly. Test fixtures
+The root now consumes this library and its SDK patch. The separate manifest
+still owns its own tests: root `cargo test --all` does not run them; CI runs both
+manifests explicitly. Test fixtures
 bind loopback ephemeral ports, use generated certificates/synthetic identity,
 and terminate their child receivers. No provider credentials or owner service
 are required. `original` is a retained unsafe-SDK observation, while

@@ -48,7 +48,9 @@ pub(super) async fn target(
             record_authz_denied(&state.audit, ctx, reason).await,
         ));
     }
-    if row.registration.disabled {
+    if row.registration.disabled
+        || row.registration.protocol != crate::registrations::Protocol::Http
+    {
         return Err(Box::new(record_tool_not_found(&state.audit, ctx).await));
     }
     if activation(&row.registration, Some(&state.catalog.load())) != "active" {

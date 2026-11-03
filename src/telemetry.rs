@@ -1,4 +1,6 @@
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, Layer, filter::filter_fn, fmt, layer::SubscriberExt, util::SubscriberInitExt,
+};
 
 use crate::config::LoggingConfig;
 
@@ -9,6 +11,15 @@ pub fn init_logging(config: Option<&LoggingConfig>) {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().json().with_target(true))
+        // SDK events include client metadata, request arguments and cancellation reasons.
+        // Never expose them, even when RUST_LOG explicitly enables SDK tracing.
+        .with(
+            fmt::layer()
+                .json()
+                .with_target(true)
+                .with_filter(filter_fn(|metadata| {
+                    metadata.target() != "rmcp" && !metadata.target().starts_with("rmcp::")
+                })),
+        )
         .init();
 }

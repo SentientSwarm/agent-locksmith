@@ -11,6 +11,8 @@
 //! configs without admin_socket continue to run with only the TCP agent
 //! listener bound — preserving backward compat.
 
+mod state_lock;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +47,7 @@ pub enum DaemonError {
 /// Run the daemon to completion. Returns when both listeners shut down
 /// (or the drain window expires).
 pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), DaemonError> {
+    let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
     if admin_enabled {
@@ -174,7 +177,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
     // up — otherwise there's no audit to sweep. Defaults to
     // 90 days / hourly when `audit:` is absent from config.
-    let sweeper_task = audit_for_sweeper.map(|audit| {
+    let mut sweeper_task = audit_for_sweeper.map(|audit| {
         let snapshot = shared_config.load();
         let cfg = snapshot.audit.as_ref().cloned().unwrap_or_default();
         drop(snapshot);
@@ -187,7 +190,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // operational-log stream never touches the audit table (LOG-1). Runs
     // only when the operational-log substrate is up; co-terminates with
     // shutdown like the audit sweeper.
-    let ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
+    let mut ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .operational_log
@@ -203,7 +206,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // nothing references any more, then hard-deletes tombstoned rows past
     // retention. Runs only when the sealing key is configured (the store
     // exists only then).
-    let credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
+    let mut credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .credential_store
@@ -283,8 +286,14 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         );
     }
 
+    let native = crate::native::Runtime::new(
+        shared_config.load().mcp.clone(),
+        registrations_for_app.clone(),
+        catalog_for_app.clone().unwrap_or_default(),
+    );
+    let mut native_task = native.start(coord.shutdown_signal());
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_k(
+        Some(catalog) => crate::app::build_app_full_with_native(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -298,6 +307,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             credential_secrets_for_app,
             operational_log_for_app,
             op_resolver_for_app,
+            native.clone(),
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -309,7 +319,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         ),
     };
     let agent_shutdown = coord.shutdown_signal();
-    let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
+    let mut agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
         crate::config::AuthMode::Bearer => {
             let listener = TcpListener::bind(addr).await?;
             info!("agent listener bound on {addr} (bearer)");
@@ -352,7 +362,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // Admin UDS listener (when configured).
     // Admin HTTPS listener piggybacks on the same UdsState — same handlers,
     // different transport (T4.3 / C-3, SPEC §4.2.5).
-    let (admin_task, admin_https_task) = if let Some(state) = admin_state {
+    let (mut admin_task, mut admin_https_task) = if let Some(state) = admin_state {
         let path = admin_socket_path.expect("checked above");
         let uds_shutdown = coord.shutdown_signal();
         let uds_state = state.clone();
@@ -427,33 +437,34 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     };
 
     let drain = async {
-        let agent_res = match (admin_task, admin_https_task) {
+        let _ = (&mut native_task).await;
+        let agent_res = match (admin_task.as_mut(), admin_https_task.as_mut()) {
             (Some(uds), Some(https)) => {
-                let (a, u, h) = tokio::join!(agent_task, uds, https);
+                let (a, u, h) = tokio::join!(&mut agent_task, uds, https);
                 (Some(a), Some(u), Some(h))
             }
             (Some(uds), None) => {
-                let (a, u) = tokio::join!(agent_task, uds);
+                let (a, u) = tokio::join!(&mut agent_task, uds);
                 (Some(a), Some(u), None)
             }
             (None, Some(https)) => {
                 // Admin HTTPS without UDS is structurally permitted but
                 // unusual; carry it through anyway.
-                let (a, h) = tokio::join!(agent_task, https);
+                let (a, h) = tokio::join!(&mut agent_task, https);
                 (Some(a), None, Some(h))
             }
-            (None, None) => (Some(agent_task.await), None, None),
+            (None, None) => (Some((&mut agent_task).await), None, None),
         };
         // Sweeper exits on its own when the shutdown signal fires; we
         // join it here so a slow tick can finish cleanly within the
         // drain window. Errors are logged but never poisoned shutdown.
-        if let Some(s) = sweeper_task {
+        if let Some(s) = sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = ops_log_sweeper_task {
+        if let Some(s) = ops_log_sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = credential_sweeper_task {
+        if let Some(s) = credential_sweeper_task.as_mut() {
             let _ = s.await;
         }
         agent_res
@@ -478,7 +489,31 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             Ok(())
         }
         Err(_) => {
-            warn!("drain window exceeded; tasks dropped");
+            warn!("drain window exceeded; finishing bounded owned cleanup");
+            finish_task(&mut agent_task).await;
+            for task in [admin_task.as_mut(), admin_https_task.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                finish_task(task).await;
+            }
+            for task in [
+                sweeper_task.as_mut(),
+                ops_log_sweeper_task.as_mut(),
+                credential_sweeper_task.as_mut(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                finish_task(task).await;
+            }
+            finish_task(&mut native_task).await;
+            let snapshot = native.snapshot();
+            if snapshot.entries != 0 {
+                return Err(DaemonError::Server(
+                    "native session cleanup incomplete".into(),
+                ));
+            }
             Ok(())
         }
     }
@@ -700,8 +735,18 @@ async fn build_admin_substrate(
     // a baked-in catalog start with an empty registrations table);
     // parse / validation errors ABORT startup since a malformed
     // catalog ships with the image.
+    let seed_listener = {
+        let cfg = config.load();
+        (cfg.listen.host.clone(), cfg.listen.port)
+    };
     if let Some(seed_path) = crate::registrations::seed_loader::seed_path_from_env() {
-        match crate::registrations::seed_loader::load_or_skip(&registrations, &seed_path).await {
+        match crate::registrations::seed_loader::load_for_listener(
+            &registrations,
+            &seed_path,
+            Some((&seed_listener.0, seed_listener.1)),
+        )
+        .await
+        {
             Ok(()) => {}
             Err(e) => {
                 return Err(DaemonError::AdminConfig(format!(
@@ -958,4 +1003,18 @@ pub async fn run_with_drain_window(
     let coord_clone = coord.clone();
     let handle = tokio::spawn(async move { run(config, coord_clone).await });
     (coord, handle)
+}
+
+async fn finish_task<T>(task: &mut tokio::task::JoinHandle<T>) {
+    // A completed handle may already have been consumed by the drain future.
+    if task.is_finished() {
+        return;
+    }
+    if tokio::time::timeout(Duration::from_secs(6), &mut *task)
+        .await
+        .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+    }
 }

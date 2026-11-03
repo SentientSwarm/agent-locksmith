@@ -30,6 +30,11 @@ middleware (`kind=infra`) is operator-only.
 
 ## Highlights (v2.8.0)
 
+- **Native MCP lifecycle (N1)** — authenticated stateful2025-11-25 sessions,
+  finite limits and safe migration. Tools remain unapproved: empty list, every
+  call denied, no upstream MCP request. See [operator setup](docs/user/operator/native-mcp.md)
+  and [agent interface](docs/user/agent-integration/native-mcp.md).
+
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
   operator-only middleware (lf-scan today) lives in its own kind.
