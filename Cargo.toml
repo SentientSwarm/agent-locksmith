@@ -20,6 +20,10 @@ harness = false
 path = "benches/audit_write_bench.rs"
 
 [dependencies]
+locksmith-mcp-transport = { path = "crates/mcp-transport" }
+rmcp = { version = "=3.7.0", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
 aes-gcm = "0.10"
 arc-swap = "1"
 argon2 = "0.5"
@@ -55,7 +59,10 @@ x509-parser = "0.16"
 pem = "3"
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "ring"] }
 
+time = "0.3"
+
 [dev-dependencies]
+reqwest_mcp = { package = "reqwest", version = "=0.13.2", default-features = false, features = ["rustls-no-provider"] }
 axum-test = "19"
 criterion = { version = "0.5", features = ["async_tokio"] }
 rcgen = "0.13"
@@ -63,3 +70,6 @@ tempfile = "3"
 time = { version = "0.3", features = ["macros"] }
 tokio-test = "0.4"
 wiremock = "0.6"
+
+[patch.crates-io]
+rmcp = { path = "crates/mcp-transport/vendor/rmcp" }

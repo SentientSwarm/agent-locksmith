@@ -122,6 +122,7 @@ fn build_registrations_admin_router(
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
+        local_listener: Some(state.admin.local_listener()),
         repo,
         catalog: state.catalog.clone(),
         resolved_creds: state.resolved_creds.clone(),
@@ -169,6 +170,7 @@ fn build_registrations_admin_router(
             "/infra/{name}/credential",
             put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
         )
+        .merge(crate::definitions::api::router())
         .with_state(st)
 }
 

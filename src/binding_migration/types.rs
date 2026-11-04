@@ -17,6 +17,8 @@ pub struct Agent {
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Registration {
+    #[serde(skip_serializing_if = "is_http")]
+    pub protocol: String,
     pub name: String,
     pub kind: String,
     pub upstream: String,
@@ -116,4 +118,8 @@ pub struct RegistrationSummary {
     pub kind: String,
     pub disabled: bool,
     pub auth_spec: Option<AuthSpec>,
+}
+
+fn is_http(protocol: &str) -> bool {
+    protocol == "http"
 }
