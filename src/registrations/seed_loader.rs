@@ -177,6 +177,13 @@ async fn apply_catalog_parsed(
     // Validate every entry up-front. Catch malformed catalogs before
     // we touch the DB.
     for entry in &catalog.entries {
+        if entry.mcp.as_ref().is_some_and(|m| m.definition.is_some()) {
+            return Err(SeedLoadError::Entry {
+                name: entry.name.clone(),
+                kind: entry.kind.to_string(),
+                error: RegistrationError::DefinitionPending,
+            });
+        }
         if let Some(metadata) = &entry.metadata {
             super::http_service::from_metadata(metadata).map_err(|error| SeedLoadError::Entry {
                 name: entry.name.clone(),

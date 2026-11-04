@@ -4,7 +4,7 @@ mod context;
 mod error;
 mod handler;
 mod ingress;
-mod json;
+pub(crate) mod json;
 mod manager;
 mod response;
 mod route;

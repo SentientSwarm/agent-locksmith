@@ -160,6 +160,9 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
 /// envelope stays uniform across all locksmith error sources.
 fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static str, &'static str) {
     match err {
+        RegistrationError::DefinitionPending => {
+            (StatusCode::CONFLICT, "conflict", "definition_pending")
+        }
         RegistrationError::InvalidMcp => (StatusCode::BAD_REQUEST, "bad_request", "invalid_mcp"),
         RegistrationError::InvalidHttpService => (
             StatusCode::BAD_REQUEST,
@@ -329,10 +332,14 @@ impl AdminRegistrationsState {
         Ok(())
     }
 
-    fn describe(&self, registration: &Registration) -> Value {
+    pub(crate) fn describe(&self, registration: &Registration) -> Value {
         let mut value = registration_to_admin_json(registration);
         let catalog = self.catalog.as_ref().map(|c| c.load());
         value["configured"] = true.into();
+        if registration.definition_pinned() {
+            value["authoring_only"] = true.into();
+            value["provider_readiness"] = "unverified".into();
+        }
         value["activation"] = crate::registrations::admission::activation(
             registration,
             catalog.as_deref().map(|c| c.as_ref()),
@@ -426,6 +433,10 @@ pub async fn op_put(
         return registration_error_response(&RegistrationError::InvalidMcp);
     }
 
+    if body.mcp.as_ref().is_some_and(|m| m.definition.is_some()) {
+        return registration_error_response(&RegistrationError::DefinitionPending);
+    }
+
     // Kind-aware auth resolution.
     //
     // - kind=tool requires the field to be present (use `auth: none` for
@@ -456,6 +467,9 @@ pub async fn op_put(
     let now = unix_now();
     let (created_at, disabled) = match state.repo.get(&name).await {
         Ok(Some(existing)) => {
+            if existing.definition_pinned() {
+                return registration_error_response(&RegistrationError::DefinitionPending);
+            }
             if existing.kind != kind {
                 return registration_error_response(&RegistrationError::WrongKind {
                     existing_kind: existing.kind,
@@ -545,6 +559,9 @@ pub async fn op_enable(
 ) -> Response {
     match state.repo.get(&name).await {
         Ok(Some(r)) => {
+            if r.definition_pinned() {
+                return registration_error_response(&RegistrationError::DefinitionPending);
+            }
             if r.kind != kind {
                 return registration_error_response(&RegistrationError::WrongKind {
                     existing_kind: r.kind,
@@ -580,8 +597,9 @@ pub async fn op_enable(
 ///
 /// Fetches the registration (404 on absent / kind mismatch); when the
 /// sealing key + store aren't configured, 404s (the feature gate). Seals
-/// the value → inserts a fresh `credential_secrets` row → mints a new
-/// `secret_ref`. Preserves the current header name if the registration
+/// the value, then rechecks the registration and atomically inserts custody
+/// plus the auth attachment. A refusal rolls back both. Preserves the current
+/// header name if the registration
 /// already injects a `Header`/`StoredHeader` (→ `StoredHeader`), else
 /// `StoredBearer`. Tombstones the prior stored ref on rotation. Returns a
 /// shape-only `{secret_ref, set_at}` — the value is NEVER echoed (CCS-1).
@@ -604,6 +622,9 @@ pub async fn op_put_credential(
         Ok(None) => return unknown_name_response(&name),
         Err(e) => return registration_error_response(&e),
     };
+    if existing.definition_pinned() {
+        return registration_error_response(&RegistrationError::DefinitionPending);
+    }
     if existing.kind != kind {
         return registration_error_response(&RegistrationError::WrongKind {
             existing_kind: existing.kind,
@@ -621,44 +642,16 @@ pub async fn op_put_credential(
             )));
         }
     };
-    let secret_ref = match secrets.insert(&sealed, &nonce).await {
-        Ok(r) => r,
-        Err(e) => {
-            return registration_error_response(&RegistrationError::Backend(format!(
-                "credential store insert failed: {e}"
-            )));
-        }
-    };
-
-    // Preserve the header name for header-shaped auth (env, stored or op);
-    // else bearer.
-    let new_auth = match existing.auth.header_name() {
-        Some(header) => AuthSpec::StoredHeader {
-            header: header.to_string(),
-            secret_ref: secret_ref.clone(),
-        },
-        None => AuthSpec::StoredBearer {
-            secret_ref: secret_ref.clone(),
-        },
-    };
-
-    // Capture the prior stored ref BEFORE overwriting so rotation can
-    // tombstone the old sealed row after the upsert commits.
-    let old_ref = existing.auth.stored_secret_ref().map(|s| s.to_string());
-
-    // An operator-set credential makes the row operator-owned (mirrors
-    // `op_put`): a seed row left at `seed=true` would be refreshed — and its
-    // stored credential silently overwritten — on the next catalog bump.
+    let old_ref = existing.auth.stored_secret_ref().map(str::to_owned);
     let now = unix_now();
-    let updated = Registration {
-        auth: new_auth,
-        seed: false,
-        updated_at: now,
-        ..existing
+    let secret_ref = match state
+        .repo
+        .store_credential(&existing, &sealed, &nonce)
+        .await
+    {
+        Ok(reference) => reference,
+        Err(e) => return registration_error_response(&e),
     };
-    if let Err(e) = state.repo.upsert(&updated).await {
-        return registration_error_response(&e);
-    }
 
     // Tombstone the rotated ref only after the upsert succeeds, so a
     // failed write never orphans the live secret.
@@ -700,6 +693,9 @@ pub async fn op_delete_credential(
         Ok(None) => return unknown_name_response(&name),
         Err(e) => return registration_error_response(&e),
     };
+    if existing.definition_pinned() {
+        return registration_error_response(&RegistrationError::DefinitionPending);
+    }
     if existing.kind != kind {
         return registration_error_response(&RegistrationError::WrongKind {
             existing_kind: existing.kind,

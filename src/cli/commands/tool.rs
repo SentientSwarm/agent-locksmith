@@ -13,6 +13,12 @@ use crate::output::Format;
 
 #[derive(Subcommand)]
 pub enum ToolCmd {
+    /// Create a disabled, immutable instance of an exact definition; no accounts or grants.
+    FromDefinition {
+        name: String,
+        #[command(flatten)]
+        options: super::definition_instance::Options,
+    },
     /// List configured tools (kind=tool registrations, including disabled).
     List,
     /// Show one tool by name.
@@ -41,6 +47,9 @@ pub enum ToolCmd {
 
 pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(), CliError> {
     match cmd {
+        ToolCmd::FromDefinition { name, options } => {
+            super::definition_instance::run(client, format, &name, options).await
+        }
         ToolCmd::List => registration::do_list(client, format, CliKind::Tool).await,
         ToolCmd::Get { name } => registration::do_get(client, format, CliKind::Tool, &name).await,
         ToolCmd::Put { name, opts } => {

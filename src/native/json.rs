@@ -6,7 +6,7 @@ use serde::{
 use serde_json::{Map, Value};
 use std::fmt;
 
-pub(super) fn parse(bytes: &[u8]) -> Result<Value, ()> {
+pub(crate) fn parse(bytes: &[u8]) -> Result<Value, ()> {
     preflight(bytes)?;
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     let value = Unique::deserialize(&mut decoder).map_err(|_| ())?.0;

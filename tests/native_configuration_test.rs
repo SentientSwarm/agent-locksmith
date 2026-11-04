@@ -7,6 +7,7 @@ fn config() -> McpConfig {
     McpConfig {
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,
+        definition: None,
     }
 }
 fn valid(
@@ -73,6 +74,7 @@ fn native_metadata_and_private_approval_are_explicit() {
 fn private_destination_opt_in_retains_self_endpoint_refusal() {
     let c = McpConfig {
         allow_private_destination: true,
+        definition: None,
         ..config()
     };
     assert!(valid(

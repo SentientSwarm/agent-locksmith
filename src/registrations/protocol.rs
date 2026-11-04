@@ -27,6 +27,8 @@ pub struct McpConfig {
     pub protocol_version: String,
     #[serde(default)]
     pub allow_private_destination: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<crate::definitions::Pin>,
 }
 
 pub fn validate(
