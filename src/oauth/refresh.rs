@@ -21,11 +21,9 @@
 //!
 //! ## Failure semantics
 //!
-//! Refresh failure (provider returned non-2xx, network error, malformed
-//! response) marks the session degraded via
-//! `OauthSessionRepository::mark_degraded`. The background task does
-//! NOT retry — operator action via `locksmith oauth bootstrap <name>`
-//! is required to recover.
+//! A committed pre-I/O claim makes uncertain custody unavailable. Only the
+//! complete pair's successful commit clears it; restart never replays it.
+//! Explicit local revoke and freshly obtained credentials recover the account.
 //!
 //! ## OAuth token-endpoint contract
 //!
@@ -94,11 +92,19 @@ pub fn refresh_safety_margin_secs(lifetime_secs: i64) -> i64 {
 #[derive(Clone, Default)]
 pub struct RefreshLockMap {
     inner: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    pub owner: RefreshOwner,
 }
 
 impl RefreshLockMap {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn with_owner(owner: RefreshOwner) -> Self {
+        Self {
+            owner,
+            ..Self::default()
+        }
     }
 
     /// Get or create the per-session lock. Cheap on the hot path
@@ -115,6 +121,9 @@ impl RefreshLockMap {
             .clone()
     }
 }
+
+mod owner;
+pub use owner::RefreshOwner;
 
 mod exchange;
 mod failure;
@@ -158,3 +167,8 @@ pub(crate) use source::{consensus, selected_source};
 #[cfg(test)]
 #[path = "refresh/selection_tests.rs"]
 mod selection_tests;
+
+#[cfg(test)]
+pub(crate) mod recovery_barrier;
+#[cfg(test)]
+mod recovery_process;

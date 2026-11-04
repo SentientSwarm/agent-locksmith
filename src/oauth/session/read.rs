@@ -28,7 +28,7 @@ impl OauthSessionRepository {
     ) -> Result<Vec<(String, String)>, OauthSessionError> {
         let rows = sqlx::query(
             "SELECT name, session_label FROM oauth_sessions \
-             WHERE degraded = 0 AND access_token_expires_at IS NOT NULL \
+             WHERE degraded = 0 AND refresh_pending = 0 AND access_token_expires_at IS NOT NULL \
                AND access_token_expires_at <= ? \
              ORDER BY access_token_expires_at ASC",
         )
@@ -49,11 +49,9 @@ impl OauthSessionRepository {
     /// List all `(name, session_label)` pairs in the table. Used by
     /// `locksmith oauth list` (Phase G CLI) for operator visibility.
     /// Does not unseal tokens — pure metadata query.
-    pub async fn list_all(
-        &self,
-    ) -> Result<Vec<(String, String, bool, Option<i64>)>, OauthSessionError> {
+    pub async fn list_all(&self) -> Result<Vec<SessionMetadata>, OauthSessionError> {
         let rows = sqlx::query(
-            "SELECT name, session_label, degraded, access_token_expires_at \
+            "SELECT name, session_label, degraded, access_token_expires_at, refresh_pending \
              FROM oauth_sessions ORDER BY name, session_label",
         )
         .fetch_all(&self.pool)
@@ -67,6 +65,7 @@ impl OauthSessionRepository {
                     r.get::<String, _>("session_label"),
                     degraded != 0,
                     r.get::<Option<i64>, _>("access_token_expires_at"),
+                    r.get::<i64, _>("refresh_pending") != 0,
                 )
             })
             .collect())
@@ -79,6 +78,7 @@ pub(super) fn decode(key: &SealingKey, row: SqliteRow) -> Result<OauthSession, O
     Ok(OauthSession {
         incarnation: row.try_get("incarnation")?,
         token_version: row.try_get("token_version")?,
+        refresh_pending: row.try_get::<i64, _>("refresh_pending")? != 0,
         name: row.try_get("name")?,
         session_label: row.try_get("session_label")?,
         refresh_token: unseal(key, &refresh_ct, &refresh_nonce)?,

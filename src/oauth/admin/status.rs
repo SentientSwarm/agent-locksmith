@@ -38,14 +38,18 @@ pub async fn op_oauth_list(State(state): State<OauthAdminState>) -> Response {
         Ok(rows) => {
             let arr: Vec<Value> = rows
                 .into_iter()
-                .map(|(name, session_label, degraded, expires_at)| {
-                    json!({
-                        "name": name,
-                        "session_label": session_label,
-                        "degraded": degraded,
-                        "access_token_expires_at": expires_at,
-                    })
-                })
+                .map(
+                    |(name, session_label, degraded, expires_at, refresh_pending)| {
+                        json!({
+                            "name": name,
+                            "session_label": session_label,
+                            "degraded": degraded,
+                            "refresh_pending": refresh_pending,
+                            "reconnect_required": refresh_pending || degraded,
+                            "access_token_expires_at": expires_at,
+                        })
+                    },
+                )
                 .collect();
             (StatusCode::OK, Json(json!({ "sessions": arr }))).into_response()
         }

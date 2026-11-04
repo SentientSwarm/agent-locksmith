@@ -22,7 +22,7 @@ path = "benches/audit_write_bench.rs"
 [dependencies]
 locksmith-mcp-transport = { path = "crates/mcp-transport" }
 rmcp = { version = "=3.7.0", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 aes-gcm = "0.10"
 arc-swap = "1"

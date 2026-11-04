@@ -15,7 +15,7 @@ pub async fn exercise() {
     f.stop();
     let before = sealed(&f);
     f.start_with_env(setup::ENV).await;
-    assert_eq!(version(&f), "12");
+    assert_eq!(version(&f), "13");
     assert_eq!(
         sealed(&f),
         before,
@@ -24,7 +24,7 @@ pub async fn exercise() {
     assert_eq!(setup::authority(&f, &agent), authority);
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.stop();
-    refused(&f, &prior);
+    refused(&f, &prior, 10);
     f.start_with_env(setup::ENV).await;
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.cleanup();
@@ -33,12 +33,12 @@ pub async fn exercise() {
     );
 }
 
-fn version(f: &Fixture) -> String {
+pub(super) fn version(f: &Fixture) -> String {
     migration::sqlite(f, &f.db, "SELECT MAX(version) FROM _sqlx_migrations;")
         .trim()
         .into()
 }
-fn sealed(f: &Fixture) -> String {
+pub(super) fn sealed(f: &Fixture) -> String {
     migration::sqlite(
         f,
         &f.db,
@@ -48,7 +48,7 @@ fn sealed(f: &Fixture) -> String {
         scope, degraded, created_at, updated_at, account_id) FROM oauth_sessions;",
     )
 }
-fn refused(f: &Fixture, prior: &str) {
+pub(super) fn refused(f: &Fixture, prior: &str, migration: u32) {
     let _ = std::fs::remove_file(&f.socket);
     let mut c = process::command(prior);
     c.arg("--config")
@@ -62,7 +62,7 @@ fn refused(f: &Fixture, prior: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        text.contains("migration 10") && text.contains("missing"),
+        text.contains(&format!("migration {migration}")) && text.contains("missing"),
         "expected migration refusal; output withheld"
     );
     assert!(!f.socket.exists(), "prior admin listener opened");

@@ -41,15 +41,10 @@ impl Task {
     async fn run(self, shutdown: impl std::future::Future<Output = ()>) {
         let mut ticker = tokio::time::interval(Duration::from_secs(REFRESH_TICK_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        tokio::pin!(shutdown);
-        loop {
-            tokio::select! {
-                _ = &mut shutdown => {
-                    info!("oauth refresh task: shutdown signal observed; exiting");
-                    return;
-                }
-                _ = ticker.tick() => self.tick().await,
-            }
+        tokio::select! {
+            biased;
+            _ = shutdown => info!("oauth refresh task stopped"),
+            _ = async { loop { ticker.tick().await; self.tick().await; } } => {},
         }
     }
 
@@ -63,7 +58,10 @@ impl Task {
             }
         };
         for (name, label) in items {
-            self.refresh(&name, &label, threshold).await;
+            self.locks
+                .owner
+                .run(self.refresh(&name, &label, threshold))
+                .await;
         }
     }
 
@@ -105,7 +103,9 @@ impl Task {
         // Re-read inside the lock: another caller may already have refreshed.
         match self.repo.get(&self.key, name, label).await {
             Ok(Some(s))
-                if !s.degraded && s.access_token_expires_at.is_none_or(|e| e <= threshold) =>
+                if !s.degraded
+                    && !s.refresh_pending
+                    && s.access_token_expires_at.is_none_or(|e| e <= threshold) =>
             {
                 Some(s)
             }

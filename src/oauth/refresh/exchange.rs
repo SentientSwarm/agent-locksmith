@@ -1,5 +1,6 @@
 //! Exchange using the explicitly selected public OAuth metadata.
 use super::*;
+use secrecy::ExposeSecret;
 
 /// Token-endpoint response shape (RFC 6749 §5.1). `expires_in` is
 /// optional per RFC but in practice all tested providers return it.
@@ -22,12 +23,36 @@ pub async fn refresh_selected_session(
     client: &reqwest::Client,
     session: &OauthSession,
 ) -> Result<OauthSession, RefreshError> {
+    if session.refresh_pending || session.degraded {
+        return Err(RefreshError::ReconnectRequired);
+    }
+    selected_parameters(selection)
+        .ok_or_else(|| RefreshError::BadResponse("selected OAuth metadata is unusable".into()))?;
+    if session.refresh_token.expose_secret().is_empty() {
+        return Err(RefreshError::BadResponse("empty refresh token".into()));
+    }
+    let attempt = repo
+        .begin_refresh(key, session)
+        .await
+        .map_err(|_| RefreshError::Persist("OAuth refresh claim failed".into()))?;
+    #[cfg(test)]
+    super::recovery_barrier::reach("claimed").await;
     let token_response = request_tokens(selection, client, session).await?;
+    complete(repo, key, &attempt, token_response).await
+}
+
+async fn complete(
+    repo: &OauthSessionRepository,
+    key: &SealingKey,
+    attempt: &crate::oauth::session::RefreshAttempt,
+    token_response: TokenResponse,
+) -> Result<OauthSession, RefreshError> {
+    let session = attempt.session();
     let lifetime = token_response.expires_in.unwrap_or(3600);
     let committed = repo
-        .update_tokens(
+        .complete_refresh(
             key,
-            session,
+            attempt,
             &token_response.access_token,
             unix_now() + lifetime,
             token_response.refresh_token.as_deref(),
@@ -48,7 +73,6 @@ async fn request_tokens(
     let (token_url, client_id) = selected_parameters(selection)
         .ok_or_else(|| RefreshError::BadResponse("selected OAuth metadata is unusable".into()))?;
 
-    use secrecy::ExposeSecret;
     if session.refresh_token.expose_secret().is_empty() {
         return Err(RefreshError::BadResponse("empty refresh token".into()));
     }

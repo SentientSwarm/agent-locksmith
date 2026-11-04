@@ -53,15 +53,33 @@ impl OauthSessionRepository {
         new_access_token_expires_at: i64,
         new_refresh_token: Option<&str>,
     ) -> Result<OauthSession, OauthSessionError> {
-        let tokens = Tokens::seal(key, Some(new_access_token), new_refresh_token)?;
-        self.commit_row(
+        self.write_tokens(
             key,
-            update_query(expected, new_access_token_expires_at, &tokens),
+            expected,
+            new_access_token,
+            new_access_token_expires_at,
+            new_refresh_token,
+            false,
         )
         .await
     }
 
-    async fn commit_row(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn write_tokens(
+        &self,
+        key: &SealingKey,
+        expected: &OauthSession,
+        access: &str,
+        expiry: i64,
+        refresh: Option<&str>,
+        pending: bool,
+    ) -> Result<OauthSession, OauthSessionError> {
+        let tokens = Tokens::seal(key, Some(access), refresh)?;
+        self.commit_row(key, update_query(expected, expiry, &tokens).bind(pending))
+            .await
+    }
+
+    pub(super) async fn commit_row(
         &self,
         key: &SealingKey,
         query: Query<'_>,
@@ -74,7 +92,11 @@ impl OauthSessionRepository {
             .ok_or(OauthSessionError::Stale)?;
         // Decode before COMMIT; return only afterward. No label-only readback.
         let committed = read::decode(key, row)?;
+        #[cfg(test)]
+        crate::oauth::refresh::recovery_barrier::complete("decoded", &committed).await;
         tx.commit().await?;
+        #[cfg(test)]
+        crate::oauth::refresh::recovery_barrier::complete("committed", &committed).await;
         Ok(committed)
     }
 }

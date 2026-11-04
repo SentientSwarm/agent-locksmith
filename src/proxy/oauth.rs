@@ -33,6 +33,25 @@ pub(super) async fn resolve_oauth_token(
             "OAuth registration requires LOCKSMITH_OAUTH_SEALING_KEY at daemon startup",
         )
     })?;
+    rt.locks
+        .owner
+        .run(resolve(state, rt, target, label))
+        .await
+        .unwrap_or_else(|| {
+            Err(unavailable(
+                "oauth_shutting_down",
+                "shutdown",
+                "OAuth operation stopped during daemon shutdown",
+            ))
+        })
+}
+
+async fn resolve(
+    state: &AppState,
+    rt: &OauthRuntime,
+    target: &ProxyTarget,
+    label: &str,
+) -> Result<ProxyAuth, OauthUnavailable> {
     let lock = rt.locks.get(&target.name, label).await;
     let _guard = lock.lock().await;
     if !selection::oauth_consistent(state, target, label).await {
@@ -89,6 +108,13 @@ async fn current(
 }
 
 fn validate(session: &OauthSession) -> Result<(), OauthUnavailable> {
+    if session.refresh_pending {
+        return Err(unavailable(
+            "oauth_reconnect_required",
+            "reconnect_required",
+            "OAuth refresh outcome uncertain; locally revoke and bootstrap freshly obtained credentials",
+        ));
+    }
     if session.degraded {
         return Err(unavailable(
             "oauth_refresh_failed",
@@ -156,6 +182,6 @@ fn refresh_failure(
     unavailable(
         "oauth_refresh_failed",
         error.audit_cause(),
-        "OAuth refresh failed — operator must re-bootstrap",
+        "OAuth refresh failed; inspect status, locally revoke uncertain custody and bootstrap freshly obtained credentials",
     )
 }

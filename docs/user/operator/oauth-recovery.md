@@ -1,95 +1,106 @@
-# OAuth recovery and the 0010 upgrade
+# OAuth recovery and the 0013 upgrade
 
-This repair prevents a late token exchange from replacing a deleted/recreated
-account, degrading its replacement, or returning credentials whose database
-write did not commit. It applies to manual bootstrap, background refresh and
-inline proxy refresh. It does not add interactive consent or provider support.
+Locksmith records an uncertain refresh before contacting the token endpoint.
+An interrupted exchange cannot automatically replay its possibly consumed token,
+including after a restart. Bootstrap, background refresh and inline proxy
+refresh use the same sealed custody. A successful exchange publishes the whole
+replacement pair only after its database transaction commits.
 
-## Disconnect and reconnect deliberately
+## Diagnose and reconnect deliberately
 
-Use the explicitly selected registration and label. These operator commands
-use your configured admin socket and operator credential:
+Inspect the explicitly selected registration and label:
 
 ```sh
 locksmith oauth status "$REGISTRATION" --label "$LABEL"
+locksmith oauth list
+```
+
+Both status and list include `refresh_pending` and `reconnect_required`.
+`refresh_pending: true` means a refresh claim committed without an observed
+committed replacement. It can mean an exchange is still in flight; after that
+exchange ends unsuccessfully or the daemon restarts, it requires reconnect.
+`reconnect_required` is true for pending or degraded custody. The proxy returns
+503 `oauth_reconnect_required` for pending custody even if the old access token
+has not expired. Background refresh skips it. `/readyz` does not attest every
+agent's credential readiness.
+
+A network error, timeout, rejected response, failed persistence or process death
+may leave the provider's outcome unknown. The marker is intentionally
+conservative: a process can stop after committing it but before sending any
+request. Restart never clears it or retries that token. Do not manually clear
+`refresh_pending`, edit migration history or repeatedly bootstrap the old token.
+
+Obtain freshly issued credentials through the provider's supported flow. Keep
+the refresh token in a permission-restricted file, then run:
+
+```sh
 locksmith oauth revoke "$REGISTRATION" --label "$LABEL"
 locksmith oauth bootstrap "$REGISTRATION" --label "$LABEL" \
   --refresh-token-stdin < "$PRIVATE_REFRESH_FILE"
 locksmith oauth status "$REGISTRATION" --label "$LABEL"
 ```
 
-Obtain the new refresh token through the provider's own supported flow and keep
-its file permission-restricted. Do not paste it into logs, shell arguments or
-review material. Revoke is local and idempotent; it does not revoke the remote
-provider grant. Revoke must precede bootstrap when a local session already exists.
+Revoke is local and idempotent; it does not revoke the remote provider grant.
+A failed bootstrap after an exchange was claimed retains the uncertain row;
+revoke must precede a fresh bootstrap. Local revoke can finish while a provider
+response is pending. A late response cannot recreate or overwrite the replacement.
+Bootstrap and refresh share a per-label lock, so bootstrap may wait for the old
+exchange to finish or time out. Already submitted provider actions cannot be
+undone by local cancellation or deletion.
 
-Local revoke can complete while an exchange is waiting on the provider. A late
-response cannot restore the deleted row. Bootstrap and refresh still share a
-per-label lock, so a new bootstrap can wait for the old exchange to finish or
-reach its timeout. This ordering is why the historical repository overwrite is
-not claimed as a demonstrated CLI replacement exploit.
-
-A stale or failed persistence result makes bootstrap fail or proxy return 503;
-there is no alternate account/default fallback. Failure cleanup and degradation
-also require the original incarnation/version. A newer committed token pair or
-replacement survives those old failure paths. Previously admitted requests may
-finish; this change cannot undo a request already received by the provider.
-
-OAuth revoke/rebootstrap leaves the agent's explicit finite HTTP grant and
-account selection intact. Inspect both before retrying, then make one deliberate
-call and confirm the receiving account and audit outcome. A selected label,
-active registration, successful bootstrap or `/readyz` is not proof that every
-agent's source is ready. See [account selection](../concepts/per-agent-credentials.md).
+Revoke/rebootstrap preserves finite HTTP grants and account selections. Inspect
+them before retrying, then make one deliberate call and confirm the receiving
+account and audit outcome. A selected label, active registration, successful
+bootstrap or `/readyz` alone is not proof of every agent's readiness. See
+[account selection](../concepts/per-agent-credentials.md).
 
 ## Upgrade and rollback
 
-1. Stop every daemon using the state directory. Do not run old and new writers
-   against the same database. Keep the previous binaries and configuration.
-2. Make a verified backup of the stopped SQLite database (including its WAL if
-   one remains). Keep the matching sealing keys in their existing secure store;
-   never bundle them into source, diagnostics or a release artifact.
-3. Start the new binary with that configuration. Migration 0010 rebuilds
-   `oauth_sessions`, preserving sealed token bytes, nonces, expiry, scope,
-   degradation, account ID and timestamps. Each existing row receives a new
-   incarnation at version zero. Grants and bindings are unchanged.
-4. Check status, explicit authority and one intended receiving-account effect.
-   Restart and repeat the intended call. A missing/unsealable/degraded source
-   remains unavailable; migration does not grant trust or repair credentials.
+1. Stop daemons using this state. Keep the previous binaries and configuration.
+2. Back up the stopped SQLite database and its WAL if present. Keep matching
+   sealing keys in their existing secure store; do not bundle keys into evidence.
+3. Start the new binary. Migration 0013 adds `refresh_pending=0` without changing
+   existing sealed bytes, versions, metadata, grants or selections. Earlier
+   migrations still apply in order;0010 supplies incarnation/version identity.
+4. Inspect status and authority, make one intended receiving-account call, then
+   restart and repeat. Migration does not repair degraded or unsealable custody.
 
-Old binaries whose embedded migrations end at 0009 refuse a database containing
-0010 before the DB-backed agent/admin listeners start. Do not delete migration
-history or disable the guard. To roll back, stop the new daemon and restore the
-complete pre-upgrade backup with its matching keys and old binary. Changes since
-that backup will be lost. Restored rotating refresh tokens may already have been
-consumed: reconnect through the provider instead of blindly replaying them.
+A binary whose migrations end at0012 refuses the upgraded database before its
+DB-backed listeners start. Never bypass that refusal. Rollback requires stopping
+the new daemon and restoring the complete pre-upgrade backup with its matching
+keys and old binary. Changes since backup are lost, and a restored refresh token
+may already have been consumed: obtain fresh credentials instead of replaying it.
 
-## Remaining rotation limit
+One daemon owns the canonical database path. Normal shutdown, forced drain and
+startup-error return close OAuth admission and finish owned OAuth scopes before
+releasing that lock. This covers current bootstrap, inline and background
+callers, not arbitrary filesystem aliases, distributed hosts or an embedding
+application forcibly dropping `daemon::run` itself.
 
-This fix does **not** make rotating refresh crash-safe. A provider may consume a
-refresh token before a network failure, process loss or failed custody commit.
-The current implementation has no durable pre-request uncertainty marker and
-cannot prove that replay after restart is safe. If the outcome is uncertain,
-stop using that session, revoke locally and obtain a fresh provider grant.
-Separate durable-refresh work must provide the durable marker, complete pair commit, explicit
-`reconnect_required` state, no replay after ambiguity and single active state
-owner. Consent remains separate work. G2 remains blocked by those requirements and live
-provider proof; this local CAS fix does not pass that gate.
+## Scope and limits
+
+This is the local custody/recovery part of AGENT-205, building on197's stale-write
+protection. It adds neither interactive consent nor verified provider support.
+Legacy parsing still preserves an omitted refresh token, retains stored scope,
+uses a 3600-second default for omitted expiry and does not validate token type or
+provider identity. Those provider/profile policies and consent remain separate
+AGENT-204/full205 work. Local checks do not pass live T14, G2 or release gates.
+SQLite WAL/NORMAL process-kill recovery is not a power-loss durability claim.
+A submitted database COMMIT may finish after caller cancellation: the next read
+must observe either the complete committed pair or the durable pending state.
 
 ## Reproducible checks
 
-Run the normal locked suite and the saved process smoke. The upgrade probe needs
-an explicit pre-0010 binary built in its own checkout:
-
 ```sh
-cargo test --locked --test oauth_incarnation_test
-cargo test --locked --test explicit_binding_smoke_test \
-  actual_daemon_oauth_revoke_during_exchange -- --nocapture
-LOCKSMITH_PRIOR_DAEMON=/path/to/pre-0010/locksmithd \
+cargo test --locked --test oauth_incarnation_test --test oauth_recovery_test
+cargo test --locked --lib oauth::refresh::recovery_process -- --nocapture
+cargo test --locked --test explicit_binding_smoke_test refresh -- --nocapture
+LOCKSMITH_RECOVERY_PRIOR_DAEMON=/path/to/schema12/locksmithd \
   cargo test --locked --test explicit_binding_smoke_test \
-  actual_daemon_oauth_upgrade_and_prior_binary_refusal -- --ignored --nocapture
+  actual_daemon_refresh_upgrade_and_prior_refusal -- --ignored --nocapture
 ```
 
-The last test is deliberately ignored by default because a prior binary cannot
-be inferred from the current checkout. Report its separate result; the normal
-suite does not imply it ran. Fixtures use synthetic tokens and disposable local
-state, no real provider account. See the [custody contract](../../development/oauth-custody.md).
+The prior-binary probe is explicitly ignored by default; the ordinary suite does
+not imply it ran. Tests use disposable synthetic state and a separate one-use
+receiver, never real provider credentials. Test-only barriers are absent from
+shipping binaries. See [custody and evidence boundaries](../../development/oauth-custody.md).

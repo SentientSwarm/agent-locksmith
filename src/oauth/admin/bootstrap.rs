@@ -7,21 +7,41 @@ pub async fn op_oauth_bootstrap(
     Query(label_q): Query<LabelQuery>,
     Json(body): Json<BootstrapBody>,
 ) -> Response {
-    let label = label_q.label_or_default();
-    if let Err(response) = validate(&state, &name).await {
+    state
+        .locks
+        .owner
+        .run(bootstrap(&state, &name, label_q.label_or_default(), &body))
+        .await
+        .unwrap_or_else(|| {
+            error_envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_error",
+                "oauth_shutting_down",
+                "OAuth operation stopped during daemon shutdown",
+            )
+        })
+}
+
+async fn bootstrap(
+    state: &OauthAdminState,
+    name: &str,
+    label: &str,
+    body: &BootstrapBody,
+) -> Response {
+    if let Err(response) = validate(state, name).await {
         return *response;
     }
-    let lock = state.locks.get(&name, label).await;
+    let lock = state.locks.get(name, label).await;
     let _guard = lock.lock().await;
-    let session = match create(&state, &name, label, &body.refresh_token).await {
+    let session = match create(state, name, label, &body.refresh_token).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
-    let updated = match exchange(&state, &session).await {
+    let updated = match exchange(state, &session).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
-    let warnings = super::warnings::collision_warnings(&state, &name, label).await;
+    let warnings = super::warnings::collision_warnings(state, name, label).await;
     let mut body = session_status_json(&updated, true);
     if !warnings.is_empty() {
         body["warnings"] = json!(warnings);

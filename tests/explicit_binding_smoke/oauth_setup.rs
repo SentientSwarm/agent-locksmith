@@ -7,9 +7,13 @@ pub const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 pub const ENV: &[(&str, &str)] = &[("LOCKSMITH_OAUTH_SEALING_KEY", KEY)];
 
 pub async fn enroll(f: &Fixture, provider: &Provider) -> setup::Agent {
+    enroll_url(f, &provider.url).await
+}
+
+pub async fn enroll_url(f: &Fixture, url: &str) -> setup::Agent {
     let auth = json!({"kind":"oauth_device_code", "client_id":"fixture-client",
-        "scopes":[], "device_url":format!("{}/device", provider.url),
-        "token_url":format!("{}/token", provider.url), "session_label":"reader"});
+        "scopes":[], "device_url":format!("{}/device", url),
+        "token_url":format!("{}/token", url), "session_label":"reader"});
     put(
         f,
         "/admin/operator/tools/accounts",

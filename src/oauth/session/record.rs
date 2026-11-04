@@ -10,6 +10,8 @@ pub struct OauthSession {
     pub incarnation: i64,
     /// Incremented by every conditional token or degradation write.
     pub token_version: i64,
+    /// A possibly consumed refresh token; only this attempt's commit clears it.
+    pub refresh_pending: bool,
     pub name: String,
     /// Session label (Phase G). Distinguishes multiple sessions under
     /// the same registration name — e.g., `(codex, "hermes")` vs
@@ -44,6 +46,7 @@ impl std::fmt::Debug for OauthSession {
         f.debug_struct("OauthSession")
             .field("incarnation", &self.incarnation)
             .field("token_version", &self.token_version)
+            .field("refresh_pending", &self.refresh_pending)
             .field("name", &self.name)
             .field("session_label", &self.session_label)
             .field("refresh_token", &"<sealed>")
