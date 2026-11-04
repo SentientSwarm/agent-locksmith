@@ -26,7 +26,7 @@ pub enum AdminError {
     AgentNotFound,
     #[error("not authorized")]
     NotAuthorized,
-    #[error("grant_target_invalid: select a currently configured HTTP tool or model")]
+    #[error("grant_target_invalid: select a currently configured tool or model connection")]
     InvalidGrantTarget,
     #[error("backend: {0}")]
     Backend(String),
@@ -176,6 +176,11 @@ pub struct AdminService {
 }
 
 impl AdminService {
+    pub(super) fn local_listener(&self) -> (String, u16) {
+        let cfg = self.config.load();
+        (cfg.listen.host.clone(), cfg.listen.port)
+    }
+
     pub fn new(
         agents: AgentRepository,
         bootstrap: BootstrapTokenRepository,

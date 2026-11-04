@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "id": "builtin.linear",
+  "name": "Linear candidate",
+  "summary": "Offline setup description; no live compatibility attestation.",
+  "auth_profiles": [
+    {
+      "id": "oauth",
+      "mechanism": "oauth_provider",
+      "setup": "Consult the linked provider documentation and obtain separately accepted provider evidence before activation.",
+      "required_scopes": [
+        "read"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Descriptive read workflow only; no executable plan or tool grant.",
+      "operations": [
+        "Read issue and project context"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Review provider setup at https://linear.app/docs/mcp. Import this document, then author a disabled connection with its separately supplied HTTPS endpoint.",
+  "limits": [
+    "Provider eligibility and live OAuth lifecycle pending AGENT-195.",
+    "Candidate scopes and lifecycle are unverified in this deployment.",
+    "No credentials, consent, account selection, activation or tool grants are created."
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "https://linear.app/docs/mcp",
+    "verified_at": null,
+    "source_revision": null
+  }
+}

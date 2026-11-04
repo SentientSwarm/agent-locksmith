@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "id": "builtin.slack",
+  "name": "Slack candidate",
+  "summary": "Offline setup description; no live compatibility attestation.",
+  "auth_profiles": [
+    {
+      "id": "oauth",
+      "mechanism": "oauth_provider",
+      "setup": "Consult the linked provider documentation and obtain separately accepted provider evidence before activation.",
+      "required_scopes": [
+        "search:read.public",
+        "channels:history"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Descriptive read workflow only; no executable plan or tool grant.",
+      "operations": [
+        "Search public messages and read public threads"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Review provider setup at https://docs.slack.dev/ai/slack-mcp-server/. Import this document, then author a disabled connection with its separately supplied HTTPS endpoint.",
+  "limits": [
+    "Eligible app, granted scopes and user-token lifecycle pending AGENT-196.",
+    "Candidate scopes and lifecycle are unverified in this deployment.",
+    "No credentials, consent, account selection, activation or tool grants are created."
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "https://docs.slack.dev/ai/slack-mcp-server/",
+    "verified_at": null,
+    "source_revision": null
+  }
+}

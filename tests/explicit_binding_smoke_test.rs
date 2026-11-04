@@ -75,3 +75,36 @@ async fn actual_daemon_finite_grants_activation_and_replacement() {
 async fn actual_daemon_reference_and_customer_service() {
     customer::exercise().await;
 }
+
+#[path = "explicit_binding_smoke/oauth_lifecycle.rs"]
+mod oauth_lifecycle;
+#[path = "explicit_binding_smoke/oauth_provider.rs"]
+mod oauth_provider;
+#[path = "explicit_binding_smoke/oauth_setup.rs"]
+mod oauth_setup;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_daemon_oauth_revoke_during_exchange() {
+    for bootstrap in [true, false] {
+        for fail in [false, true] {
+            oauth_lifecycle::exercise(bootstrap, fail).await;
+        }
+    }
+}
+
+#[path = "explicit_binding_smoke/oauth_upgrade.rs"]
+mod oauth_upgrade;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_PRIOR_DAEMON pointing to a pre-0010 binary"]
+async fn actual_daemon_oauth_upgrade_and_prior_binary_refusal() {
+    oauth_upgrade::exercise().await;
+}
+#[path = "explicit_binding_smoke/native_upgrade.rs"]
+mod native_upgrade;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_NATIVE_PRIOR_DAEMON and sibling CLI from accepted pre-0011 revision"]
+async fn actual_daemon_native_upgrade_and_prior_binary_refusal() {
+    native_upgrade::exercise().await;
+}
