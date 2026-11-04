@@ -4,6 +4,10 @@
 
 ### Internal
 
+- Make native ingress/body deadline tests use explicit pending/body barriers and
+  controlled Tokio time, with a nondefault five-second request budget for real
+  authenticated recovery on the same runtime. Production deadlines and authority are unchanged.
+
 - Box finished internal OAuth bootstrap error responses for current-stable
   Clippy; handlers return the same responses and retain conditional cleanup.
 

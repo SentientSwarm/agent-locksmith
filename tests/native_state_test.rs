@@ -1,12 +1,15 @@
 #[path = "native/fixture.rs"]
 mod fixture;
+use axum::http::StatusCode;
 use axum::{
     body::{Body, Bytes},
     http::Request,
 };
 use fixture::*;
+use futures_util::poll;
 use secrecy::ExposeSecret;
 use serde_json::json;
+use std::{pin::pin, task::Poll, time::Duration};
 use tower::ServiceExt;
 
 fn delayed(
@@ -43,12 +46,28 @@ async fn binding_removed_during_actual_body_wait_prevents_allocation() {
 }
 #[tokio::test]
 async fn expired_body_deadline_never_allocates_after_late_body() {
-    let f = Fixture::new("mcp:\n  request_ms: 150\n").await;
+    let f = Fixture::new("").await;
     let (enter, entered) = tokio::sync::oneshot::channel();
     let (finish, finished) = tokio::sync::oneshot::channel();
-    let task = tokio::spawn(f.app.clone().oneshot(delayed(&f, enter, finished)));
-    entered.await.unwrap();
-    assert_eq!(task.await.unwrap().unwrap().status(), 408);
+    let mut request = pin!(f.app.clone().oneshot(delayed(&f, enter, finished)));
+    tokio::select! {
+        biased;
+        result = &mut request => panic!("request completed before body entry: {:?}", result.unwrap().status()),
+        signal = tokio::time::timeout(Duration::from_secs(10), entered) => signal.unwrap().unwrap(),
+    }
+    // Authentication/SQLx used real time; only the known body wait is virtual.
+    tokio::time::pause();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut sentinel = pin!(tokio::time::sleep_until(deadline));
+    assert!(poll!(sentinel.as_mut()).is_pending());
+    assert!(poll!(request.as_mut()).is_pending());
+    tokio::time::advance(Duration::from_secs(10)).await;
+    sentinel.await;
+    let serviced = tokio::time::Instant::now();
+    assert!(serviced >= deadline && serviced <= deadline + Duration::from_millis(1));
+    let expired = poll!(request.as_mut()).map(|r| r.unwrap().status());
+    tokio::time::resume();
+    assert_eq!(expired, Poll::Ready(StatusCode::REQUEST_TIMEOUT));
     assert!(finish.send(()).is_err());
     assert_eq!(f.runtime.snapshot().workers_created, 0);
 }

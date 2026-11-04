@@ -122,6 +122,19 @@ establish Python execution. The process target uses ordinary operator CLI,
 verified TLS and a separate TCP receiver, including unsupported methods/raw
 HTTP zero arrivals, missing/revoked authority, capacity, locking and drain.
 Router tests additionally exercise foreign identities and delayed DB/body state.
+The ingress pool-wait test holds all database connections and manually polls
+requests to prove admission before advancing a paused Tokio clock through the
+configured nondefault five-second deadline. A pre-registered timer sentinel services that
+boundary, allowing only Tokio's at-most-one-millisecond upward timer rounding;
+a missing timeout fails a bounded manual poll rather than waiting for a later
+SQLx timer. The clock resumes before connections return and the same
+runtime performs real bearer authentication, initialization, ping and deletion
+with that same five-second request budget. This also detects a guard that ignores
+the configured value and hardcodes the ten-second default. The delayed-body test
+uses the ten-second default and reaches its
+body barrier with real authentication before pausing; expiry then rejects the
+late body without allocating a worker. Neither test relies on a 40ms scheduling
+sleep or a 150ms authentication-speed assumption. Production limits are unchanged.
 
 Preserve both accepted public pre-native205a735 binaries before building the candidate.
 Set `LOCKSMITH_NATIVE_PRIOR_DAEMON` to that daemon with its matching `locksmith`
