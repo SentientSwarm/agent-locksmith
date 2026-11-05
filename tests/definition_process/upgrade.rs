@@ -4,6 +4,9 @@ pub async fn exercise() {
     let prior = std::env::var("LOCKSMITH_DEFINITION_PRIOR_DAEMON")
         .expect("qualified public schema11 1de53fc daemon required");
     let mut f = Fixture::new();
+    // The prior binary logs its configured address, so it cannot report an
+    // OS-assigned port.
+    f.use_stable_port();
     f.start(&prior).await;
     f.enroll("existing", "https://example.com/mcp");
     assert_eq!(version(&f).await, 11);
