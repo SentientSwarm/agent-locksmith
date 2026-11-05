@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct Approved {
     pub digest: String,
+    pub effect: String,
     pub tool: Value,
     pub public: Value,
     pub context: serde_json::Map<String, Value>,
@@ -108,6 +109,10 @@ fn append(s: &mut Snapshot, manifest: &Value, row: sqlx::sqlite::SqliteRow) -> R
         name,
         Approved {
             digest,
+            effect: reviewed["effect"]
+                .as_str()
+                .ok_or(Error("review_invalid"))?
+                .into(),
             tool: checked.full,
             public: checked.public,
             context: checked.context,

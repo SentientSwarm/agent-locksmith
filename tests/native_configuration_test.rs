@@ -5,6 +5,7 @@ use agent_locksmith::{
 use serde_json::json;
 fn config() -> McpConfig {
     McpConfig {
+        compact: false,
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,
         definition: None,
@@ -73,6 +74,7 @@ fn native_metadata_and_private_approval_are_explicit() {
 #[test]
 fn private_destination_opt_in_retains_self_endpoint_refusal() {
     let c = McpConfig {
+        compact: false,
         allow_private_destination: true,
         definition: None,
         ..config()
@@ -153,4 +155,20 @@ async fn later_invalid_native_seed_preserves_earlier_rows_and_version() {
     );
     assert!(repo.get("first").await.unwrap().is_none());
     assert!(repo.get_seed_version().await.unwrap().is_none());
+}
+
+#[test]
+fn compact_opt_in_is_typed_and_false_keeps_existing_bytes() {
+    let original = json!({"protocol_version":"2025-11-25","allow_private_destination":false});
+    let old: McpConfig = serde_json::from_value(original.clone()).unwrap();
+    assert_eq!(serde_json::to_value(old).unwrap(), original);
+    let mut enabled = original.clone();
+    enabled["compact"] = true.into();
+    let parsed = serde_json::from_value::<McpConfig>(enabled.clone());
+    assert!(parsed.is_ok(), "typed compact opt-in rejected: {parsed:?}");
+    assert_eq!(serde_json::to_value(parsed.unwrap()).unwrap(), enabled);
+    let mut disabled = original.clone();
+    disabled["compact"] = false.into();
+    let parsed: McpConfig = serde_json::from_value(disabled).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), original);
 }

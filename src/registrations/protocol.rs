@@ -29,6 +29,8 @@ pub struct McpConfig {
     pub allow_private_destination: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<crate::definitions::Pin>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compact: bool,
 }
 
 pub fn validate(

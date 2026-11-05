@@ -72,6 +72,9 @@ pub async fn list_public(
             if r.registration.protocol == super::Protocol::McpStreamableHttp {
                 value["protocol_version"] = super::protocol::VERSION.into();
                 value["tool_authority"] = "reviewed_per_agent".into();
+                if r.registration.mcp.as_ref().is_some_and(|c| c.compact) {
+                    value["compact_path"] = format!("/mcp/{}/compact", r.registration.name).into();
+                }
             }
             if let Ok(Some(service)) = super::http_service::from_metadata(&r.registration.metadata)
             {

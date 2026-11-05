@@ -14,6 +14,31 @@ Native provider consent, definition activation and broader schema mediation
 remain staged work. This local capability does not make 3.0.0 ready
 or authorize deployment, merging, tagging or publication.
 
+## Protocol-aware agent guidance (bounded AGENT-209)
+
+Authenticated `/skill` preserves each eligible connection's discovery type and
+public path, with separate HTTP and native recipes. Native consumers initialize,
+list complete callable schemas and construct only public arguments; fixed context
+and finite grants remain operator-owned. A native connection named `codex` gets
+no personalized HTTP Codex recipe. Read [skill guidance](../agent-integration/skill-reference.md)
+for current repair, cache/authentication and uncertainty boundaries.
+
+This rendering correction adds no migration, config, SDK, authority or credential
+source. Existing HTTP calls stay compatible; rebuild/restart to load the embedded
+text. Full AGENT-209 onboarding and live-provider prerequisites remain open.
+
+## Optional compact facade (bounded AGENT-210)
+
+An explicit `compact:true` MCP configuration adds `/mcp/{connection}/compact` and
+conditional `compact_path` discovery. The shared session/authority/dispatcher
+serves local search, complete describe receipts and committed invoke. Read the
+[public compact contract](../agent-integration/compact-mcp.md) before opting in.
+A toggle clears existing connection/bootstrap, account and per-tool authority.
+A pre-compact daemon fails startup with stored true metadata; all daemon listener
+availability is affected. The old CLI can read JSON through a new daemon. Reupgrade
+and deliberate authority repair are covered separately. No migration/version bump,
+provider acceptance or model efficiency claim is added.
+
 ## Upgrade and recovery
 
 Stop all daemons using the database. Take a SQLite-consistent backup plus the

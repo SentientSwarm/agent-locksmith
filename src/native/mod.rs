@@ -1,4 +1,5 @@
 //! Native MCP lifecycle. Connection authority never implies a tool grant.
+mod compact;
 pub mod config;
 mod context;
 mod error;
@@ -12,7 +13,7 @@ mod runtime;
 mod wire;
 
 pub use ingress::boundary;
-pub use route::endpoint;
+pub use route::{compact_endpoint, endpoint};
 pub use runtime::Runtime;
 mod audit;
 

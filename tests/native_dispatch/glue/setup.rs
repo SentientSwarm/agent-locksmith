@@ -64,6 +64,7 @@ async fn destination(s: &Setup, port: u16) -> Result<(), Error> {
     let mut r = s.f.repo.get("native").await?.unwrap();
     r.upstream = format!("https://localhost:{port}/mcp");
     r.mcp.as_mut().unwrap().allow_private_destination = true;
+    r.mcp.as_mut().unwrap().compact = crate::COMPACT;
     s.f.repo.upsert(&r).await?;
     s.f.agents
         .update_policy(

@@ -1,4 +1,5 @@
 #![allow(dead_code)] // Adapter exposes the unchanged historical assertion interface.
+const COMPACT: bool = false;
 extern crate self as locksmith_mcp_authority_proof;
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 #[path = "native_dispatch/glue/fixture.rs"]

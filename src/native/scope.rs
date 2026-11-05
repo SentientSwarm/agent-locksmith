@@ -29,6 +29,9 @@ pub(super) fn select(
     let context = scoped
         .metadata(&SessionId::from(id))
         .map_err(|_| Failure(404, "session_unavailable"))?;
+    if context.facade != candidate.facade {
+        return Err(Failure(404, "session_unavailable"));
+    }
     ready(&context, value)?;
     Ok(context)
 }

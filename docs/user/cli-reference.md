@@ -20,6 +20,16 @@ The CLI also reads:
 - `LOCKSMITH_ADMIN_URL` — same as `--admin-url`.
 - `LOCKSMITH_CA_BUNDLE` — same as `--ca-bundle`.
 
+## Guidance and diagnosis
+
+The daemon's [`GET /skill`](agent-integration/skill-reference.md) distinguishes
+HTTP connections from native MCP tools; it is not a new CLI subcommand. Native
+repair uses existing `tool mcp show`, `agent mcp-grants show`, `agent credentials
+list` and `audit query`. Status reads do not observe upstreams. Deliberate
+observation/review/grant writes use the [native operator guide](operator/native-tool-review.md);
+HTTP env/op/header/OAuth options must not be used as native repair recipes.
+Existing command syntax/help and authentication are unchanged.
+
 ## Subcommands
 
 ### `integration` and `tool from-definition` — offline authoring
@@ -364,3 +374,8 @@ to verify daemon/CLI setup, selection, clear/repair and offline migration.
 nonsecret `context` in its strict JSON request. Saving a review grants nothing.
 `tool mcp show` and `agent mcp-grants show` return safe current-state diagnosis
 without network requests. See [review, repair and downgrade limits](operator/native-context.md).
+
+Native `tool put --mcp-config-file` accepts optional `compact:true` (default false).
+Configure before grants: changing MCP config clears connection/bootstrap scopes,
+selections, observations, reviews and tool grants. See [compact MCP](agent-integration/compact-mcp.md)
+for the complete agent contract and actual prior-daemon startup cost.

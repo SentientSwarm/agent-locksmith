@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::json;
 
-fn context() -> Context {
+pub(super) fn context() -> Context {
     Context::new(
         Weak::new(),
         AgentIdentity {
@@ -41,7 +41,7 @@ fn admission() -> HttpAdmission {
         epoch: 3,
     }
 }
-fn snapshot() -> Snapshot {
+pub(super) fn snapshot() -> Snapshot {
     Snapshot {
         current: Current {
             source: authority::source::Source {
@@ -71,6 +71,7 @@ fn first_list_refuses_a_new_snapshot_in_an_old_session() {
                     "one".into(),
                     Approved {
                         digest: "digest".into(),
+                        effect: "read".into(),
                         tool: json!({"name":"one"}),
                         public: json!({"name":"one"}),
                         context: Default::default(),

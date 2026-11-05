@@ -48,6 +48,19 @@ Store this non-secret object in `mcp.json`:
 {"protocol_version":"2025-11-25"}
 ```
 
+For compact search/full describe/invoke, use this explicit opt-in **before** setup:
+
+```json
+{"protocol_version":"2025-11-25","compact":true}
+```
+
+The standard route stays available; authenticated discovery adds `compact_path`.
+Omitted/false keeps prior serialized metadata. Changing this configuration clears
+connection/bootstrap authority, selections, observations, reviews and tool grants;
+restore them deliberately. Pre-compact daemons fail startup with a stored
+true field, affecting all listener availability. See [compact limits and upgrade
+costs](../agent-integration/compact-mcp.md); no automatic downgrade is supported.
+
 Then use the normal operator credential and admin socket configuration:
 
 ```sh

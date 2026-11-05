@@ -39,10 +39,10 @@ impl CliKind {
 /// verbatim by `tool put`, `model put`, `infra put`.
 #[derive(Args, Debug)]
 pub struct PutOpts {
-    /// Native MCP is lifecycle-only until tool review/dispatch is implemented.
+    /// Native MCP requires explicit account selection and current reviewed per-tool grants.
     #[arg(long, value_parser = ["http", "mcp_streamable_http"])]
     pub protocol: Option<String>,
-    /// Strict MCP configuration JSON: protocol_version, allow_private_destination.
+    /// Strict MCP JSON: protocol_version, allow_private_destination, optional compact (default false). Changing it clears existing connection/tool authority; configure before grants.
     #[arg(long)]
     pub mcp_config_file: Option<std::path::PathBuf>,
 

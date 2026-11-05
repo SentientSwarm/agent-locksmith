@@ -37,6 +37,12 @@ pub(super) fn safe_reason(reason: &'static str) -> &'static str {
 }
 
 const REASONS: &[&str] = &[
+    "compact_arguments",
+    "compact_reference",
+    "compact_cursor_changed",
+    "compact_capacity",
+    "compact_response_limit",
+    "schema_required",
     "success",
     "tool_error",
     "tool_outcome_unknown",
@@ -78,3 +84,12 @@ const REASONS: &[&str] = &[
     "upstream_id",
     "upstream_session",
 ];
+
+/// Project a borrowed RPC code into the same fixed diagnostic vocabulary.
+pub(crate) fn safe_code(reason: &str) -> &'static str {
+    REASONS
+        .iter()
+        .copied()
+        .find(|r| *r == reason)
+        .unwrap_or("request_refused")
+}

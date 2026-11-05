@@ -1,7 +1,8 @@
 # Native MCP agent interface
 
 Use your own Locksmith agent identity over the operator-provided verified TLS
-listener. Discover connections with authenticated `GET /tools`; a native entry
+listener. Fetch authenticated [`/skill`](skill-reference.md) for protocol-aware
+guidance, then use JSON discovery rather than Markdown headings. Discover connections with authenticated `GET /tools`; a native entry
 has `type: "mcp"`, a path such as `/mcp/sample`,
 `protocol_version: "2025-11-25"` and `tool_authority: "reviewed_per_agent"`.
 It is not an HTTP `/api` connection. No provider credentials are supplied to a
@@ -13,7 +14,9 @@ call requires the current selected account, current reviewed grant and a fresh
 operator observation (less than60 seconds old, from this daemon run). The list
 is empty when no tools are granted; stale observations require operator repair.
 Resources, prompts, sampling, elicitation, roots, tasks, dynamic context,
-compact, stateless protocols, legacy SSE and stdio are unsupported.
+stateless protocols, legacy SSE and stdio are unsupported. An explicit
+[compact facade](compact-mcp.md) adds search/full describe/invoke on the conditional
+`compact_path`; standard sessions and schemas remain available.
 
 ## Request sequence
 
