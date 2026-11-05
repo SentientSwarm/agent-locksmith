@@ -168,7 +168,16 @@ async fn selected_oauth_missing_degraded_and_revoked_never_use_default() {
             )
             .await
             .unwrap();
-        h.sessions.mark_degraded("codex", "selected").await.unwrap();
+        h.sessions
+            .mark_degraded(
+                &h.sessions
+                    .get(&h.sealing_key, "codex", "selected")
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         call(&h)
             .await
             .assert_status(StatusCode::SERVICE_UNAVAILABLE);

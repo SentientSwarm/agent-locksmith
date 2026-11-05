@@ -26,11 +26,6 @@ use tokio::time::timeout;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 struct Pki {
     ca_pem: String,
     server_cert_pem: String,
@@ -111,7 +106,6 @@ struct MtlsScaffold {
     sock: std::path::PathBuf,
     ops_path: std::path::PathBuf,
     db_path: std::path::PathBuf,
-    agent_port: u16,
 }
 
 impl MtlsScaffold {
@@ -137,7 +131,6 @@ impl MtlsScaffold {
             sock,
             ops_path,
             db_path,
-            agent_port: pick_port(),
         }
     }
 
@@ -168,27 +161,22 @@ impl Drop for MtlsScaffold {
     }
 }
 
-/// Spawn the daemon with the given YAML, wait for the agent listener
-/// to bind, and return the shutdown coordinator + join handle. The
-/// caller is responsible for `coord.trigger()` + `timeout(handle)` at
-/// the end of the test.
+/// Spawn the daemon with the given YAML (agent port 0), wait for every
+/// listener to bind, and return the shutdown coordinator, join handle
+/// and the OS-assigned agent port (AGENT-219). The caller is responsible
+/// for `coord.trigger()` + `timeout(handle)` at the end of the test.
 async fn spawn_mtls_daemon(
     yaml: &str,
-    agent_port: u16,
 ) -> (
     agent_locksmith::shutdown::ShutdownCoordinator,
     tokio::task::JoinHandle<Result<(), agent_locksmith::daemon::DaemonError>>,
+    u16,
 ) {
     let cfg = parse_config_str(yaml).expect("config parses");
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while std::net::TcpStream::connect(("127.0.0.1", agent_port)).is_err() {
-        if std::time::Instant::now() > deadline {
-            panic!("agent listener never bound on port {agent_port}");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    (coord, handle)
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    (started.coord, started.handle, started.addrs.agent.port())
 }
 
 /// Build a reqwest client that trusts the test CA and presents the
@@ -269,7 +257,7 @@ async fn agent_listener_mtls_authenticates_via_client_cert() {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
   auth_mode: mtls
@@ -293,7 +281,6 @@ tools:
           var: AGENT_LISTENER_MTLS_TEST_KEY
           prefix: "Bearer "
 "#,
-        agent_port = scaffold.agent_port,
         sock = scaffold.sock.display(),
         ca = scaffold.ca_path.display(),
         server_cert = scaffold.server_cert_path.display(),
@@ -302,10 +289,10 @@ tools:
         db = scaffold.db_path.display(),
         upstream = mock.uri(),
     );
-    let (coord, handle) = spawn_mtls_daemon(&yaml, scaffold.agent_port).await;
+    let (coord, handle, agent_port) = spawn_mtls_daemon(&yaml).await;
     let client = mtls_reqwest_client(&scaffold.pki);
 
-    let url = format!("https://127.0.0.1:{}/api/ping/v1/ping", scaffold.agent_port);
+    let url = format!("https://127.0.0.1:{agent_port}/api/ping/v1/ping");
     let resp = client
         .get(&url)
         .send()
@@ -392,7 +379,7 @@ async fn ts14_mtls_identity_acl_gate_denies_in_denylist() {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
   auth_mode: mtls
@@ -410,7 +397,6 @@ tools:
     description: "ping service"
     upstream: "{upstream}"
 "#,
-        agent_port = scaffold.agent_port,
         sock = scaffold.sock.display(),
         ca = scaffold.ca_path.display(),
         server_cert = scaffold.server_cert_path.display(),
@@ -419,10 +405,10 @@ tools:
         db = scaffold.db_path.display(),
         upstream = mock.uri(),
     );
-    let (coord, handle) = spawn_mtls_daemon(&yaml, scaffold.agent_port).await;
+    let (coord, handle, agent_port) = spawn_mtls_daemon(&yaml).await;
     let client = mtls_reqwest_client(&scaffold.pki);
 
-    let url = format!("https://127.0.0.1:{}/api/ping/v1/ping", scaffold.agent_port);
+    let url = format!("https://127.0.0.1:{agent_port}/api/ping/v1/ping");
     let resp = client
         .get(&url)
         .send()

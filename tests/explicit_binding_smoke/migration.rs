@@ -13,8 +13,13 @@ pub(super) fn sqlite(f: &Fixture, db: &std::path::Path, sql: &str) -> String {
         "missing fixture DB {}",
         db.file_name().unwrap().to_string_lossy()
     );
+    // Fixtures read databases a live or just-returned daemon may be writing.
+    // Without a busy timeout the CLI fails at once on a transient write lock.
     let mut c = process::command("sqlite3");
-    c.current_dir(f.path()).arg(db).arg(sql);
+    c.current_dir(f.path())
+        .args(["-cmd", ".timeout 5000"])
+        .arg(db)
+        .arg(sql);
     let o = process::run(c);
     assert!(
         o.status.success(),

@@ -88,6 +88,9 @@ fn entry(s: &Snapshot, a: &Agent, r: &Registration, legacy: &[Legacy]) -> Entry 
     }
 }
 pub(super) fn route_reason(a: &Agent, r: &Registration) -> Option<&'static str> {
+    if r.protocol != "http" {
+        return Some("native_connection_requires_explicit_operator_selection");
+    }
     if a.revoked_at.is_some() {
         return Some("agent_revoked");
     }
