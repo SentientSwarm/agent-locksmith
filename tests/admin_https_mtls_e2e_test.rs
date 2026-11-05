@@ -28,11 +28,6 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 struct Pki {
     ca_pem: String,
     server_cert_pem: String,
@@ -121,19 +116,18 @@ async fn admin_https_mtls_authenticates_operator_via_client_cert() {
     let pool = migrations::open_and_migrate(&db_path).await.unwrap();
     let audit = AuditRepository::new(pool);
 
-    let agent_port = pick_port();
-    let https_port = pick_port();
     let yaml = format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
   admin_https:
     enabled: true
     host: "127.0.0.1"
-    port: {https_port}
+    # OS-assigned; the daemon reports the bound port (AGENT-219).
+    port: 0
     cert_path: "{server_cert}"
     key_path: "{server_key}"
     auth_mode: mtls
@@ -146,8 +140,6 @@ database:
   path: "{db}"
 tools: []
 "#,
-        agent_port = agent_port,
-        https_port = https_port,
         sock = sock.display(),
         server_cert = server_cert_path.display(),
         server_key = server_key_path.display(),
@@ -156,20 +148,13 @@ tools: []
         db = db_path.display(),
     );
     let cfg = parse_config_str(&yaml).expect("config parses with admin_https.auth_mode=mtls");
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-
-    // Wait for the admin HTTPS listener to bind. With auth_mode=mtls the
-    // listener requires client certs; we probe the TCP port until it's
-    // open, then drive the real test request through reqwest.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while std::net::TcpStream::connect(("127.0.0.1", https_port)).is_err() {
-        if std::time::Instant::now() > deadline {
-            coord.trigger();
-            let _ = timeout(Duration::from_secs(6), handle).await;
-            panic!("admin HTTPS listener never bound on port {https_port}");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // Every listener is bound before start returns, so the reported
+    // admin HTTPS port is ready for the real test request.
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    let https_port = started.addrs.admin_https.expect("admin HTTPS bound").port();
 
     // Build a reqwest client with our CA + operator client cert.
     let ca = reqwest::Certificate::from_pem(pki.ca_pem.as_bytes()).unwrap();

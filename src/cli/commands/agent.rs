@@ -10,6 +10,11 @@ use crate::output::{Format, print};
 
 #[derive(Subcommand)]
 pub enum AgentCmd {
+    /// Inspect or replace finite reviewed native MCP tool grants.
+    McpGrants {
+        #[command(subcommand)]
+        command: super::native_mcp::GrantsCmd,
+    },
     /// List all agents.
     List {
         /// Include revoked agents.
@@ -72,9 +77,8 @@ pub enum AgentCmd {
         #[arg(long, conflicts_with = "cert_identity")]
         clear: bool,
     },
-    /// Phase G: pin a per-agent credential override on a registration.
-    /// One of `--auth bearer=ENV`, `--auth header=H:ENV`, `--no-auth`,
-    /// or `--oauth-session LABEL` is required.
+    /// Select an explicit account: auth, None, OAuth, or sealed bearer.
+    /// Native MCP supports only `--no-auth` or sealed bearer selections.
     SetCredential(SetCredentialArgs),
     /// Remove an agent's explicit account binding. Subsequent requests to
     /// this registration are denied until a binding is set again. Idempotent.
@@ -133,11 +137,20 @@ pub struct SetCredentialArgs {
         conflicts_with_all = ["auth", "no_auth"],
     )]
     pub oauth_session: Option<String>,
+    /// Read a bearer value from stdin and seal it; never pass values in argv.
+    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_ref"])]
+    pub stored_bearer_stdin: bool,
+    /// Explicitly select an existing live sealed bearer reference.
+    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin"])]
+    pub stored_bearer_ref: Option<String>,
 }
 
 pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<(), CliError> {
     let token = CliClient::op_token()?;
     match cmd {
+        AgentCmd::McpGrants { command } => {
+            return super::native_mcp::grants(client, format, command).await;
+        }
         AgentCmd::List { include_revoked } => {
             let path = if include_revoked {
                 "/admin/operator/agents?include_revoked=true"
@@ -239,12 +252,19 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                 .await?;
         }
         AgentCmd::SetCredential(args) => {
+            if args.stored_bearer_stdin {
+                return super::native_mcp::ingest(client, format, &args.id, &args.registration)
+                    .await;
+            }
             let auth_spec = if let Some(label) = &args.oauth_session {
                 oauth::selection(client, &token, &args.registration, label).await?
             } else {
                 build_auth_spec(&args)?
             };
-            let body = json!({"auth_spec": auth_spec});
+            let mut body = json!({"auth_spec": auth_spec});
+            if args.stored_bearer_ref.is_some() {
+                body["require_live_bearer"] = true.into();
+            }
             let resp: Value = client
                 .json(
                     "PUT",
@@ -300,6 +320,9 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
 /// expectations carry across `locksmith {model,tool} put` and the
 /// new `agent set-credential`.
 fn build_auth_spec(args: &SetCredentialArgs) -> Result<Value, CliError> {
+    if let Some(secret_ref) = &args.stored_bearer_ref {
+        return Ok(json!({"kind":"stored_bearer","secret_ref":secret_ref}));
+    }
     if args.no_auth {
         return Ok(json!({"kind": "none"}));
     }

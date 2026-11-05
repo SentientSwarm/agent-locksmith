@@ -10,22 +10,25 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+/// Hold a port for the whole test instead of probing and releasing it,
+/// which another process could take in between (AGENT-219). A daemon that
+/// tried to bind a held port would fail startup.
+fn hold_port() -> std::net::TcpListener {
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port();
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_err(),
+        "a held port cannot be bound twice on this platform"
+    );
+    held
 }
 
-fn fixture_yaml(
-    tcp: u16,
-    sock: &std::path::Path,
-    ops: &std::path::Path,
-    db: &std::path::Path,
-) -> String {
+fn fixture_yaml(sock: &std::path::Path, ops: &std::path::Path, db: &std::path::Path) -> String {
     format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {tcp}
+  port: 0
   admin_socket:
     path: "{sock}"
 shutdown:
@@ -66,22 +69,17 @@ async fn admin_https_not_bound_when_block_absent() {
     let db = dir.path().join("locksmith.db");
     write_operators_yaml(&ops);
 
-    let target_https_port = pick_port();
-    let tcp_port = pick_port();
-    let cfg = parse_config_str(&fixture_yaml(tcp_port, &sock, &ops, &db)).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(2)).await;
+    let cfg = parse_config_str(&fixture_yaml(&sock, &ops, &db)).unwrap();
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(2))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
 
-    // Wait briefly so the daemon has its bind opportunity.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // The target port must still be bindable — proves the daemon did
-    // not claim it (since admin_https config is absent).
-    let probe = std::net::TcpListener::bind(("127.0.0.1", target_https_port));
-    assert!(
-        probe.is_ok(),
-        "admin HTTPS port should be bindable when block absent — daemon must not have claimed it"
+    // Every listener is bound before start returns: none is admin HTTPS.
+    assert_eq!(
+        started.addrs.admin_https, None,
+        "admin HTTPS must not be bound when the block is absent"
     );
-    drop(probe);
 
     coord.trigger();
     timeout(Duration::from_secs(3), handle)
@@ -104,13 +102,13 @@ async fn admin_https_not_bound_when_enabled_false() {
     std::fs::write(&cert, "").unwrap();
     std::fs::write(&key, "").unwrap();
 
-    let target_https_port = pick_port();
-    let tcp_port = pick_port();
+    let held = hold_port();
+    let target_https_port = held.local_addr().unwrap().port();
     let yaml = format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {tcp}
+  port: 0
   admin_socket:
     path: "{sock}"
   admin_https:
@@ -126,7 +124,6 @@ database:
   path: "{db}"
 tools: []
 "#,
-        tcp = tcp_port,
         https = target_https_port,
         sock = sock.display(),
         cert = cert.display(),
@@ -135,16 +132,17 @@ tools: []
         db = db.display(),
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(2)).await;
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let probe = std::net::TcpListener::bind(("127.0.0.1", target_https_port));
-    assert!(
-        probe.is_ok(),
-        "admin HTTPS port should be bindable when enabled=false — daemon must not have claimed it"
+    // The configured port is held by this test, so a daemon that tried to
+    // bind it would fail startup.
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(2))
+        .await
+        .expect("daemon starts without claiming the disabled admin HTTPS port");
+    let (coord, handle) = (started.coord, started.handle);
+    assert_eq!(
+        started.addrs.admin_https, None,
+        "admin HTTPS must not be bound when enabled=false"
     );
-    drop(probe);
+    drop(held);
 
     coord.trigger();
     timeout(Duration::from_secs(3), handle)
