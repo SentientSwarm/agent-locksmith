@@ -150,3 +150,29 @@ async fn actual_self_listener_is_refused_before_wire() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("self_destination"));
     f.stop();
 }
+
+/// Admin HTTPS in mTLS mode reuses the agent mTLS serve loop. Its bound log
+/// line must name admin HTTPS, or tooling that reads the agent's bound port
+/// from the log adopts the admin port instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn actual_mtls_admin_listener_is_not_reported_as_agent() {
+    let mut f = Fixture::new();
+    let path = f.path().join("config.yaml");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["listen"]["admin_https"] = json!({
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 0,
+        "cert_path": f.path().join("server.pem"),
+        "key_path": f.path().join("server.key"),
+        "auth_mode": "both",
+        "mtls": {"ca_bundle_path": f.path().join("ca.pem")},
+    });
+    std::fs::write(path, config.to_string()).unwrap();
+    f.start(process::DAEMON).await;
+    let admin = f.admin_https_port().expect("admin HTTPS bound");
+    assert_ne!(f.port, admin, "agent port read from the log is the agent's");
+    let live = f.http.get(f.url("/livez")).send().await.unwrap();
+    assert_eq!(live.status(), 200);
+    f.stop();
+}

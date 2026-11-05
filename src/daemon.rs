@@ -437,6 +437,7 @@ async fn run_owned(
             let listener = agent_listener;
             Box::pin(async move {
                 crate::agent_listener::serve_mtls(
+                    "agent listener",
                     listener,
                     &server_cert_path,
                     &server_key_path,
