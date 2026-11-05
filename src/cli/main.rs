@@ -257,6 +257,19 @@ mod tests {
             ],
             &["locksmith", "agent", "credentials", "list", "-Oabc"],
             &["locksmith", "bootstrap", "revoke", "-Oabc"],
+            // Consent attempt ids and account revisions are URL-safe base64 too.
+            &["locksmith", "oauth", "attempt-status", "linear", "-Oabc"],
+            &["locksmith", "oauth", "cancel", "linear", "-Oabc"],
+            &[
+                "locksmith",
+                "oauth",
+                "disconnect",
+                "linear",
+                "--label",
+                "work",
+                "--if-match",
+                "-Oabc",
+            ],
         ];
         for args in cases {
             if let Err(e) = Cli::try_parse_from(*args) {

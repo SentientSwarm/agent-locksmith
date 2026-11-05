@@ -18,9 +18,19 @@ pub enum OauthCmd {
         expected_config_revision: i64,
     },
     /// Read owner-bound attempt state. Never returns the authorization URL.
-    AttemptStatus { name: String, attempt: String },
+    AttemptStatus {
+        name: String,
+        /// Attempt ids are URL-safe base64 and may begin with `-`.
+        #[arg(allow_hyphen_values = true)]
+        attempt: String,
+    },
     /// Cancel an owned attempt; a committed account is retained.
-    Cancel { name: String, attempt: String },
+    Cancel {
+        name: String,
+        /// Attempt ids are URL-safe base64 and may begin with `-`.
+        #[arg(allow_hyphen_values = true)]
+        attempt: String,
+    },
     /// Read controlled account metadata, revision and current config revision.
     AccountStatus {
         name: String,
@@ -32,7 +42,8 @@ pub enum OauthCmd {
         name: String,
         #[arg(long)]
         label: String,
-        #[arg(long)]
+        /// Revisions are URL-safe base64 and may begin with `-`.
+        #[arg(long, allow_hyphen_values = true)]
         if_match: String,
     },
     /// Bootstrap a new OAuth session for `<name>` with a
