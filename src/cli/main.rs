@@ -57,6 +57,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Offline immutable integration definitions (operator); no activation.
+    Integration {
+        #[command(subcommand)]
+        cmd: commands::integration::IntegrationCmd,
+    },
     /// Agent management (operator).
     Agent {
         #[command(subcommand)]
@@ -170,6 +175,7 @@ async fn main() -> ExitCode {
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
         Cmd::MigrateBindings(_) => unreachable!("handled before client construction"),
         Cmd::BootstrapOperator(_) => unreachable!("handled before client construction"),
+        Cmd::Integration { cmd } => commands::integration::run(&client, cli.format, cmd).await,
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,

@@ -27,7 +27,7 @@ pub struct AgentCredentialOverride {
 /// Repository for the `agent_credential_overrides` table.
 #[derive(Clone)]
 pub struct AgentCredentialRepository {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl AgentCredentialRepository {
@@ -41,6 +41,38 @@ impl AgentCredentialRepository {
     /// `auth_spec` and bumps `updated_at`.
     pub async fn set(
         &self,
+        agent_id: i64,
+        registration: &str,
+        auth_spec: &AuthSpec,
+    ) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin().await?;
+        Self::set_into(&mut tx, agent_id, registration, auth_spec).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn set_live_bearer(
+        &self,
+        agent: i64,
+        registration: &str,
+        auth: &AuthSpec,
+    ) -> Result<(), RepoError> {
+        let AuthSpec::StoredBearer { secret_ref } = auth else {
+            return Err(RepoError::InvalidGrantTarget);
+        };
+        let mut tx = self.pool.begin().await?;
+        let live: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_secrets WHERE secret_ref=? AND tombstoned_at IS NULL)")
+            .bind(secret_ref).fetch_one(&mut *tx).await?;
+        if !live {
+            return Err(RepoError::InvalidGrantTarget);
+        }
+        Self::set_into(&mut tx, agent, registration, auth).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn set_into(
+        connection: &mut sqlx::SqliteConnection,
         agent_id: i64,
         registration: &str,
         auth_spec: &AuthSpec,
@@ -61,7 +93,7 @@ impl AgentCredentialRepository {
         .bind(now)
         .bind(now)
         .bind(registration)
-        .execute(&self.pool)
+        .execute(connection)
         .await?;
         if result.rows_affected() == 0 {
             return Err(RepoError::InvalidGrantTarget);

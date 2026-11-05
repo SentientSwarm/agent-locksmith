@@ -30,6 +30,19 @@ middleware (`kind=infra`) is operator-only.
 
 ## Highlights (v2.8.0)
 
+- **Offline integration authoring** — strict immutable definitions and disabled
+  native instances pinned to exact revisions, with matching operator API/CLI.
+  No provider verification, credential, account selection or grant is implied.
+  See [authoring setup](docs/user/operator/integration-definitions.md).
+- **Native MCP lifecycle (N1)** — authenticated stateful2025-11-25 sessions,
+  finite limits and safe migration. Tools remain unapproved: empty list, every
+  call denied, no agent-triggered upstream MCP request. See [operator setup](docs/user/operator/native-mcp.md)
+  and [agent interface](docs/user/agent-integration/native-mcp.md).
+- **Native tool preparation (206A)** — operators can observe, inspect, review and
+  replace finite prepared grants using explicit None or sealed bearer accounts.
+  [The CLI/API workflow](docs/user/operator/native-tool-review.md) never enables
+  agent calls; positive dispatch remains a separate stage.
+
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
   operator-only middleware (lf-scan today) lives in its own kind.
@@ -364,6 +377,8 @@ For the canonical deployment story:
     full `locksmith` CLI surface.
 
 - **Engineering docs (per-component)**:
+  - [Bounded MCP transport prerequisite](docs/development/mcp-transport.md) —
+    separate library checks, configuration, diagnostics and integration limits.
   - [`docs/v2/SPEC.md`](docs/v2/SPEC.md) — engineering spec with task
     references (T1.x, T2.x, …).
   - [`docs/v2/HANDOFF.md`](docs/v2/HANDOFF.md) — cold-start handoff for

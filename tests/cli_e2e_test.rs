@@ -32,11 +32,6 @@ impl Drop for E2eFixture {
     }
 }
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 fn wait_for_socket(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
@@ -57,7 +52,6 @@ fn start_daemon() -> E2eFixture {
     let ops_path = dir.path().join("operators.yaml");
     let db_path = dir.path().join("locksmith.db");
     let config_path = dir.path().join("config.yaml");
-    let port = pick_port();
 
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let op_token_wire = op_tok.wire_format();
@@ -81,7 +75,9 @@ fn start_daemon() -> E2eFixture {
             r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  # The test only uses the admin socket; an OS-assigned agent port cannot
+  # collide with another process (AGENT-219).
+  port: 0
   admin_socket:
     path: "{sock}"
 shutdown:
