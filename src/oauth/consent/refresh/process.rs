@@ -13,13 +13,34 @@ impl Drop for ChildGuard {
     }
 }
 async fn wait(path: &Path) {
-    tokio::time::timeout(Duration::from_secs(15), async {
+    let reached = tokio::time::timeout(Duration::from_secs(15), async {
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .expect("phase witness");
+    .await;
+    if reached.is_err() {
+        // Name the phase and show the fixture's worker and receiver logs:
+        // these waits only time out on slower CI hosts.
+        let dir = path.parent().unwrap();
+        let mut logs: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "log"))
+            .collect();
+        logs.sort();
+        for log in logs {
+            let text = std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .replace(dir.to_str().unwrap(), "[fixture]");
+            let name = log.file_name().unwrap().to_string_lossy().into_owned();
+            let lines: Vec<_> = text.lines().collect();
+            for line in &lines[lines.len().saturating_sub(40)..] {
+                eprintln!("{name}: {line}");
+            }
+        }
+        panic!("phase witness not reached: {:?}", path.file_name().unwrap());
+    }
 }
 fn spawn(root: &Path, point: &str) -> ChildGuard {
     let log = std::fs::File::create(root.join(format!("worker-{point}.log"))).unwrap();

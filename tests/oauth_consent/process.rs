@@ -587,9 +587,10 @@ pub async fn embedded() {
         "--nocapture",
     ])
     .env("CONSENT_EMBEDDED", f.path())
-    .env("LOCKSMITH_OAUTH_SEALING_KEY", KEY)
-    .stdout(Stdio::null())
-    .stderr(Stdio::null());
+    .env("LOCKSMITH_OAUTH_SEALING_KEY", KEY);
+    let log = std::fs::File::create(f.path().join("embedding.log")).unwrap();
+    c.stdout(Stdio::from(log.try_clone().unwrap()))
+        .stderr(Stdio::from(log));
     let mut worker = process::Guard(c.spawn().unwrap());
     wait_path(&f.path().join("embedded-ready")).await;
     std::fs::write(f.path().join("hold-token"), "hold").unwrap();
@@ -638,13 +639,29 @@ pub async fn embedded() {
     );
 }
 async fn wait_path(path: &std::path::Path) {
-    tokio::time::timeout(Duration::from_secs(12), async {
+    let reached = tokio::time::timeout(Duration::from_secs(12), async {
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .expect("owned phase reached");
+    .await;
+    if reached.is_err() {
+        // Name the phase and show the fixture's own logs: these waits only
+        // time out on slower CI hosts, where the temporary directory is gone
+        // by the time anyone looks.
+        let dir = path.parent().unwrap();
+        for log in ["embedding.log", "daemon.log", "receiver.log"] {
+            let Ok(text) = std::fs::read_to_string(dir.join(log)) else {
+                continue;
+            };
+            let text = text.replace(dir.to_str().unwrap(), "[fixture]");
+            let lines: Vec<_> = text.lines().collect();
+            for line in &lines[lines.len().saturating_sub(40)..] {
+                eprintln!("{log}: {line}");
+            }
+        }
+        panic!("owned phase not reached: {:?}", path.file_name().unwrap());
+    }
 }
 pub async fn embedded_worker() {
     let Some(path) = std::env::var_os("CONSENT_EMBEDDED") else {
