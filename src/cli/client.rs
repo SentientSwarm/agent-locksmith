@@ -172,8 +172,19 @@ impl CliClient {
         auth: Auth<'_>,
         expected: &str,
     ) -> Result<T, CliError> {
+        self.json_body_if_match(method, path, auth, None, expected)
+            .await
+    }
+    pub async fn json_body_if_match<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        auth: Auth<'_>,
+        body: Option<&Value>,
+        expected: &str,
+    ) -> Result<T, CliError> {
         let (status, bytes) = self
-            .raw_headers(method, path, auth, None, &[("if-match", expected)])
+            .raw_headers(method, path, auth, body, &[("if-match", expected)])
             .await?;
         if !(200..300).contains(&status) {
             return Err(CliError::Server {

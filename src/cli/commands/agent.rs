@@ -78,8 +78,20 @@ pub enum AgentCmd {
         clear: bool,
     },
     /// Select an explicit account: auth, None, OAuth, or sealed bearer.
-    /// Native MCP supports only `--no-auth` or sealed bearer selections.
+    /// Controlled native OAuth uses the separate owner-bound `select-oauth` command.
     SetCredential(SetCredentialArgs),
+    /// Delegate an owned controlled OAuth account after granting the connection ACL.
+    /// Reobserve, review and grant finite tools before using a new native session.
+    SelectOauth {
+        #[arg(allow_hyphen_values = true)]
+        id: String,
+        #[arg(allow_hyphen_values = true)]
+        registration: String,
+        #[arg(long, allow_hyphen_values = true)]
+        label: String,
+        #[arg(long, allow_hyphen_values = true)]
+        if_match: String,
+    },
     /// Remove an agent's explicit account binding. Subsequent requests to
     /// this registration are denied until a binding is set again. Idempotent.
     UnsetCredential {
@@ -250,6 +262,23 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                     Some(&body),
                 )
                 .await?;
+        }
+        AgentCmd::SelectOauth {
+            id,
+            registration,
+            label,
+            if_match,
+        } => {
+            let value: Value = client
+                .json_body_if_match(
+                    "PUT",
+                    &format!("/admin/operator/agents/{id}/oauth-selection/{registration}"),
+                    Auth::Operator(&token),
+                    Some(&json!({"label":label})),
+                    &if_match,
+                )
+                .await?;
+            print(&value, format);
         }
         AgentCmd::SetCredential(args) => {
             if args.stored_bearer_stdin {

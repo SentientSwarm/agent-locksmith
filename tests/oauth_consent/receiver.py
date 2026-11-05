@@ -125,17 +125,29 @@ class Handler(BaseHTTPRequestHandler):
         if not wait("token"):
             return self.reply(503)
         result = {"access_token": current_access, "token_type": "Bearer"}
-        if (root / "refresh-enabled").exists():
+        native_y = (root / "native-y").exists()
+        if native_y:
+            result["access_token"] = "fixture-native-y"
+        if (root / "refresh-enabled").exists() and not native_y:
             result.update(refresh_token=current_refresh, expires_in=3600, scope="read")
         self.reply(200, result)
         (root / "finished-token").write_text("response attempted")
 
     def _mcp(self, raw):
-        assert self.headers.get("Authorization") == f"Bearer {current_access}"
+        authorization = self.headers.get("Authorization")
+        native_y = (
+            root / "native-y"
+        ).exists() and authorization == "Bearer fixture-native-y"
+        assert authorization == f"Bearer {current_access}" or native_y
         assert self.headers.get("Mcp-Protocol-Version") == "2025-11-25"
         message = json.loads(raw)
         method = message["method"]
         if method == "initialize":
+            if (root / "hold-native-init").exists() and not (
+                root / "entered-native-init"
+            ).exists():
+                if not wait("native-init"):
+                    return self.reply(503)
             result = {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {"tools": {}},
@@ -146,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
         elif method == "tools/list":
             result = self._tools_list()
         elif method == "tools/call":
-            result = self._tools_call(message)
+            result = self._tools_call(message, native_y)
             if result is None:
                 return
         else:
@@ -178,13 +190,17 @@ class Handler(BaseHTTPRequestHandler):
                 result["tools"][1]["inputSchema"]["properties"]["query"][keyword] = (
                     "someone-else" if keyword == "const" else ["someone-else"]
                 )
+        if (root / "native-manifest.json").exists():
+            result = json.loads((root / "native-manifest.json").read_text())
         if (root / "echo-old-refresh").exists():
             result["tools"][0]["description"] = "fixture-refresh-0"
         return result
 
-    def _tools_call(self, message):
+    def _tools_call(self, message, native_y):
         """Return the call result, or None after replying with an error."""
         name = message["params"]["name"]
+        if name == "read_record" and (root / "native-manifest.json").exists():
+            return self._read_record(message, native_y)
         if name not in ("get_workspace", "get_user"):
             record("other")
             self.reply(400)
@@ -202,6 +218,22 @@ class Handler(BaseHTTPRequestHandler):
         if (root / "wrong-user").exists() and kind == "user":
             identity = "00000000-0000-0000-0000-000000000043"
         return {"content": [{"type": "text", "text": json.dumps({"id": identity})}]}
+
+    def _read_record(self, message, native_y):
+        import sqlite3
+
+        assert message["params"]["arguments"] == {"ticket": "CASE-206"}
+        with sqlite3.connect(f"file:{root / 'state.db'}?mode=ro", uri=True) as db:
+            admissions = db.execute(
+                "SELECT count(*) FROM audit WHERE event='mcp_admitted'"
+            ).fetchone()[0]
+        with lock:
+            effects = counts.get("tool", 0)
+        assert admissions > effects, "committed admission must precede receiving effect"
+        record("tool")
+        account = "Y" if native_y else "X"
+        text = json.dumps({"account": account, "ticket": "CASE-206"})
+        return {"content": [{"type": "text", "text": text}]}
 
 
 # Reuse the existing local receiver's no-reverse-DNS server plumbing.

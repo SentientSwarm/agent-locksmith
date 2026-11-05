@@ -24,3 +24,6 @@ mod original;
 
 #[path = "native_dispatch/deadline.rs"]
 mod deadline;
+
+#[path = "native_oauth/fixture.rs"]
+mod controlled;

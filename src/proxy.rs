@@ -299,7 +299,9 @@ impl ProxyTarget {
                 reference: reference.clone(),
                 resolved_value: None,
             },
-            AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
+            AuthSpec::ControlledOauth { .. }
+            | AuthSpec::OauthPkce { .. }
+            | AuthSpec::OauthDeviceCode { .. } => {
                 // Caller must use from_registration_oauth instead;
                 // this path indicates a programming error. We return
                 // a placeholder Oauth variant with empty session_id
@@ -308,6 +310,7 @@ impl ProxyTarget {
                 let audit_mode = match &r.auth {
                     AuthSpec::OauthPkce { .. } => "oauth_pkce",
                     AuthSpec::OauthDeviceCode { .. } => "oauth_device_code",
+                    AuthSpec::ControlledOauth { .. } => "controlled_unavailable",
                     _ => unreachable!(),
                 };
                 ProxyAuth::Oauth {

@@ -8,8 +8,8 @@ not hosted provider acceptance and `connected_unbound` confers no agent authorit
 Migration 0015 extends oauth_sessions with a checked kind and owner/profile/identity
 metadata. Legacy typed records retain required refresh tokens. Controlled records
 preserve optional refresh/expiry without sentinels; legacy get/list/claim/update/
-bootstrap/revoke reject or exclude them. Existing native account support stays
-None/StoredBearer. A previously selected absent label cannot bypass this boundary.
+bootstrap/revoke reject or exclude them. At that increment native account support
+remained None/StoredBearer. The later [controlled native selection](../user/operator/native-oauth.md) adds explicit owner delegation; a previously selected absent legacy label still cannot bypass it.
 
 One attempt table holds a state hash and sealed verifier/quarantine. Claim commits
 before code exchange. Final publication rechecks the attempt/run/deadline and

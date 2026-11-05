@@ -2,6 +2,7 @@
 mod account;
 pub mod api;
 pub mod config;
+pub(crate) mod native;
 mod operation;
 mod refresh;
 pub mod server;
@@ -40,6 +41,7 @@ pub struct Runtime {
     pool: SqlitePool,
     key: SealingKey,
     config: config::Config,
+    native_roots: std::collections::HashMap<String, native::Roots>,
     run_id: String,
     owner: RefreshOwner,
     operations: Semaphore,
@@ -67,6 +69,7 @@ impl Runtime {
             token::client(p)?;
             wire::client(p)?;
         }
+        let native_roots = native::load_roots(&config)?;
         // A wrong key must not create a mixed-key consent domain. Empty custody
         // has no previous key to validate; existing sealed pairs are checked
         // without changing their rows or the independent credential store.
@@ -77,6 +80,7 @@ impl Runtime {
             pool,
             key,
             config,
+            native_roots,
             run_id: random()?,
             owner,
             operations: Semaphore::new(16),

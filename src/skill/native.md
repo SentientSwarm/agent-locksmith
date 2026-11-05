@@ -72,10 +72,14 @@ locksmith agent credentials list <agent-public-id>
 - `protected_argument`, `argument_schema`, `value_limit`: use only public fields
   and respect the full merged argument limits, including injected fixed context.
 
-Native supports explicit None or a live sealed StoredBearer selection only.
-Env, op/1Password, header and OAuth selections remain HTTP-only. The operator
+Native supports explicit None, live sealed StoredBearer, or deliberate owner-bound
+controlled OAuth selection. Env, op/1Password, header and legacy OAuth selections
+remain HTTP-only. The operator
 uses `agent set-credential ... --no-auth`, `--stored-bearer-stdin`, or a deliberate
 `--stored-bearer-ref` selection; never supply provider tokens to the consumer.
+Controlled OAuth uses `agent select-oauth AGENT CONNECTION --label LABEL --if-match
+REVISION` after connection ACL and owned consent. Refresh requires new observation,
+review, grants and session; reconnect also requires reselection. No automatic refresh.
 Selection changes clear affected grants; a saved review alone grants nothing.
 Consult the shipped native-tool-review/native-context operator guides for the
 exact observation, review and grant preconditions. No implicit fallback.

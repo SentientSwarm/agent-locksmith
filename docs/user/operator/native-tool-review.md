@@ -1,5 +1,7 @@
 # Review and grant native tools
 
+For owner-selected controlled OAuth, see [native OAuth accounts](native-oauth.md).
+
 Operators can observe, inspect, review and grant a finite set of MCP tools for
 an existing agent's explicit account. Agents can list and call only that current
 intersection. The first successful list pins its names/contracts for the session,
@@ -45,8 +47,8 @@ locksmith agent set-credential SECOND_AGENT_ID sample --stored-bearer-ref CS_REF
 ```
 
 That reference must be live. Rotating one selection preserves a handle still
-selected elsewhere. Env, op, OAuth and stored-header accounts are unsupported
-for native observation and calls; they remain available on their existing HTTP paths.
+selected elsewhere. Env, op, legacy OAuth selections and stored-header accounts remain HTTP-only.
+Controlled OAuth requires the separate owner-bound selection flow linked above.
 
 Upstreams must use verified HTTPS. Optional restart-only extra trust roots:
 
@@ -161,12 +163,14 @@ is deliberately finite. Unsupported keywords/tool metadata refuse the whole
 observation. Selected bearer echoes in decoded keys/strings also refuse it;
 this is known-secret screening, not general DLP.
 
-Migration0014 starts with zero tool preparation and preserves existing accounts,
+The original migration 0014 started with zero tool preparation and preserved existing accounts,
 HTTP authority, definitions and OAuth recovery state. Follow the
 [consistent backup/rollback procedure](../changes/native-mcp.md) before upgrade.
 Schema13 binaries refuse upgraded state before listeners. Restart retains
-historical observations/reviews/grants but requires fresh observation. Stage B adds no migration: schema14 A binaries can still open the database,
-but cannot execute these calls. Back up before changing binaries; either restart
+historical observations/reviews/grants but requires fresh observation. The original
+Stage B added no migration: schema-14 stage A binaries could still open that database,
+but could not execute those calls. Current controlled OAuth adds schema 17; follow
+its [whole-daemon downgrade and repair guidance](native-oauth.md#upgrade-and-evidence-limits). Back up before changing binaries; either restart
 invalidates observation freshness. This is additive planned3.0.0 work with no
 version bump, publication or full206/provider acceptance.
 

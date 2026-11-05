@@ -52,6 +52,7 @@ pub(super) fn snapshot() -> Snapshot {
             },
             agent: 1,
             admission: admission(),
+            controlled: None,
         },
         generation: None,
         revision: None,

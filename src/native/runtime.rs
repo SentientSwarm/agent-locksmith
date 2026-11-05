@@ -84,10 +84,52 @@ impl Runtime {
         {
             return Err(Failure(404, "compact_unavailable"));
         }
+        let authority = if matches!(
+            row.account,
+            Some(crate::registrations::AuthSpec::ControlledOauth { .. })
+        ) {
+            let rt = self
+                .authority
+                .as_ref()
+                .ok_or(Failure(503, "native_store_unavailable"))?;
+            let mut tx = repo
+                .pool
+                .begin()
+                .await
+                .map_err(|_| Failure(503, "native_store_unavailable"))?;
+            let current = rt
+                .current(&mut tx, &identity.public_id, name)
+                .await
+                .map_err(|_| Failure(404, "authority_changed"))?;
+            configuration(&current.admission.registration)?;
+            if facade == super::compact::Facade::Compact
+                && !current
+                    .admission
+                    .registration
+                    .mcp
+                    .as_ref()
+                    .is_some_and(|c| c.compact)
+            {
+                return Err(Failure(404, "compact_unavailable"));
+            }
+            let scope = current.scope();
+            current
+                .fresh()
+                .map_err(|_| Failure(404, "authority_changed"))?;
+            tx.commit()
+                .await
+                .map_err(|_| Failure(503, "native_store_unavailable"))?;
+            current
+                .fresh()
+                .map_err(|_| Failure(404, "authority_changed"))?;
+            scope
+        } else {
+            super::scope::authority(&row.instance, row.revision, row.epoch)
+        };
         Ok(Scope {
             owner: identity.public_id.clone(),
             connection: name.into(),
-            authority: super::scope::authority(&row.instance, row.revision, row.epoch),
+            authority,
         })
     }
     pub fn start(

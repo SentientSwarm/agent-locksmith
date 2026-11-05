@@ -105,8 +105,7 @@ locksmith agent credentials list <agent-public-id>
 Repair the intended source/activation, observe it, review changed tools and
 replace affected finite grants using current preconditions. Observation is an
 explicit upstream operation; reading guidance/status is not. Native supports
-explicit None or live sealed StoredBearer only. Env/op/header/OAuth recipes do
-not apply. See [review and grant](../operator/native-tool-review.md).
+explicit None, live sealed StoredBearer or [owner-selected controlled OAuth](../operator/native-oauth.md). Generic HTTP env/op/header/OAuth recipes do not apply. See [review and grant](../operator/native-tool-review.md).
 
 Native HTTP-boundary errors use `error.code`; JSON-RPC refusals use
 `error.data.code`, even on an HTTP-success response. These differ from the HTTP

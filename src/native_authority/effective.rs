@@ -75,6 +75,7 @@ impl Runtime {
         }
         let observation = store::observation(c, &current, &self.run).await?;
         let mut snapshot = Snapshot::empty(current, revision, expires_at, &observation);
+        snapshot.current.fresh()?;
         if rows.is_empty() {
             return Ok(snapshot);
         }
@@ -151,6 +152,7 @@ impl Snapshot {
         self.fresh()
     }
     pub fn fresh(&self) -> Result<()> {
+        self.current.fresh()?;
         if self.expires_at.is_some_and(|t| t <= store::now()) {
             return Err(Error("source_unavailable"));
         }

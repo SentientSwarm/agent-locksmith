@@ -309,10 +309,9 @@ pub(super) async fn registration(
             session_label: None,
         };
         if auth != expected
-            || row.get::<&str, _>("protocol") != "http"
+            || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"
             || row.get::<&str, _>("upstream") != p.resource
-            || row.get::<Option<String>, _>("mcp_json").is_some()
         {
             return Err(Error("profile_conflict"));
         }
@@ -339,4 +338,35 @@ async fn current(
         return Err(Error("source_conflict"));
     }
     Ok(())
+}
+
+// Preserve the legacy HTTP profile predicate; native consent additionally uses
+// the existing manual/direct/HTTPS configuration validator.
+fn native_registration_or_http(row: &SqliteRow) -> bool {
+    use crate::registrations::{Kind, McpConfig, Protocol, protocol};
+    if row.get::<&str, _>("protocol") == "http" {
+        return row.get::<Option<String>, _>("mcp_json").is_none();
+    }
+    let Some(raw) = row.get::<Option<&str>, _>("mcp_json") else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<McpConfig>(raw) else {
+        return false;
+    };
+    let Ok(metadata) = serde_json::from_str::<Value>(row.get("metadata_json")) else {
+        return false;
+    };
+    !row.get::<bool, _>("disabled")
+        && !row.get::<bool, _>("seed")
+        && row.get::<&str, _>("egress") == "direct"
+        && config.definition.is_none()
+        && protocol::validate(
+            Protocol::McpStreamableHttp,
+            Some(&config),
+            Kind::Tool,
+            crate::config::EgressMode::Direct,
+            row.get("upstream"),
+            Some(&metadata),
+        )
+        .is_ok()
 }

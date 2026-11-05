@@ -70,7 +70,7 @@ impl Runtime {
         if let Some(secret) = &bearer {
             contract::screen(&call.arguments, secret.expose_secret())?;
         }
-        let client = self.client(reg).await?;
+        let client = self.client(&before.current).await?;
         let mut upstream = wire::Connection {
             client,
             endpoint: reg.upstream.clone().into(),
@@ -113,8 +113,9 @@ impl Runtime {
 
     async fn client(
         &self,
-        reg: &crate::registrations::Registration,
+        current: &super::source::Current,
     ) -> Result<locksmith_mcp_transport::Client> {
+        let reg = &current.admission.registration;
         let private = reg
             .mcp
             .as_ref()
@@ -122,7 +123,7 @@ impl Runtime {
         let addresses = destination::resolve(&reg.upstream, private, &self.listeners).await?;
         locksmith_mcp_transport::Client::pinned(
             Default::default(),
-            self.roots.clone(),
+            self.current_roots(current),
             &reg.upstream,
             addresses,
             1024 * 1024,

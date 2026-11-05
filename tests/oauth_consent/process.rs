@@ -766,3 +766,6 @@ pub async fn callback_bind_failure() {
 
 #[path = "refresh_process.rs"]
 pub mod refresh;
+
+#[path = "../native_oauth/process.rs"]
+pub mod native;

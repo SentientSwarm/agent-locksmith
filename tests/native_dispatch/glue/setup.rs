@@ -39,6 +39,13 @@ pub async fn prepare(script: &str) -> Result<(Setup, process::Guard), Error> {
         Default::default(),
     )
     .await?;
+    if std::env::var_os("LOCKSMITH_TEST_CONTROLLED_OAUTH").is_some() {
+        let p = crate::controlled::profile(s.f._dir.path(), port);
+        crate::controlled::configure(&s, &p).await;
+        crate::controlled::insert(&s, &p, &crate::controlled::key(), "x", "owner").await;
+        s.rt = crate::controlled::runtime(&s, p, crate::controlled::key()).await;
+        crate::controlled::select(&s).await;
+    }
     approve(&s).await?;
     Ok((s, receiver))
 }
@@ -49,14 +56,25 @@ async fn approve(s: &Setup) -> Result<(), Error> {
         json!({"tools":[tool]}).to_string(),
     )?;
     let source = s.current().await.source;
-    let state = s.rt.observe(&s.agent, "native", &source, None).await?;
-    let reviewed = s.review(&state, "read").await;
-    s.grant_for(
+    let owner = std::env::var_os("LOCKSMITH_TEST_CONTROLLED_OAUTH").map(|_| "owner");
+    let state =
+        s.rt.observe_for(owner, &s.agent, "native", &source, None)
+            .await?;
+    let entry = &state["observation"]["manifest"]["tools"][0];
+    let input = serde_json::from_value(
+        json!({"source":state["source"],"generation":state["observation"]["generation"],"name":"read","observed_digest":entry["observed_digest"],"effect":"read"}),
+    )?;
+    let reviewed = s.rt.review_for(owner, &s.agent, "native", input).await?;
+    s.rt.replace_for(
+        owner,
         &s.agent,
-        &state,
-        json!([{"name":"read","contract_digest":reviewed["contract_digest"]}]),
+        "native",
+        Setup::replace(
+            &state,
+            json!([{"name":"read","contract_digest":reviewed["contract_digest"]}]),
+        ),
     )
-    .await;
+    .await?;
     Ok(())
 }
 

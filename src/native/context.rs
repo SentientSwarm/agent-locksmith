@@ -61,12 +61,11 @@ impl Context {
         self.pins.lock().unwrap().list(snapshot)
     }
     pub fn check_snapshot(&self, snapshot: &Snapshot) -> authority::Result<()> {
-        let source = &snapshot.current.source;
+        snapshot.current.fresh()?;
         if self.cancelled.is_cancelled()
             || self.scope.owner != self.identity.public_id
             || self.scope.connection != self.name
-            || self.scope.authority
-                != super::scope::authority(&source.instance, source.revision, source.agent_epoch)
+            || self.scope.authority != snapshot.current.scope()
         {
             self.cancelled.cancel();
             return Err(authority::Error("authority_changed"));

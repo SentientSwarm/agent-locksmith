@@ -79,7 +79,7 @@ Read local state first; these GET-backed commands do not contact an upstream:
 "#,
         );
         out.push_str(&format!("locksmith --format json tool mcp show <connection> --agent {id}\nlocksmith --format json agent mcp-grants show <connection> --agent {id}\nlocksmith agent credentials list {id}\nlocksmith audit query --agent {id} --since-ms <ms>\n```\n"));
-        out.push_str("\nUse the native repair steps above: current observation/review/grant and explicit None/live StoredBearer selection, then a fresh session when needed. HTTP env/op/header/OAuth recipes do not apply. Missing outcomes remain unknown; do not replay or switch accounts.\n");
+        out.push_str("\nUse the native repair steps above: current observation/review/grant and explicit None/live StoredBearer or owner-selected controlled OAuth, then a fresh session when needed. Controlled refresh changes authority and requires reobserve/review/regrant; reconnect also requires select-oauth. HTTP env/op/header/OAuth recipes do not apply. Missing outcomes remain unknown; do not replay or switch accounts.\n");
     }
     out.push_str(&format!(
         "\n### Connection policy\n\n- **Allowlist**: {}\n- **Denylist**: {}\n\nThese connection-level lists do not describe native tool grants. Native calls also require current per-agent reviewed contracts. Only your operator changes policy; re-fetch discovery after a deliberate change.\n",

@@ -9,7 +9,8 @@ It is not an HTTP `/api` connection. No provider credentials are supplied to a
 consumer. Activation/account selection are configuration facts, not credential
 readiness or permission to execute a tool.
 
-Manual None and sealed-bearer selections support finite reviewed tools. Each
+Manual None, sealed-bearer and deliberately owner-selected
+[controlled OAuth](../operator/native-oauth.md) accounts support finite reviewed tools. Each
 call requires the current selected account, current reviewed grant and a fresh
 operator observation (less than60 seconds old, from this daemon run). The list
 is empty when no tools are granted; stale observations require operator repair.

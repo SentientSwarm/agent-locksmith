@@ -27,7 +27,8 @@ HTTP connections from native MCP tools; it is not a new CLI subcommand. Native
 repair uses existing `tool mcp show`, `agent mcp-grants show`, `agent credentials
 list` and `audit query`. Status reads do not observe upstreams. Deliberate
 observation/review/grant writes use the [native operator guide](operator/native-tool-review.md);
-HTTP env/op/header/OAuth options must not be used as native repair recipes.
+HTTP env/op/header/legacy OAuth options must not be used as native repair recipes.
+Controlled native OAuth uses the owner-bound [select-oauth flow](operator/native-oauth.md).
 Existing command syntax/help and authentication are unchanged.
 
 ## Subcommands
@@ -92,6 +93,7 @@ locksmith agent set-credential <public_id> <reg> --auth bearer=<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --auth header=<Header>:<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --no-auth
 locksmith agent set-credential <public_id> <reg> --oauth-session <label>
+locksmith agent select-oauth <public_id> <reg> --label <label> --if-match <account-revision>
 locksmith agent unset-credential <public_id> <reg>
 locksmith agent credentials list <public_id>
 ```

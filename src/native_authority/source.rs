@@ -20,10 +20,12 @@ pub struct Current {
     pub source: Source,
     pub agent: i64,
     pub admission: admission::HttpAdmission,
+    pub(crate) controlled: Option<crate::oauth::consent::native::Account>,
 }
 pub async fn current(
     repo: &RegistrationRepository,
     catalog: &Catalog,
+    consent: Option<&crate::oauth::consent::Runtime>,
     connection: &mut SqliteConnection,
     public_id: &str,
     name: &str,
@@ -44,9 +46,34 @@ pub async fn current(
         .account
         .as_ref()
         .ok_or(Error("explicit_selection_required"))?;
-    supported(connection, auth).await?;
+    let controlled = if matches!(auth, AuthSpec::ControlledOauth { .. }) {
+        Some(
+            consent
+                .ok_or(Error("oauth_custody_unavailable"))?
+                .native_account(connection, name, auth)
+                .await
+                .map_err(super::selection::custody)?,
+        )
+    } else {
+        supported(connection, auth).await?;
+        None
+    };
     let auth = auth.clone();
-    Ok(captured(identity.id, admission, auth))
+    let mut current = captured(identity.id, admission, auth.clone());
+    if let Some(account) = &controlled {
+        current.source.account_key = contract::digest(
+            "locksmith-native-account-v2",
+            &json!([
+                current.source.instance,
+                auth,
+                account.version,
+                account.roots_digest
+            ]),
+        );
+    }
+    current.controlled = controlled;
+    current.fresh()?;
+    Ok(current)
 }
 fn captured(agent: i64, admission: admission::HttpAdmission, auth: AuthSpec) -> Current {
     let account_key = contract::digest(
@@ -63,6 +90,7 @@ fn captured(agent: i64, admission: admission::HttpAdmission, auth: AuthSpec) -> 
         source,
         agent,
         admission,
+        controlled: None,
     }
 }
 async fn identity(connection: &mut SqliteConnection, public_id: &str) -> Result<AgentIdentity> {
@@ -95,6 +123,28 @@ async fn supported(connection: &mut SqliteConnection, auth: &AuthSpec) -> Result
     }
 }
 impl Current {
+    pub fn fresh(&self) -> Result<()> {
+        if self
+            .controlled
+            .as_ref()
+            .and_then(|a| a.expires_at)
+            .is_some_and(|t| t <= super::store::now())
+        {
+            Err(Error("access_expired"))
+        } else {
+            Ok(())
+        }
+    }
+    pub fn scope(&self) -> String {
+        let s = &self.source;
+        let base = format!("{}:{}:{}", s.instance, s.revision, s.agent_epoch);
+        if self.controlled.is_some() {
+            format!("{base}:{}", s.account_key)
+        } else {
+            base
+        }
+    }
+
     pub fn matches(&self, expected: &Source) -> Result<()> {
         if &self.source == expected {
             Ok(())

@@ -77,6 +77,9 @@ impl AgentCredentialRepository {
         registration: &str,
         auth_spec: &AuthSpec,
     ) -> Result<(), RepoError> {
+        if matches!(auth_spec, AuthSpec::ControlledOauth { .. }) {
+            return Err(RepoError::InvalidGrantTarget);
+        }
         let auth_json = serde_json::to_string(auth_spec)?;
         let now = unix_now();
         let result = sqlx::query(

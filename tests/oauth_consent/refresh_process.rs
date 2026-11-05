@@ -409,6 +409,10 @@ pub async fn upgrade() {
     use sqlx::Row;
     let prior = std::env::var("CONTROLLED_PRIOR_DAEMON").expect("retained prior binary");
     let cli = std::env::var("CONTROLLED_PRIOR_CLI").expect("retained prior CLI");
+    let prior_schema = std::env::var("CONTROLLED_PRIOR_SCHEMA")
+        .ok()
+        .map(|v| v.parse::<i64>().unwrap())
+        .unwrap_or(15);
     let mut f = Fixture::new();
     std::fs::write(f.path().join("refresh-enabled"), "fixture").unwrap();
     let t = Twin::start(&f);
@@ -453,7 +457,7 @@ pub async fn upgrade() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        15
+        prior_schema
     );
     let rows = sqlx::query("SELECT * FROM oauth_sessions")
         .fetch_all(&pool)
@@ -487,7 +491,7 @@ pub async fn upgrade() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        16
+        17
     );
     let rows = sqlx::query("SELECT * FROM oauth_sessions")
         .fetch_all(&pool)
@@ -530,6 +534,6 @@ pub async fn upgrade() {
     f.stop();
     t.stop();
     println!(
-        "actual schema-15 CLI+daemon connected account -> schema-16 unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined"
+        "actual schema-{prior_schema} CLI+daemon connected account -> schema-17 unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined"
     );
 }
