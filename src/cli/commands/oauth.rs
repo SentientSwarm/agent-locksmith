@@ -12,68 +12,13 @@
 //! All three talk to admin UDS (or admin HTTPS via `--admin-url`).
 //! Operator-credentialed.
 
-use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
 use crate::client::{Auth, CliClient, CliError};
 use crate::output::{Format, print};
 
-#[derive(Subcommand, Debug)]
-pub enum OauthCmd {
-    /// Bootstrap a new OAuth session for `<name>` with a
-    /// pre-obtained refresh token. v1.0 manual path: complete the
-    /// provider's own OAuth flow first (e.g., `gh auth login` for
-    /// copilot, `claude auth` for anthropic-oauth) and pass the
-    /// refresh token here. Future versions ship the interactive
-    /// flow inside this command.
-    Bootstrap(BootstrapArgs),
-    /// Show OAuth session status for `<name>` [--label <label>].
-    Status {
-        name: String,
-        /// Phase G: session label (defaults to "default"). Use to
-        /// inspect a specific per-agent session under a registration.
-        #[arg(long)]
-        label: Option<String>,
-    },
-    /// Revoke (delete locally) the OAuth session for `<name>`
-    /// [--label <label>]. Idempotent. Does NOT call the provider's
-    /// revoke endpoint.
-    Revoke {
-        name: String,
-        /// Phase G: session label (defaults to "default").
-        #[arg(long)]
-        label: Option<String>,
-    },
-    /// List all OAuth sessions across all registrations + labels.
-    /// Phase G; useful for spotting orphaned per-agent sessions.
-    List,
-}
-
-#[derive(Args, Debug)]
-pub struct BootstrapArgs {
-    /// Registration name (must already exist as a kind=tool or
-    /// kind=model with an OAuth AuthSpec).
-    pub name: String,
-
-    /// Phase G: session label. Defaults to "default" — single shared
-    /// session per registration. Use distinct labels (e.g., "hermes",
-    /// "openclaw") when bootstrapping per-agent OAuth from different
-    /// upstream accounts. See concepts/per-agent-credentials.md for
-    /// the single-grant trap explanation.
-    #[arg(long)]
-    pub label: Option<String>,
-
-    /// Refresh token obtained out-of-band from the provider's OAuth
-    /// flow. WARNING: this argument transits the shell history. Prefer
-    /// `--refresh-token-stdin` for production use.
-    #[arg(long, conflicts_with = "refresh_token_stdin")]
-    pub refresh_token: Option<String>,
-
-    /// Read the refresh token from stdin (one line, trimmed). Use this
-    /// in scripts / pipelines to keep the token out of shell history.
-    #[arg(long, conflicts_with = "refresh_token")]
-    pub refresh_token_stdin: bool,
-}
+mod args;
+pub use args::{BootstrapArgs, OauthCmd};
 
 pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<(), CliError> {
     match cmd {
@@ -119,19 +64,7 @@ async fn bootstrap(
     format: Format,
     args: BootstrapArgs,
 ) -> Result<(), CliError> {
-    let token = match (args.refresh_token, args.refresh_token_stdin) {
-        (Some(t), false) => t,
-        (None, true) => read_stdin_token()?,
-        (None, false) => {
-            return Err(CliError::Usage(
-                "must provide either --refresh-token <TOKEN> or --refresh-token-stdin".into(),
-            ));
-        }
-        (Some(_), true) => unreachable!("clap conflicts_with prevents this"),
-    };
-    if token.trim().is_empty() {
-        return Err(CliError::Usage("refresh token is empty".into()));
-    }
+    let token = bootstrap_token(args.refresh_token, args.refresh_token_stdin)?;
     let op_token = CliClient::op_token()?;
     let body = json!({"refresh_token": token.trim()});
     let path = with_label_query(
@@ -203,4 +136,21 @@ fn read_stdin_token() -> Result<String, CliError> {
         .read_to_string(&mut buf)
         .map_err(|e| CliError::Usage(format!("read stdin: {e}")))?;
     Ok(buf)
+}
+
+fn bootstrap_token(token: Option<String>, stdin: bool) -> Result<String, CliError> {
+    let token = match (token, stdin) {
+        (Some(t), false) => t,
+        (None, true) => read_stdin_token()?,
+        (None, false) => {
+            return Err(CliError::Usage(
+                "must provide either --refresh-token <TOKEN> or --refresh-token-stdin".into(),
+            ));
+        }
+        (Some(_), true) => unreachable!("clap conflicts_with prevents this"),
+    };
+    if token.trim().is_empty() {
+        return Err(CliError::Usage("refresh token is empty".into()));
+    }
+    Ok(token)
 }

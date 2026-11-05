@@ -83,6 +83,11 @@ pub async fn bind_and_serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
     let tls = load_tls_config(cert_path, key_path).await?;
+    let listener = std::net::TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    if let Some(rt) = state.admin.native_authority() {
+        rt.listeners.bound("admin", listener.local_addr()?);
+    }
     let app = super::uds::build_router(state);
 
     let handle = Handle::new();
@@ -94,7 +99,7 @@ pub async fn bind_and_serve(
     });
 
     info!(addr = %addr, cert = %cert_path.display(), "admin HTTPS listener bound");
-    let result = axum_server::bind_rustls(addr, tls)
+    let result = axum_server::from_tcp_rustls(listener, tls)
         .handle(handle)
         .serve(app.into_make_service())
         .await;
@@ -121,10 +126,14 @@ pub async fn bind_and_serve_mtls(
     state: UdsState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    if let Some(rt) = state.admin.native_authority() {
+        rt.listeners.bound("admin", listener.local_addr()?);
+    }
     let app = super::uds::build_router(state);
     info!(addr = %addr, mode = ?auth_mode, "admin HTTPS (mTLS) listener bound");
-    crate::agent_listener::bind_and_serve_mtls(
-        addr,
+    crate::agent_listener::serve_mtls(
+        listener,
         cert_path,
         key_path,
         ca_bundle_pem,

@@ -22,6 +22,17 @@ The CLI also reads:
 
 ## Subcommands
 
+### `integration` and `tool from-definition` — offline authoring
+
+`integration import --file FILE` saves one strict immutable definition;
+`integration get ID --revision N` reads the exact revision.
+`tool from-definition NAME --definition ID --revision N --auth-profile ID
+--upstream URL [--allow-private-destination]` creates a disabled pinned native
+connection. No provider request, account selection, credential or grant occurs.
+General edits/enable remain refused for these derived instances. See
+[complete schema, examples and limits](operator/integration-definitions.md).
+
+
 ### `bootstrap-operator` — mint operator credential (offline)
 
 ```bash
@@ -140,11 +151,13 @@ validation and compatibility details.
 |---|---|
 | `--upstream <url>` | Required base URL. Tool/model require absolute HTTP(S), with no userinfo, query or fragment; localhost/IP/private hosts and path prefixes are supported. Infra retains its existing contract. |
 | `--auth <spec>` | Auth shape — see "Auth spec syntax" below. |
-| `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `proxied` server-side. |
+| `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `direct`; native currently requires `direct`. |
 | `--timeout-request <secs>` | Per-request timeout. Defaults server-side. |
 | `--timeout-idle <secs>` | Per-read idle timeout. Defaults server-side. |
 | `--body-limit <bytes>` | Max upstream response body size. Defaults 10 MiB. |
 | `--metadata k=v` | Per-kind metadata. Repeatable. |
+| `--protocol http\|mcp_streamable_http` | Registration protocol; omitted means HTTP, including full replacement updates. Native is tool-only. |
+| `--mcp-config-file <path>` | Strict native JSON config (`protocol_version`, optional `allow_private_destination`), required for native. See [native setup](operator/native-mcp.md). |
 | `--metadata-file <path>` | Complete JSON metadata value, replacing existing metadata without merging. Mutually exclusive with `--metadata`. Supports nested `http_service` descriptions. |
 | `--description '...'` | Free-form description. |
 

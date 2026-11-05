@@ -13,3 +13,5 @@ pub mod uds;
 pub mod uds_client;
 
 pub use service::{AdminError, AdminService, RegisterInput, RegisterOutput};
+
+mod stored_credential;

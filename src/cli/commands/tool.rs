@@ -13,6 +13,17 @@ use crate::output::Format;
 
 #[derive(Subcommand)]
 pub enum ToolCmd {
+    /// Observe and review native tool contracts; agent calls remain disabled.
+    Mcp {
+        #[command(subcommand)]
+        command: super::native_mcp::ToolCmd,
+    },
+    /// Create a disabled, immutable instance of an exact definition; no accounts or grants.
+    FromDefinition {
+        name: String,
+        #[command(flatten)]
+        options: super::definition_instance::Options,
+    },
     /// List configured tools (kind=tool registrations, including disabled).
     List,
     /// Show one tool by name.
@@ -25,7 +36,7 @@ pub enum ToolCmd {
         /// Registration name.
         name: String,
         #[command(flatten)]
-        opts: PutOpts,
+        opts: Box<PutOpts>,
     },
     /// Delete a tool. Operator rows are removed; seed rows are flipped to disabled=1.
     Delete {
@@ -41,10 +52,14 @@ pub enum ToolCmd {
 
 pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(), CliError> {
     match cmd {
+        ToolCmd::Mcp { command } => super::native_mcp::tool(client, format, command).await,
+        ToolCmd::FromDefinition { name, options } => {
+            super::definition_instance::run(client, format, &name, options).await
+        }
         ToolCmd::List => registration::do_list(client, format, CliKind::Tool).await,
         ToolCmd::Get { name } => registration::do_get(client, format, CliKind::Tool, &name).await,
         ToolCmd::Put { name, opts } => {
-            registration::do_put(client, format, CliKind::Tool, &name, opts).await
+            registration::do_put(client, format, CliKind::Tool, &name, *opts).await
         }
         ToolCmd::Delete { name } => {
             registration::do_delete(client, format, CliKind::Tool, &name).await

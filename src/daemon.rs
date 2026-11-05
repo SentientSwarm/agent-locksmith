@@ -11,6 +11,9 @@
 //! configs without admin_socket continue to run with only the TCP agent
 //! listener bound — preserving backward compat.
 
+mod oauth;
+mod state_lock;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +48,17 @@ pub enum DaemonError {
 /// Run the daemon to completion. Returns when both listeners shut down
 /// (or the drain window expires).
 pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), DaemonError> {
+    // Outbound TLS also needs a provider when every inbound listener is plain.
+    crate::admin::https::install_crypto_provider_once();
+    let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
+    oauth::owned(config, coord).await
+}
+
+async fn run_owned(
+    config: AppConfig,
+    coord: ShutdownCoordinator,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
+) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
     if admin_enabled {
@@ -131,7 +145,9 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         operational_log_store_for_sweeper,
         op_resolver_for_app,
     ) = if admin_enabled {
-        let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
+        let setup =
+            build_admin_substrate(shared_config.clone(), resolved_creds.clone(), refresh_owner)
+                .await?;
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
@@ -171,10 +187,17 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         )
     };
 
+    let refresh = oauth::Background::prepare(
+        oauth_runtime_for_app.as_ref(),
+        catalog_for_app.as_ref(),
+        agent_creds_for_app.as_ref(),
+        operational_log_for_app.as_ref(),
+    );
+
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
     // up — otherwise there's no audit to sweep. Defaults to
     // 90 days / hourly when `audit:` is absent from config.
-    let sweeper_task = audit_for_sweeper.map(|audit| {
+    let mut sweeper_task = audit_for_sweeper.map(|audit| {
         let snapshot = shared_config.load();
         let cfg = snapshot.audit.as_ref().cloned().unwrap_or_default();
         drop(snapshot);
@@ -187,7 +210,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // operational-log stream never touches the audit table (LOG-1). Runs
     // only when the operational-log substrate is up; co-terminates with
     // shutdown like the audit sweeper.
-    let ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
+    let mut ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .operational_log
@@ -203,7 +226,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // nothing references any more, then hard-deletes tombstoned rows past
     // retention. Runs only when the sealing key is configured (the store
     // exists only then).
-    let credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
+    let mut credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .credential_store
@@ -283,8 +306,14 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         );
     }
 
+    let native = crate::native::Runtime::new(
+        shared_config.load().mcp.clone(),
+        registrations_for_app.clone(),
+        catalog_for_app.clone().unwrap_or_default(),
+    );
+    let mut native_task = native.start(coord.shutdown_signal());
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_k(
+        Some(catalog) => crate::app::build_app_full_with_native(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -298,6 +327,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             credential_secrets_for_app,
             operational_log_for_app,
             op_resolver_for_app,
+            native.clone(),
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -308,10 +338,16 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             registrations_for_app,
         ),
     };
+    let observation = admin_state
+        .as_ref()
+        .and_then(|s| s.admin.native_authority());
     let agent_shutdown = coord.shutdown_signal();
-    let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
+    let mut agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
         crate::config::AuthMode::Bearer => {
             let listener = TcpListener::bind(addr).await?;
+            if let Some(rt) = &observation {
+                rt.listeners.bound("agent", listener.local_addr()?);
+            }
             info!("agent listener bound on {addr} (bearer)");
             tokio::spawn(async move {
                 axum::serve(listener, agent_router)
@@ -334,9 +370,13 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
                 )
             })?;
             let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
+            let listener = TcpListener::bind(addr).await?;
+            if let Some(rt) = &observation {
+                rt.listeners.bound("agent", listener.local_addr()?);
+            }
             tokio::spawn(async move {
-                crate::agent_listener::bind_and_serve_mtls(
-                    addr,
+                crate::agent_listener::serve_mtls(
+                    listener,
                     &server_cert_path,
                     &server_key_path,
                     &ca_pem,
@@ -352,12 +392,17 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // Admin UDS listener (when configured).
     // Admin HTTPS listener piggybacks on the same UdsState — same handlers,
     // different transport (T4.3 / C-3, SPEC §4.2.5).
-    let (admin_task, admin_https_task) = if let Some(state) = admin_state {
+    let (mut admin_task, mut admin_https_task) = if let Some(state) = admin_state {
         let path = admin_socket_path.expect("checked above");
+        #[cfg(test)]
+        let body_test_path = path.clone();
         let uds_shutdown = coord.shutdown_signal();
         let uds_state = state.clone();
         let uds = tokio::spawn(async move {
-            crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await
+            let result = crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await;
+            #[cfg(test)]
+            crate::native_authority::body_probe::hold_listener(path, "uds").await;
+            result
         });
 
         // Build the HTTPS task only when explicitly enabled. The block
@@ -376,14 +421,18 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
 
                 match auth_mode {
                     crate::config::AuthMode::Bearer => Some(tokio::spawn(async move {
-                        crate::admin::https::bind_and_serve(
+                        let result = crate::admin::https::bind_and_serve(
                             addr,
                             &cert,
                             &key,
                             https_state_base,
                             https_shutdown,
                         )
-                        .await
+                        .await;
+                        #[cfg(test)]
+                        crate::native_authority::body_probe::hold_listener(body_test_path, "https")
+                            .await;
+                        result
                     })),
                     crate::config::AuthMode::Mtls | crate::config::AuthMode::Both => {
                         let mtls_cfg = c.mtls.as_ref().ok_or_else(|| {
@@ -405,7 +454,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
                             validator,
                         });
                         Some(tokio::spawn(async move {
-                            crate::admin::https::bind_and_serve_mtls(
+                            let result = crate::admin::https::bind_and_serve_mtls(
                                 addr,
                                 &cert,
                                 &key,
@@ -414,7 +463,14 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
                                 https_state,
                                 https_shutdown,
                             )
-                            .await
+                            .await;
+                            #[cfg(test)]
+                            crate::native_authority::body_probe::hold_listener(
+                                body_test_path,
+                                "https",
+                            )
+                            .await;
+                            result
                         }))
                     }
                 }
@@ -426,34 +482,39 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         (None, None)
     };
 
+    let mut refresh_task = refresh.map(|task| task.spawn(&coord));
     let drain = async {
-        let agent_res = match (admin_task, admin_https_task) {
+        if let Some(task) = refresh_task.as_mut() {
+            let _ = task.await;
+        }
+        let _ = (&mut native_task).await;
+        let agent_res = match (admin_task.as_mut(), admin_https_task.as_mut()) {
             (Some(uds), Some(https)) => {
-                let (a, u, h) = tokio::join!(agent_task, uds, https);
+                let (a, u, h) = tokio::join!(&mut agent_task, uds, https);
                 (Some(a), Some(u), Some(h))
             }
             (Some(uds), None) => {
-                let (a, u) = tokio::join!(agent_task, uds);
+                let (a, u) = tokio::join!(&mut agent_task, uds);
                 (Some(a), Some(u), None)
             }
             (None, Some(https)) => {
                 // Admin HTTPS without UDS is structurally permitted but
                 // unusual; carry it through anyway.
-                let (a, h) = tokio::join!(agent_task, https);
+                let (a, h) = tokio::join!(&mut agent_task, https);
                 (Some(a), None, Some(h))
             }
-            (None, None) => (Some(agent_task.await), None, None),
+            (None, None) => (Some((&mut agent_task).await), None, None),
         };
         // Sweeper exits on its own when the shutdown signal fires; we
         // join it here so a slow tick can finish cleanly within the
         // drain window. Errors are logged but never poisoned shutdown.
-        if let Some(s) = sweeper_task {
+        if let Some(s) = sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = ops_log_sweeper_task {
+        if let Some(s) = ops_log_sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = credential_sweeper_task {
+        if let Some(s) = credential_sweeper_task.as_mut() {
             let _ = s.await;
         }
         agent_res
@@ -478,7 +539,32 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             Ok(())
         }
         Err(_) => {
-            warn!("drain window exceeded; tasks dropped");
+            warn!("drain window exceeded; finishing bounded owned cleanup");
+            finish_task(&mut agent_task).await;
+            for task in [admin_task.as_mut(), admin_https_task.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                finish_task(task).await;
+            }
+            for task in [
+                sweeper_task.as_mut(),
+                ops_log_sweeper_task.as_mut(),
+                credential_sweeper_task.as_mut(),
+                refresh_task.as_mut(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                finish_task(task).await;
+            }
+            finish_task(&mut native_task).await;
+            let snapshot = native.snapshot();
+            if snapshot.entries != 0 {
+                return Err(DaemonError::Server(
+                    "native session cleanup incomplete".into(),
+                ));
+            }
             Ok(())
         }
     }
@@ -666,6 +752,7 @@ struct AdminSetup {
 async fn build_admin_substrate(
     config: Arc<ArcSwap<AppConfig>>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
 ) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
@@ -700,8 +787,18 @@ async fn build_admin_substrate(
     // a baked-in catalog start with an empty registrations table);
     // parse / validation errors ABORT startup since a malformed
     // catalog ships with the image.
+    let seed_listener = {
+        let cfg = config.load();
+        (cfg.listen.host.clone(), cfg.listen.port)
+    };
     if let Some(seed_path) = crate::registrations::seed_loader::seed_path_from_env() {
-        match crate::registrations::seed_loader::load_or_skip(&registrations, &seed_path).await {
+        match crate::registrations::seed_loader::load_for_listener(
+            &registrations,
+            &seed_path,
+            Some((&seed_listener.0, seed_listener.1)),
+        )
+        .await
+        {
             Ok(()) => {}
             Err(e) => {
                 return Err(DaemonError::AdminConfig(format!(
@@ -791,7 +888,7 @@ async fn build_admin_substrate(
     let admin = AdminService::with_audit_and_creds(
         agents,
         bootstrap,
-        config,
+        config.clone(),
         Some(audit.clone()),
         resolved_creds.clone(),
     )
@@ -825,17 +922,8 @@ async fn build_admin_substrate(
     let (oauth_admin, oauth_runtime) = match crate::oauth::SealingKey::from_env() {
         Ok(key) => {
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
-            let locks = crate::oauth::refresh::RefreshLockMap::new();
-            tokio::spawn(crate::oauth::refresh::run(
-                sessions.clone(),
-                catalog.clone(),
-                crate::repo::AgentCredentialRepository::new(pool.clone()),
-                key.clone(),
-                locks.clone(),
-                Some(operational_log.clone()),
-                std::future::pending::<()>(),
-            ));
-            info!("oauth: sealing key loaded; refresh task spawned");
+            let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner.clone());
+            info!("oauth: sealing key loaded; refresh task prepared");
             let refresh_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -913,6 +1001,32 @@ async fn build_admin_substrate(
         );
     }
 
+    let roots =
+        crate::native_authority::runtime::roots(config.load().mcp.upstream_ca_bundle.as_deref())
+            .map_err(|e| DaemonError::AdminConfig(e.to_string()))?;
+    let authority = Arc::new(
+        crate::native_authority::runtime::Runtime::new(
+            registrations.clone(),
+            catalog.clone(),
+            credential_sealing_key.clone(),
+            roots,
+            refresh_owner,
+        )
+        .await
+        .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
+    );
+    authority.listeners.expect("agent");
+    if config
+        .load()
+        .listen
+        .admin_https
+        .as_ref()
+        .is_some_and(|c| c.enabled)
+    {
+        authority.listeners.expect("admin");
+    }
+    let admin = admin.with_native_authority(authority);
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -958,4 +1072,27 @@ pub async fn run_with_drain_window(
     let coord_clone = coord.clone();
     let handle = tokio::spawn(async move { run(config, coord_clone).await });
     (coord, handle)
+}
+
+async fn finish_task<T>(task: &mut tokio::task::JoinHandle<T>) {
+    // A completed handle may already have been consumed by the drain future.
+    if task.is_finished() {
+        return;
+    }
+    if tokio::time::timeout(Duration::from_secs(6), &mut *task)
+        .await
+        .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+#[cfg(test)]
+#[path = "daemon/native_body/tests.rs"]
+mod native_body_tests;
+
+#[cfg(test)]
+pub(crate) fn body_test_lock(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    state_lock::acquire(Some(path))
 }
