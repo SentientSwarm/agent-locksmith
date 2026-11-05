@@ -12,6 +12,11 @@
 
 ### Internal
 
+- Keep symbols in build-time artifacts of release builds
+  (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
+  corrupts proc-macro dylibs, which broke `cargo build --release`; shipped
+  binaries keep the default release stripping.
+
 - Make native ingress/body deadline tests use explicit pending/body barriers and
   controlled Tokio time, with a nondefault five-second request budget for real
   authenticated recovery on the same runtime. Production deadlines and authority are unchanged.

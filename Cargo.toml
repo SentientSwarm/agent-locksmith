@@ -74,3 +74,11 @@ wiremock = "0.6"
 
 [patch.crates-io]
 rmcp = { path = "crates/mcp-transport/vendor/rmcp" }
+
+# Build-time artifacts (proc macros, build scripts) keep their symbols.
+# Cargo's release default strips debuginfo, and the macOS 27 `strip`
+# corrupts proc-macro dylibs such as sqlx-macros ("mis-aligned
+# LINKEDIT"). Shipped binaries keep the default release stripping.
+# AGENT-218.
+[profile.release.build-override]
+strip = false
