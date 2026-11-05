@@ -4,6 +4,11 @@
 
 - Own native preparation request bodies before buffering through daemon shutdown,
   retaining independent body and operation budgets; useful tool calls remain denied.
+- Fail daemon startup immediately when the admin socket or admin HTTPS port
+  cannot be bound, and stop the daemon with an error-level log when any listener
+  stops before shutdown. Previously the daemon kept serving agents without its
+  admin surface and reported the error only when stopped. Listener "bound" log
+  lines now show the actually bound address, so a configured port 0 is usable.
 
 ### Internal
 

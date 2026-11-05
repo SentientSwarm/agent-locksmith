@@ -75,18 +75,27 @@ pub async fn load_tls_config(
         })
 }
 
-pub async fn bind_and_serve(
-    addr: SocketAddr,
+/// Bind the admin HTTPS port. The daemon binds before spawning [`serve`]
+/// or [`serve_mtls`] so a bind failure fails startup immediately and the
+/// actually bound address (port 0 included) is known (AGENT-217).
+pub fn bind(addr: SocketAddr) -> Result<std::net::TcpListener, std::io::Error> {
+    let listener = std::net::TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+/// Serve bearer-authenticated admin HTTPS on a listener from [`bind`].
+pub async fn serve(
+    listener: std::net::TcpListener,
     cert_path: &Path,
     key_path: &Path,
     state: UdsState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
     let tls = load_tls_config(cert_path, key_path).await?;
-    let listener = std::net::TcpListener::bind(addr)?;
-    listener.set_nonblocking(true)?;
+    let addr = listener.local_addr()?;
     if let Some(rt) = state.admin.native_authority() {
-        rt.listeners.bound("admin", listener.local_addr()?);
+        rt.listeners.bound("admin", addr);
     }
     let app = super::uds::build_router(state);
 
@@ -109,16 +118,17 @@ pub async fn bind_and_serve(
     result
 }
 
-/// mTLS-terminated admin HTTPS listener (#83 / T6.7 wire-side closure).
+/// mTLS-terminated admin HTTPS listener (#83 / T6.7 wire-side closure)
+/// on a listener from [`bind`].
 ///
 /// `state.operator_mtls` MUST be `Some(_)` matching `auth_mode`; the
 /// operator middleware reads the peer cert from per-request extensions
 /// stamped by the underlying tokio-rustls accept loop. Delegates the
-/// accept loop to `agent_listener::bind_and_serve_mtls` so the wire
-/// shape (PeerCertDer extension, ConnBuilder, service_fn) stays
-/// identical between agent and admin paths.
-pub async fn bind_and_serve_mtls(
-    addr: SocketAddr,
+/// accept loop to `agent_listener::serve_mtls` so the wire shape
+/// (PeerCertDer extension, ConnBuilder, service_fn) stays identical
+/// between agent and admin paths.
+pub async fn serve_mtls(
+    listener: std::net::TcpListener,
     cert_path: &Path,
     key_path: &Path,
     ca_bundle_pem: &str,
@@ -126,9 +136,10 @@ pub async fn bind_and_serve_mtls(
     state: UdsState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+    let addr = listener.local_addr()?;
     if let Some(rt) = state.admin.native_authority() {
-        rt.listeners.bound("admin", listener.local_addr()?);
+        rt.listeners.bound("admin", addr);
     }
     let app = super::uds::build_router(state);
     info!(addr = %addr, mode = ?auth_mode, "admin HTTPS (mTLS) listener bound");
