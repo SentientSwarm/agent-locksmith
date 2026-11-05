@@ -2,7 +2,7 @@ use super::{fixture::Fixture, flow, process, receiver, support as s, wire};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires actual accepted d7 daemon via LOCKSMITH_CONTEXT_PRIOR_DAEMON"]
+#[ignore = "requires the pre-context schema-14 daemon via LOCKSMITH_CONTEXT_PRIOR_DAEMON; holds only while the current schema is 14 (through 4b777cb)"]
 async fn actual_schema14_context_downgrade_is_fail_closed_and_reupgrade_preserves_revoke() {
     let prior = std::env::var("LOCKSMITH_CONTEXT_PRIOR_DAEMON").unwrap();
     let mut f = Fixture::new();

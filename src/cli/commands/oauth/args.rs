@@ -2,6 +2,39 @@ use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum OauthCmd {
+    /// Create one controlled-linear-v1 consent attempt; prints its URL once.
+    /// No browser is opened and no agent authority is granted.
+    Connect {
+        name: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        client_generation: u64,
+        #[arg(long)]
+        redirect_profile: String,
+        #[arg(long)]
+        expected_config_revision: i64,
+    },
+    /// Read owner-bound attempt state. Never returns the authorization URL.
+    AttemptStatus { name: String, attempt: String },
+    /// Cancel an owned attempt; a committed account is retained.
+    Cancel { name: String, attempt: String },
+    /// Read controlled account metadata, revision and current config revision.
+    AccountStatus {
+        name: String,
+        #[arg(long)]
+        label: String,
+    },
+    /// Disconnect controlled custody locally with its current opaque revision.
+    Disconnect {
+        name: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        if_match: String,
+    },
     /// Bootstrap a new OAuth session for `<name>` with a
     /// pre-obtained refresh token. v1.0 manual path: complete the
     /// provider's own OAuth flow first (e.g., `gh auth login` for
@@ -27,7 +60,7 @@ pub enum OauthCmd {
         #[arg(long)]
         label: Option<String>,
     },
-    /// List all OAuth sessions across all registrations + labels.
+    /// List legacy OAuth sessions across all registrations + labels.
     /// Phase G; useful for spotting orphaned per-agent sessions.
     List,
 }

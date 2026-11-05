@@ -140,6 +140,22 @@ jobs:
           printf 'source_commit=3e86ff8a9b1a2c0d08faab83dcd48248baef3b98\n' > "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
           sha256sum "$RUNNER_TEMP/schema13-3e86ff8/locksmithd" "$RUNNER_TEMP/schema13-3e86ff8/locksmith" >> "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
           cat "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
+      - name: Check out pinned schema14 source
+        uses: actions/checkout@v4
+        with:
+          ref: 4b777cbe3964ac9652438ad2605d5844e034ba91
+          path: consent-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema14 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/consent-prior-source" rev-parse HEAD)" = "4b777cbe3964ac9652438ad2605d5844e034ba91"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/consent-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema14-4b777cb"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema14-4b777cb/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema14-4b777cb/locksmith"
+          printf 'source_commit=4b777cbe3964ac9652438ad2605d5844e034ba91\n' > "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema14-4b777cb/locksmithd" "$RUNNER_TEMP/schema14-4b777cb/locksmith" >> "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
       - run: cargo test --all
       - name: Verify OAuth upgrade and prior-binary refusal
         run: |
@@ -176,6 +192,9 @@ jobs:
       - name: Verify native preparation migration and prior-binary refusal
         run: |
           LOCKSMITH_PREPARATION_PRIOR_DAEMON="$RUNNER_TEMP/schema13-3e86ff8/locksmithd" cargo test --locked --test native_preparation_process_test actual_schema13_upgrade_and_prior_refusal -- --ignored --exact --nocapture
+      - name: Verify consent migration and prior-binary refusal
+        run: |
+          LOCKSMITH_CONSENT_PRIOR_DAEMON="$RUNNER_TEMP/schema14-4b777cb/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_consent_upgrade_and_prior_refusal -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
       - name: Bounded MCP transport (separate integration prerequisite)

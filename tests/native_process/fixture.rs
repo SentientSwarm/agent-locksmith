@@ -126,6 +126,11 @@ impl Fixture {
         self.configured_port = port;
         self.port = port;
     }
+    /// Forget an adopted port before a daemon start that bypasses `start`,
+    /// so the readiness loop reads that start's bound port.
+    pub fn reset_assigned_port(&mut self) {
+        self.port = self.configured_port;
+    }
     /// Adopt the agent port the daemon reported binding, once it has.
     pub fn adopt_assigned_port(&mut self) {
         if self.port == 0

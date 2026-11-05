@@ -125,7 +125,9 @@ There is no B schema migration: schema14 state, account bytes and finite grants
 remain readable by accepted A. A cannot execute native tools. Every restart
 requires fresh observation; downgrade/re-upgrade never grants new authority.
 Preserve accepted0a binaries before building and run the ignored compatibility
-probe with `LOCKSMITH_DISPATCH_PRIOR_DAEMON`. Earlier schema13/12/11 refusal
+probe with `LOCKSMITH_DISPATCH_PRIOR_DAEMON`. That probe holds only while the
+current schema is 14 (through commit `4b777cb`); after migration 0015 the A binary
+refuses the upgraded database, which the consent upgrade probe covers. Earlier schema13/12/11 refusal
 probes retain their own exact prior binaries and attribution.
 
 Actual local checks are not hosted provider, optimized/four-platform, release or

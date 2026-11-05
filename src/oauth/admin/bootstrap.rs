@@ -101,6 +101,9 @@ async fn create(
 }
 
 fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<Response> {
+    if matches!(e, crate::oauth::OauthSessionError::UnsupportedKind) {
+        return Box::new(super::status::unsupported());
+    }
     if e.to_string().contains("UNIQUE") || e.to_string().contains("constraint") {
         return Box::new(error_envelope(
             StatusCode::CONFLICT,

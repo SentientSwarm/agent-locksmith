@@ -35,6 +35,15 @@ impl OauthSessionRepository {
         access_token_expires_at: Option<i64>,
         scope: &str,
     ) -> Result<OauthSession, OauthSessionError> {
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM oauth_sessions WHERE name=? AND session_label=?")
+                .bind(name)
+                .bind(session_label)
+                .fetch_optional(&self.pool)
+                .await?;
+        if kind.as_deref().is_some_and(|k| k != "legacy") {
+            return Err(OauthSessionError::UnsupportedKind);
+        }
         let tokens = Tokens::seal(key, access_token, Some(refresh_token))?;
         self.commit_row(
             key,

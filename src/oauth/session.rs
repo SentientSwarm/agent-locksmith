@@ -40,6 +40,9 @@ pub enum OauthSessionError {
     #[error("OAuth session changed or is absent")]
     Stale,
 
+    #[error("OAuth account kind is not supported by this interface")]
+    UnsupportedKind,
+
     #[error("sealing: {0}")]
     Sealing(#[from] SealingKeyError),
 

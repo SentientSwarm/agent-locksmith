@@ -2,7 +2,7 @@ use super::{calls, discovery, fixture::Fixture, flow, process, receiver, wire};
 use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires accepted A binary via LOCKSMITH_DISPATCH_PRIOR_DAEMON"]
+#[ignore = "requires the stage A schema-14 daemon via LOCKSMITH_DISPATCH_PRIOR_DAEMON; holds only while the current schema is 14 (through 4b777cb)"]
 async fn schema14_authority_survives_a_b_a_b_without_migration() {
     let prior = std::env::var("LOCKSMITH_DISPATCH_PRIOR_DAEMON").unwrap();
     let mut f = Fixture::new();

@@ -22,6 +22,7 @@ pub async fn op_oauth_status(
             })),
         )
             .into_response(),
+        Err(crate::oauth::OauthSessionError::UnsupportedKind) => unsupported(),
         Err(_) => error_envelope(
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_error",
@@ -53,6 +54,7 @@ pub async fn op_oauth_list(State(state): State<OauthAdminState>) -> Response {
                 .collect();
             (StatusCode::OK, Json(json!({ "sessions": arr }))).into_response()
         }
+        Err(crate::oauth::OauthSessionError::UnsupportedKind) => unsupported(),
         Err(_) => error_envelope(
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_error",
@@ -72,6 +74,7 @@ pub async fn op_oauth_revoke(
     let session_label = label_q.label_or_default();
     match state.sessions.delete(&name, session_label).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(crate::oauth::OauthSessionError::UnsupportedKind) => unsupported(),
         Err(_) => error_envelope(
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_error",
@@ -83,4 +86,13 @@ pub async fn op_oauth_revoke(
 
 fn status_response(session: &OauthSession) -> Response {
     (StatusCode::OK, Json(session_status_json(session, true))).into_response()
+}
+
+pub(super) fn unsupported() -> Response {
+    error_envelope(
+        StatusCode::CONFLICT,
+        "auth_error",
+        "oauth_kind_unsupported",
+        "OAuth account kind is unsupported by this interface",
+    )
 }

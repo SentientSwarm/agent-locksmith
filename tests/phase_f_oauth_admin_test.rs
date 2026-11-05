@@ -98,6 +98,7 @@ async fn setup() -> Harness {
         catalog: Some(catalog_arc.clone()),
         resolved_creds: None,
         oauth: Some(OauthAdminState {
+            consent: None,
             registrations,
             sessions,
             sealing_key,

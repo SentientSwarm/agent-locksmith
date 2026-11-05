@@ -165,3 +165,11 @@ for AGENT-175. Layer8's configured-volume discovery, template/env forwarding,
 packaged backup/restore commands, private-site rehearsal and upgrade automation
 remain separate work. It does not establish full AGENT-175, packaged AGENT-213,
 live OAuth compatibility or release acceptance.
+
+## Controlled consent custody
+
+Migration 0015 controlled accounts remain unbound and are excluded from legacy
+refresh. Pending attempts expire on restart; committed custody survives. This
+does not relax the no-OAuth-key quarantine for restored legacy rows, including
+revoked owners. Follow [controlled consent](oauth-consent.md) for owner-bound
+status/disconnect and the explicit older-binary refusal cost.

@@ -137,3 +137,14 @@ The three earlier predecessor probes retain their own exact binaries and env.
 No ordinary full-suite result implies an ignored probe ran. The old schema12
 binary must refuse migration0013 before both listeners, while the new daemon
 preserves custody and authority and can restart normally.
+
+## Controlled consent accounts
+
+[Controlled consent](adr-operator-consent.md) extends this repository in migration 0015.
+Provider-kind checks exclude those rows from every legacy materializer, refresh
+claim/update, bootstrap and status/revoke route; list filters them. A separate
+owner-bound attempt CAS governs first publication and absent-account disconnect.
+It reuses the AGENT-205 future owner and adds a joined callback-only TLS listener.
+That listener binds after the other listeners and before any of them serves, and
+stopping before shutdown stops the daemon like any other listener.
+No hosted identity, useful read, provider refresh or native OAuth claim follows.

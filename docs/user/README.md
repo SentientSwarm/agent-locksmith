@@ -69,3 +69,6 @@ Wiring an agent through a layer8-proxy deployment:
 - [Reviewed migration](concepts/migrating-account-bindings.md) — backup, preview/apply and restart.
 - [Account troubleshooting](operator/account-binding-troubleshooting.md) — error classes and repair.
 - [Saved local smoke](../development/explicit-account-bindings-smoke.md) — actual daemon/CLI SM01–SM05.
+
+- [Controlled operator consent](operator/oauth-consent.md): local TLS identity
+  twin, owner-bound sealed custody and explicit disconnect; no agent activation.

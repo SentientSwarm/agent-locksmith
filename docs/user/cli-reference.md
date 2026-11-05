@@ -199,15 +199,16 @@ host-specific routing. The OAuth credential management itself uses
 
 ### `oauth` — OAuth session management (operator)
 
-Phase F + Phase G. Requires `LOCKSMITH_OAUTH_SEALING_KEY` set in
-the daemon's env.
+The legacy Phase F + Phase G commands below require
+`LOCKSMITH_OAUTH_SEALING_KEY` in the daemon's environment. They do not manage
+controlled consent accounts.
 
 ```bash
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token <token>
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token-stdin
 locksmith oauth status   <name> [--label <label>]
 locksmith oauth revoke   <name> [--label <label>]
-locksmith oauth list                                # NEW (Phase G)
+locksmith oauth list                                # legacy sessions only
 ```
 
 `bootstrap` takes a refresh token obtained out-of-band (provider's
@@ -229,8 +230,15 @@ degraded, audit_session_id). Never leaks tokens.
 `revoke` clears local session state. Idempotent. Provider-side
 revocation deferred to v1.1+.
 
-`list` enumerates all `(registration, label)` sessions across the
-deployment. Useful for spotting orphaned per-agent sessions.
+`list` enumerates legacy `(registration, label)` sessions across the
+deployment. Controlled owner-bound rows are filtered out; legacy status,
+revoke and bootstrap refuse those rows.
+
+For the optional controlled-only consent profile, use `oauth connect`,
+`oauth attempt-status`, `oauth cancel`, `oauth account-status` and
+`oauth disconnect`. The [controlled consent guide](operator/oauth-consent.md)
+specifies their flags, owner checks, configuration and local disconnect
+precondition. A `connected_unbound` account does not authorize agent calls.
 
 ### `audit` — audit log queries (operator)
 

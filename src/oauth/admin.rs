@@ -45,6 +45,7 @@ impl LabelQuery {
 /// fields are `Arc` or owned-but-cheap.
 #[derive(Clone)]
 pub struct OauthAdminState {
+    pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
     pub registrations: Arc<RegistrationRepository>,
     pub sessions: OauthSessionRepository,
     pub sealing_key: SealingKey,

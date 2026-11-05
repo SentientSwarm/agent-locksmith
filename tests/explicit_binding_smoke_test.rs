@@ -142,6 +142,14 @@ async fn embedded_oauth_recovery_worker() {
     recovery_embedded::worker().await;
 }
 
+#[path = "explicit_binding_smoke/consent_upgrade.rs"]
+mod consent_upgrade;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_CONSENT_PRIOR_DAEMON built from schema14"]
+async fn actual_daemon_consent_upgrade_and_prior_refusal() {
+    consent_upgrade::exercise().await;
+}
+
 #[path = "explicit_binding_smoke/recovery_upgrade.rs"]
 mod recovery_upgrade;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -118,3 +118,8 @@ tools:
 # Native connection MCP JSON can opt in with "compact": true before authority setup.
 # This is per-registration metadata (not a global mcp setting); see
 # docs/user/agent-integration/compact-mcp.md for toggle/downgrade costs.
+
+# Optional controlled-only operator consent (off when omitted):
+# See docs/user/operator/oauth-consent.md for the complete oauth_consent example,
+# callback TLS configuration, public-client metadata and migration 0015 costs.
+# This profile does not enable hosted Linear/Slack or agent OAuth use.
