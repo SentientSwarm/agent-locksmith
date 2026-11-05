@@ -151,6 +151,8 @@ tools: []
     let mut daemon = Command::new(LOCKSMITHD)
         .arg("--config")
         .arg(&config_path)
+        // The bound address comes from an info-level log line.
+        .env("RUST_LOG", "agent_locksmith=info")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

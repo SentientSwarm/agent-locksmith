@@ -104,12 +104,42 @@ async fn actual_self_listener_is_refused_before_wire() {
     receiver::configure(&f);
     let path = f.path().join("config.yaml");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    // Both listeners use port 0, so neither actual port is in the config.
     config["listen"]["port"] = 0.into();
+    config["listen"]["admin_https"] = json!({
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 0,
+        "cert_path": f.path().join("server.pem"),
+        "key_path": f.path().join("server.key"),
+    });
     std::fs::write(path, config.to_string()).unwrap();
-    f.port = 0;
     f.start(process::DAEMON).await;
     assert_ne!(f.port, 0);
-    let a = f.enroll("self", &format!("https://localhost:{}/mcp/native", f.port));
+
+    // The registration guard sees the actual agent port, not the configured
+    // 0 (AGENT-217), and refuses the self-loop before any agent exists.
+    let mut put = f.command(&[
+        "tool",
+        "put",
+        "native",
+        "--upstream",
+        &format!("https://localhost:{}/mcp/native", f.port),
+        "--auth",
+        "none",
+        "--egress",
+        "direct",
+        "--protocol",
+        "mcp_streamable_http",
+        "--mcp-config-file",
+    ]);
+    put.arg(f.path().join("mcp.json"));
+    assert!(!process::run(put).status.success());
+
+    // The registration guard covers only the agent port. Every other actual
+    // listener is refused by the runtime destination check before the wire.
+    let admin = f.admin_https_port().expect("admin HTTPS bound");
+    let a = f.enroll("self", &format!("https://localhost:{admin}/mcp/native"));
     let id = a["public_id"].as_str().unwrap();
     let s = flow::show(&f, id);
     let file = flow::write(&f, json!({"source":s["source"],"generation":null}));
