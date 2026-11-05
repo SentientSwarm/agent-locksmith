@@ -12,6 +12,13 @@
 
 ### Internal
 
+- Start daemon integration tests on port 0 and read the bound address back
+  instead of probing a free port and releasing it, which another process could
+  take first under parallel load. The admin HTTPS off-by-default tests now hold
+  the configured port, so a daemon that tried to bind it would fail startup.
+  The explicit-binding smoke keeps a stable port because its upgrade probes run
+  prior binaries.
+
 - Keep symbols in build-time artifacts of release builds
   (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
   corrupts proc-macro dylibs, which broke `cargo build --release`; shipped

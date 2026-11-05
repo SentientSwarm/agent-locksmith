@@ -32,8 +32,17 @@ impl Fixture {
         let config = dir.path().join("config.yaml");
         let socket = dir.path().join("admin.sock");
         let db = dir.path().join("locksmith.db");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
+        // A stable probed port, unlike the other daemon tests (AGENT-219):
+        // the upgrade probes restart the same config under prior binaries,
+        // which log the configured address rather than the bound one. A
+        // collision cannot be mistaken for readiness, because `ready` also
+        // requires this fixture's own admin socket, which a daemon that
+        // failed to bind the agent port never creates.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let operator = super::setup::operator(dir.path());
         let http = reqwest::Client::builder()
             .no_proxy()

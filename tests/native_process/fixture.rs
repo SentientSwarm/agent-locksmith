@@ -27,11 +27,9 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let pki = Pki::write(dir.path());
         let operator = operator(dir.path());
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        // Port 0 in config; each start reads the OS-assigned port from the
+        // daemon log, so no probed port can be taken first (AGENT-219).
+        let port = 0;
         let http = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(5))
@@ -76,6 +74,8 @@ impl Fixture {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(self.path().join("admin.sock"));
         let log = std::fs::File::create(self.path().join("daemon.log")).unwrap();
+        // A restart binds a fresh OS-assigned port; `ready` reads it.
+        self.port = 0;
         let mut c = process::command(binary);
         c.args(["--config"]).arg(self.path().join("config.yaml"));
         if let Some(key) = key {

@@ -25,11 +25,11 @@ pub async fn exercise() {
 }
 async fn second_daemon_refused(f: &Fixture, config: &Value) {
     let mut second = config.clone();
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // Hold the configured port for the whole check rather than probing and
+    // releasing it (AGENT-219). The second daemon must refuse on the state
+    // lock before binding anything; a bind attempt would fail differently.
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port();
     second["database"]["path"] = "./state.db".into();
     second["listen"]["port"] = port.into();
     second["listen"]["admin_socket"]["path"] =
@@ -46,7 +46,7 @@ async fn second_daemon_refused(f: &Fixture, config: &Value) {
     );
     assert!(text.contains("database already owned"));
     assert!(!f.path().join("second.sock").exists());
-    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+    drop(held);
     assert_eq!(
         f.http.get(f.url("/livez")).send().await.unwrap().status(),
         200
