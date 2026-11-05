@@ -12,12 +12,15 @@ from urllib.parse import parse_qs
 
 root = pathlib.Path(sys.argv[1])
 lock = threading.Lock()
+refresh_number = 0
+current_refresh = "fixture-refresh-0"
+current_access = "fixture-access-204"
 counts = {"token": 0, "workspace": 0, "user": 0, "other": 0, "delete": 0}
 
 
 def record(kind):
     with lock:
-        counts[kind] += 1
+        counts[kind] = counts.get(kind, 0) + 1
         temporary = root / "counts.new"
         temporary.write_text(json.dumps(counts))
         temporary.replace(root / "counts.json")
@@ -53,30 +56,71 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         record("delete")
-        self.reply(405)
+        self.reply(500 if (root / "fail-delete").exists() else 405)
 
     def do_POST(self):
+        global refresh_number, current_refresh, current_access
         raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         if self.path == "/token":
             record("token")
             form = parse_qs(raw.decode())
-            assert form["grant_type"] == ["authorization_code"]
             assert form["client_id"] == ["fixture-client"]
-            assert len(form["code_verifier"][0]) == 43
             assert form["resource"] == [
                 f"https://127.0.0.1:{self.server.server_port}/mcp/readonly"
             ]
+            if form["grant_type"] == ["refresh_token"]:
+                record("refresh")
+                assert form["scope"] == ["read"]
+                assert set(form) == {
+                    "grant_type",
+                    "refresh_token",
+                    "client_id",
+                    "resource",
+                    "scope",
+                }
+                with lock:
+                    valid = form["refresh_token"] == [current_refresh]
+                    if valid:
+                        refresh_number += 1
+                        current_refresh = f"fixture-refresh-{refresh_number}"
+                        current_access = f"fixture-access-{refresh_number}"
+                if not valid or (root / "invalid-grant").exists():
+                    return self.reply(400, {"error": "invalid_grant"})
+                record("consumed")
+                record("issued")
+                if not wait("refresh"):
+                    return self.reply(503)
+                result = {
+                    "access_token": current_access,
+                    "refresh_token": current_refresh,
+                    "token_type": "Bearer",
+                }
+                if (root / "omit-refresh").exists():
+                    current_refresh = form["refresh_token"][0]
+                    del result["refresh_token"]
+                if (root / "token-error-member").exists():
+                    result["error"] = "synthetic-refusal"
+                if (root / "token-metadata").exists():
+                    result.update(json.loads((root / "token-metadata").read_text()))
+                self.reply(200, result)
+                (root / "finished-refresh").write_text("response attempted")
+                return
+            assert form["grant_type"] == ["authorization_code"]
+            assert len(form["code_verifier"][0]) == 43
             if not wait("token"):
                 return self.reply(503)
-            self.reply(
-                200, {"access_token": "fixture-access-204", "token_type": "Bearer"}
-            )
+            result = {"access_token": current_access, "token_type": "Bearer"}
+            if (root / "refresh-enabled").exists():
+                result.update(
+                    refresh_token=current_refresh, expires_in=3600, scope="read"
+                )
+            self.reply(200, result)
             (root / "finished-token").write_text("response attempted")
             return
         if self.path != "/mcp/readonly":
             record("other")
             return self.reply(400)
-        assert self.headers.get("Authorization") == "Bearer fixture-access-204"
+        assert self.headers.get("Authorization") == f"Bearer {current_access}"
         assert self.headers.get("Mcp-Protocol-Version") == "2025-11-25"
         message = json.loads(raw)
         method = message["method"]
@@ -134,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
         else:
             record("other")
             return self.reply(400)
+        if method == "tools/list" and (root / "echo-old-refresh").exists():
+            result["tools"][0]["description"] = "fixture-refresh-0"
         self.reply(200, {"jsonrpc": "2.0", "id": message["id"], "result": result})
 
 

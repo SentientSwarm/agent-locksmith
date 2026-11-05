@@ -73,7 +73,7 @@ impl Runtime {
         self.check(a).await?;
         self.quarantine(a, &token).await?;
         let mut wire = wire::Wire::new(self, a, token.access.expose_secret(), stage.clone())?;
-        let checked = match identity(&mut wire, p, &token).await {
+        let checked = match identity(&mut wire, p, &token, None).await {
             Err(error) => Err(error),
             Ok(()) => {
                 *stage.lock().expect("stage") = "publication";
@@ -110,12 +110,26 @@ impl Runtime {
         Ok(())
     }
 }
-async fn identity(w: &mut wire::Wire<'_>, p: &config::Profile, token: &token::Token) -> Result<()> {
-    w.initialize().await?;
-    w.enter("list");
+pub(super) async fn identity(
+    w: &mut wire::Wire<'_>,
+    p: &config::Profile,
+    token: &token::Token,
+    old: Option<&token::Token>,
+) -> Result<()> {
+    let initialized = w.initialize().await?;
+    token.screen(&initialized)?;
+    if let Some(old) = old {
+        old.screen(&initialized)?;
+    }
+    w.enter(if old.is_some() { "tools_list" } else { "list" });
     let result = w.rpc("tools/list", json!({})).await?;
     token.screen(&result)?;
-    w.enter("schema");
+    if let Some(old) = old {
+        old.screen(&result)?;
+    }
+    if old.is_none() {
+        w.enter("schema");
+    }
     if result.get("nextCursor").is_some_and(|v| !v.is_null()) {
         return Err(Error("pagination_unsupported"));
     }
@@ -165,8 +179,14 @@ async fn identity(w: &mut wire::Wire<'_>, p: &config::Profile, token: &token::To
             .rpc("tools/call", json!({"name":name,"arguments":args}))
             .await?;
         token.screen(&result)?;
+        if let Some(old) = old {
+            old.screen(&result)?;
+        }
         let value = object(&result)?;
         token.screen(&value)?;
+        if let Some(old) = old {
+            old.screen(&value)?;
+        }
         if value["id"] != expected.as_str() {
             return Err(Error(if stage == "workspace" {
                 "workspace_mismatch"

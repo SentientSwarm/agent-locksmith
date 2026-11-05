@@ -99,7 +99,7 @@ impl Runtime {
     pub async fn account(&self, owner: &str, name: &str, label: &str) -> Result<Value> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sweep(&mut tx).await?;
-        let result = account(&mut tx, owner, name, label).await?;
+        let result = self.account_view(&mut tx, owner, name, label).await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -112,7 +112,7 @@ impl Runtime {
     ) -> Result<Value> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sweep(&mut tx).await?;
-        let current = account(&mut tx, owner, name, label).await?;
+        let current = self.account_view(&mut tx, owner, name, label).await?;
         if current["revision"].as_str() != Some(expected) {
             return Err(Error("source_conflict"));
         }
@@ -290,7 +290,7 @@ async fn owned_attempt(
         .await?
         .ok_or(Error("not_found"))
 }
-async fn registration(
+pub(super) async fn registration(
     c: &mut SqliteConnection,
     name: &str,
     profile: Option<&config::Profile>,
@@ -339,48 +339,4 @@ async fn current(
         return Err(Error("source_conflict"));
     }
     Ok(())
-}
-async fn account(c: &mut SqliteConnection, owner: &str, name: &str, label: &str) -> Result<Value> {
-    if !identifier(name) || !identifier(label) {
-        return Err(Error("invalid_request"));
-    }
-    let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,access_token_expires_at,scope_echoed FROM oauth_sessions WHERE name=? AND session_label=?")
-        .bind(name).bind(label).fetch_optional(&mut *c).await?;
-    if let Some(row) = row {
-        if row.get::<&str, _>("kind") != "controlled_linear_v1"
-            || row.get::<Option<&str>, _>("owner_id") != Some(owner)
-        {
-            return Err(Error("not_found"));
-        }
-        // Durable custody can outlive its registration. Only its owner may
-        // inspect/disconnect it, and only genuine absence permits this branch.
-        let (instance, revision) = match registration(c, name, None).await {
-            Ok((instance, revision)) => (Some(instance), Some(revision)),
-            Err(Error("not_found")) => (None, None),
-            Err(error) => return Err(error),
-        };
-        let generation: i64 = row.get("incarnation");
-        let rev = digest(
-            serde_json::to_string(&json!([instance, revision, label, generation]))
-                .unwrap()
-                .as_bytes(),
-        );
-        return Ok(
-            json!({"state":"connected_unbound","kind":"controlled_linear_v1","profile":row.get::<String,_>("profile_id"),"account_generation":generation,"revision":rev,
-            "config_revision":revision,"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":["read"],"granted_scope":if row.get::<bool,_>("scope_echoed") {Some("read")} else {None}}),
-        );
-    }
-    let (instance, revision) = registration(c, name, None).await?;
-    let active = sqlx::query("SELECT id,owner_id FROM oauth_consent_attempts WHERE name=? AND session_label=? AND state IN ('pending','exchanging')")
-        .bind(name).bind(label).fetch_optional(c).await?;
-    if active
-        .as_ref()
-        .is_some_and(|a| a.get::<&str, _>("owner_id") != owner)
-    {
-        return Err(Error("not_found"));
-    }
-    let id = active.as_ref().map(|a| a.get::<&str, _>("id"));
-    Ok(
-        json!({"state":"absent","config_revision":revision,"account_generation":null,"revision":digest(serde_json::to_string(&json!([instance,revision,label,id])).unwrap().as_bytes())}),
-    )
 }

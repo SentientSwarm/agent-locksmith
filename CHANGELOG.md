@@ -12,11 +12,19 @@
 
 ### Changed
 
+- Add manual owner-bound controlled refresh and explicit fresh-consent repair.
+  Migration 0016 commits pending uncertainty before I/O and exact current custody
+  before success, preserving optional expiry/scope and claimed refresh retention.
+  Status/revisions and the [JSON contract](docs/user/operator/oauth-account-response-v1.schema.json)
+  expose pending/reconnect state. Legacy kind barriers remain; no automatic refresh,
+  hosted provider acceptance or agent/native authority. Prior schema-15 binaries
+  refuse upgraded state; restore only a full prior snapshot under recovery rules.
+
 - Add [controlled operator consent](docs/user/operator/oauth-consent.md) with
   public-ID ownership, sealed `connected_unbound` custody, strict twin identity
   checks and revision-checked disconnect. Migration 0015 preserves legacy custody;
-  older binaries refuse the new schema/config. Hosted provider acceptance,
-  native OAuth activation and provider refresh remain outside this increment.
+  older binaries refuse the new schema/config. Hosted provider acceptance and
+  native OAuth activation remain outside this increment.
 
 - Document and exercise [sealed-state recovery](docs/user/operator/sealed-state-recovery.md):
   SQLite-consistent snapshots, separate stored/OAuth key custody, isolated restore

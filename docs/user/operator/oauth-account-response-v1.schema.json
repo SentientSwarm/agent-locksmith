@@ -1,0 +1,352 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:locksmith:controlled-oauth-account-response:v1",
+  "title": "Controlled account status and refresh response v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "connected_unbound",
+            "reconnect_required"
+          ]
+        },
+        "kind": {
+          "const": "controlled_linear_v1"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "account_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "token_expires_at": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity_verified": {
+          "const": true
+        },
+        "requested_scopes": {
+          "const": [
+            "read"
+          ]
+        },
+        "granted_scope": {
+          "enum": [
+            "read",
+            null
+          ]
+        },
+        "token_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "refresh_pending": {
+          "type": "boolean"
+        },
+        "reconnect_required": {
+          "type": "boolean"
+        },
+        "refresh_available": {
+          "type": "boolean"
+        },
+        "refresh_unavailable_reason": {
+          "enum": [
+            null,
+            "refresh_pending",
+            "account_degraded",
+            "registration_unavailable",
+            "profile_conflict",
+            "refresh_missing",
+            "version_exhausted"
+          ]
+        },
+        "refresh": {
+          "$ref": "#/$defs/refresh"
+        }
+      },
+      "required": [
+        "state",
+        "kind",
+        "profile",
+        "account_generation",
+        "revision",
+        "config_revision",
+        "token_expires_at",
+        "identity_verified",
+        "requested_scopes",
+        "granted_scope",
+        "token_version",
+        "refresh_pending",
+        "reconnect_required",
+        "refresh_available",
+        "refresh_unavailable_reason"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "const": "absent"
+        },
+        "config_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "account_generation": {
+          "type": "null"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "config_revision",
+        "account_generation",
+        "revision"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "oauth_consent"
+            },
+            "code": {
+              "enum": [
+                "account_conflict",
+                "attempt_changed",
+                "authorization_denied",
+                "callback_already_started",
+                "callback_bind_failed",
+                "callback_refused",
+                "callback_tls_failed",
+                "capacity",
+                "commit_unknown",
+                "content_unsupported",
+                "custody_failed",
+                "duplicate_tool",
+                "expired",
+                "if_match_required",
+                "initialize_refused",
+                "invalid_profile",
+                "invalid_request",
+                "json_refused",
+                "mcp_event_invalid",
+                "mcp_event_limit",
+                "mcp_protocol_mismatch",
+                "mcp_request_invalid",
+                "mcp_response_invalid",
+                "mcp_response_missing",
+                "mcp_result_not_object",
+                "mcp_stream_ended",
+                "mcp_stream_refused",
+                "not_found",
+                "operation_incomplete",
+                "pagination_unsupported",
+                "profile_conflict",
+                "random_failed",
+                "reconnect_required",
+                "refresh_invalid_grant",
+                "refresh_unavailable",
+                "request_failed",
+                "required_tool_unavailable",
+                "response_id_mismatch",
+                "rpc_error",
+                "schema_unsupported",
+                "sealing_failed",
+                "secret_echo",
+                "server_request_unsupported",
+                "session_changed",
+                "shutting_down",
+                "source_conflict",
+                "structured_content_unsupported",
+                "tls_unavailable",
+                "token_body_incomplete",
+                "token_body_limit",
+                "token_error_response",
+                "token_http_refused",
+                "token_invalid",
+                "token_metadata_mismatch",
+                "tool_error",
+                "tool_invalid",
+                "tool_limit",
+                "unexpected_initialized_response",
+                "user_mismatch",
+                "version_exhausted",
+                "workspace_mismatch"
+              ]
+            },
+            "message": {
+              "enum": [
+                "Refresh operation refused",
+                "Consent operation refused"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
+          ]
+        },
+        "refresh": {
+          "$ref": "#/$defs/refresh"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  ],
+  "$defs": {
+    "refresh": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "enum": [
+            "committed",
+            "refused",
+            "unknown"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "admission",
+            "claim",
+            "token",
+            "initialize",
+            "initialized",
+            "tools_list",
+            "workspace",
+            "user",
+            "commit"
+          ]
+        },
+        "safe_reason": {
+          "enum": [
+            null,
+            "account_conflict",
+            "attempt_changed",
+            "authorization_denied",
+            "callback_already_started",
+            "callback_bind_failed",
+            "callback_refused",
+            "callback_tls_failed",
+            "capacity",
+            "commit_unknown",
+            "content_unsupported",
+            "custody_failed",
+            "duplicate_tool",
+            "expired",
+            "if_match_required",
+            "initialize_refused",
+            "invalid_profile",
+            "invalid_request",
+            "json_refused",
+            "mcp_event_invalid",
+            "mcp_event_limit",
+            "mcp_protocol_mismatch",
+            "mcp_request_invalid",
+            "mcp_response_invalid",
+            "mcp_response_missing",
+            "mcp_result_not_object",
+            "mcp_stream_ended",
+            "mcp_stream_refused",
+            "not_found",
+            "operation_incomplete",
+            "pagination_unsupported",
+            "profile_conflict",
+            "random_failed",
+            "reconnect_required",
+            "refresh_invalid_grant",
+            "refresh_unavailable",
+            "request_failed",
+            "required_tool_unavailable",
+            "response_id_mismatch",
+            "rpc_error",
+            "schema_unsupported",
+            "sealing_failed",
+            "secret_echo",
+            "server_request_unsupported",
+            "session_changed",
+            "shutting_down",
+            "source_conflict",
+            "structured_content_unsupported",
+            "tls_unavailable",
+            "token_body_incomplete",
+            "token_body_limit",
+            "token_error_response",
+            "token_http_refused",
+            "token_invalid",
+            "token_metadata_mismatch",
+            "tool_error",
+            "tool_invalid",
+            "tool_limit",
+            "unexpected_initialized_response",
+            "user_mismatch",
+            "version_exhausted",
+            "workspace_mismatch"
+          ]
+        },
+        "cleanup": {
+          "enum": [
+            "not_required",
+            "attempted_helper_accepted",
+            "attempt_failed",
+            "incomplete"
+          ]
+        },
+        "finalization": {
+          "enum": [
+            "not_started",
+            "pending",
+            "commit_unknown",
+            "committed"
+          ]
+        }
+      },
+      "required": [
+        "outcome",
+        "stage",
+        "safe_reason",
+        "cleanup",
+        "finalization"
+      ]
+    }
+  }
+}

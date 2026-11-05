@@ -278,6 +278,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn oauth_attempt_ids_leading_dash_are_opaque_values() {
+        for command in ["attempt-status", "cancel"] {
+            for expected in ["-fixture_attempt", "--fixture_attempt"] {
+                let parsed = Cli::try_parse_from([
+                    "locksmith",
+                    "oauth",
+                    command,
+                    "fixture",
+                    expected,
+                    "--format",
+                    "json",
+                ])
+                .unwrap_or_else(|e| panic!("{command}: {e}"));
+                let Some(Cmd::Oauth { cmd }) = parsed.cmd else {
+                    panic!("expected oauth command");
+                };
+                let (name, attempt) = match cmd {
+                    oauth::OauthCmd::AttemptStatus { name, attempt }
+                        if command == "attempt-status" =>
+                    {
+                        (name, attempt)
+                    }
+                    oauth::OauthCmd::Cancel { name, attempt } if command == "cancel" => {
+                        (name, attempt)
+                    }
+                    _ => panic!("expected requested attempt command"),
+                };
+                assert_eq!(name, "fixture");
+                assert_eq!(attempt, expected);
+                assert!(matches!(parsed.format, Format::Json));
+            }
+            let help = Cli::try_parse_from(["locksmith", "oauth", command, "--help"]);
+            assert_eq!(
+                help.err().map(|e| e.kind()),
+                Some(clap::error::ErrorKind::DisplayHelp)
+            );
+        }
+    }
+
+    #[test]
+    fn oauth_revision_leading_dash_is_an_opaque_value() {
+        for command in ["refresh", "disconnect"] {
+            let parsed = Cli::try_parse_from([
+                "locksmith",
+                "oauth",
+                command,
+                "fixture",
+                "--if-match",
+                "-M_fixture_revision",
+                "--label",
+                "reader",
+            ]);
+            assert!(parsed.is_ok(), "{command}: {:?}", parsed.err());
+        }
+    }
+
     /// Accepting a leading `-` must not swallow real flags.
     #[test]
     fn hyphen_tolerant_ids_still_honor_flags() {

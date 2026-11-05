@@ -66,11 +66,14 @@ fn configure(f: &Fixture, t: &Twin) -> u16 {
     callback
 }
 async fn start(f: &mut Fixture) {
+    start_binary(f, process::DAEMON).await;
+}
+async fn start_binary(f: &mut Fixture, binary: &str) {
     assert!(f.daemon.is_none());
     // Port 0 in config: each start binds a fresh port, read from the log.
     f.reset_assigned_port();
     let log = std::fs::File::create(f.path().join("daemon.log")).unwrap();
-    let mut c = process::command(process::DAEMON);
+    let mut c = process::command(binary);
     c.arg("--config")
         .arg(f.path().join("config.yaml"))
         .env("LOCKSMITH_OAUTH_SEALING_KEY", KEY)
@@ -254,7 +257,7 @@ pub async fn orphan() {
         status, 200,
         "owned durable account remains inspectable without registration"
     );
-    assert_eq!(orphan["state"], "connected_unbound");
+    assert_eq!(orphan["state"], "reconnect_required");
     assert_eq!(orphan["config_revision"], Value::Null);
     assert_ne!(orphan["revision"], original["revision"]);
     let stale = |revision: &str| {
@@ -648,10 +651,18 @@ pub async fn embedded_worker() {
         return;
     };
     let path = std::path::PathBuf::from(path);
-    let config = agent_locksmith::config::parse_config_str(
+    let mut config = agent_locksmith::config::parse_config_str(
         &std::fs::read_to_string(path.join("config.yaml")).unwrap(),
     )
     .unwrap();
+    let mode = std::env::var("CONTROLLED_REFRESH_OWNER_MODE").unwrap_or_default();
+    if mode == "startup" {
+        // Every listener binds and is configured before any serves, so a
+        // listener can fail only after serving starts: the admin HTTPS
+        // certificate is a FIFO its task blocks on until the test writes an
+        // invalid one, while a refresh is in flight.
+        config.listen.admin_https=Some(serde_json::from_value(json!({"enabled":true,"host":"127.0.0.1","port":0,"cert_path":path.join("startup-cert"),"key_path":path.join("server.key"),"auth_mode":"mtls","mtls":{"ca_bundle_path":path.join("ca.pem")}})).unwrap());
+    }
     let client = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(2))
@@ -660,11 +671,19 @@ pub async fn embedded_worker() {
         )
         .build()
         .unwrap();
-    let coord = agent_locksmith::shutdown::ShutdownCoordinator::new(Duration::from_millis(10));
+    let coord = agent_locksmith::shutdown::ShutdownCoordinator::new(if mode == "normal" {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_millis(10)
+    });
     // The config uses port 0: learn the bound port from the daemon.
     let (bound, addrs) = tokio::sync::oneshot::channel();
     let run = agent_locksmith::daemon::run_reporting(config, coord.clone(), Some(bound));
-    let control = async {
+    let control_path = path.clone();
+    let control_coord = coord.clone();
+    let control = tokio::spawn(async move {
+        let path = control_path;
+        let coord = control_coord;
         let port = addrs.await.expect("bound addresses").agent.port();
         wait_path(&path.join("admin.sock")).await;
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -680,11 +699,20 @@ pub async fn embedded_worker() {
         .await
         .unwrap();
         std::fs::write(path.join("embedded-ready"), "ready").unwrap();
-        wait_path(&path.join("shutdown")).await;
-        coord.trigger();
-    };
-    let (result, ()) = tokio::join!(run, control);
-    result.unwrap();
+        // In startup mode the failing listener stops the daemon itself.
+        let requested = path.join("shutdown");
+        tokio::select! {
+            _ = wait_path(&requested) => coord.trigger(),
+            _ = coord.shutdown_signal() => {}
+        }
+    });
+    let (result, observed) = tokio::join!(run, control);
+    observed.unwrap();
+    if mode == "startup" {
+        assert!(result.is_err());
+    } else {
+        result.unwrap();
+    }
     std::fs::write(path.join("returned"), "returned").unwrap();
     wait_path(&path.join("finish")).await;
 }
@@ -718,3 +746,6 @@ pub async fn callback_bind_failure() {
     t.stop();
     println!("held callback port fails startup before any listener serves");
 }
+
+#[path = "refresh_process.rs"]
+pub mod refresh;

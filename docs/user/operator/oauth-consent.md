@@ -1,7 +1,7 @@
 # Controlled operator consent
 
-The optional `controlled-linear-v1` profile lets an authenticated operator create
-and disconnect sealed, durable custody through the shipping CLI and daemon. It
+The optional `controlled-linear-v1` profile lets an authenticated operator create,
+renew and disconnect sealed, durable custody through the shipping CLI and daemon. It
 supports a **local HTTPS twin only**. `connected_unbound` means that twin returned
 the configured workspace and user IDs. It does not establish hosted Linear or
 Slack support, a usable read grant, native OAuth activation, or agent access.
@@ -95,7 +95,10 @@ and `finalization`. It never returns the URL, state, code, verifier or tokens.
 A code is claimed once before exchange. Timeout or lost delivery is not permission
 to replay it; poll and account-status reconcile the durable outcome.
 
-Account status returns `connected_unbound`, kind `controlled_linear_v1`, profile,
+Pass the returned `attempt_id` unchanged to `attempt-status` and `cancel`.
+IDs beginning with `-` are accepted directly by both commands.
+
+Account status returns `connected_unbound` or `reconnect_required`, kind `controlled_linear_v1`, profile,
 account generation, opaque revision, current `config_revision`, nullable
 `token_expires_at`, `requested_scopes: [read]`, nullable `granted_scope`, and
 `identity_verified: true`. The identity statement refers only to the twin.
@@ -121,12 +124,87 @@ attempt expiry, eviction and restart. Completed graceful-shutdown cleanup marks
 unfinished attempts `failed` with `safe_reason: daemon_stopped`. At startup, any
 remaining `pending` or `exchanging` attempts become `expired` with
 `safe_reason: daemon_restarted`, including work left by an abrupt stop. Neither
-path resumes provider work. No provider refresh is implemented for this kind.
+path resumes provider work. Renewal is manual through the operation below; there is no background refresh for this kind.
+
+## Renew custody or reconnect
+
+Use the current account-status `revision` for one explicit renewal:
+
+```sh
+locksmith --format json oauth account-status twin --label reader
+locksmith --format json oauth refresh twin --label reader --if-match REVISION
+```
+
+The API is POST `/admin/operator/tools/twin/oauth/accounts/reader/refresh`, with
+`If-Match: REVISION` and an **empty body**. Missing revision is 428, stale revision
+is 409, and nonempty bodies refuse with 400. Wrong owner/kind/missing account is 404.
+The CLI does not open a browser or change agent authority. Repeated use of an old
+revision does not send another token request.
+
+Status adds `token_version`, `refresh_pending`, `reconnect_required`,
+`refresh_available` and nullable `refresh_unavailable_reason`. Reasons in order
+are `refresh_pending`, `account_degraded`, `registration_unavailable`,
+`profile_conflict`, `refresh_missing`, `version_exhausted`. Metadata eligibility
+is not a promise that the key can decrypt or that the provider accepts a token.
+Status neither decrypts nor performs network I/O. The state is
+`reconnect_required` for pending/degraded custody, missing/incompatible current
+registration/profile, exhausted version, or known-expired custody without a
+refresh token. Otherwise it remains `connected_unbound`. Missing refresh alone
+with unknown/unexpired access does not prove invalid access, but manual renewal
+is unavailable. `identity_verified` describes only the last committed twin pair.
+
+A durable pending marker and version increment commit before the single token
+POST. The request uses the configured client/resource and `scope=read`. No retry
+or remote fallback occurs. A complete verified pair commits atomically, advances
+the version again and retains the account generation. Omitted rotated refresh
+preserves **only the exact claimed prior refresh token** under this controlled
+profile rule. Omitted expiry becomes null, never the prior deadline or a default;
+omitted scope becomes unobserved/null even if the previous response echoed read.
+Present scope must equal read; optional resource/client_id/issuer/iss must match
+the configured values exactly. Presence is not additional identity evidence.
+Null token fields refuse. HTTP 200 bodies containing error/error_description/
+error_uri refuse even alongside otherwise valid credentials. Both identity
+schemas and both stored/configured IDs must match before publication; old and new
+known credential strings are screened from semantic identity responses.
+
+Any uncertain postclaim result keeps pending custody unavailable across restart.
+A complete HTTP 400 `invalid_grant` body without token-success fields is reported
+as `refresh_invalid_grant`; it does not prove global revocation. Malformed,
+partial, mixed or hidden transport responses cannot justify replay. Each call
+has a 40-second deadline, including DB waits and cleanup. The whole future is owned
+through normal/forced shutdown and a listener failing after serving starts,
+before state-lock release. Cancellation cannot undo a submitted SQL COMMIT or remote effect.
+
+The immediate response adds `refresh` with `outcome` (`committed`, `refused`,
+`unknown`), `stage`, nullable `safe_reason`, `cleanup` and `finalization`.
+`unknown` conservatively denotes postclaim uncertainty even for a rejected
+response; finalization distinguishes `pending`, `commit_unknown` and `committed`.
+Preclaim refusals use `not_started`. Checked committed custody survives cleanup
+failure. Outer auth/capacity/shutdown/timeouts can return a generic static error
+without this diagnostic; lost delivery requires status reconciliation. The
+[versioned JSON response contract](oauth-account-response-v1.schema.json) describes
+account-status and refresh bodies; it is separate from attempt-status.
+
+After pending/degraded uncertainty, read a fresh status revision, disconnect, then
+use the existing connect flow with fresh consent. Do not replay the old refresh,
+clear a pending flag, restore a previous revision or bootstrap over this kind.
+Disconnect can finish while a response is held; late completion cannot resurrect
+a retired incarnation. Original attempt cancel/expiry/eviction does not erase a
+renewed account. New consent creates new custody, never restores grants.
+
+Accounts created before this increment have no original registration instance
+record. This bounded policy deliberately uses a **fresh current match**, not
+invented provenance: same-profile deletion/recreation before fresh status can be
+accepted. Registration ABA or a change after captured status/claim refuses; a
+changed profile requires disconnect and fresh consent. Profiles remain
+startup-only. Owner-readable orphan cleanup remains available with fresh status.
+This does not implement full hosted/native connection invalidation.
 
 ## Identity and isolation boundaries
 
-After token exchange, the daemon seals quarantine and initializes MCP 2025-11-25,
-then lists tools and calls only `get_workspace({})` and `get_user({"query":"me"})`.
+For initial consent, the daemon seals quarantine after token exchange. Refresh
+holds the returned candidate only in memory until verification and commit. Both
+paths initialize MCP 2025-11-25, then list tools and call only `get_workspace({})` and `get_user({"query":"me"})`.
 Both identity input schemas must admit those exact arguments before either call.
 They use the [finite schema grammar](native-tool-review.md), including required
 fields, string length, `const` and `enum`, with at most 128 nodes and depth 8.
@@ -143,7 +221,7 @@ strings or keys refuse. Only a verified identity permits atomic account commit.
 
 Legacy `oauth list` hides controlled rows. Legacy status/revoke/bootstrap refuse
 those rows with `oauth_kind_unsupported`; use the new owner-bound commands.
-Legacy proxy and every refresh path refuse this kind before token use, including
+Legacy proxy and legacy refresh paths refuse this kind before token use, including
 when an agent previously selected the absent label. Native OAuth and definition
 activation remain unsupported. Identity calls are internal verification traffic,
 not useful agent dispatch. Existing legacy accounts retain their interfaces.
@@ -167,6 +245,11 @@ and at most 256 tools; raw MCP bodies are 512 KiB, JSON work 32768 units, SSE 12
 Terminal secrets are erased immediately; terminal records expire after 24 hours or
 are evicted oldest-first for capacity. Reducing a page size cannot make unsupported
 schema/result shapes valid.
+
+Migration 0016 permits controlled pending markers while preserving all existing
+sealed/nullable metadata, triggers and highest-deleted/all-empty sequence history.
+A schema-15 binary refuses the migrated database; downgrade requires a full
+prior snapshot and matching keys, never editing migration history or pending flags.
 
 Take the [consistent sealed-state backup](sealed-state-recovery.md) before
 upgrade. Migration 0015 preserves legacy sealed bytes, refresh markers, versions

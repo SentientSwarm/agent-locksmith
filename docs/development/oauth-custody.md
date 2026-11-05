@@ -147,4 +147,7 @@ owner-bound attempt CAS governs first publication and absent-account disconnect.
 It reuses the AGENT-205 future owner and adds a joined callback-only TLS listener.
 That listener binds after the other listeners and before any of them serves, and
 stopping before shutdown stops the daemon like any other listener.
-No hosted identity, useful read, provider refresh or native OAuth claim follows.
+No hosted identity, useful read or native OAuth claim follows. Controlled manual
+refresh uses the separate owner-bound path in the [consent ADR](adr-operator-consent.md),
+with 0016 pending/version CAS, current-match inherited custody and explicit repair.
+Legacy kind filters and their background/inline/bootstrap semantics stay unchanged.
