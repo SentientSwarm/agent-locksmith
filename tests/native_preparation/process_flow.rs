@@ -113,7 +113,7 @@ fn replace(f: &Fixture, id: &str, s: &Value, tools: Value) {
         "--file",
         &file,
     ]);
-    assert_eq!(out["callable"], false);
+    assert_eq!(out["callable"], !tools.as_array().unwrap().is_empty());
 }
 fn ingest(f: &Fixture, id: &str) {
     let mut cmd = f.command(&[
@@ -148,7 +148,7 @@ async fn deny(f: &Fixture, token: &str) {
     .text()
     .await
     .unwrap();
-    assert!(result.contains("\"tools\":[]"));
-    let result=wire::post(f,token,Some(&session),json!({"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"read_record","arguments":{}}})).await.text().await.unwrap();
+    assert!(result.contains("\"name\":\"read_record\""));
+    let result=wire::post(f,token,Some(&session),json!({"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"unapproved_tool","arguments":{}}})).await.text().await.unwrap();
     assert!(result.contains("tool_not_approved"));
 }

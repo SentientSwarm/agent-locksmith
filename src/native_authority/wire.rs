@@ -1,4 +1,4 @@
-//! A finite operator observation through the accepted bounded SDK client hook.
+//! Finite observation and admitted calls through the accepted bounded client hook.
 pub use super::wire_format::validate;
 use super::wire_format::{response, validate_inner};
 use super::{Error, Result, contract};
@@ -22,7 +22,7 @@ pub struct Connection<'a> {
     pub session: Option<Arc<str>>,
 }
 impl Connection<'_> {
-    pub async fn observe(&mut self) -> Result<Value> {
+    pub async fn initialize(&mut self) -> Result<()> {
         self.rpc(
             1,
             "initialize",
@@ -37,7 +37,15 @@ impl Connection<'_> {
         if !matches!(reply, Reply::Accepted) {
             return Err(Error("upstream_notification"));
         }
+        Ok(())
+    }
+    pub async fn observe(&mut self) -> Result<Value> {
+        self.initialize().await?;
         self.pages().await
+    }
+    pub async fn call(&mut self, name: &str, arguments: &Value) -> Result<Value> {
+        self.rpc(2, "tools/call", json!({"name":name,"arguments":arguments}))
+            .await
     }
     async fn pages(&mut self) -> Result<Value> {
         let mut cursor = None;
@@ -71,7 +79,11 @@ impl Connection<'_> {
         .map_err(|_| Error("request_invalid"))?;
         let reply = self.send(message).await?;
         let (value, session) = response(reply).await?;
-        validate_inner(&value)?;
+        if method == "tools/call" {
+            super::call_result::envelope(&value).map_err(|_| Error("upstream_result"))?;
+        } else {
+            validate_inner(&value)?;
+        }
         if value["id"] != id
             || (method == "initialize" && value["result"].get("protocolVersion").is_none())
             || (method == "tools/list" && value["result"].get("tools").is_none())

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Own native preparation request bodies before buffering through daemon shutdown,
-  retaining independent body and operation budgets; useful tool calls remain denied.
+  retaining independent body and operation budgets.
 - Fail daemon startup immediately when the admin socket or admin HTTPS port
   cannot be bound, and stop the daemon with an error-level log when any listener
   stops before shutdown. Previously the daemon kept serving agents without its
@@ -43,11 +43,43 @@
   their behavior.
 
 
+### Fixed native context and diagnosis
+
+- Review typed nonsecret fixed top-level values, deliberately grant the exact
+  contract, and expose a truthful callable schema that omits protected fields.
+  Reject any caller override, inject once, validate merged limits and screen the
+  current selected secret before persistence or upstream I/O. Empty context keeps
+  existing bytes/digests. See [operator guidance](docs/user/operator/native-context.md).
+- Refuse a combined schema/context contract that exceeds the grant reader's
+  JSON budget before saving it; keep existing reviews and grants unchanged.
+- Add safe phase/reason/correlation diagnostics, current-state repair hints and
+  observable mirror failure. Missing outcomes remain unknown; checked results
+  survive later cleanup/diagnostic failure when locally available. Async waits
+  are bounded; synchronous filesystem calls are not a hard50ms guarantee.
+- Keep schema14. Accepted pre-context B refuses whole context-bearing mixed
+  inventories; re-upgrade preserves reviews/revocation and needs fresh observation.
+  Planned3.0.0 is unchanged. Bounded207 local acceptance and full207/208/provider
+  and release gates remain separate; [checks and limits](docs/development/native-protected-context.md).
+
+### Native reviewed dispatch
+
+- Enable manual native None/live sealed-bearer tools through current account,
+  observation, reviewed contract and finite grant intersection. A first list
+  pins exact contracts within its original session scope; empty pins cannot
+  expand. Every call validates arguments
+  and commits a safe admission record before one upstream submission.
+- Bound supported text/structured results, enforce known-token screening and
+  preserve uncertain outcomes without retry. Re-observe after60s or restart.
+  Stage B adds no migration; schema14 downgrade retains state but loses positive
+  dispatch. See [agent workflow](docs/user/agent-integration/native-mcp.md) and
+  [implementation/verification](docs/development/native-dispatch.md). Full206,
+  provider/compact and release gates remain open; bounded fixed context is above.
+
 ### Native tool preparation
 
 - Add operator-only observe/inspect/review/finite grant replacement for manual
-  native None and sealed-bearer accounts, with matching strict CLI/API. Prepared
-  entries never enable agent calls: empty lists and denial remain. See the
+  native None and sealed-bearer accounts, with matching strict CLI/API. Stage A
+  initially retained empty lists and denial; stage B above adds reviewed calls. See the
   [workflow, limits and upgrade](docs/user/operator/native-tool-review.md).
 - Use the bounded outbound adapter with duplicate-safe raw response checks,
   approved-address pinning, verified TLS, finite complete observations and
@@ -57,7 +89,7 @@
 - Stored bearer stdin ingestion explicitly replaces header shape and commits
   sealed storage plus selection together; deliberate sharing requires a live
   reference. This is AGENT-206A only, with no version bump/full206/provider or
-  release acceptance. Useful dispatch remains stage B.
+  release acceptance. Useful dispatch is described in stage B above.
 
 ### OAuth refresh recovery
 

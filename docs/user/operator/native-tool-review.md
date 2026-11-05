@@ -1,9 +1,10 @@
-# Prepare native tool contracts
+# Review and grant native tools
 
-Operators can observe, inspect, review and prepare a finite set of MCP tools for
-an existing agent's explicit account. **Prepared grants are not callable.**
-Agents still see an empty `tools/list` and `tool_not_approved` on every call.
-This is AGENT-206 stage A; useful dispatch is stage B.
+Operators can observe, inspect, review and grant a finite set of MCP tools for
+an existing agent's explicit account. Agents can list and call only that current
+intersection. The first successful list pins its names/contracts for the session,
+including an empty list. New contracts need a new session. See the
+[agent workflow](../agent-integration/native-mcp.md).
 
 Start with [native connection/agent setup](native-mcp.md) and the existing
 operator credential/admin socket. Only enabled, fully activated **manual**
@@ -39,7 +40,7 @@ locksmith agent set-credential SECOND_AGENT_ID sample --stored-bearer-ref CS_REF
 
 That reference must be live. Rotating one selection preserves a handle still
 selected elsewhere. Env, op, OAuth and stored-header accounts are unsupported
-for observation in A; they remain available on their existing HTTP paths.
+for native observation and calls; they remain available on their existing HTTP paths.
 
 Upstreams must use verified HTTPS. Optional restart-only extra trust roots:
 
@@ -114,14 +115,15 @@ contract for inspection. `prepared_only: true` and `callable: false` do not gran
 agent execution authority.
 
 Effect is your declaration: `read`, `write` or `mixed`. Provider annotations
-cannot set it. Context is empty and retry is always `never`. Reviews are
+cannot set it. Optional fixed nonsecret `context` is covered in the
+[context and diagnosis guide](native-context.md); retry is always `never`. Reviews are
 immutable content-addressed records; an exact repeat returns the same digest.
 
-## Prepare or revoke finite grants
+## Grant or revoke finite tools
 
 Continue with [finite grant preparation and revocation](native-tool-grants.md).
 Use the review response's `contract_digest` and current grant-show `source`,
-`observation.generation` and `grant_revision`; preparation remains non-callable.
+`observation.generation` and `grant_revision`.
 
 ## API, limits and upgrade
 
@@ -130,7 +132,7 @@ The same authenticated operator API works over UDS and admin HTTPS:
 | Method | Path below `/admin/operator` | Body |
 |---|---|---|
 | GET / POST | `/tools/{connection}/mcp/observations/{agent_id}` | POST: `source`, `generation` |
-| PUT | `/tools/{connection}/mcp/reviews/{agent_id}` | `source`, `generation`, `name`, `observed_digest`, `effect` |
+| PUT | `/tools/{connection}/mcp/reviews/{agent_id}` | `source`, `generation`, `name`, `observed_digest`, `effect`, optional `context` |
 | GET / PUT | `/agents/{agent_id}/mcp-grants/{connection}` | PUT: `source`, `generation`, `revision`, `tools` |
 
 Stored ingestion uses PUT `/agents/{agent_id}/credentials/{connection}/credential`
@@ -157,8 +159,10 @@ Migration0014 starts with zero tool preparation and preserves existing accounts,
 HTTP authority, definitions and OAuth recovery state. Follow the
 [consistent backup/rollback procedure](../changes/native-mcp.md) before upgrade.
 Schema13 binaries refuse upgraded state before listeners. Restart retains
-historical observations/reviews/grants but requires fresh observation. This is
-additive planned3.0.0 work with no version bump, publication or full206 acceptance.
+historical observations/reviews/grants but requires fresh observation. Stage B adds no migration: schema14 A binaries can still open the database,
+but cannot execute these calls. Back up before changing binaries; either restart
+invalidates observation freshness. This is additive planned3.0.0 work with no
+version bump, publication or full206/provider acceptance.
 
 ## Staged API mapping
 
@@ -173,4 +177,4 @@ the strict body, rather than `/reviews/{tool}`. Optimistic concurrency uses the
 required body `source` and observation `generation`, plus grant-set `revision`
 for replacement. HTTP `If-Match` is not the interface. Echo exact returned
 preconditions; an absent/null field is not a wildcard or alternate selector.
-This staged route shape does not add OAuth/definition activation or useful calls.
+This staged route shape does not add OAuth or definition activation.

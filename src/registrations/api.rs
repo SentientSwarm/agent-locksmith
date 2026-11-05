@@ -71,7 +71,7 @@ pub async fn list_public(
             });
             if r.registration.protocol == super::Protocol::McpStreamableHttp {
                 value["protocol_version"] = super::protocol::VERSION.into();
-                value["tool_authority"] = "none".into();
+                value["tool_authority"] = "reviewed_per_agent".into();
             }
             if let Ok(Some(service)) = super::http_service::from_metadata(&r.registration.metadata)
             {

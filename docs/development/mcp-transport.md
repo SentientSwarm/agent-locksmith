@@ -1,11 +1,12 @@
 # Bounded native MCP transport prerequisite
 
-AGENT-198 adds [locksmith-mcp-transport](../../crates/mcp-transport/README.md),
-a reusable adapter for rmcp's public `StreamableHttpClient` hook. It is not
-wired into either Locksmith binary. AGENT-202 owns native daemon integration;
-[AGENT-199 sessions](mcp-sessions.md) own session allocation/recovery. Existing HTTP/OAuth behavior,
-configuration and the root 2.8.0 version are unchanged. No deployment or
-migration is needed for this isolated library.
+AGENT-198 introduced [locksmith-mcp-transport](../../crates/mcp-transport/README.md),
+a reusable adapter for rmcp's public `StreamableHttpClient` hook. The daemon now
+consumes it for operator observation and [reviewed dispatch](native-dispatch.md).
+AGENT-202 supplies native daemon integration; [AGENT-199 sessions](mcp-sessions.md)
+own session allocation/recovery. Existing HTTP/OAuth behavior and the root
+2.8.0 version remain unchanged. The original isolated library needed no migration;
+current native setup and upgrade steps are in the [operator guide](../user/operator/native-mcp.md).
 
 The design starts from accepted HTTP/OAuth `10a0d8b` and the S1 counterexample
 at research `087ea143d9604a9450949666ed6390d55732b931`:
@@ -162,6 +163,7 @@ Rust/Python/process checks and Linux CI remain pending at source preparation.
 CI uses the existing root target directory for both independent manifests.
 
 AGENT-202 now consumes the bounded session manager in the
-[native daemon lifecycle](native-mcp.md). The outbound client remains a separate
-proof here: no N1 daemon operation resolves upstream credentials or invokes it.
-Later observation/dispatch must use this hook and repeat receiving-effect tests.
+[native daemon lifecycle](native-mcp.md). The original N1 outbound client was a separate
+proof. [Operator observation](native-tool-review.md) and
+[reviewed dispatch](native-dispatch.md) now consume this hook with selected
+credentials and repeat receiving-effect tests; hosted provider gates remain open.

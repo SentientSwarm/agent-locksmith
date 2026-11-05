@@ -25,18 +25,18 @@ pub struct Write {
 }
 #[derive(Subcommand)]
 pub enum ToolCmd {
-    /// Read persisted observation, freshness and source; no network request.
+    /// Read persisted observation, freshness, safe readiness and source; no network.
     Show(Selection),
     /// Initialize/list only and publish one bounded complete observation.
     Observe(Write),
-    /// Record an immutable operator-reviewed contract and declared effect.
+    /// Review an immutable contract/effect with optional fixed nonsecret context.
     Review(Write),
 }
 #[derive(Subcommand)]
 pub enum GrantsCmd {
-    /// Inspect finite prepared entries and their CAS revision.
+    /// Inspect reviewed grants, current callability and CAS revision.
     Show(Selection),
-    /// Atomically replace prepared entries; an empty tools array revokes.
+    /// Atomically replace reviewed grants; an empty tools array revokes.
     Replace(Write),
 }
 pub async fn tool(client: &CliClient, format: Format, command: ToolCmd) -> Result<(), CliError> {

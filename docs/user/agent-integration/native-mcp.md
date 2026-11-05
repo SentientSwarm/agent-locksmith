@@ -3,14 +3,16 @@
 Use your own Locksmith agent identity over the operator-provided verified TLS
 listener. Discover connections with authenticated `GET /tools`; a native entry
 has `type: "mcp"`, a path such as `/mcp/sample`,
-`protocol_version: "2025-11-25"` and `tool_authority: "none"`.
+`protocol_version: "2025-11-25"` and `tool_authority: "reviewed_per_agent"`.
 It is not an HTTP `/api` connection. No provider credentials are supplied to a
 consumer. Activation/account selection are configuration facts, not credential
 readiness or permission to execute a tool.
 
-This stage supports stateful Streamable HTTP lifecycle only: initialize, ping,
-empty tools/list, explicit tools/call denial, cancellation, GET and DELETE.
-No tool is callable. Resources, prompts, sampling, elicitation, roots, tasks,
+Manual None and sealed-bearer selections support finite reviewed tools. Each
+call requires the current selected account, current reviewed grant and a fresh
+operator observation (less than60 seconds old, from this daemon run). The list
+is empty when no tools are granted; stale observations require operator repair.
+Resources, prompts, sampling, elicitation, roots, tasks, dynamic context,
 compact, stateless protocols, legacy SSE and stdio are unsupported.
 
 ## Request sequence
@@ -44,9 +46,16 @@ It returns 202 with no body. Then:
 ```
 
 Each line is a separate POST, not a JSON batch. Requests return JSON or SSE
-JSON-RPC responses. The list is empty. The call returns error -32050 with
-`data.code: "tool_not_approved"`; it makes no upstream request. Do not infer
-tool approval from the connection grant or account selection.
+JSON-RPC responses. The list contains only effective reviewed tools and their complete callable schemas. The
+example unapproved call returns -32050 with `data.code: "tool_not_approved"`.
+Calling before a successful list returns `tools_list_required`. Neither sends a
+tool upstream. Do not infer tool approval from connection/account selection.
+
+The first successful list pins the returned names and exact contracts, even if
+empty. Later lists can shrink but cannot add names or changed contracts. A new
+grant needs a new session. Existing pins still require current grants on every
+call; revocation/drift does not become permission when inventory returns.
+Deliberate regrant of an identical previously pinned contract can be effective.
 
 Use unique safe-integer IDs (absolute value at most 9007199254740991) or nonempty
 strings of at most 64 UTF-8 bytes without control characters. Initialization,
@@ -55,7 +64,7 @@ outstanding and completed request IDs share a bounded 256-ID ledger; reuse is
 Valid request params may include `_meta: {"progressToken": ID}` or empty `_meta`
 for standard SDK compatibility. Progress is not emitted. Other metadata, task
 extensions, arbitrary envelope fields and negotiated client capabilities reject.
-No cursor is supported by the empty list.
+The finite list has no cursor.
 
 `notifications/cancelled` accepts `params: {"requestId": ID}` and optional bounded
 `reason`. It returns 202 and only addresses that authenticated session. DELETE
@@ -84,7 +93,6 @@ import ssl
 import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.exceptions import MCPError
 
 async def main() -> None:
     ca = ssl.create_default_context(cafile=os.environ["LOCKSMITH_CA_FILE"])
@@ -93,20 +101,23 @@ async def main() -> None:
         async with streamable_http_client(os.environ["LOCKSMITH_NATIVE_URL"], http_client=http) as streams:
             async with ClientSession(*streams, read_timeout_seconds=5) as session:
                 await session.initialize()
-                assert (await session.list_tools()).tools == []
-                await session.send_ping()
-                try:
-                    await session.call_tool("unapproved", {})
-                except MCPError as error:
-                    assert error.code == -32050
-                    assert error.data["code"] == "tool_not_approved"
-                else:
-                    raise AssertionError("unexpected tool authority")
+                tools = (await session.list_tools()).tools
+                for tool in tools:
+                    print(tool.name, tool.input_schema)
+                name = os.environ.get("LOCKSMITH_TOOL_NAME")
+                if name is not None:
+                    import json
+                    assert any(tool.name == name for tool in tools)
+                    # Construct these arguments from the returned complete schema.
+                    arguments = json.loads(os.environ["LOCKSMITH_TOOL_ARGUMENTS"])
+                    result = await session.call_tool(name, arguments)
+                    print(result)
 
 asyncio.run(main())
 ```
 
-This example makes no useful provider call. The Rust client pin is rmcp3.7.0
+Set the optional name/arguments only for a deliberately selected tool; do not
+automatically replay exceptions or ambiguous results. The Rust client pin is rmcp3.7.0
 with protocol2025-11-25. Consumers should disable expired-session call replay
 and GET renewal; the server refuses them. The accepted bounded Rust adapter
 provides this policy; see [its contract](../../development/mcp-transport.md).
@@ -129,4 +140,39 @@ security headers, batches, null/float/object IDs and duplicate JSON members
 reject. Native budgets and compatibility costs are listed in
 [finite limits](../../development/native-mcp.md). Use the
 [operator guide](../operator/native-mcp.md) to diagnose configuration; widening
-grants cannot create tool authority in this stage.
+connection ACLs alone cannot create tool authority.
+
+## Arguments, results and uncertain effects
+
+Read the full input schema before constructing object arguments; omitted arguments
+mean `{}`. Objects are closed, required fields apply, and nested types, array and
+Unicode-scalar string lengths, enum/const and numeric bounds are enforced.
+Integer fields require a parsed JSON integer (`1.0` is not an integer here).
+Operators can protect fixed top-level inputs. Their properties and required
+entries are absent from the callable schema; never send those keys, even with
+equal or null values (`protected_argument`). Locksmith injects the reviewed
+values and validates the complete upstream input. All-protected tools take `{}`.
+Arguments after injection are at most32KiB, depth16 and4096 values. Unsupported schema features
+never enter a reviewed manifest; no references are fetched.
+
+Results support at most16 text blocks, each16KiB, plus optional object
+`structuredContent` and boolean `isError`, within32KiB total. Successful output
+schemas require matching structured content. Valid `isError: true` remains a
+tool error. Resource links, embedded resources, images, audio, tasks and extra
+metadata are refused. Known selected-token echoes are withheld; no general DLP
+claim is made.
+
+One original ingress deadline spans auth/body, preparation, final database
+admission, call and cleanup (at most10s). Admission must commit before one tool
+submission. An invalid/oversized/secret-bearing result after submission returns
+`tool_outcome_unknown`: a remote effect may already exist. Timeout, cancellation,
+disconnect and missing outcomes have the same uncertainty. No automatic retry
+or fallback occurs. A deliberate new call can duplicate that effect. The
+operator can correlate safe `mcp_admitted`/`mcp_outcome` audit records using their
+server-generated operation/admission ID; arguments, RPC/session IDs and provider payloads
+are not audit fields.
+
+See [safe phases and operator repair](../operator/native-context.md) for denied,
+uncertain-COMMIT and unavailable-diagnostic evidence. A checked result survives
+later cleanup/diagnostic failure while the handler remains owned; response
+delivery after disconnect is unconfirmed.

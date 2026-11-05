@@ -18,6 +18,7 @@ pub struct Runtime {
     pub(super) ingress: Semaphore,
     pub(super) stopped: CancellationToken,
     pub(super) contexts: Mutex<Vec<Weak<Context>>>,
+    pub(super) authority: Option<Arc<crate::native_authority::runtime::Runtime>>,
     repo: Option<Arc<RegistrationRepository>>,
     catalog: Arc<ArcSwap<Catalog>>,
 }
@@ -27,7 +28,16 @@ impl Runtime {
         repo: Option<Arc<RegistrationRepository>>,
         catalog: Arc<ArcSwap<Catalog>>,
     ) -> Arc<Self> {
+        Self::with_authority(config, repo, catalog, None)
+    }
+    pub fn with_authority(
+        config: Config,
+        repo: Option<Arc<RegistrationRepository>>,
+        catalog: Arc<ArcSwap<Catalog>>,
+        authority: Option<Arc<crate::native_authority::runtime::Runtime>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            authority,
             pool: Pool::new(config.sessions()).expect("validated session limits"),
             ingress: Semaphore::new(config.ingress),
             stopped: CancellationToken::new(),
@@ -66,7 +76,7 @@ impl Runtime {
         Ok(Scope {
             owner: identity.public_id.clone(),
             connection: name.into(),
-            authority: format!("{}:{}:{}", row.instance, row.revision, row.epoch),
+            authority: super::scope::authority(&row.instance, row.revision, row.epoch),
         })
     }
     pub fn start(

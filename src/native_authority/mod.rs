@@ -1,4 +1,4 @@
-//! Operator preparation of finite native authority. Agent dispatch stays disabled.
+//! Finite reviewed native authority and one committed tool dispatcher.
 pub mod contract;
 mod numbers;
 pub mod schema;
@@ -34,3 +34,17 @@ mod wire_format;
 #[cfg(test)]
 pub(crate) mod body_probe;
 mod body_scope;
+pub mod call_result;
+pub mod effective;
+pub mod values;
+
+pub mod control;
+pub mod dispatch;
+mod dispatch_audit;
+
+pub mod protected;
+
+mod diagnostic_event;
+pub mod diagnostics;
+
+mod readiness;

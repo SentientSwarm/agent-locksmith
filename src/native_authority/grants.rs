@@ -1,6 +1,6 @@
-use super::{Error, Result, contract, source::Current, store};
+use super::{Error, Result, contract, protected, source::Current, store, writes::Review};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sqlx::{Row, SqliteConnection};
 use std::collections::BTreeSet;
 
@@ -33,20 +33,25 @@ pub async fn review(
     c: &mut SqliteConnection,
     current: &Current,
     manifest: &Value,
-    name: &str,
-    expected: &str,
-    effect: &str,
+    input: &Review,
+    secret: Option<&str>,
 ) -> Result<Value> {
+    let name = &input.name;
+    let expected = &input.observed_digest;
     let entry = observed(manifest, name)?;
-    if entry["observed_digest"] != expected {
+    if entry["observed_digest"] != *expected {
         return Err(Error("observation_conflict"));
     }
-    let value = contract::review(&entry["tool"], effect)?;
-    let digest = contract::digest("locksmith-native-contract-v1", &value);
+    let value = protected::create(&entry["tool"], &input.effect, &input.context)?;
+    if let Some(secret) = secret {
+        contract::screen(&value, secret).map_err(|_| Error("context_secret"))?;
+    }
+    let response = protected::response(value)?;
+    let digest = response["contract_digest"].as_str().unwrap();
     sqlx::query("INSERT INTO native_reviews(instance,account_key,name,contract_digest,observed_digest,contract) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING")
-        .bind(&current.source.instance).bind(&current.source.account_key).bind(name).bind(&digest)
-        .bind(expected).bind(value.to_string()).execute(c).await?;
-    Ok(json!({"contract":value,"contract_digest":digest,"prepared_only":true,"callable":false}))
+        .bind(&current.source.instance).bind(&current.source.account_key).bind(name).bind(digest)
+        .bind(expected).bind(response["contract"].to_string()).execute(c).await?;
+    Ok(response)
 }
 pub async fn replace(
     c: &mut SqliteConnection,
@@ -89,10 +94,16 @@ async fn validate(
             return Err(Error("duplicate_tool"));
         }
         let observed = observed(manifest, &entry.name)?;
-        let digest: Option<String> = sqlx::query_scalar("SELECT observed_digest FROM native_reviews WHERE instance=? AND account_key=? AND name=? AND contract_digest=?")
+        let row = sqlx::query("SELECT observed_digest,contract FROM native_reviews WHERE instance=? AND account_key=? AND name=? AND contract_digest=?")
             .bind(&current.source.instance).bind(&current.source.account_key).bind(&entry.name)
-            .bind(&entry.contract_digest).fetch_optional(&mut *c).await?;
-        if digest.as_deref() != observed["observed_digest"].as_str() {
+            .bind(&entry.contract_digest).fetch_optional(&mut *c).await?.ok_or(Error("review_required"))?;
+        let value = crate::native::json::parse(row.get::<&str, _>("contract").as_bytes())
+            .map_err(|_| Error("review_invalid"))?;
+        protected::load(&value)?;
+        if row.get::<String, _>("observed_digest") != observed["observed_digest"]
+            || value["tool"] != observed["tool"]
+            || contract::digest("locksmith-native-contract-v1", &value) != entry.contract_digest
+        {
             return Err(Error("review_required"));
         }
     }

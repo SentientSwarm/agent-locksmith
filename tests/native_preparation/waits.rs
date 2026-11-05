@@ -63,7 +63,8 @@ async fn process_slots_are_finite_and_all_leases_release_on_close() {
     for _ in 0..8 {
         let r = rt.clone();
         tasks.push(tokio::spawn(async move {
-            r.scoped(std::future::pending()).await
+            r.scoped::<serde_json::Value, _>(std::future::pending())
+                .await
         }));
     }
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
@@ -73,7 +74,9 @@ async fn process_slots_are_finite_and_all_leases_release_on_close() {
     })
     .await
     .unwrap();
-    let ninth = rt.scoped(async { panic!("ninth entered") }).await;
+    let ninth = rt
+        .scoped::<serde_json::Value, _>(async { panic!("ninth entered") })
+        .await;
     assert_eq!(ninth.unwrap_err().0, "observation_capacity");
     rt.owner.close();
     rt.owner.wait().await;

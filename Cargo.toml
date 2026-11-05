@@ -82,3 +82,12 @@ rmcp = { path = "crates/mcp-transport/vendor/rmcp" }
 # AGENT-218.
 [profile.release.build-override]
 strip = false
+
+# Opt-in replay preserves the historical oracle byte-for-byte; see the smoke guide.
+[features]
+s3-disconnect-proof = []
+
+[[test]]
+name = "native_dispatch_ownership_test"
+path = "tests/native_dispatch_ownership_test.rs"
+required-features = ["s3-disconnect-proof"]

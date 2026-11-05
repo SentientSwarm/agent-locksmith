@@ -1,5 +1,6 @@
 use super::{Runtime, error::Failure};
 use crate::auth_v2::AgentIdentity;
+use crate::native_authority::{self as authority, effective::Snapshot};
 use locksmith_mcp_transport::sessions::Scope;
 use std::{
     collections::HashSet,
@@ -15,6 +16,7 @@ pub(super) struct Context {
     pub cancelled: CancellationToken,
     pub ready: AtomicBool,
     ids: Mutex<HashSet<String>>,
+    pub pins: Mutex<crate::native_authority::effective::Pins>,
 }
 impl Context {
     pub fn new(
@@ -32,6 +34,7 @@ impl Context {
             cancelled,
             ready: AtomicBool::new(false),
             ids: Mutex::default(),
+            pins: Mutex::default(),
         }
     }
     pub async fn current(&self) -> Result<(), Failure> {
@@ -49,6 +52,19 @@ impl Context {
             }
         }
     }
+    pub fn list(&self, snapshot: &Snapshot) -> authority::Result<Vec<serde_json::Value>> {
+        let source = &snapshot.current.source;
+        if self.cancelled.is_cancelled()
+            || self.scope.owner != self.identity.public_id
+            || self.scope.connection != self.name
+            || self.scope.authority
+                != super::scope::authority(&source.instance, source.revision, source.agent_epoch)
+        {
+            self.cancelled.cancel();
+            return Err(authority::Error("authority_changed"));
+        }
+        self.pins.lock().unwrap().list(snapshot)
+    }
     pub fn remember(&self, id: &serde_json::Value, max: usize) -> Result<(), Failure> {
         let mut ids = self.ids.lock().unwrap();
         let key = id.to_string();
@@ -62,3 +78,7 @@ impl Context {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod tests;

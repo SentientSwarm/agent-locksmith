@@ -4,6 +4,10 @@ use rmcp::transport::streamable_http_server::session::SessionId;
 use serde_json::Value;
 use std::sync::{Arc, atomic::Ordering};
 
+pub(super) fn authority(instance: &str, revision: i64, epoch: i64) -> String {
+    format!("{instance}:{revision}:{epoch}")
+}
+
 pub(super) fn select(
     runtime: &Runtime,
     candidate: Arc<Context>,

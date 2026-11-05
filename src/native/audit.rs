@@ -27,7 +27,9 @@ pub(super) async fn record(
         agent_public_id: Some(context.identity.public_id.clone()),
         tool: Some(context.name.clone()),
         decision,
-        details: Some(serde_json::json!({"operation":operation,"tool_authority":"none"})),
+        details: Some(
+            serde_json::json!({"operation":operation,"admission":"not_recorded_by_lifecycle"}),
+        ),
         ..Default::default()
     };
     let _ = tokio::time::timeout(Duration::from_millis(50), repo.record(&event)).await;

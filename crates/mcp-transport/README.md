@@ -4,7 +4,9 @@ AGENT-198/199 bounded transport and session library. AGENT-202 consumes the
 session pool in the [native daemon lifecycle](../../docs/development/native-mcp.md);
 AGENT-206A also consumes its pinned outbound client for
 [operator observation](../../docs/user/operator/native-tool-review.md).
-Agent tool dispatch remains disabled; prepared grants do not enable calls.
+AGENT-206B consumes the same outbound client for
+[reviewed native dispatch](../../docs/development/native-dispatch.md) with
+current finite grants for manual None/live StoredBearer accounts.
 See the [design, configuration and diagnostics](../../docs/development/mcp-transport.md).
 The separate library introduced no root version bump. Native migration/routing
 now belong to AGENT-202; existing HTTP selected-account authority is preserved.

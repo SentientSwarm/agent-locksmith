@@ -357,3 +357,10 @@ review, unavailable-source handling, verification and rollback consequences.
 For a runnable local setup see [getting started](getting-started.md). Execute
 the [saved cutover smoke](../development/explicit-account-bindings-smoke.md)
 to verify daemon/CLI setup, selection, clear/repair and offline migration.
+
+## Native fixed context and diagnosis
+
+`tool mcp review CONNECTION --agent AGENT_ID --file PATH` accepts optional fixed
+nonsecret `context` in its strict JSON request. Saving a review grants nothing.
+`tool mcp show` and `agent mcp-grants show` return safe current-state diagnosis
+without network requests. See [review, repair and downgrade limits](operator/native-context.md).

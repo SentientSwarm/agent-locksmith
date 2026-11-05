@@ -370,10 +370,14 @@ async fn run_owned(
         );
     }
 
-    let native = crate::native::Runtime::new(
+    let observation = admin_state
+        .as_ref()
+        .and_then(|s| s.admin.native_authority());
+    let native = crate::native::Runtime::with_authority(
         shared_config.load().mcp.clone(),
         registrations_for_app.clone(),
         catalog_for_app.clone().unwrap_or_default(),
+        observation.clone(),
     );
     let mut native_task = native.start(coord.shutdown_signal());
     let agent_router = match catalog_for_app {
@@ -402,9 +406,6 @@ async fn run_owned(
             registrations_for_app,
         ),
     };
-    let observation = admin_state
-        .as_ref()
-        .and_then(|s| s.admin.native_authority());
     let agent_shutdown = coord.shutdown_signal();
     // Every listener is bound and every fallible check done before any
     // serve task is spawned, so a startup failure leaves nothing serving.
