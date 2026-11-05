@@ -142,11 +142,15 @@ spec = importlib.util.spec_from_file_location(
     "consent_receiver_base",
     pathlib.Path(__file__).parents[1] / "native_preparation" / "receiver.py",
 )
+assert spec is not None and spec.loader is not None
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 server = base.Server(("127.0.0.1", 0), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / "server.pem", root / "server.key")
 server.socket = context.wrap_socket(server.socket, server_side=True)
-(root / "provider-port.json").write_text(json.dumps(server.server_port))
+# Publish atomically: the test polls for this file and must never read it
+# truncated-but-not-yet-written.
+(root / "provider-port.new").write_text(json.dumps(server.server_port))
+(root / "provider-port.new").replace(root / "provider-port.json")
 server.serve_forever()
