@@ -93,7 +93,7 @@ where
 }
 
 async fn run_owned(
-    config: AppConfig,
+    mut config: AppConfig,
     coord: ShutdownCoordinator,
     refresh_owner: crate::oauth::refresh::RefreshOwner,
     bound: Option<oneshot::Sender<BoundAddrs>>,
@@ -132,6 +132,15 @@ async fn run_owned(
         config.listen.host.parse().unwrap_or([127, 0, 0, 1].into()),
         config.listen.port,
     );
+    // Bind the agent port before anything reads `listen.port`, and record
+    // the port actually bound. A configured port 0 must not reach the MCP
+    // self-loop guards (registration API, definitions, seed catalog) as 0,
+    // which would let an upstream point back at this daemon (AGENT-217).
+    let agent_listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| DaemonError::Server(format!("agent listener: {e}")))?;
+    let agent_addr = agent_listener.local_addr()?;
+    config.listen.port = agent_addr.port();
 
     // Wrap config in shared ArcSwap. Both the agent router (via
     // build_app_with_shared_config) and the AdminService observe this
@@ -382,11 +391,9 @@ async fn run_owned(
         .and_then(|s| s.admin.native_authority());
     let agent_shutdown = coord.shutdown_signal();
     let (exits, mut exited) = mpsc::unbounded_channel::<&'static str>();
-    let agent_addr;
     let mut agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
         crate::config::AuthMode::Bearer => {
-            let listener = TcpListener::bind(addr).await?;
-            agent_addr = listener.local_addr()?;
+            let listener = agent_listener;
             if let Some(rt) = &observation {
                 rt.listeners.bound("agent", agent_addr);
             }
@@ -412,8 +419,7 @@ async fn run_owned(
                 )
             })?;
             let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
-            let listener = TcpListener::bind(addr).await?;
-            agent_addr = listener.local_addr()?;
+            let listener = agent_listener;
             if let Some(rt) = &observation {
                 rt.listeners.bound("agent", agent_addr);
             }
