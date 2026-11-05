@@ -225,7 +225,10 @@ async fn deferred_commit_and_exhaustion_preserve_uncertainty() {
         )
         .await
         .unwrap();
-    f.rt.pool.execute("CREATE TRIGGER refresh_deferred AFTER UPDATE ON oauth_sessions WHEN NEW.refresh_pending=0 BEGIN INSERT INTO refresh_child VALUES(1); END").await.unwrap();
+    // A distinct name: a pooled connection can still cache the schema from
+    // before the DROP above, and SQLite checks "already exists" against that
+    // cache at prepare time without reloading it.
+    f.rt.pool.execute("CREATE TRIGGER refresh_deferred_completion AFTER UPDATE ON oauth_sessions WHEN NEW.refresh_pending=0 BEGIN INSERT INTO refresh_child VALUES(1); END").await.unwrap();
     let replacement = token::Token {
         access: "new".into(),
         refresh: Some("new-refresh".into()),
@@ -255,7 +258,7 @@ async fn deferred_commit_and_exhaustion_preserve_uncertainty() {
         pending
     );
     f.rt.pool
-        .execute("DROP TRIGGER refresh_deferred")
+        .execute("DROP TRIGGER refresh_deferred_completion")
         .await
         .unwrap();
     sqlx::query("UPDATE oauth_sessions SET refresh_pending=0, token_version=?")
