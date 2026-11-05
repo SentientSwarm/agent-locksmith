@@ -91,9 +91,15 @@ In-repo per-component engineering docs are at `docs/v2/SPEC.md` (with
 
 ## Common commands
 
+Use the [tested build recipe](docs/development/build-identity.md#build-with-the-tested-recipe).
+Rust 1.94.0 selects the tested compiler, not an MSRV. Optimized builds are
+validated locally on macOS ARM64; other platforms remain unproved. The native
+commands below preserve `target/release` paths.
+
 ```bash
 # Build (release)
-cargo build --release           # binaries: target/release/{locksmithd,locksmith}
+cargo +1.94.0 build --locked --release --bins
+# binaries: target/release/{locksmith,locksmithd}
 
 # Tests + lint (CI runs all three; clippy is -D warnings)
 cargo test --all

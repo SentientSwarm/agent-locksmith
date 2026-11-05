@@ -159,3 +159,23 @@ async fn startup_error_does_not_spawn_refresh() {
 async fn oauth_startup_failure_worker() {
     recovery_embedded::startup_worker().await;
 }
+
+#[path = "explicit_binding_smoke/sealed_key_restore.rs"]
+mod sealed_key_restore;
+#[path = "explicit_binding_smoke/sealed_oauth_restore.rs"]
+mod sealed_oauth_restore;
+#[path = "explicit_binding_smoke/sealed_recovery.rs"]
+mod sealed_recovery;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_independent_keys_and_accounts() {
+    sealed_key_restore::exercise().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_pending_refresh() {
+    sealed_oauth_restore::pending().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_revoked_owner_quarantine() {
+    sealed_oauth_restore::quarantine().await;
+}

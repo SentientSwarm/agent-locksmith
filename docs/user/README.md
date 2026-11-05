@@ -26,6 +26,7 @@ For the production Docker Compose bundle deployment story, see
 |---|---|
 | [getting-started.md](getting-started.md) | Developer first-contact: build, mint operator credential, register agent, explicitly select an account, make a call. |
 | [cli-reference.md](cli-reference.md) | Complete `locksmith` CLI subcommand and flag reference. |
+| [operator/sealed-state-recovery.md](operator/sealed-state-recovery.md) | Consistent snapshots, independent key recovery and quarantined restore. |
 | [operator/integration-definitions.md](operator/integration-definitions.md) | Strict offline definitions and disabled exact-revision native instances. |
 | [operator/native-mcp.md](operator/native-mcp.md) | Native lifecycle, zero tool authority, current identity and upgrade requirements. |
 | [operator/connector-onboarding.md](operator/connector-onboarding.md) | Operator recipe: validate a reference/customer HTTP service, grant a named agent, select its account and verify the receiving effect. |

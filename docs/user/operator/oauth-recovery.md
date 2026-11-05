@@ -57,8 +57,9 @@ bootstrap or `/readyz` alone is not proof of every agent's readiness. See
 ## Upgrade and rollback
 
 1. Stop daemons using this state. Keep the previous binaries and configuration.
-2. Back up the stopped SQLite database and its WAL if present. Keep matching
-   sealing keys in their existing secure store; do not bundle keys into evidence.
+2. Take a [consistent standalone SQLite snapshot](sealed-state-recovery.md),
+   including committed WAL pages through the backup API. Keep matching sealing
+   keys separately in their secure store; do not bundle keys into evidence.
 3. Start the new binary. Migration 0013 adds `refresh_pending=0` without changing
    existing sealed bytes, versions, metadata, grants or selections. Earlier
    migrations still apply in order;0010 supplies incarnation/version identity.

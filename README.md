@@ -132,9 +132,14 @@ catalog management), `oauth` (operator — OAuth session bootstrap), `audit`,
 ### Build
 
 ```bash
-cargo build --release
-# binaries: target/release/{locksmithd,locksmith}
+cargo +1.94.0 build --locked --release --bins
+# binaries: target/release/{locksmith,locksmithd}
 ```
+
+Rust 1.94.0 is the tested compiler, not a minimum-version promise. Optimized
+builds are validated locally on macOS ARM64; other platforms remain unproved. See the
+[build recipe and identity checks](docs/development/build-identity.md#build-with-the-tested-recipe)
+for prerequisites, explicit-target paths and evidence limits.
 
 ### Configure
 

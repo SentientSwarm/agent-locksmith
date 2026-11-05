@@ -12,6 +12,25 @@
 
 ### Changed
 
+- Document and exercise [sealed-state recovery](docs/user/operator/sealed-state-recovery.md):
+  SQLite-consistent snapshots, separate stored/OAuth key custody, isolated restore
+  and selected-account verification. Missing/wrong keys, revoked-owner quarantine
+  and uncertain refresh remain fail-closed; no new keychain or key-rewrap command.
+
+- Align contributor builds and CI on tested Rust 1.94.0. The
+  [build recipe](docs/development/build-identity.md#build-with-the-tested-recipe)
+  is one command on every host, preserving runtime optimization and native
+  output paths. It distinguishes locally validated macOS ARM64 artifacts from
+  remaining platform work; the release workflow is unchanged, and this is not an
+  MSRV or full release-readiness claim.
+
+- Add configuration-free `--build-info` JSON to both binaries and shared build
+  metadata to `/version`, preserving short version output and release names.
+  `locksmithd --version` now prints the same short form as `locksmith --version`.
+  The [captured-file verifier](docs/development/build-identity.md) checks an
+  independently expected commit, clean source state, binary roles and checksums.
+  These local consistency checks do not establish release or platform readiness.
+
 - Add an explicit per-connection compact MCP facade with pinned local search,
   complete describe receipts and the existing committed native dispatcher.
   Standard/compact share session and request limits; fixed context and account
