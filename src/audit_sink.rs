@@ -18,6 +18,8 @@ use crate::repo::audit::AuditEvent;
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
+mod status;
+pub use status::MirrorStatus;
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -89,42 +91,20 @@ impl JsonlSink {
     }
 
     /// Append a single audit event as one JSONL line. Best-effort —
-    /// any IO error is logged and the call still returns. The next
-    /// successful tick of the writer will recover.
+    /// any IO error is reported with a static code and the call still returns.
+    /// A lost file remains unavailable until successful rotation or restart.
     pub async fn append(&self, event: &AuditEvent) {
-        let line = serialize(event);
-        let mut state = self.state.lock().await;
-        // Daily rotation check.
-        let today = utc_date();
-        if today != state.today {
-            self.rotate_to(&mut state, &today);
-        }
-        // Cap-based rotation: if writing this line would push us over
-        // the cap, rotate first.
-        let would_be = state.written.saturating_add(line.len() as u64);
-        if would_be > self.cfg.max_bytes && state.written > 0 {
-            // Same day, but cap exceeded: bump the overflow suffix.
-            self.rotate_to(&mut state, &today);
-        }
-        if let Some(file) = state.file.as_mut() {
-            if let Err(e) = file.write_all(line.as_bytes()) {
-                warn!(error = %e, "audit jsonl append failed");
-                state.file = None;
-                return;
-            }
-            state.written = state.written.saturating_add(line.len() as u64);
-        }
+        let _ = self.append_status(event).await;
     }
 
     /// Force a flush of any buffered output. Useful for tests; the
-    /// production daemon doesn't call this — fsync-on-every-write is
-    /// the default since each append is short.
+    /// production daemon does not call this. Append/flush do not fsync.
     pub async fn flush(&self) {
         let mut state = self.state.lock().await;
         if let Some(file) = state.file.as_mut()
-            && let Err(e) = file.flush()
+            && file.flush().is_err()
         {
-            warn!(error = %e, "audit jsonl flush failed");
+            warn!("audit_jsonl_flush_unavailable");
         }
     }
 
@@ -149,8 +129,8 @@ impl JsonlSink {
                 state.file = Some(file);
                 state.written = written;
             }
-            Err(e) => {
-                warn!(error = %e, path = %candidate.display(), "audit jsonl rotate-open failed");
+            Err(_) => {
+                warn!("audit_jsonl_rotate_unavailable");
             }
         }
         prune_oldest(&self.cfg.path, self.cfg.keep_files);
@@ -246,8 +226,8 @@ fn prune_oldest(base: &Path, keep_files: usize) {
     files.sort_by_key(|(t, _)| *t);
     let to_remove = files.len() - keep_files;
     for (_, p) in files.into_iter().take(to_remove) {
-        if let Err(e) = std::fs::remove_file(&p) {
-            warn!(error = %e, path = %p.display(), "audit jsonl prune failed");
+        if std::fs::remove_file(&p).is_err() {
+            warn!("audit_jsonl_prune_unavailable");
         }
     }
 }
@@ -305,3 +285,6 @@ mod tests {
         assert_eq!(ymd_from_unix_secs(1_767_225_600), (2026, 1, 1));
     }
 }
+
+#[cfg(test)]
+mod status_tests;

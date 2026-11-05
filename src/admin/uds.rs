@@ -28,7 +28,7 @@ use tracing::{info, warn};
 /// on a `UdsState`, the operator middleware enforces bearer-only auth
 /// (M0..M5 default — UDS path always uses this). When `Some`, the
 /// listener is admin HTTPS in mtls/both mode and the middleware extracts
-/// the peer cert injected by `agent_listener::bind_and_serve_mtls`.
+/// the peer cert injected by `agent_listener::serve_mtls`.
 #[derive(Clone)]
 pub struct OperatorMtlsContext {
     pub auth_mode: AuthMode,
@@ -97,7 +97,7 @@ impl UdsState {
     /// Reconcile the `op://` resolver with the references now in use after
     /// a per-agent override mutation. No-op when the resolver or catalog
     /// isn't wired (non-daemon / test paths).
-    async fn resync_op_references(&self) {
+    pub(super) async fn resync_op_references(&self) {
         if let (Some(resolver), Some(catalog)) = (self.op_resolver.as_ref(), self.catalog.as_ref())
         {
             crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
@@ -122,6 +122,7 @@ fn build_registrations_admin_router(
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
+        local_listener: Some(state.admin.local_listener()),
         repo,
         catalog: state.catalog.clone(),
         resolved_creds: state.resolved_creds.clone(),
@@ -169,6 +170,7 @@ fn build_registrations_admin_router(
             "/infra/{name}/credential",
             put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
         )
+        .merge(crate::definitions::api::router())
         .with_state(st)
 }
 
@@ -179,6 +181,11 @@ fn build_registrations_admin_router(
 /// (`UdsState.oauth = Some(_)`).
 fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
     use crate::oauth::admin;
+    let consent = state
+        .consent
+        .clone()
+        .map(crate::oauth::consent::api::router)
+        .unwrap_or_default();
     Router::new()
         .route("/oauth", get(admin::op_oauth_list))
         .route(
@@ -187,10 +194,11 @@ fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
         )
         .route("/oauth/{name}/bootstrap", post(admin::op_oauth_bootstrap))
         .with_state(state)
+        .merge(consent)
 }
 
 /// Build the admin router. Public for testing — production wiring uses
-/// `bind_and_serve` below.
+/// [`bind`] and [`serve`] below.
 pub fn build_router(state: UdsState) -> Router {
     // Agent self-service routes that DO require an agent token.
     let agent_authed_routes = Router::new()
@@ -263,6 +271,8 @@ pub fn build_router(state: UdsState) -> Router {
         Some(repo) => operator_existing.merge(build_registrations_admin_router(repo, &state)),
         None => operator_existing,
     };
+    let operator_with_registrations =
+        operator_with_registrations.merge(crate::native_authority::api::router(state.clone()));
     let operator_routes = match state.oauth.clone() {
         Some(oauth_state) => {
             operator_with_registrations.merge(build_oauth_admin_router(oauth_state))
@@ -277,16 +287,16 @@ pub fn build_router(state: UdsState) -> Router {
     Router::new()
         .nest("/admin/agent", agent_routes)
         .nest("/admin/operator", operator_routes)
+        .layer(axum::middleware::from_fn(
+            crate::oauth::consent::api::protect_errors,
+        ))
 }
 
-/// Bind a Unix domain socket at `path` with mode `0o660` and serve the
-/// admin router. Removes a stale socket file from a previous unclean
-/// shutdown if found.
-pub async fn bind_and_serve(
-    path: &FsPath,
-    state: UdsState,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-) -> Result<(), std::io::Error> {
+/// Bind a Unix domain socket at `path` with mode `0o660`. Removes a stale
+/// socket file from a previous unclean shutdown if found. The daemon binds
+/// before spawning [`serve`] so a bind failure fails startup immediately
+/// instead of surfacing only at shutdown (AGENT-217).
+pub fn bind(path: &FsPath) -> Result<UnixListener, std::io::Error> {
     if path.exists() {
         // Sanity check: it's a socket, no process is bound (best-effort).
         let meta = std::fs::metadata(path)?;
@@ -301,7 +311,16 @@ pub async fn bind_and_serve(
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
     info!(socket = %path.display(), "admin UDS listener bound");
+    Ok(listener)
+}
 
+/// Serve the admin router on a socket returned by [`bind`] until
+/// `shutdown` resolves.
+pub async fn serve(
+    listener: UnixListener,
+    state: UdsState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), std::io::Error> {
     let app = build_router(state);
     let make_service = app.into_make_service();
     axum::serve(listener, make_service)
@@ -399,7 +418,7 @@ fn error_response(e: AuthError) -> Response {
     (status, Json(body)).into_response()
 }
 
-fn admin_err_response(e: AdminError) -> Response {
+pub(super) fn admin_err_response(e: AdminError) -> Response {
     let (status, code) = match &e {
         AdminError::InvalidBootstrap => (StatusCode::UNAUTHORIZED, "invalid_credential"),
         AdminError::AgentNameConflict => (StatusCode::CONFLICT, "agent_name_conflict"),
@@ -848,6 +867,8 @@ async fn op_query_logs(
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetCredentialBody {
+    #[serde(default)]
+    require_live_bearer: bool,
     /// Full AuthSpec JSON. Validated by serde via the AuthSpec
     /// `deny_unknown_fields` shape.
     auth_spec: crate::registrations::AuthSpec,
@@ -896,7 +917,14 @@ async fn op_set_agent_credential(
         Ok(a) => a,
         Err(e) => return admin_err_response(e),
     };
-    match creds.set(agent.id, &registration, &body.auth_spec).await {
+    let result = if body.require_live_bearer {
+        creds
+            .set_live_bearer(agent.id, &registration, &body.auth_spec)
+            .await
+    } else {
+        creds.set(agent.id, &registration, &body.auth_spec).await
+    };
+    match result {
         Ok(()) => {
             // An `op_*` override must resolve without a restart (T2.2).
             state.resync_op_references().await;
@@ -914,135 +942,13 @@ async fn op_set_agent_credential(
     }
 }
 
-/// Body for `PUT /agents/{id}/credentials/{registration}/credential`
-/// (Phase J / M2, CCS-7). The cleartext `value` is sealed before storage
-/// (reveal-never); it is never logged, echoed, or persisted in cleartext.
-/// An optional `header` makes the override a `stored_header` (else
-/// `stored_bearer`, unless an existing header-shaped override is
-/// preserved). `deny_unknown_fields` rejects a stray `secret_ref`.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SetAgentStoredCredentialBody {
-    value: secrecy::SecretString,
-    #[serde(default)]
-    header: Option<String>,
-}
-
-/// `PUT /admin/operator/agents/{public_id}/credentials/{registration}/credential`
-/// — seal an operator-supplied value into `credential_secrets` and write a
-/// `stored_*` per-agent override (CCS-7). Mirrors `op_put_credential` on
-/// the registration path: seal → insert → mint ref → set override →
-/// tombstone the prior stored ref on rotation. Gated on the credential
-/// sealing key (404 when unconfigured — the feature gate). The value is
-/// never echoed.
 async fn op_set_agent_stored_credential(
     State(state): State<UdsState>,
     Extension(op): Extension<OperatorIdentity>,
     Path((agent_id_or_name, registration)): Path<(String, String)>,
-    Json(body): Json<SetAgentStoredCredentialBody>,
+    Json(body): Json<super::stored_credential::Input>,
 ) -> Response {
-    use crate::registrations::AuthSpec;
-    use secrecy::ExposeSecret;
-
-    // Sealing-key gate: feature off ⇒ 404 (route behaves as if absent).
-    let (Some(key), Some(secrets)) = (
-        state.credential_sealing_key.as_ref(),
-        state.credential_secrets.as_ref(),
-    ) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": {
-                    "type": "not_found",
-                    "code": "credential_store_unconfigured",
-                    "message": "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)",
-                }
-            })),
-        )
-            .into_response();
-    };
-    let Some(creds) = state.agent_creds.as_ref() else {
-        return admin_err_response(crate::admin::service::AdminError::Backend(
-            "agent_credential_overrides not wired".into(),
-        ));
-    };
-    let agent = match state.admin.get_agent(&op, &agent_id_or_name).await {
-        Ok(a) => a,
-        Err(e) => return admin_err_response(e),
-    };
-
-    // Capture the prior override's stored ref (for tombstoning). Header
-    // shape: an explicit `header` in the body wins; else an existing
-    // override keeps its own shape (bearer stays bearer); else — no
-    // override yet — inherit the registration's header, so a header-auth
-    // registration (`x-api-key`) doesn't silently start injecting
-    // `Authorization`.
-    let existing = creds.get(agent.id, &registration).await.ok().flatten();
-    let old_ref = existing
-        .as_ref()
-        .and_then(|o| o.auth_spec.stored_secret_ref().map(|s| s.to_string()));
-    let header_name = match (body.header.clone(), existing.as_ref()) {
-        (Some(header), _) => Some(header),
-        (None, Some(o)) => o.auth_spec.header_name().map(str::to_string),
-        (None, None) => state.catalog.as_ref().and_then(|c| {
-            c.load()
-                .lookup_any(&registration)
-                .and_then(|r| r.auth.header_name().map(str::to_string))
-        }),
-    };
-
-    // Seal the cleartext; the SecretString zeroizes on drop. Never logged /
-    // echoed (CCS-1).
-    let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {
-        Ok(pair) => pair,
-        Err(e) => {
-            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
-                "credential seal failed: {e}"
-            )));
-        }
-    };
-    let secret_ref = match secrets.insert(&sealed, &nonce).await {
-        Ok(r) => r,
-        Err(e) => {
-            return admin_err_response(crate::admin::service::AdminError::Backend(format!(
-                "credential store insert failed: {e}"
-            )));
-        }
-    };
-
-    let new_auth = match header_name {
-        Some(header) => AuthSpec::StoredHeader {
-            header,
-            secret_ref: secret_ref.clone(),
-        },
-        None => AuthSpec::StoredBearer {
-            secret_ref: secret_ref.clone(),
-        },
-    };
-
-    if let Err(e) = creds.set(agent.id, &registration, &new_auth).await {
-        return admin_err_response(e.into());
-    }
-
-    // Tombstone the rotated ref only after the override write succeeds so a
-    // failed write never orphans the live secret.
-    if let Some(old) = old_ref
-        && let Err(e) = secrets.tombstone_if_unreferenced(&old).await
-    {
-        tracing::warn!(error = %e, "tombstone of rotated agent-override credential ref failed");
-    }
-    // A replaced `op_*` override's reference drops out of the cache.
-    state.resync_op_references().await;
-
-    (
-        StatusCode::OK,
-        Json(json!({
-            "agent_public_id": agent.public_id,
-            "registration": registration,
-            "secret_ref": secret_ref,
-        })),
-    )
-        .into_response()
+    super::stored_credential::set(state, op, agent_id_or_name, registration, body).await
 }
 
 async fn op_unset_agent_credential(

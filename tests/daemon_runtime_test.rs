@@ -14,18 +14,9 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-/// Pick an unused TCP port by binding to :0, reading the port, and
-/// dropping the listener. Race-prone in theory, fine in practice for
-/// test isolation.
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 struct DaemonFixture {
     dir: TempDir,
     socket_path: std::path::PathBuf,
-    tcp_port: u16,
     op_token_wire: String,
 }
 
@@ -33,7 +24,6 @@ fn build_fixture() -> DaemonFixture {
     let dir = TempDir::new().unwrap();
     let socket_path = dir.path().join("admin.sock");
     let ops_path = dir.path().join("operators.yaml");
-    let tcp_port = pick_port();
 
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let op_token_wire = op_tok.wire_format();
@@ -54,7 +44,6 @@ fn build_fixture() -> DaemonFixture {
     DaemonFixture {
         dir,
         socket_path,
-        tcp_port,
         op_token_wire,
     }
 }
@@ -66,7 +55,7 @@ fn config_yaml(f: &DaemonFixture) -> String {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  port: 0
   admin_socket:
     path: "{sock}"
 shutdown:
@@ -76,7 +65,6 @@ database:
   path: "{db}"
 tools: []
 "#,
-        port = f.tcp_port,
         sock = f.socket_path.display(),
         ops = ops_path.display(),
         db = db_path.display(),
@@ -88,19 +76,13 @@ async fn daemon_binds_both_listeners_and_drains_clean() {
     let f = build_fixture();
     let cfg = parse_config_str(&config_yaml(&f)).unwrap();
 
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-
-    // Wait for both listeners to come up. The agent listener is a TCP
-    // bind; the admin UDS listener is a unix socket. Poll the socket
-    // file (its presence + 0660 mode prove bind_and_serve completed
-    // setup). Cap at 2s.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while !f.socket_path.exists() {
-        if std::time::Instant::now() > deadline {
-            panic!("admin UDS never appeared at {}", f.socket_path.display());
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // Port 0: the daemon reports the port it actually bound (AGENT-219).
+    // Both listeners are bound before start returns.
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    assert!(f.socket_path.exists(), "admin UDS bound");
     let perms = std::fs::metadata(&f.socket_path).unwrap().permissions();
     assert_eq!(
         perms.mode() & 0o777,
@@ -109,7 +91,7 @@ async fn daemon_binds_both_listeners_and_drains_clean() {
     );
 
     // Agent listener is up: a quick TCP probe to /livez returns 200.
-    let agent_url = format!("http://127.0.0.1:{}/livez", f.tcp_port);
+    let agent_url = format!("http://{}/livez", started.addrs.agent);
     let resp = reqwest::get(&agent_url).await.expect("livez reachable");
     assert!(resp.status().is_success(), "agent listener serving /livez");
 
@@ -131,35 +113,25 @@ async fn daemon_binds_both_listeners_and_drains_clean() {
 async fn daemon_runs_without_admin_substrate() {
     // M0/M1 backward-compat: admin_socket absent ⇒ admin UDS not bound,
     // database not opened, operators.yaml not consulted.
-    let port = pick_port();
-    let yaml = format!(
-        r#"
+    let yaml = r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  port: 0
 shutdown:
   drain_window_seconds: 2
 tools: []
-"#
-    );
-    let cfg = parse_config_str(&yaml).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(2)).await;
+"#;
+    let cfg = parse_config_str(yaml).unwrap();
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(2))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
 
     // Probe livez on the TCP listener.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        if reqwest::get(format!("http://127.0.0.1:{port}/livez"))
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-        {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("agent listener never bound");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let resp = reqwest::get(format!("http://{}/livez", started.addrs.agent))
+        .await
+        .expect("livez reachable");
+    assert!(resp.status().is_success(), "agent listener serving /livez");
 
     coord.trigger();
     timeout(Duration::from_secs(3), handle)
@@ -176,13 +148,12 @@ async fn daemon_rejects_admin_socket_without_database() {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  port: 0
   admin_socket:
     path: "{sock}"
 operator_credentials_path: "{ops}"
 tools: []
 "#,
-        port = f.tcp_port,
         sock = f.socket_path.display(),
         ops = f.dir.path().join("operators.yaml").display(),
     );

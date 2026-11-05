@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod client;
 mod commands;
@@ -25,8 +25,17 @@ use output::Format;
 const DEFAULT_SOCKET: &str = "/var/run/locksmith/admin.sock";
 
 #[derive(Parser)]
-#[command(name = "locksmith", about = "Agent Locksmith CLI", version)]
+#[command(
+    name = "locksmith",
+    about = "Agent Locksmith CLI",
+    version,
+    arg_required_else_help = true
+)]
 struct Cli {
+    /// Print JSON build identity without loading configuration or contacting a daemon.
+    #[arg(long)]
+    build_info: bool,
+
     /// Path to the admin UDS. Falls back to LOCKSMITH_SOCKET, then the
     /// system default. Ignored when `--admin-url` (or
     /// `LOCKSMITH_ADMIN_URL`) is set.
@@ -52,11 +61,16 @@ struct Cli {
     format: Format,
 
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Offline immutable integration definitions (operator); no activation.
+    Integration {
+        #[command(subcommand)]
+        cmd: commands::integration::IntegrationCmd,
+    },
     /// Agent management (operator).
     Agent {
         #[command(subcommand)]
@@ -123,12 +137,32 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.build_info {
+        if cli.cmd.is_some() {
+            Cli::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--build-info cannot be combined with a command",
+                )
+                .exit();
+        }
+        println!("{}", agent_locksmith::build_info::document("locksmith"));
+        return ExitCode::SUCCESS;
+    }
+    let cmd = cli.cmd.unwrap_or_else(|| {
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingSubcommand,
+                "a command is required",
+            )
+            .exit()
+    });
 
     // Offline subcommands run before client construction so they work
     // without a daemon to talk to. `bootstrap-operator` is the canonical
     // example — it mints credentials locally for a fresh deploy where
     // no admin UDS / HTTPS exists yet.
-    if let Cmd::BootstrapOperator(args) = cli.cmd {
+    if let Cmd::BootstrapOperator(args) = cmd {
         return match bootstrap_operator::run(args) {
             Ok(()) => ExitCode::from(0),
             Err(e) => {
@@ -138,7 +172,7 @@ async fn main() -> ExitCode {
         };
     }
 
-    if let Cmd::MigrateBindings(args) = cli.cmd {
+    if let Cmd::MigrateBindings(args) = cmd {
         return match commands::migrate_bindings::run(args).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -165,11 +199,12 @@ async fn main() -> ExitCode {
         }
     };
 
-    let res = match cli.cmd {
+    let res = match cmd {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
         Cmd::MigrateBindings(_) => unreachable!("handled before client construction"),
         Cmd::BootstrapOperator(_) => unreachable!("handled before client construction"),
+        Cmd::Integration { cmd } => commands::integration::run(&client, cli.format, cmd).await,
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,
@@ -222,6 +257,19 @@ mod tests {
             ],
             &["locksmith", "agent", "credentials", "list", "-Oabc"],
             &["locksmith", "bootstrap", "revoke", "-Oabc"],
+            // Consent attempt ids and account revisions are URL-safe base64 too.
+            &["locksmith", "oauth", "attempt-status", "linear", "-Oabc"],
+            &["locksmith", "oauth", "cancel", "linear", "-Oabc"],
+            &[
+                "locksmith",
+                "oauth",
+                "disconnect",
+                "linear",
+                "--label",
+                "work",
+                "--if-match",
+                "-Oabc",
+            ],
         ];
         for args in cases {
             if let Err(e) = Cli::try_parse_from(*args) {
@@ -241,9 +289,9 @@ mod tests {
         let cli =
             Cli::try_parse_from(["locksmith", "agent", "revoke", "-Oabc", "--reason", "gone"])
                 .expect("id then flag parses");
-        let Cmd::Agent {
+        let Some(Cmd::Agent {
             cmd: agent::AgentCmd::Revoke { id, reason },
-        } = cli.cmd
+        }) = cli.cmd
         else {
             panic!("expected agent revoke");
         };
