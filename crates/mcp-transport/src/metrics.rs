@@ -12,6 +12,7 @@ struct Counters {
     chunk_high_water: AtomicUsize,
     retained_high_water: AtomicUsize,
     active_bodies: AtomicUsize,
+    budget: AtomicUsize,
 }
 
 /// Aggregate observations for this client, never a process-global heap bound.
@@ -27,6 +28,9 @@ pub struct Snapshot {
     pub active_bodies: usize,
 }
 impl Metrics {
+    pub(crate) fn budget(&self, bytes: usize) {
+        self.0.budget.store(bytes, Relaxed);
+    }
     pub fn snapshot(&self) -> Snapshot {
         let c = &self.0;
         Snapshot {
@@ -38,10 +42,15 @@ impl Metrics {
             active_bodies: c.active_bodies.load(Relaxed),
         }
     }
-    pub(crate) fn received(&self, n: usize) {
-        self.0.received.fetch_add(n, Relaxed);
+    pub(crate) fn received(&self, n: usize) -> Result<(), crate::Error> {
+        let total = self.0.received.fetch_add(n, Relaxed).saturating_add(n);
         self.0.chunks.fetch_add(1, Relaxed);
         self.0.chunk_high_water.fetch_max(n, Relaxed);
+        let budget = self.0.budget.load(Relaxed);
+        if budget != 0 && total > budget {
+            return Err(crate::Error("aggregate_bytes"));
+        }
+        Ok(())
     }
     pub(crate) fn admitted(&self, n: usize) {
         self.0.admitted.fetch_add(n, Relaxed);

@@ -78,7 +78,7 @@ impl Registration {
 /// Repository for the `registrations` and `registrations_meta` tables.
 #[derive(Clone)]
 pub struct RegistrationRepository {
-    pub(super) pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl RegistrationRepository {

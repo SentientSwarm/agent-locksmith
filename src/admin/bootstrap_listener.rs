@@ -84,6 +84,11 @@ pub async fn bind_and_serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
     let tls = load_tls_config(cert_path, key_path).await?;
+    let listener = std::net::TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
+    if let Some(rt) = state.admin.native_authority() {
+        rt.listeners.bound("bootstrap", listener.local_addr()?);
+    }
     let app = build_router(state);
 
     let handle = Handle::new();
@@ -95,7 +100,7 @@ pub async fn bind_and_serve(
     });
 
     info!(addr = %addr, cert = %cert_path.display(), "bootstrap-only listener bound");
-    let result = axum_server::bind_rustls(addr, tls)
+    let result = axum_server::from_tcp_rustls(listener, tls)
         .handle(handle)
         .serve(app.into_make_service())
         .await;

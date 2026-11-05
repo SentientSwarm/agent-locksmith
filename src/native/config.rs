@@ -4,6 +4,7 @@ use std::time::Duration;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub upstream_ca_bundle: Option<std::path::PathBuf>,
     pub allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
     pub ingress: usize,
@@ -22,6 +23,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            upstream_ca_bundle: None,
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "[::1]".into()],
             allowed_origins: vec![],
             ingress: 128,

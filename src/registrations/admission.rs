@@ -37,6 +37,21 @@ impl RegistrationRepository {
         name: Option<&str>,
         protocol: Protocol,
     ) -> Result<Vec<HttpAdmission>, AdmissionUnavailable> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|_| AdmissionUnavailable)?;
+        self.admissions_on(&mut connection, identity, name, protocol)
+            .await
+    }
+    pub(crate) async fn admissions_on(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
+        identity: &AgentIdentity,
+        name: Option<&str>,
+        protocol: Protocol,
+    ) -> Result<Vec<HttpAdmission>, AdmissionUnavailable> {
         let rows = sqlx::query(
             "SELECT r.*, a.id AS current_agent_id, a.mcp_epoch, \
              i.instance_id, i.revision, a.revoked_at, a.expires_at, a.grants_reviewed, \
@@ -52,15 +67,22 @@ impl RegistrationRepository {
         .bind(name)
         .bind(name)
         .bind(protocol.as_str())
-        .fetch_all(&self.pool)
+        .fetch_all(connection)
         .await
         .map_err(|_| AdmissionUnavailable)?;
-        let snapshots = rows.into_iter().map(|row| snapshot(row, identity));
-        if name.is_some() {
-            snapshots.collect()
-        } else {
-            Ok(snapshots.filter_map(Result::ok).collect())
-        }
+        snapshots(rows, identity, name.is_some())
+    }
+}
+fn snapshots(
+    rows: Vec<sqlx::sqlite::SqliteRow>,
+    identity: &AgentIdentity,
+    selected: bool,
+) -> Result<Vec<HttpAdmission>, AdmissionUnavailable> {
+    let snapshots = rows.into_iter().map(|row| snapshot(row, identity));
+    if selected {
+        snapshots.collect()
+    } else {
+        Ok(snapshots.filter_map(Result::ok).collect())
     }
 }
 fn snapshot(

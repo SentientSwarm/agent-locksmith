@@ -3,8 +3,9 @@
 The composition root now serves `/mcp/{connection}` with the existing registered
 bearer/mTLS identity, current SQLite authority and one process-wide accepted199
 session pool. This is N1 lifecycle integration, with **zero tool authority**.
-No code path resolves an upstream credential, observes upstream tools or invokes
-a provider. `tools/list` is empty; `tools/call` returns -32050/tool_not_approved.
+No agent path resolves an upstream credential, observes upstream tools or invokes
+a provider. [206A operator preparation](native-tool-review.md) is a separate bounded
+operator path; it does not add an agent dispatcher. `tools/list` is empty; `tools/call` returns -32050/tool_not_approved.
 Connection grants and account selections are prerequisites for local lifecycle,
 never imported tool approvals. Raw HTTP admission and discovery filter protocol.
 
@@ -32,7 +33,8 @@ The resource observation `native sessions joined` reports only numerical
 entry/created/joined/released counters after pool shutdown completes.
 
 Existing198 whole-response outbound bounds are preserved and tested separately.
-There is no reachable daemon outbound hook in N1. Later203/206 integration must
+The original N1 had no reachable daemon outbound hook. 206A operator preparation
+now consumes the accepted hook; later dispatch integration must
 consume those bounds at the real selected-credential observation/call boundary,
 enforce DNS/connected-address and trust policy, and repeat receiving-effect tests.
 No protected tool schema is compiled here; later207 retains jsonschema0.60.1
@@ -93,7 +95,7 @@ advance authority. Policy/selection changes and any registration revision do.
 
 Protocol/config/destination/egress mutation clears connection ACLs, bootstrap
 scopes and selections transactionally. Existing HTTP state/receipts/revocations
-are preserved by the migration. No MCP tool-grant writer/table or positive
+are preserved by the migration. 206A adds prepared tool-grant writers/tables; no positive
 dispatcher branch exists. Old binaries refuse unknown applied migration0011
 before listeners; one database sidecar lock prevents two supported daemon
 instances sharing that state. See the public backup/rollback requirements.

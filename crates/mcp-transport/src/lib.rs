@@ -20,3 +20,8 @@ pub use metrics::{Metrics, Snapshot};
 
 /// Scoped SDK session ownership and finite resource budgets.
 pub mod sessions;
+
+mod pinned;
+pub mod strict_json;
+pub use reqwest::Certificate;
+pub type ResponseValidator = fn(&serde_json::Value) -> Result<(), Error>;

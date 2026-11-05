@@ -57,6 +57,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "locksmith-mcp-transport",
  "pem",
  "rcgen",

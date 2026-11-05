@@ -14,13 +14,21 @@ pub(crate) fn stream(
     body: Body,
     limits: Limits,
     metrics: Metrics,
+    validator: Option<crate::ResponseValidator>,
 ) -> BoxStream<'static, Result<Sse, SseError>> {
     let state = State {
         body,
         guard: Guard::new(limits),
         metrics,
     };
-    let bytes = stream::try_unfold(state, |mut state| async move {
+    checked(
+        SseStream::from_bytes_stream(bytes(state)).boxed(),
+        limits,
+        validator,
+    )
+}
+fn bytes(state: State) -> impl futures_util::Stream<Item = Result<bytes::Bytes, Error>> {
+    stream::try_unfold(state, |mut state| async move {
         match state.body.next().await? {
             Some(chunk) => {
                 let high = state.guard.observe(&chunk)?;
@@ -33,12 +41,12 @@ pub(crate) fn stream(
                 Ok(None)
             }
         }
-    });
-    checked(SseStream::from_bytes_stream(bytes).boxed(), limits)
+    })
 }
 fn checked(
     source: BoxStream<'static, Result<Sse, SseError>>,
     limits: Limits,
+    validator: Option<crate::ResponseValidator>,
 ) -> BoxStream<'static, Result<Sse, SseError>> {
     stream::try_unfold(
         (source, 0usize),
@@ -51,6 +59,11 @@ fn checked(
                 units += crate::json::preflight(data.as_bytes(), limits).map_err(sse_error)?;
                 if units > limits.json_units {
                     return Err(sse_error(Error("json_units")));
+                }
+                if let Some(validate) = validator {
+                    let raw =
+                        crate::strict_json::parse(data.as_bytes(), limits).map_err(sse_error)?;
+                    validate(&raw).map_err(sse_error)?;
                 }
                 crate::json::decode(data.as_bytes(), limits).map_err(sse_error)?;
             }

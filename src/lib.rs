@@ -31,3 +31,5 @@ pub mod binding_migration;
 pub mod native;
 
 pub mod definitions;
+
+pub mod native_authority;

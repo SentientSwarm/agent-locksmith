@@ -9,7 +9,7 @@ pub async fn exercise() {
     let mut f = Fixture::new(&receiver.server.uri());
     let (agents, before) = prepare(&mut f, &receiver, &prior, &old_cli).await;
     f.start().await;
-    assert_eq!(sql(&f, "SELECT max(version) FROM _sqlx_migrations;"), "13");
+    assert_eq!(sql(&f, "SELECT max(version) FROM _sqlx_migrations;"), "14");
     assert_eq!(authority(&f), before);
     assert_eq!(
         sql(

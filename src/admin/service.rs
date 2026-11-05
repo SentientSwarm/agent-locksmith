@@ -160,6 +160,7 @@ pub struct ToolInfo {
 
 #[derive(Clone)]
 pub struct AdminService {
+    native_authority: Option<std::sync::Arc<crate::native_authority::runtime::Runtime>>,
     agents: AgentRepository,
     bootstrap: BootstrapTokenRepository,
     config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
@@ -176,6 +177,19 @@ pub struct AdminService {
 }
 
 impl AdminService {
+    pub fn with_native_authority(
+        mut self,
+        runtime: std::sync::Arc<crate::native_authority::runtime::Runtime>,
+    ) -> Self {
+        self.native_authority = Some(runtime);
+        self
+    }
+    pub fn native_authority(
+        &self,
+    ) -> Option<std::sync::Arc<crate::native_authority::runtime::Runtime>> {
+        self.native_authority.clone()
+    }
+
     pub(super) fn local_listener(&self) -> (String, u16) {
         let cfg = self.config.load();
         (cfg.listen.host.clone(), cfg.listen.port)
@@ -205,6 +219,7 @@ impl AdminService {
             audit,
             resolved_creds: None,
             operational_log: None,
+            native_authority: None,
         }
     }
 
@@ -225,6 +240,7 @@ impl AdminService {
             audit,
             resolved_creds: Some(resolved_creds),
             operational_log: None,
+            native_authority: None,
         }
     }
 

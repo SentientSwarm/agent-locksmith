@@ -14,3 +14,5 @@ pub mod tool;
 
 pub mod definition_instance;
 pub mod integration;
+
+pub mod native_mcp;
