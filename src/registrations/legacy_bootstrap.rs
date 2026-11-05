@@ -75,6 +75,8 @@ pub async fn bootstrap_from_config_tools(
 
         let now = unix_now();
         let r = Registration {
+            protocol: Default::default(),
+            mcp: None,
             name: tool.name.clone(),
             kind: Kind::Tool,
             description: tool.description.clone(),

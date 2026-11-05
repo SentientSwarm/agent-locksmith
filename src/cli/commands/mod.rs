@@ -11,3 +11,8 @@ pub mod oauth;
 pub mod registration;
 pub mod self_svc;
 pub mod tool;
+
+pub mod definition_instance;
+pub mod integration;
+
+pub mod native_mcp;

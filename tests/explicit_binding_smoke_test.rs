@@ -75,3 +75,107 @@ async fn actual_daemon_finite_grants_activation_and_replacement() {
 async fn actual_daemon_reference_and_customer_service() {
     customer::exercise().await;
 }
+
+#[path = "explicit_binding_smoke/oauth_lifecycle.rs"]
+mod oauth_lifecycle;
+#[path = "explicit_binding_smoke/oauth_provider.rs"]
+mod oauth_provider;
+#[path = "explicit_binding_smoke/oauth_setup.rs"]
+mod oauth_setup;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_daemon_oauth_revoke_during_exchange() {
+    for bootstrap in [true, false] {
+        for fail in [false, true] {
+            oauth_lifecycle::exercise(bootstrap, fail).await;
+        }
+    }
+}
+
+#[path = "explicit_binding_smoke/oauth_upgrade.rs"]
+mod oauth_upgrade;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_PRIOR_DAEMON pointing to a pre-0010 binary"]
+async fn actual_daemon_oauth_upgrade_and_prior_binary_refusal() {
+    oauth_upgrade::exercise().await;
+}
+#[path = "explicit_binding_smoke/native_upgrade.rs"]
+mod native_upgrade;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_NATIVE_PRIOR_DAEMON and sibling CLI from accepted pre-0011 revision"]
+async fn actual_daemon_native_upgrade_and_prior_binary_refusal() {
+    native_upgrade::exercise().await;
+}
+
+#[path = "explicit_binding_smoke/recovery_common.rs"]
+mod recovery_common;
+#[path = "explicit_binding_smoke/recovery_crash.rs"]
+mod recovery_crash;
+#[path = "explicit_binding_smoke/recovery_provider.rs"]
+mod recovery_provider;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_daemon_refresh_crash_requires_fresh_reconnect() {
+    for bootstrap in [true, false] {
+        recovery_crash::exercise(bootstrap).await;
+    }
+}
+
+#[path = "explicit_binding_smoke/recovery_embedded.rs"]
+mod recovery_embedded;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn embedded_daemon_joins_bootstrap_refresh_before_return() {
+    recovery_embedded::exercise(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn embedded_daemon_joins_inline_refresh_before_return() {
+    recovery_embedded::exercise(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "isolated embedding worker launched by parent"]
+async fn embedded_oauth_recovery_worker() {
+    recovery_embedded::worker().await;
+}
+
+#[path = "explicit_binding_smoke/recovery_upgrade.rs"]
+mod recovery_upgrade;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_RECOVERY_PRIOR_DAEMON built from schema12"]
+async fn actual_daemon_refresh_upgrade_and_prior_refusal() {
+    recovery_upgrade::exercise().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_error_does_not_spawn_refresh() {
+    recovery_embedded::startup_failure().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "isolated startup-error worker launched by parent"]
+async fn oauth_startup_failure_worker() {
+    recovery_embedded::startup_worker().await;
+}
+
+#[path = "explicit_binding_smoke/sealed_key_restore.rs"]
+mod sealed_key_restore;
+#[path = "explicit_binding_smoke/sealed_oauth_restore.rs"]
+mod sealed_oauth_restore;
+#[path = "explicit_binding_smoke/sealed_recovery.rs"]
+mod sealed_recovery;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_independent_keys_and_accounts() {
+    sealed_key_restore::exercise().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_pending_refresh() {
+    sealed_oauth_restore::pending().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_restore_revoked_owner_quarantine() {
+    sealed_oauth_restore::quarantine().await;
+}

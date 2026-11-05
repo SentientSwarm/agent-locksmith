@@ -11,13 +11,17 @@
 //! configs without admin_socket continue to run with only the TCP agent
 //! listener bound — preserving backward compat.
 
+mod oauth;
+mod state_lock;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{error, info, warn};
 
 use crate::admin::{AdminService, uds::UdsState};
 use crate::audit_sink::{JsonlSink, JsonlSinkConfig};
@@ -42,9 +46,74 @@ pub enum DaemonError {
     Server(String),
 }
 
+/// Addresses the daemon actually bound. A configured port 0 resolves to
+/// the OS-assigned port here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundAddrs {
+    pub agent: SocketAddr,
+    pub admin_https: Option<SocketAddr>,
+}
+
 /// Run the daemon to completion. Returns when both listeners shut down
 /// (or the drain window expires).
 pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), DaemonError> {
+    run_reporting(config, coord, None).await
+}
+
+/// [`run`], additionally sending the bound addresses once every listener
+/// is bound. A daemon that fails before that point drops `bound` unsent.
+pub async fn run_reporting(
+    config: AppConfig,
+    coord: ShutdownCoordinator,
+    bound: Option<oneshot::Sender<BoundAddrs>>,
+) -> Result<(), DaemonError> {
+    // Outbound TLS also needs a provider when every inbound listener is plain.
+    crate::admin::https::install_crypto_provider_once();
+    let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
+    oauth::owned(config, coord, bound).await
+}
+
+/// A listener's serve future, bound and fully prepared but not yet spawned.
+type ListenerServe =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), std::io::Error>> + Send>>;
+
+/// Reports a listener task's end on drop, so a panic is reported too.
+struct ExitNotice {
+    name: &'static str,
+    exits: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Drop for ExitNotice {
+    fn drop(&mut self) {
+        let _ = self.exits.send(self.name);
+    }
+}
+
+/// Spawn a listener task that reports its end on `exits`, however it
+/// ends. A listener that stops before shutdown has stopped serving; the
+/// daemon watches `exits` so that failure is never deferred to shutdown
+/// (AGENT-217).
+fn spawn_listener(
+    name: &'static str,
+    exits: &mpsc::UnboundedSender<&'static str>,
+    serve: ListenerServe,
+) -> tokio::task::JoinHandle<Result<(), std::io::Error>> {
+    let notice = ExitNotice {
+        name,
+        exits: exits.clone(),
+    };
+    tokio::spawn(async move {
+        let _notice = notice;
+        serve.await
+    })
+}
+
+async fn run_owned(
+    mut config: AppConfig,
+    coord: ShutdownCoordinator,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
+    bound: Option<oneshot::Sender<BoundAddrs>>,
+) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
     if admin_enabled {
@@ -79,6 +148,15 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         config.listen.host.parse().unwrap_or([127, 0, 0, 1].into()),
         config.listen.port,
     );
+    // Bind the agent port before anything reads `listen.port`, and record
+    // the port actually bound. A configured port 0 must not reach the MCP
+    // self-loop guards (registration API, definitions, seed catalog) as 0,
+    // which would let an upstream point back at this daemon (AGENT-217).
+    let agent_listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| DaemonError::Server(format!("agent listener: {e}")))?;
+    let agent_addr = agent_listener.local_addr()?;
+    config.listen.port = agent_addr.port();
 
     // Wrap config in shared ArcSwap. Both the agent router (via
     // build_app_with_shared_config) and the AdminService observe this
@@ -131,7 +209,9 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         operational_log_store_for_sweeper,
         op_resolver_for_app,
     ) = if admin_enabled {
-        let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
+        let setup =
+            build_admin_substrate(shared_config.clone(), resolved_creds.clone(), refresh_owner)
+                .await?;
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
@@ -171,10 +251,17 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         )
     };
 
+    let refresh = oauth::Background::prepare(
+        oauth_runtime_for_app.as_ref(),
+        catalog_for_app.as_ref(),
+        agent_creds_for_app.as_ref(),
+        operational_log_for_app.as_ref(),
+    );
+
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
     // up — otherwise there's no audit to sweep. Defaults to
     // 90 days / hourly when `audit:` is absent from config.
-    let sweeper_task = audit_for_sweeper.map(|audit| {
+    let mut sweeper_task = audit_for_sweeper.map(|audit| {
         let snapshot = shared_config.load();
         let cfg = snapshot.audit.as_ref().cloned().unwrap_or_default();
         drop(snapshot);
@@ -187,7 +274,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // operational-log stream never touches the audit table (LOG-1). Runs
     // only when the operational-log substrate is up; co-terminates with
     // shutdown like the audit sweeper.
-    let ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
+    let mut ops_log_sweeper_task = operational_log_store_for_sweeper.map(|store| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .operational_log
@@ -203,7 +290,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // nothing references any more, then hard-deletes tombstoned rows past
     // retention. Runs only when the sealing key is configured (the store
     // exists only then).
-    let credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
+    let mut credential_sweeper_task = credential_secrets_for_app.clone().map(|repo| {
         let snapshot = shared_config.load();
         let cfg = snapshot
             .credential_store
@@ -283,8 +370,18 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         );
     }
 
+    let observation = admin_state
+        .as_ref()
+        .and_then(|s| s.admin.native_authority());
+    let native = crate::native::Runtime::with_authority(
+        shared_config.load().mcp.clone(),
+        registrations_for_app.clone(),
+        catalog_for_app.clone().unwrap_or_default(),
+        observation.clone(),
+    );
+    let mut native_task = native.start(coord.shutdown_signal());
     let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_phase_k(
+        Some(catalog) => crate::app::build_app_full_with_native(
             shared_config.clone(),
             audit_for_proxy,
             resolved_creds.clone(),
@@ -298,6 +395,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             credential_secrets_for_app,
             operational_log_for_app,
             op_resolver_for_app,
+            native.clone(),
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -309,11 +407,13 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         ),
     };
     let agent_shutdown = coord.shutdown_signal();
-    let agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
+    // Every listener is bound and every fallible check done before any
+    // serve task is spawned, so a startup failure leaves nothing serving.
+    let agent_serve: ListenerServe = match auth_mode {
         crate::config::AuthMode::Bearer => {
-            let listener = TcpListener::bind(addr).await?;
-            info!("agent listener bound on {addr} (bearer)");
-            tokio::spawn(async move {
+            let listener = agent_listener;
+            info!(addr = %agent_addr, mode = "bearer", "agent listener bound on {agent_addr} (bearer)");
+            Box::pin(async move {
                 axum::serve(listener, agent_router)
                     .with_graceful_shutdown(agent_shutdown)
                     .await
@@ -334,9 +434,10 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
                 )
             })?;
             let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
-            tokio::spawn(async move {
-                crate::agent_listener::bind_and_serve_mtls(
-                    addr,
+            let listener = agent_listener;
+            Box::pin(async move {
+                crate::agent_listener::serve_mtls(
+                    listener,
                     &server_cert_path,
                     &server_key_path,
                     &ca_pem,
@@ -352,108 +453,178 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // Admin UDS listener (when configured).
     // Admin HTTPS listener piggybacks on the same UdsState — same handlers,
     // different transport (T4.3 / C-3, SPEC §4.2.5).
-    let (admin_task, admin_https_task) = if let Some(state) = admin_state {
-        let path = admin_socket_path.expect("checked above");
-        let uds_shutdown = coord.shutdown_signal();
-        let uds_state = state.clone();
-        let uds = tokio::spawn(async move {
-            crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await
-        });
+    let mut admin_https_addr = None;
+    let (admin_serve, admin_https_serve): (Option<ListenerServe>, Option<ListenerServe>) =
+        if let Some(state) = admin_state {
+            let path = admin_socket_path.expect("checked above");
+            #[cfg(test)]
+            let body_test_path = path.clone();
+            let uds_shutdown = coord.shutdown_signal();
+            let uds_state = state.clone();
+            let uds_listener = crate::admin::uds::bind(&path)
+                .map_err(|e| DaemonError::Server(format!("admin listener: {e}")))?;
+            let uds: ListenerServe = Box::pin(async move {
+                let result = crate::admin::uds::serve(uds_listener, uds_state, uds_shutdown).await;
+                #[cfg(test)]
+                crate::native_authority::body_probe::hold_listener(path, "uds").await;
+                result
+            });
 
-        // Build the HTTPS task only when explicitly enabled. The block
-        // present-but-disabled path is a no-op (off-by-default contract).
-        let snapshot = shared_config.load();
-        let https = match snapshot.listen.admin_https.as_ref().filter(|c| c.enabled) {
-            None => None,
-            Some(c) => {
-                let host: std::net::IpAddr = c.host.parse().unwrap_or([127, 0, 0, 1].into());
-                let addr = SocketAddr::new(host, c.port);
-                let cert = c.cert_path.clone();
-                let key = c.key_path.clone();
-                let auth_mode = c.auth_mode;
-                let https_shutdown = coord.shutdown_signal();
-                let https_state_base = state.clone();
+            // Build the HTTPS task only when explicitly enabled. The block
+            // present-but-disabled path is a no-op (off-by-default contract).
+            let snapshot = shared_config.load();
+            let https: Option<ListenerServe> = match snapshot
+                .listen
+                .admin_https
+                .as_ref()
+                .filter(|c| c.enabled)
+            {
+                None => None,
+                Some(c) => {
+                    let host: std::net::IpAddr = c.host.parse().unwrap_or([127, 0, 0, 1].into());
+                    let addr = SocketAddr::new(host, c.port);
+                    let cert = c.cert_path.clone();
+                    let key = c.key_path.clone();
+                    let auth_mode = c.auth_mode;
+                    let https_shutdown = coord.shutdown_signal();
+                    let https_state_base = state.clone();
+                    let https_listener = crate::admin::https::bind(addr)
+                        .map_err(|e| DaemonError::Server(format!("admin HTTPS listener: {e}")))?;
+                    admin_https_addr = Some(https_listener.local_addr()?);
 
-                match auth_mode {
-                    crate::config::AuthMode::Bearer => Some(tokio::spawn(async move {
-                        crate::admin::https::bind_and_serve(
-                            addr,
-                            &cert,
-                            &key,
-                            https_state_base,
-                            https_shutdown,
-                        )
-                        .await
-                    })),
-                    crate::config::AuthMode::Mtls | crate::config::AuthMode::Both => {
-                        let mtls_cfg = c.mtls.as_ref().ok_or_else(|| {
-                            DaemonError::AdminConfig(format!(
-                                "admin_https.auth_mode={auth_mode:?} requires admin_https.mtls.ca_bundle_path"
-                            ))
-                        })?;
-                        let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
-                        let validator = std::sync::Arc::new(
-                            crate::mtls::MtlsValidator::new(&ca_pem).map_err(|e| {
-                                DaemonError::AdminConfig(format!(
-                                    "admin_https.mtls.ca_bundle_path: {e}"
-                                ))
-                            })?,
-                        );
-                        let mut https_state = https_state_base;
-                        https_state.operator_mtls = Some(crate::admin::uds::OperatorMtlsContext {
-                            auth_mode,
-                            validator,
-                        });
-                        Some(tokio::spawn(async move {
-                            crate::admin::https::bind_and_serve_mtls(
-                                addr,
+                    match auth_mode {
+                        crate::config::AuthMode::Bearer => Some(Box::pin(async move {
+                            let result = crate::admin::https::serve(
+                                https_listener,
                                 &cert,
                                 &key,
-                                &ca_pem,
-                                auth_mode,
-                                https_state,
+                                https_state_base,
                                 https_shutdown,
                             )
-                            .await
-                        }))
+                            .await;
+                            #[cfg(test)]
+                            crate::native_authority::body_probe::hold_listener(
+                                body_test_path,
+                                "https",
+                            )
+                            .await;
+                            result
+                        })),
+                        crate::config::AuthMode::Mtls | crate::config::AuthMode::Both => {
+                            let mtls_cfg = c.mtls.as_ref().ok_or_else(|| {
+                                    DaemonError::AdminConfig(format!(
+                                        "admin_https.auth_mode={auth_mode:?} requires admin_https.mtls.ca_bundle_path"
+                                    ))
+                                })?;
+                            let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
+                            let validator = std::sync::Arc::new(
+                                crate::mtls::MtlsValidator::new(&ca_pem).map_err(|e| {
+                                    DaemonError::AdminConfig(format!(
+                                        "admin_https.mtls.ca_bundle_path: {e}"
+                                    ))
+                                })?,
+                            );
+                            let mut https_state = https_state_base;
+                            https_state.operator_mtls =
+                                Some(crate::admin::uds::OperatorMtlsContext {
+                                    auth_mode,
+                                    validator,
+                                });
+                            Some(Box::pin(async move {
+                                let result = crate::admin::https::serve_mtls(
+                                    https_listener,
+                                    &cert,
+                                    &key,
+                                    &ca_pem,
+                                    auth_mode,
+                                    https_state,
+                                    https_shutdown,
+                                )
+                                .await;
+                                #[cfg(test)]
+                                crate::native_authority::body_probe::hold_listener(
+                                    body_test_path,
+                                    "https",
+                                )
+                                .await;
+                                result
+                            }))
+                        }
                     }
                 }
-            }
+            };
+            drop(snapshot);
+            (Some(uds), https)
+        } else {
+            (None, None)
         };
-        drop(snapshot);
-        (Some(uds), https)
-    } else {
-        (None, None)
-    };
 
+    // All binds succeeded: record them and start serving.
+    if let Some(rt) = &observation {
+        rt.listeners.bound("agent", agent_addr);
+    }
+    let (exits, mut exited) = mpsc::unbounded_channel::<&'static str>();
+    let mut agent_task = spawn_listener("agent listener", &exits, agent_serve);
+    let mut admin_task = admin_serve.map(|serve| spawn_listener("admin listener", &exits, serve));
+    let mut admin_https_task =
+        admin_https_serve.map(|serve| spawn_listener("admin HTTPS listener", &exits, serve));
+
+    drop(exits);
+    if let Some(bound) = bound {
+        let _ = bound.send(BoundAddrs {
+            agent: agent_addr,
+            admin_https: admin_https_addr,
+        });
+    }
+
+    let mut refresh_task = refresh.map(|task| task.spawn(&coord));
+    // A listener that stops before shutdown has stopped serving: stop the
+    // daemon now and report it rather than discovering it at shutdown.
+    let early_exit = tokio::select! {
+        biased;
+        _ = coord.shutdown_signal() => None,
+        Some(name) = exited.recv() => Some(name),
+    };
+    if let Some(name) = early_exit {
+        error!(
+            listener = name,
+            "listener stopped before shutdown; shutting the daemon down"
+        );
+        coord.trigger();
+    }
+    let stopped_early = |name: &str| DaemonError::Server(format!("{name} stopped before shutdown"));
     let drain = async {
-        let agent_res = match (admin_task, admin_https_task) {
+        if let Some(task) = refresh_task.as_mut() {
+            let _ = task.await;
+        }
+        let _ = (&mut native_task).await;
+        let agent_res = match (admin_task.as_mut(), admin_https_task.as_mut()) {
             (Some(uds), Some(https)) => {
-                let (a, u, h) = tokio::join!(agent_task, uds, https);
+                let (a, u, h) = tokio::join!(&mut agent_task, uds, https);
                 (Some(a), Some(u), Some(h))
             }
             (Some(uds), None) => {
-                let (a, u) = tokio::join!(agent_task, uds);
+                let (a, u) = tokio::join!(&mut agent_task, uds);
                 (Some(a), Some(u), None)
             }
             (None, Some(https)) => {
                 // Admin HTTPS without UDS is structurally permitted but
                 // unusual; carry it through anyway.
-                let (a, h) = tokio::join!(agent_task, https);
+                let (a, h) = tokio::join!(&mut agent_task, https);
                 (Some(a), None, Some(h))
             }
-            (None, None) => (Some(agent_task.await), None, None),
+            (None, None) => (Some((&mut agent_task).await), None, None),
         };
         // Sweeper exits on its own when the shutdown signal fires; we
         // join it here so a slow tick can finish cleanly within the
         // drain window. Errors are logged but never poisoned shutdown.
-        if let Some(s) = sweeper_task {
+        if let Some(s) = sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = ops_log_sweeper_task {
+        if let Some(s) = ops_log_sweeper_task.as_mut() {
             let _ = s.await;
         }
-        if let Some(s) = credential_sweeper_task {
+        if let Some(s) = credential_sweeper_task.as_mut() {
             let _ = s.await;
         }
         agent_res
@@ -465,20 +636,56 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
     // (which was the pre-fix bug — see ShutdownCoordinator docs).
     match coord.await_shutdown_then_drain(drain).await {
         Ok((agent_res, admin_res, https_res)) => {
-            if let Some(Ok(Err(e))) = agent_res {
-                return Err(DaemonError::Server(format!("agent listener: {e}")));
+            for (name, result) in [
+                ("agent listener", agent_res),
+                ("admin listener", admin_res),
+                ("admin HTTPS listener", https_res),
+            ] {
+                match result {
+                    Some(Ok(Err(e))) => return Err(DaemonError::Server(format!("{name}: {e}"))),
+                    // A panicked listener is a failure, not a clean exit.
+                    Some(Err(e)) => {
+                        return Err(DaemonError::Server(format!("{name} task failed: {e}")));
+                    }
+                    _ => {}
+                }
             }
-            if let Some(Ok(Err(e))) = admin_res {
-                return Err(DaemonError::Server(format!("admin listener: {e}")));
-            }
-            if let Some(Ok(Err(e))) = https_res {
-                return Err(DaemonError::Server(format!("admin HTTPS listener: {e}")));
+            if let Some(name) = early_exit {
+                return Err(stopped_early(name));
             }
             info!("clean shutdown complete");
             Ok(())
         }
         Err(_) => {
-            warn!("drain window exceeded; tasks dropped");
+            warn!("drain window exceeded; finishing bounded owned cleanup");
+            finish_task(&mut agent_task).await;
+            for task in [admin_task.as_mut(), admin_https_task.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                finish_task(task).await;
+            }
+            for task in [
+                sweeper_task.as_mut(),
+                ops_log_sweeper_task.as_mut(),
+                credential_sweeper_task.as_mut(),
+                refresh_task.as_mut(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                finish_task(task).await;
+            }
+            finish_task(&mut native_task).await;
+            let snapshot = native.snapshot();
+            if snapshot.entries != 0 {
+                return Err(DaemonError::Server(
+                    "native session cleanup incomplete".into(),
+                ));
+            }
+            if let Some(name) = early_exit {
+                return Err(stopped_early(name));
+            }
             Ok(())
         }
     }
@@ -666,6 +873,7 @@ struct AdminSetup {
 async fn build_admin_substrate(
     config: Arc<ArcSwap<AppConfig>>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
 ) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
@@ -700,8 +908,18 @@ async fn build_admin_substrate(
     // a baked-in catalog start with an empty registrations table);
     // parse / validation errors ABORT startup since a malformed
     // catalog ships with the image.
+    let seed_listener = {
+        let cfg = config.load();
+        (cfg.listen.host.clone(), cfg.listen.port)
+    };
     if let Some(seed_path) = crate::registrations::seed_loader::seed_path_from_env() {
-        match crate::registrations::seed_loader::load_or_skip(&registrations, &seed_path).await {
+        match crate::registrations::seed_loader::load_for_listener(
+            &registrations,
+            &seed_path,
+            Some((&seed_listener.0, seed_listener.1)),
+        )
+        .await
+        {
             Ok(()) => {}
             Err(e) => {
                 return Err(DaemonError::AdminConfig(format!(
@@ -791,7 +1009,7 @@ async fn build_admin_substrate(
     let admin = AdminService::with_audit_and_creds(
         agents,
         bootstrap,
-        config,
+        config.clone(),
         Some(audit.clone()),
         resolved_creds.clone(),
     )
@@ -825,17 +1043,8 @@ async fn build_admin_substrate(
     let (oauth_admin, oauth_runtime) = match crate::oauth::SealingKey::from_env() {
         Ok(key) => {
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
-            let locks = crate::oauth::refresh::RefreshLockMap::new();
-            tokio::spawn(crate::oauth::refresh::run(
-                sessions.clone(),
-                catalog.clone(),
-                crate::repo::AgentCredentialRepository::new(pool.clone()),
-                key.clone(),
-                locks.clone(),
-                Some(operational_log.clone()),
-                std::future::pending::<()>(),
-            ));
-            info!("oauth: sealing key loaded; refresh task spawned");
+            let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner.clone());
+            info!("oauth: sealing key loaded; refresh task prepared");
             let refresh_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -913,6 +1122,32 @@ async fn build_admin_substrate(
         );
     }
 
+    let roots =
+        crate::native_authority::runtime::roots(config.load().mcp.upstream_ca_bundle.as_deref())
+            .map_err(|e| DaemonError::AdminConfig(e.to_string()))?;
+    let authority = Arc::new(
+        crate::native_authority::runtime::Runtime::new(
+            registrations.clone(),
+            catalog.clone(),
+            credential_sealing_key.clone(),
+            roots,
+            refresh_owner,
+        )
+        .await
+        .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
+    );
+    authority.listeners.expect("agent");
+    if config
+        .load()
+        .listen
+        .admin_https
+        .as_ref()
+        .is_some_and(|c| c.enabled)
+    {
+        authority.listeners.expect("admin");
+    }
+    let admin = admin.with_native_authority(authority);
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -958,4 +1193,63 @@ pub async fn run_with_drain_window(
     let coord_clone = coord.clone();
     let handle = tokio::spawn(async move { run(config, coord_clone).await });
     (coord, handle)
+}
+
+/// A daemon whose listeners are all bound, from [`start_with_drain_window`].
+pub struct StartedDaemon {
+    pub coord: ShutdownCoordinator,
+    pub handle: tokio::task::JoinHandle<Result<(), DaemonError>>,
+    pub addrs: BoundAddrs,
+}
+
+/// Spawn the runtime and wait until every listener is bound, returning the
+/// actually bound addresses. Configure port 0 to let the OS choose: a port
+/// probed and released by the caller can be taken before the daemon binds
+/// it. A daemon that fails during startup returns its own error here.
+pub async fn start_with_drain_window(
+    config: AppConfig,
+    drain: Duration,
+) -> Result<StartedDaemon, DaemonError> {
+    let coord = ShutdownCoordinator::new(drain);
+    let (tx, rx) = oneshot::channel();
+    let coord_clone = coord.clone();
+    let mut handle =
+        tokio::spawn(async move { run_reporting(config, coord_clone, Some(tx)).await });
+    match rx.await {
+        Ok(addrs) => Ok(StartedDaemon {
+            coord,
+            handle,
+            addrs,
+        }),
+        Err(_) => match (&mut handle).await {
+            Ok(Err(e)) => Err(e),
+            Ok(Ok(())) => Err(DaemonError::Server(
+                "daemon exited before binding its listeners".into(),
+            )),
+            Err(e) => Err(DaemonError::Server(format!("daemon task failed: {e}"))),
+        },
+    }
+}
+
+async fn finish_task<T>(task: &mut tokio::task::JoinHandle<T>) {
+    // A completed handle may already have been consumed by the drain future.
+    if task.is_finished() {
+        return;
+    }
+    if tokio::time::timeout(Duration::from_secs(6), &mut *task)
+        .await
+        .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+#[cfg(test)]
+#[path = "daemon/native_body/tests.rs"]
+mod native_body_tests;
+
+#[cfg(test)]
+pub(crate) fn body_test_lock(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    state_lock::acquire(Some(path))
 }

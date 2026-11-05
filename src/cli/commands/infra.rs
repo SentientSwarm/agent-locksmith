@@ -28,7 +28,7 @@ pub enum InfraCmd {
         /// Registration name.
         name: String,
         #[command(flatten)]
-        opts: PutOpts,
+        opts: Box<PutOpts>,
     },
     /// Delete an infra registration.
     Delete {
@@ -47,7 +47,7 @@ pub async fn run(client: &CliClient, format: Format, cmd: InfraCmd) -> Result<()
         InfraCmd::List => registration::do_list(client, format, CliKind::Infra).await,
         InfraCmd::Get { name } => registration::do_get(client, format, CliKind::Infra, &name).await,
         InfraCmd::Put { name, opts } => {
-            registration::do_put(client, format, CliKind::Infra, &name, opts).await
+            registration::do_put(client, format, CliKind::Infra, &name, *opts).await
         }
         InfraCmd::Delete { name } => {
             registration::do_delete(client, format, CliKind::Infra, &name).await
