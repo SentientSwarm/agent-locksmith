@@ -1,0 +1,199 @@
+--- a/src/service.rs
++++ b/src/service.rs
+@@ -1322,6 +1322,22 @@
+     tokio::task::spawn_local(future)
+ }
+ 
++#[cfg(not(feature = "local"))]
++fn spawn_handler_task(
++    tasks: &mut tokio::task::JoinSet<()>,
++    future: impl Future<Output = ()> + Send + 'static,
++) {
++    tasks.spawn(future);
++}
++
++#[cfg(feature = "local")]
++fn spawn_handler_task(
++    tasks: &mut tokio::task::JoinSet<()>,
++    future: impl Future<Output = ()> + 'static,
++) {
++    tasks.spawn_local(future);
++}
++
+ /// Run the service loop over `transport`.
+ ///
+ /// `initial_messages` are messages the caller already read from `transport`
+@@ -1370,6 +1386,7 @@
+         let mut batch_messages = initial_messages;
+         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
+         let mut response_send_tasks = tokio::task::JoinSet::<()>::new();
++        let mut handler_tasks = tokio::task::JoinSet::<()>::new();
+         #[derive(Debug)]
+         enum SendTaskResult {
+             Request {
+@@ -1438,6 +1455,9 @@
+                         Event::ResponseSendTaskResult(
+                             result.expect("non-empty response send task set")
+                         )
++                    }
++                    _ = handler_tasks.join_next(), if !handler_tasks.is_empty() => {
++                        continue;
+                     }
+                     _ = serve_loop_ct.cancelled() => {
+                         tracing::info!("task cancelled");
+@@ -1586,7 +1606,7 @@
+                         };
+                         let current_span = tracing::Span::current();
+                         let handler_id = id.clone();
+-                        spawn_service_task(async move {
++                        spawn_handler_task(&mut handler_tasks, async move {
+                             let result = ORIGINATING_REQUEST
+                                 .scope(handler_id, service.handle_request(request, context))
+                                 .await;
+@@ -1694,7 +1714,7 @@
+                             extensions,
+                         };
+                         let current_span = tracing::Span::current();
+-                        spawn_service_task(async move {
++                        spawn_handler_task(&mut handler_tasks, async move {
+                             let result = service.handle_notification(notification, context).await;
+                             if let Err(error) = result {
+                                 tracing::warn!(%error, "Error sending notification");
+@@ -1791,6 +1811,13 @@
+         // Preserve the response drain above, then cancel any handlers still running.
+         // EOF does not cancel the externally supplied service token.
+         serve_loop_ct.cancel();
++
++        handler_tasks.abort_all();
++        send_task_set.abort_all();
++        response_send_tasks.abort_all();
++        while handler_tasks.join_next().await.is_some() {}
++        while send_task_set.join_next().await.is_some() {}
++        while response_send_tasks.join_next().await.is_some() {}
+ 
+         let sink_close_result = transport.close().await;
+         if let Err(e) = sink_close_result {
+--- a/src/transport/streamable_http_server/session.rs
++++ b/src/transport/streamable_http_server/session.rs
+@@ -91,6 +91,21 @@
+     type Error: std::error::Error + Send + 'static;
+     type Transport: crate::transport::Transport<RoleServer>;
+ 
++    /// Cancellation owned by the session manager, including initialization.
++    fn session_cancellation_token(&self, _id: &SessionId) -> tokio_util::sync::CancellationToken {
++        tokio_util::sync::CancellationToken::new()
++    }
++
++    /// Notify the manager that the complete SDK handshake has finished.
++    fn session_initialized(&self, _id: &SessionId) {}
++
++    /// Own the complete initialize/service/close task. The close callback must
++    /// not wait for this same task. A false result means service-task join
++    /// failed, so nested cleanup is unconfirmed. The default preserves behavior.
++    fn spawn_session(&self, _id: SessionId, future: impl Future<Output = bool> + Send + 'static) {
++        tokio::spawn(future);
++    }
++
+     /// Create a new session and return its ID together with the transport
+     /// that will be used to exchange MCP messages within this session.
+     fn create_session(
+@@ -103,6 +118,17 @@
+         id: &SessionId,
+         message: ClientJsonRpcMessage,
+     ) -> impl Future<Output = Result<ServerJsonRpcMessage, Self::Error>> + Send;
++
++    /// Own the initial response body, including an unpolled body drop. Clients
++    /// may stop reading after its final event without polling EOF. The default
++    /// preserves the original one-event response stream.
++    fn initialization_response(
++        &self,
++        _id: &SessionId,
++        response: ServerJsonRpcMessage,
++    ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
++        Ok(futures::stream::iter([ServerSseMessage::from_message(response)]))
++    }
+ 
+     /// Return `true` if a session with the given ID exists and is active.
+     fn has_session(&self, id: &SessionId)
+--- a/src/transport/streamable_http_server/tower.rs
++++ b/src/transport/streamable_http_server/tower.rs
+@@ -30,7 +30,7 @@
+         InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
+         ProtocolVersion, RequestId, ServerConfig, ServerJsonRpcMessage, ServerResult,
+     },
+-    serve_server,
++    service::serve_server_with_ct,
+     service::{
+         NotificationContext, RequestContext, Service, negotiate_protocol_version,
+         serve_directly_with_ct, uses_legacy_lifecycle,
+@@ -1618,28 +1618,34 @@
+         S: crate::ServerHandler + Send + 'static,
+         M: SessionManager,
+     {
+-        tokio::spawn(async move {
+-            let svc =
+-                serve_server::<S, M::Transport, _, TransportAdapterIdentity>(service, transport)
+-                    .await;
+-            match svc {
++        let ct = session_manager.session_cancellation_token(&session_id);
++        let owner = session_manager.clone();
++        owner.spawn_session(session_id.clone(), async move {
++            let svc = serve_server_with_ct::<S, M::Transport, _, TransportAdapterIdentity>(
++                service, transport, ct,
++            )
++            .await;
++            let completed = match svc {
+                 Ok(svc) => {
++                    session_manager.session_initialized(&session_id);
+                     if let Some(tx) = init_done_tx {
+                         let _ = tx.send(());
+                     }
+-                    let _ = svc.waiting().await;
++                    svc.waiting().await.is_ok()
+                 }
+                 Err(e) => {
+                     tracing::error!("Failed to serve session: {e}");
+                     // Dropping init_done_tx (if Some) signals failure to the caller.
++                    true
+                 }
+-            }
++            };
+             let _ = session_manager
+                 .close_session(&session_id)
+                 .await
+                 .inspect_err(|e| {
+                     tracing::error!("Failed to close session {session_id}: {e}");
+                 });
++            completed
+         });
+     }
+ 
+@@ -2197,8 +2203,10 @@
+                             );
+                         });
+                 }
+-                let stream =
+-                    futures::stream::once(async move { ServerSseMessage::from_message(response) });
++                let stream = self
++                    .session_manager
++                    .initialization_response(&session_id, response)
++                    .map_err(internal_error_response("initial response"))?;
+                 // Prepend priming event if sse_retry configured
+                 let stream = if let Some(retry) = self.config.sse_retry {
+                     let priming = ServerSseMessage::priming("0", retry);
+--- a/src/transport/worker.rs
++++ b/src/transport/worker.rs
+@@ -203,6 +203,13 @@
+ impl<W: Worker> WorkerTransport<W> {
+     pub fn cancel_token(&self) -> CancellationToken {
+         self.ct.clone()
++    }
++    /// Abort the owned worker without taking its join handle. Callers must
++    /// still await `close` to observe termination.
++    pub fn worker_abort_handle(&self) -> Option<tokio::task::AbortHandle> {
++        self.join_handle
++            .as_ref()
++            .map(tokio::task::JoinHandle::abort_handle)
+     }
+     pub fn spawn(worker: W) -> Self {
+         Self::spawn_with_ct(worker, CancellationToken::new())

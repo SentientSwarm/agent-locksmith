@@ -211,8 +211,15 @@ async fn ts222_degraded_session_returns_503() {
     seed_session(&h, "rt", Some("at"), Some(unix_now() + 3600)).await;
     h.sessions
         .mark_degraded(
-            "codex",
-            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+            &h.sessions
+                .get(
+                    &h.sealing_key,
+                    "codex",
+                    agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+                )
+                .await
+                .unwrap()
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -259,9 +266,9 @@ async fn ts223_expired_access_token_triggers_inline_refresh() {
     resp.assert_status_ok();
 }
 
-// ─── TS-224: refresh failure marks session degraded + 503 ──────────────────
+// ─── TS-224: refresh failure retains pending custody + 503 ──────────────────
 #[tokio::test]
-async fn ts224_refresh_failure_marks_session_degraded() {
+async fn ts224_refresh_failure_requires_reconnect() {
     let h = setup().await;
     seed_session(&h, "rt-bad", Some("at"), Some(unix_now() - 60)).await;
 
@@ -281,7 +288,7 @@ async fn ts224_refresh_failure_marks_session_degraded() {
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"]["code"], "oauth_refresh_failed");
 
-    // Session is now degraded; second call returns 503 without
+    // Session is now pending; second call returns 503 without
     // hitting the token endpoint again.
     let resp2 = h
         .server
@@ -299,7 +306,13 @@ async fn ts224_refresh_failure_marks_session_degraded() {
         .await
         .unwrap()
         .unwrap();
-    assert!(session.degraded);
+    assert!(session.refresh_pending);
+    assert!(!session.degraded);
+    assert_eq!(
+        resp2.json::<serde_json::Value>()["error"]["code"],
+        "oauth_reconnect_required"
+    );
+    assert_eq!(h.mock.received_requests().await.unwrap().len(), 1);
 }
 
 // ─── TS-225: audit row carries auth_mode + oauth_session_id ────────────────
