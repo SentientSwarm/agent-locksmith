@@ -36,14 +36,47 @@ impl Drop for HttpsFixture {
     }
 }
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+/// Read the admin HTTPS address the daemon actually bound from its JSON
+/// log, then keep draining stdout so the daemon never blocks on a full
+/// pipe. The config uses port 0: a port probed and released by the test
+/// could be taken before the daemon binds it (AGENT-219).
+fn bound_https_addr(daemon: &mut std::process::Child, timeout: Duration) -> String {
+    use std::io::BufRead;
+    let stdout = daemon.stdout.take().expect("daemon stdout piped");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let fields = &event["fields"];
+            if fields["message"] == "admin HTTPS listener bound"
+                && let Some(addr) = fields["addr"].as_str()
+            {
+                let _ = tx.send(addr.to_string());
+            }
+        }
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(addr) = rx.recv_timeout(Duration::from_millis(50)) {
+            return addr;
+        }
+        if let Some(status) = daemon.try_wait().expect("poll daemon") {
+            panic!("daemon exited before binding admin HTTPS: {status}");
+        }
+        if Instant::now() > deadline {
+            panic!("daemon did not report its admin HTTPS address within {timeout:?}");
+        }
+    }
 }
 
 fn wait_for_socket(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
-    while !path.exists() {
+    // The socket file appears at bind(), before listen(); only a successful
+    // connect proves the daemon is accepting.
+    while std::os::unix::net::UnixStream::connect(path).is_err() {
         if Instant::now() > deadline {
             panic!("daemon did not bind {} within {timeout:?}", path.display());
         }
@@ -86,21 +119,19 @@ fn start_daemon_with_https() -> HttpsFixture {
     )
     .unwrap();
 
-    let agent_port = pick_port();
-    let https_port = pick_port();
     std::fs::write(
         &config_path,
         format!(
             r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
   admin_https:
     enabled: true
     host: "127.0.0.1"
-    port: {https_port}
+    port: 0
     cert_path: "{cert}"
     key_path: "{key}"
 shutdown:
@@ -119,20 +150,23 @@ tools: []
     )
     .unwrap();
 
-    let daemon = Command::new(LOCKSMITHD)
+    let mut daemon = Command::new(LOCKSMITHD)
         .arg("--config")
         .arg(&config_path)
-        .stdout(Stdio::null())
+        // The bound address comes from an info-level log line.
+        .env("RUST_LOG", "agent_locksmith=info")
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("locksmithd spawns");
 
+    let https_addr = bound_https_addr(&mut daemon, Duration::from_secs(5));
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     HttpsFixture {
         _dir: dir,
         socket_path,
-        https_url: format!("https://127.0.0.1:{https_port}"),
+        https_url: format!("https://{https_addr}"),
         ca_bundle: cert_path,
         op_token_wire,
         daemon,

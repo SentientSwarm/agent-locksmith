@@ -36,10 +36,11 @@ fn acl(raw: Option<String>) -> Result<Option<Vec<String>>, Error> {
         .transpose()
 }
 async fn registrations(c: &mut SqliteConnection) -> Result<Vec<Registration>, Error> {
-    let rows = sqlx::query("SELECT name, kind, upstream, egress, auth_json, disabled, created_at, updated_at FROM registrations ORDER BY name").fetch_all(c).await?;
+    let rows = sqlx::query("SELECT name, protocol, kind, upstream, egress, auth_json, disabled, created_at, updated_at FROM registrations ORDER BY name").fetch_all(c).await?;
     rows.iter()
         .map(|r| {
             Ok(Registration {
+                protocol: r.try_get("protocol")?,
                 name: r.try_get("name")?,
                 kind: r.try_get("kind")?,
                 upstream: r.try_get("upstream")?,
