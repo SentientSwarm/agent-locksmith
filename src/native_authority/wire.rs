@@ -147,7 +147,9 @@ impl Connection<'_> {
                 64 * 1024,
             )
             .await
-            .map_err(|_| Error("upstream_observation_failed"))
+            .map_err(|e| {
+                Error(locksmith_mcp_transport::io_code(&e).unwrap_or("upstream_observation_failed"))
+            })
     }
     pub async fn cleanup(&self) {
         if let Some(session) = &self.session {

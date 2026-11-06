@@ -14,7 +14,7 @@ mod sse_guard;
 mod transport;
 
 pub use client::Client;
-pub use error::Error;
+pub use error::{Error, io_code};
 pub use limits::Limits;
 pub use metrics::{Metrics, Snapshot};
 

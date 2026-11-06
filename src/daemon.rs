@@ -1056,6 +1056,34 @@ async fn build_admin_substrate(
     }
     let catalog: Arc<ArcSwap<crate::registrations::Catalog>> = Arc::new(ArcSwap::from_pointee(cat));
 
+    // Phase J (ADR-0008) — credential-store sealing key. Built only when
+    // the operator supplies `LOCKSMITH_CREDENTIAL_SEALING_KEY` — distinct
+    // from the OAuth key so the two sealing domains have independent
+    // blast radius. When absent, the stored-credential admin routes 404
+    // (feature off) and any `stored_*` registration fails loud with a
+    // `503 credential_unresolved` at proxy time (T1.6). The sealed store
+    // is constructed only when the key is present so "no key" cleanly
+    // means "feature off".
+    let (credential_sealing_key, credential_secrets) =
+        match crate::secret::CredentialSealingKey::from_env() {
+            Ok(key) => {
+                info!("credential store: sealing key loaded; stored-credential routes mounted");
+                let secrets = crate::repo::CredentialSecretsRepository::new(pool.clone());
+                (Some(key), Some(secrets))
+            }
+            Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
+                info!(
+                    "credential store: LOCKSMITH_CREDENTIAL_SEALING_KEY unset; stored-credential routes not mounted"
+                );
+                (None, None)
+            }
+            Err(e) => {
+                return Err(DaemonError::AdminConfig(format!(
+                    "credential sealing key: {e}"
+                )));
+            }
+        };
+
     // Phase F.4 — OAuth admin state. Built only when the operator
     // supplies `LOCKSMITH_OAUTH_SEALING_KEY`. When absent, OAuth
     // registrations exist in the catalog but bootstrap calls fail
@@ -1072,11 +1100,12 @@ async fn build_admin_substrate(
                 .unwrap_or_else(|_| reqwest::Client::new());
             let consent = match config.load().oauth_consent.clone() {
                 Some(c) => Some(
-                    crate::oauth::consent::Runtime::new(
+                    crate::oauth::consent::Runtime::with_client_key(
                         pool.clone(),
                         key.clone(),
                         c,
                         refresh_owner.clone(),
+                        credential_sealing_key.clone(),
                     )
                     .await
                     .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
@@ -1112,34 +1141,6 @@ async fn build_admin_substrate(
             return Err(DaemonError::AdminConfig(format!("oauth sealing key: {e}")));
         }
     };
-
-    // Phase J (ADR-0008) — credential-store sealing key. Built only when
-    // the operator supplies `LOCKSMITH_CREDENTIAL_SEALING_KEY` — distinct
-    // from the OAuth key so the two sealing domains have independent
-    // blast radius. When absent, the stored-credential admin routes 404
-    // (feature off) and any `stored_*` registration fails loud with a
-    // `503 credential_unresolved` at proxy time (T1.6). The sealed store
-    // is constructed only when the key is present so "no key" cleanly
-    // means "feature off".
-    let (credential_sealing_key, credential_secrets) =
-        match crate::secret::CredentialSealingKey::from_env() {
-            Ok(key) => {
-                info!("credential store: sealing key loaded; stored-credential routes mounted");
-                let secrets = crate::repo::CredentialSecretsRepository::new(pool.clone());
-                (Some(key), Some(secrets))
-            }
-            Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
-                info!(
-                    "credential store: LOCKSMITH_CREDENTIAL_SEALING_KEY unset; stored-credential routes not mounted"
-                );
-                (None, None)
-            }
-            Err(e) => {
-                return Err(DaemonError::AdminConfig(format!(
-                    "credential sealing key: {e}"
-                )));
-            }
-        };
 
     // Phase J / M2 (LOG-2) — operational-log emitter + its drain task.
     // Built unconditionally when the admin substrate is up (the table is

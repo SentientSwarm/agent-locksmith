@@ -20,6 +20,7 @@ pub(super) struct Claim {
     token_client: reqwest::Client,
     pub(super) wire_client: locksmith_mcp_transport::Client,
     old: token::Token,
+    client_secret: Option<secrecy::SecretString>,
     pub(super) deadline: Instant,
 }
 #[derive(Clone)]
@@ -64,7 +65,13 @@ impl Runtime {
             trace.enter("token");
             self.check_refresh(&claim).await?;
             let profile = self.profile(&claim.profile_id)?;
-            let token = token::refresh(profile, &claim.token_client, &claim.old).await?;
+            let token = token::refresh(
+                profile,
+                &claim.token_client,
+                &claim.old,
+                claim.client_secret.as_ref().map(|v| v.expose_secret()),
+            )
+            .await?;
             #[cfg(test)]
             crate::oauth::refresh::recovery_barrier::reach("controlled_received").await;
             self.check_refresh(&claim).await?;
@@ -119,6 +126,7 @@ impl Runtime {
             .await?
             .ok_or(Error("source_conflict"))?;
         let profile = self.profile(&claim.profile_id)?;
+        clients::current(c, &claim.owner, profile).await?;
         if !config::managed_kind(row.get("kind"))
             || row.get::<Option<&str>, _>("owner_id") != Some(&claim.owner)
             || row.get::<i64, _>("incarnation") != claim.generation

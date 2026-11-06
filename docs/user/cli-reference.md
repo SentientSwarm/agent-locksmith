@@ -409,3 +409,11 @@ Eligible definition promotion accepts `--contract-policy finite-v2` and repeatab
 active pin requires deactivation and deliberate repair. The review JSON must
 repeat the policy, and open-empty input requires `input_restriction:"empty-arguments"`.
 See [exact policy, projection and old-reader limits](operator/native-contract-policy.md).
+
+### Confidential OAuth client custody
+
+See [Slack OAuth](operator/slack-oauth.md) for `oauth client set --secret-stdin`,
+`oauth client status`, and `oauth client retire`. All require the connection name,
+`--profile` and `--client-generation`. Set seals a new immutable owner generation;
+reads never reveal the value. Slack `oauth connect` requires explicit
+`--scopes search:read.public,channels:history`.

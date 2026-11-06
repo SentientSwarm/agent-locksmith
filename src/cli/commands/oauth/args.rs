@@ -2,7 +2,12 @@ use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum OauthCmd {
-    /// Create one controlled or hosted Linear consent attempt; prints its URL once.
+    /// Manage an owner-bound protected confidential client generation.
+    Client {
+        #[command(subcommand)]
+        command: super::client::ClientCmd,
+    },
+    /// Create one supported owner-bound consent attempt; prints its URL once.
     /// No browser is opened and no agent authority is granted.
     Connect {
         name: String,
@@ -16,6 +21,9 @@ pub enum OauthCmd {
         redirect_profile: String,
         #[arg(long)]
         expected_config_revision: i64,
+        /// Exact requested scopes. Slack requires search:read.public,channels:history.
+        #[arg(long, value_delimiter = ',', default_value = "read")]
+        scopes: Vec<String>,
     },
     /// Read owner-bound attempt state. Never returns the authorization URL.
     AttemptStatus {
@@ -31,13 +39,13 @@ pub enum OauthCmd {
         #[arg(allow_hyphen_values = true)]
         attempt: String,
     },
-    /// Read owner-bound controlled/hosted account metadata and current revisions.
+    /// Read owner-bound supported account metadata and current revisions.
     AccountStatus {
         name: String,
         #[arg(long)]
         label: String,
     },
-    /// Manually refresh owned controlled/hosted custody with its current revision.
+    /// Manually refresh owned supported custody with its current revision.
     /// Pending/uncertain custody requires disconnect and fresh consent.
     Refresh {
         name: String,
@@ -47,7 +55,7 @@ pub enum OauthCmd {
         #[arg(long, allow_hyphen_values = true)]
         if_match: String,
     },
-    /// Disconnect owned controlled/hosted custody with its current opaque revision.
+    /// Disconnect owned supported custody with its current opaque revision.
     Disconnect {
         name: String,
         #[arg(long)]

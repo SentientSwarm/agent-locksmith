@@ -13,16 +13,17 @@ struct Twin {
 }
 impl Twin {
     fn start(f: &Fixture) -> Self {
+        Self::script(
+            f,
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/oauth_consent/receiver.py"
+            ),
+        )
+    }
+    fn script(f: &Fixture, script: &str) -> Self {
         let mut command = process::command("python3");
-        command
-            .args([
-                "-B",
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/tests/oauth_consent/receiver.py"
-                ),
-            ])
-            .arg(f.path());
+        command.args(["-B", script]).arg(f.path());
         let log = std::fs::File::create(f.path().join("receiver.log")).unwrap();
         command
             .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -772,3 +773,6 @@ pub mod native;
 
 #[path = "hosted.rs"]
 pub mod hosted;
+
+#[path = "slack/mod.rs"]
+pub mod slack;

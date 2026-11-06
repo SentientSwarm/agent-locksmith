@@ -73,6 +73,7 @@ impl Runtime {
             return Err(Error("not_found"));
         }
         let p = self.profile(profile_id)?;
+        clients::current(c, owner_id, p).await?;
         if row.get::<i64, _>("incarnation") != *incarnation
             || row.get::<&str, _>("profile_id") != profile_id
             || row.get::<&str, _>("profile_digest") != profile_digest
@@ -119,7 +120,7 @@ impl Runtime {
         if view["revision"].as_str() != Some(expected) {
             return Err(Error("source_conflict"));
         }
-        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1')")
+        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1')")
             .bind(name).bind(label).bind(owner).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
         let selection = AuthSpec::ControlledOauth {
             session_label: label.into(),

@@ -186,7 +186,8 @@ async fn change(
                     .ok_or(Error::Unavailable)?
                     .profile(id)
                     .map_err(|_| Error::Invalid)?;
-                if p.hosted() || p.resource != r.upstream {
+                if p.hosted() || p.resource != r.upstream || p.scopes() != declared.required_scopes
+                {
                     return Err(Error::Invalid);
                 }
                 (

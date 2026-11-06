@@ -1,5 +1,7 @@
 # Controlled OAuth accounts for native MCP
 
+For the separate confidential Slack profile, see [Slack OAuth](slack-oauth.md).
+
 For the fixed hosted Linear profile and its separately named offline twin, see
 [hosted Linear setup](hosted-linear.md). The controlled profile below retains its
 local-only behavior.

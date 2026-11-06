@@ -174,7 +174,9 @@ impl IntoResponse for Error {
             "observation_capacity" => StatusCode::TOO_MANY_REQUESTS,
             "agent_not_found" | "not_found" => StatusCode::NOT_FOUND,
             "operation_deadline" | "body_deadline" => StatusCode::REQUEST_TIMEOUT,
-            "oauth_custody_unavailable"
+            "deadline"
+            | "http"
+            | "oauth_custody_unavailable"
             | "backend_unavailable"
             | "shutting_down"
             | "native_preparation_unavailable" => StatusCode::SERVICE_UNAVAILABLE,

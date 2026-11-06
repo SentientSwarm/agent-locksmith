@@ -125,10 +125,7 @@ impl<'a> Wire<'a> {
     }
 
     async fn post(&self, value: Value) -> Result<Reply> {
-        match self.guard {
-            Guard::Consent(a) => self.runtime.check(a).await?,
-            Guard::Refresh(c) => self.runtime.check_refresh(c).await?,
-        }
+        self.check().await?;
         let message: ClientJsonRpcMessage =
             serde_json::from_value(value).map_err(|_| Error("mcp_request_invalid"))?;
         self.client
@@ -140,7 +137,15 @@ impl<'a> Wire<'a> {
                 headers(),
             )
             .await
-            .map_err(|_| Error("request_failed"))
+            .map_err(|e| Error(locksmith_mcp_transport::io_code(&e).unwrap_or("request_failed")))
+    }
+
+    pub(super) async fn check(&self) -> Result<()> {
+        match self.guard {
+            Guard::Consent(a) => self.runtime.check(a).await?,
+            Guard::Refresh(c) => self.runtime.check_refresh(c).await?,
+        }
+        Ok(())
     }
 
     pub async fn close(&self) -> &'static str {
@@ -199,7 +204,9 @@ async fn decode(reply: Reply) -> Result<(ServerJsonRpcMessage, Option<String>)> 
                     .next()
                     .await
                     .ok_or(Error("mcp_stream_ended"))?
-                    .map_err(|_| Error("mcp_stream_refused"))?;
+                    .map_err(|e| {
+                        Error(locksmith_mcp_transport::io_code(&e).unwrap_or("mcp_stream_refused"))
+                    })?;
                 let text = event.data.unwrap_or_default();
                 if text.trim().is_empty() {
                     continue;

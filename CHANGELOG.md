@@ -12,6 +12,13 @@
 
 ### Changed
 
+- Add an explicit [confidential Slack user profile](docs/user/operator/slack-oauth.md)
+  through owner-bound sealed client/token custody and customer definition activation.
+  S256/client authentication, exact identities/scopes, finite tool authority and
+  deliberate refresh repair are exercised against an invented TLS receiver.
+  Migration 0021 preserves custody/highwater and permanently retires client generations.
+  Preserve closed deadline/HTTP diagnostics; no live provider acceptance is claimed.
+
 - Add explicit [finite-v2 native contracts](docs/user/operator/native-contract-policy.md)
   for supported customer None/bearer/OAuth sources through existing review/grants.
   Customer registrations can explicitly select names after the same complete

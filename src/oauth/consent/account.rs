@@ -14,7 +14,7 @@ impl Runtime {
         if !identifier(name) || !identifier(label) {
             return Err(Error("invalid_request"));
         }
-        let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at,scope_echoed,refresh_token_ciphertext IS NOT NULL AS has_refresh FROM oauth_sessions WHERE name=? AND session_label=?")
+        let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at,scope,scope_echoed,refresh_token_ciphertext IS NOT NULL AS has_refresh FROM oauth_sessions WHERE name=? AND session_label=?")
             .bind(name).bind(label).fetch_optional(&mut *c).await?;
         if let Some(row) = row {
             if !config::managed_kind(row.get("kind"))
@@ -30,7 +30,9 @@ impl Runtime {
             let profile = self.profile(row.get("profile_id")).ok();
             let profile_digest = profile.map(config::Profile::digest).transpose()?;
             let compatible = if let Some(profile) = profile {
-                if !profile_matches(&row, profile)? {
+                if !profile_matches(&row, profile)?
+                    || clients::current(c, owner, profile).await.is_err()
+                {
                     false
                 } else {
                     match super::store::registration(c, name, Some(profile)).await {
@@ -92,7 +94,7 @@ impl Runtime {
             );
             return Ok(
                 json!({"state":if reconnect {"reconnect_required"} else {"connected_unbound"},"kind":row.get::<&str,_>("kind"),"profile":row.get::<&str,_>("profile_id"),"account_generation":generation,"revision":revision,
-                "config_revision":registration.as_ref().map(|r| r.1),"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":["read"],"granted_scope":if row.get::<bool,_>("scope_echoed") {Some("read")} else {None},
+                "config_revision":registration.as_ref().map(|r| r.1),"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":requested_scopes(row.get("kind")),"granted_scope":row.get::<bool,_>("scope_echoed").then(|| row.get::<&str,_>("scope")),
                 "token_version":version,"refresh_pending":pending,"reconnect_required":reconnect,"refresh_available":reason.is_none(),"refresh_unavailable_reason":reason}),
             );
         }
@@ -117,4 +119,16 @@ pub(super) fn profile_matches(row: &SqliteRow, p: &config::Profile) -> Result<bo
         && row.get::<&str, _>("profile_digest") == p.digest()?
         && row.get::<&str, _>("workspace_id") == p.expected_workspace
         && row.get::<&str, _>("user_id") == p.expected_user)
+}
+
+// Managed kinds have fixed requested scopes; current config may be removed/replaced.
+fn requested_scopes(kind: &str) -> Vec<&'static str> {
+    if matches!(
+        kind,
+        "slack_confidential_v1" | "slack_confidential_fixture_v1"
+    ) {
+        super::slack::SCOPES.to_vec()
+    } else {
+        vec!["read"]
+    }
 }

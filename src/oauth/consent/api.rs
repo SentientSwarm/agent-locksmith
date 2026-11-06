@@ -15,6 +15,14 @@ pub fn router(runtime: Arc<Runtime>) -> Router {
     Router::new()
         .route("/tools/{name}/oauth/attempts", post(start))
         .route(
+            "/tools/{name}/oauth/client",
+            post(super::client_api::set).layer(DefaultBodyLimit::max(16384)),
+        )
+        .route(
+            "/tools/{name}/oauth/clients/{profile}/{generation}",
+            get(super::client_api::get).delete(super::client_api::delete),
+        )
+        .route(
             "/tools/{name}/oauth/attempts/{id}",
             get(poll).delete(cancel),
         )
@@ -53,7 +61,7 @@ pub(super) fn headers(mut response: Response) -> Response {
     }
     response
 }
-fn error(e: Error) -> Response {
+pub(super) fn error(e: Error) -> Response {
     let status = error_status(e);
     headers((status,Json(json!({"error":{"type":"oauth_consent","code":e.0,"message":"Consent operation refused"}}))).into_response())
 }

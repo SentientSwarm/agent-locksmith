@@ -70,7 +70,15 @@ impl Runtime {
         .into();
         *stage.lock().expect("stage") = "token";
         self.check(a).await?;
-        let token = token::exchange(p, code, verifier.expose_secret()).await?;
+        let client_secret = self.client_for_attempt(a).await?;
+        self.check(a).await?;
+        let token = token::exchange(
+            p,
+            code,
+            verifier.expose_secret(),
+            client_secret.as_ref().map(|v| v.expose_secret()),
+        )
+        .await?;
         self.check(a).await?;
         self.quarantine(a, &token).await?;
         let mut wire = wire::Wire::new(self, a, token.access.expose_secret(), stage.clone())?;
@@ -117,6 +125,9 @@ pub(super) async fn identity(
     token: &token::Token,
     old: Option<&token::Token>,
 ) -> Result<()> {
+    if p.slack() {
+        return super::slack_identity::verify(w, p, token, old).await;
+    }
     let initialized = w.initialize().await?;
     token.screen(&initialized)?;
     if let Some(old) = old {
