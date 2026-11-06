@@ -45,6 +45,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthSpec {
+    /// Owner-authorized native delegation. Only select-oauth may construct it.
+    ControlledOauth {
+        session_label: String,
+        owner_id: String,
+        incarnation: i64,
+        profile_id: String,
+        profile_digest: String,
+    },
     None,
     Header {
         header: String,
@@ -195,7 +203,8 @@ impl AuthSpec {
             | AuthSpec::OpHeader { .. }
             | AuthSpec::OpBearer { .. }
             | AuthSpec::OauthPkce { .. }
-            | AuthSpec::OauthDeviceCode { .. } => None,
+            | AuthSpec::OauthDeviceCode { .. }
+            | AuthSpec::ControlledOauth { .. } => None,
             AuthSpec::Header { env_var, .. } | AuthSpec::Bearer { env_var } => {
                 Some(SecretRef::FromEnv {
                     var: env_var.clone(),

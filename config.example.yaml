@@ -11,6 +11,22 @@ listen:
 #   mode: "bearer"
 #   token: "${LOCKSMITH_INBOUND_TOKEN}"
 
+# Native MCP budgets/host policy require restart. Calls need reviewed tool grants.
+# See docs/user/operator/native-mcp.md and docs/development/native-mcp.md.
+# Fixed native context is reviewed per account, not global config:
+# docs/user/operator/native-context.md (diagnostics and synchronous sink limits).
+# mcp:
+#   # Native observation and dispatch trust; adds roots and requires restart.
+#   # See docs/user/operator/native-tool-review.md. Never disables TLS checks.
+#   upstream_ca_bundle: "/etc/locksmith/ca/native-provider.pem"
+#   allowed_hosts: ["localhost", "127.0.0.1", "[::1]"]
+#   allowed_origins: [] # Reject every present Origin unless explicitly allowed.
+#   ingress: 128
+#   sessions: 256
+#   request_ms: 10000
+#   response_ms: 60000
+#   request_bytes: 262144
+
 # HTTP CONNECT proxy used for tools whose `egress: proxied` is set
 # (typically Pipelock, per D-16).
 # egress_proxy: "http://127.0.0.1:8888"
@@ -98,3 +114,14 @@ tools:
     timeouts:
       request_seconds: 15
       idle_seconds: 60
+
+# Native connection MCP JSON can opt in with "compact": true before authority setup.
+# This is per-registration metadata (not a global mcp setting); see
+# docs/user/agent-integration/compact-mcp.md for toggle/downgrade costs.
+
+# Optional owner-bound operator consent (off when omitted):
+# See docs/user/operator/oauth-consent.md for controlled local profiles and
+# docs/user/operator/hosted-linear.md for fixed hosted Linear profiles, the
+# selected_tools list, callback TLS configuration and migration 0019 costs.
+# Consent alone creates no agent authority; select, observe, review and grant
+# explicitly. Hosted fixture and real-provider profiles remain distinct.

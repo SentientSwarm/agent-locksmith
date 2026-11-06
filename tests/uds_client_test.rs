@@ -9,17 +9,11 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 #[tokio::test]
 async fn uds_client_round_trips_register_and_status() {
     let dir = TempDir::new().unwrap();
     let socket_path = dir.path().join("admin.sock");
     let ops_path = dir.path().join("operators.yaml");
-    let port = pick_port();
 
     // Operator credentials.
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
@@ -38,11 +32,14 @@ async fn uds_client_round_trips_register_and_status() {
     )
     .unwrap();
 
+    // The test never talks to the agent listener, so it binds an
+    // OS-assigned port. A probed-then-released port can be taken before
+    // the daemon binds it, failing startup before the admin socket exists.
     let yaml = format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  port: 0
   admin_socket:
     path: "{sock}"
 operator_credentials_path: "{ops}"
@@ -55,13 +52,22 @@ tools: []
         db = dir.path().join("locksmith.db").display(),
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
+    let (coord, mut handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
 
-    // Wait for socket to appear.
+    // Wait for socket to appear. A daemon that exits during startup is
+    // reported with its own error instead of a bare missing-socket timeout.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while !socket_path.exists() {
+        if handle.is_finished() {
+            panic!(
+                "daemon exited before binding the socket: {:?}",
+                (&mut handle).await
+            );
+        }
         if std::time::Instant::now() > deadline {
-            panic!("socket never appeared");
+            coord.trigger();
+            let exit = tokio::time::timeout(Duration::from_secs(6), &mut handle).await;
+            panic!("socket never appeared; daemon after shutdown: {exit:?}");
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
