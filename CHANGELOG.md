@@ -12,6 +12,10 @@
 
 ### Changed
 
+- Decode documented Slack workspace display labels in declared identity checks
+  while retaining exact observed IDs, bot refusal and token echo validation;
+  expose [closed identity diagnostics](docs/user/operator/slack-identity-diagnostics.md).
+
 - Add [declared custom OAuth contracts](docs/user/operator/custom-oauth.md) for exact scopes, independently verified user/workspace or service-principal identities, none/confidential clients and explicit Slack response variants. Existing named contracts remain unchanged. Migration 0022 preserves custody and sequence highwaters; old binaries refuse the new schema.
 
 - Report [closed Slack token metadata reasons](docs/user/operator/slack-token-diagnostics.md)

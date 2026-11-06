@@ -24,3 +24,8 @@ async fn declared_contract_slack_nested() {
 async fn declared_contract_missing_scope_refresh_identity_and_retired_client() {
     consent::contract::denials::run().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declared_contract_identity_diagnostics() {
+    consent::contract::identity::run().await;
+}

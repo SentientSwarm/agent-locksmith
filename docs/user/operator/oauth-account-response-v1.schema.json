@@ -443,7 +443,18 @@
                 "slack_token_nested_token_type_null",
                 "slack_token_nested_token_type_type",
                 "slack_token_nested_token_type_conflict",
-                "token_response_refused"
+                "token_response_refused",
+                "identity_echo_refused",
+                "identity_error_present",
+                "identity_metadata_refused",
+                "identity_ok_refused",
+                "identity_ok_unexpected",
+                "identity_response_shape",
+                "identity_subject_mismatch",
+                "identity_team_display_type",
+                "identity_workspace_missing",
+                "identity_user_missing",
+                "identity_principal_missing"
               ]
             },
             "message": {
@@ -621,7 +632,18 @@
             "slack_token_nested_token_type_null",
             "slack_token_nested_token_type_type",
             "slack_token_nested_token_type_conflict",
-            "token_response_refused"
+            "token_response_refused",
+            "identity_echo_refused",
+            "identity_error_present",
+            "identity_metadata_refused",
+            "identity_ok_refused",
+            "identity_ok_unexpected",
+            "identity_response_shape",
+            "identity_subject_mismatch",
+            "identity_team_display_type",
+            "identity_workspace_missing",
+            "identity_user_missing",
+            "identity_principal_missing"
           ]
         },
         "cleanup": {

@@ -1,5 +1,6 @@
 //! Closed, declarative wire adapters; custody and authority remain in consent.
 mod identity;
+mod identity_value;
 pub(super) mod publication;
 mod scope;
 mod slack;
@@ -46,3 +47,6 @@ pub(super) use validate::validate;
 
 #[cfg(test)]
 mod adverse;
+
+#[cfg(test)]
+mod identity_tests;

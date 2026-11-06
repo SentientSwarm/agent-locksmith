@@ -62,6 +62,21 @@ def identity(h):
     if c['identity']['response'] == 'slack-auth-test-v1':
         value['team_id'] = value.pop('workspace_id')
         value['ok'] = True
+        value.update(team='Invented Workspace', user='invented-user', url='https://invented.slack.com/')
     if (h.server.root / 'wrong-identity').exists():
         value['subject_id' if 'subject_id' in value else 'user_id'] = 'wrong-observed-subject'
-    h._reply(value)
+    identity_reply(h, value)
+
+
+def identity_reply(h, value):
+    path = h.server.root / 'identity-case.json'
+    case = json.loads(path.read_text()) if path.exists() else {}
+    value.update(case.get('set', {}))
+    for key in case.get('remove', []):
+        value.pop(key, None)
+    raw = case.get('raw', json.dumps(value)).encode()
+    h.send_response(case.get('http', 200))
+    h.send_header('Content-Type', 'application/json')
+    h.send_header('Content-Length', str(len(raw)))
+    h.end_headers()
+    h.wfile.write(raw)

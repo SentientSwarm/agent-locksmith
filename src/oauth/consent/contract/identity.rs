@@ -20,19 +20,7 @@ pub(in crate::oauth::consent) async fn verify(
     if let Some(old) = old {
         old.screen(&value)?;
     }
-    let c = p.contract.as_ref().ok_or(Error("invalid_profile"))?;
-    let slack = c.identity.response == "slack-auth-test-v1";
-    if !value.is_object()
-        || ["error", "error_description", "error_uri"]
-            .iter()
-            .any(|k| value.get(k).is_some())
-        || (slack && value.get("ok") != Some(&Value::Bool(true)))
-        || (!slack && value.get("ok").is_some())
-    {
-        return Err(Error("identity_mismatch"));
-    }
-    super::token::echoes(p, &value)?;
-    c.subject.observe(&value, slack)
+    super::identity_value::decode(p, &value)
 }
 async fn response(p: &Profile, token: &token::Token) -> Result<Value> {
     let c = p.contract.as_ref().ok_or(Error("invalid_profile"))?;
@@ -48,13 +36,16 @@ async fn response(p: &Profile, token: &token::Token) -> Result<Value> {
         .send()
         .await
         .map_err(token_io::error)?;
-    if r.status() != reqwest::StatusCode::OK || r.content_length().is_some_and(|n| n > 65536) {
-        return Err(Error("identity_mismatch"));
+    if r.status() != reqwest::StatusCode::OK {
+        return Err(Error("identity_http_refused"));
+    }
+    if r.content_length().is_some_and(|n| n > 65536) {
+        return Err(Error("identity_body_limit"));
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = r.chunk().await.map_err(token_io::error)? {
         if bytes.len() + chunk.len() > 65536 {
-            return Err(Error("token_body_limit"));
+            return Err(Error("identity_body_limit"));
         }
         bytes.extend_from_slice(&chunk);
     }
