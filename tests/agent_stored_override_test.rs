@@ -241,3 +241,6 @@ async fn stored_override_with_header_makes_stored_header() {
         other => panic!("expected stored_header, got {other:?}"),
     }
 }
+
+#[path = "native_preparation/credential.rs"]
+mod native_credential;

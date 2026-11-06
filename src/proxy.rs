@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod admission;
+mod oauth;
 mod selection;
+use oauth::resolve_oauth_token;
 
 use crate::app::AppState;
 use crate::config::{EgressMode, ToolConfig, ToolTimeouts};
@@ -297,7 +299,9 @@ impl ProxyTarget {
                 reference: reference.clone(),
                 resolved_value: None,
             },
-            AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => {
+            AuthSpec::ControlledOauth { .. }
+            | AuthSpec::OauthPkce { .. }
+            | AuthSpec::OauthDeviceCode { .. } => {
                 // Caller must use from_registration_oauth instead;
                 // this path indicates a programming error. We return
                 // a placeholder Oauth variant with empty session_id
@@ -306,6 +310,7 @@ impl ProxyTarget {
                 let audit_mode = match &r.auth {
                     AuthSpec::OauthPkce { .. } => "oauth_pkce",
                     AuthSpec::OauthDeviceCode { .. } => "oauth_device_code",
+                    AuthSpec::ControlledOauth { .. } => "controlled_unavailable",
                     _ => unreachable!(),
                 };
                 ProxyAuth::Oauth {
@@ -1393,196 +1398,6 @@ fn url_host(url: &str) -> Option<String> {
 }
 
 // ─── Phase F.5: OAuth resolution helpers ─────────────────────────────────
-
-/// Wrapped error returned by [`resolve_oauth_token`] when the session
-/// can't be materialized. Carries both the wire response and the
-/// audit cause string for the failure-mode audit row.
-struct OauthUnavailable {
-    response: Response,
-    audit_cause: &'static str,
-}
-
-/// Phase F.5 — materialize the OAuth access token for `target`.
-///
-/// Walks the lifecycle decisions from ADR-0005 D6:
-/// - Sealing key unset (operator hasn't set `LOCKSMITH_OAUTH_SEALING_KEY`)
-///   → 503 `oauth_sealing_key_unset`.
-/// - Session row missing (operator hasn't run `locksmith oauth bootstrap`)
-///   → 503 `oauth_session_missing`.
-/// - Session degraded (refresh previously failed) → 503
-///   `oauth_refresh_failed`.
-/// - Access token absent or expiring within 60s → trigger inline
-///   refresh under the per-session lock; surface the new token.
-/// - Refresh failed inline → mark degraded + 503 `oauth_refresh_failed`.
-// The Err variant carries the finished wire `Response` on a cold path that
-// returns it immediately; boxing would only add an allocation + churn.
-#[allow(clippy::result_large_err)]
-async fn resolve_oauth_token(
-    state: &AppState,
-    target: &ProxyTarget,
-    session_label: &str,
-) -> Result<ProxyAuth, OauthUnavailable> {
-    let Some(rt) = &state.oauth else {
-        return Err(OauthUnavailable {
-            response: oauth_unavailable_envelope(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "oauth_sealing_key_unset",
-                "OAuth registration requires LOCKSMITH_OAUTH_SEALING_KEY at daemon startup",
-            ),
-            audit_cause: "sealing_key_unset",
-        });
-    };
-    let audit_mode = match &target.auth {
-        ProxyAuth::Oauth { audit_mode, .. } => *audit_mode,
-        _ => "oauth_unknown", // shouldn't happen; caller guards on Oauth variant
-    };
-
-    let lock = rt.locks.get(&target.name, session_label).await;
-    let _guard = lock.lock().await;
-
-    if !selection::oauth_consistent(state, target, session_label).await {
-        return Err(OauthUnavailable {
-            response: oauth_unavailable_envelope(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "oauth_selection_unavailable",
-                "OAuth session requires consistent explicit selections",
-            ),
-            audit_cause: "selection_unavailable",
-        });
-    }
-
-    let session = match rt
-        .sessions
-        .get(&rt.sealing_key, &target.name, session_label)
-        .await
-    {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return Err(OauthUnavailable {
-                response: oauth_unavailable_envelope(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "oauth_session_missing",
-                    "OAuth session not bootstrapped for this registration",
-                ),
-                audit_cause: "session_missing",
-            });
-        }
-        Err(e) => {
-            tracing::warn!(name = %target.name, error = %e, "oauth session read failed");
-            return Err(OauthUnavailable {
-                response: oauth_unavailable_envelope(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "oauth_session_read_failed",
-                    "OAuth session unavailable (sealing failure)",
-                ),
-                audit_cause: "session_read_failed",
-            });
-        }
-    };
-
-    if session.degraded {
-        return Err(OauthUnavailable {
-            response: oauth_unavailable_envelope(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "oauth_refresh_failed",
-                "OAuth session degraded — operator must re-bootstrap",
-            ),
-            audit_cause: "degraded",
-        });
-    }
-
-    if session
-        .access_token
-        .as_ref()
-        .is_some_and(|t| t.expose_secret().is_empty())
-        || session.refresh_token.expose_secret().is_empty()
-    {
-        return Err(OauthUnavailable {
-            response: oauth_unavailable_envelope(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "oauth_session_empty",
-                "selected OAuth session contains an empty token",
-            ),
-            audit_cause: "session_empty",
-        });
-    }
-    let now = now_secs();
-    let needs_refresh = match (&session.access_token, session.access_token_expires_at) {
-        (None, _) => true,
-        (Some(_), Some(exp)) if exp <= now + 60 => true,
-        _ => false,
-    };
-
-    let active_session = if needs_refresh {
-        let Some(selected) = target.oauth_selection.as_ref() else {
-            return Err(OauthUnavailable {
-                response: oauth_unavailable_envelope(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "oauth_selection_unavailable",
-                    "explicit OAuth selection is unavailable",
-                ),
-                audit_cause: "selection_unavailable",
-            });
-        };
-        match crate::oauth::refresh::refresh_selected_session(
-            &rt.sessions,
-            selected,
-            &rt.sealing_key,
-            &rt.refresh_client,
-            &session,
-        )
-        .await
-        {
-            Ok(updated) => updated,
-            Err(e) => {
-                let _ = rt.sessions.mark_degraded(&target.name, session_label).await;
-                tracing::warn!(
-                    name = %target.name,
-                    cause = e.audit_cause(),
-                    error = %e,
-                    "oauth refresh failed inline; marking session degraded"
-                );
-                return Err(OauthUnavailable {
-                    response: oauth_unavailable_envelope(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "oauth_refresh_failed",
-                        "OAuth refresh failed — operator must re-bootstrap",
-                    ),
-                    audit_cause: e.audit_cause(),
-                });
-            }
-        }
-    } else {
-        session
-    };
-
-    let oauth_session_id = active_session.audit_session_id();
-    let access_token = active_session.access_token;
-    let account_id = active_session.account_id;
-
-    Ok(ProxyAuth::Oauth {
-        audit_mode,
-        oauth_session_id,
-        access_token,
-        account_id,
-    })
-}
-
-/// Render the §4.7.9 envelope for OAuth-side unavailability. Three
-/// codes per ADR-0005 D6 + sibling cases above.
-fn oauth_unavailable_envelope(status: StatusCode, code: &'static str, message: &str) -> Response {
-    (
-        status,
-        Json(json!({
-            "error": {
-                "type": "auth_error",
-                "code": code,
-                "message": message,
-            }
-        })),
-    )
-        .into_response()
-}
 
 /// Audit the OAuth-side failure that caused proxy_handler to short-
 /// circuit before reaching the upstream. Distinct from

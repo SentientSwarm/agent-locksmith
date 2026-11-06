@@ -31,6 +31,8 @@ use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct OperatorIdentity {
+    /// Stable authenticated principal; display names are not identities.
+    pub public_id: String,
     pub name: String,
     /// Reserved for future fine-grained operator roles (D-6).
     pub scope: Option<serde_json::Value>,
@@ -88,6 +90,17 @@ impl OperatorAuthenticator {
         })?;
         let parsed: OperatorsFile = serde_yaml::from_str(&text)
             .map_err(|e| AuthError::Backend(format!("parse operators yaml: {e}")))?;
+        let mut ids = std::collections::HashSet::new();
+        let mut certs = std::collections::HashSet::new();
+        if parsed.operators.iter().any(|r| {
+            r.public_id.is_empty()
+                || !ids.insert(&r.public_id)
+                || r.cert_identity.as_ref().is_some_and(|c| !certs.insert(c))
+        }) {
+            return Err(AuthError::Backend(
+                "duplicate or empty operator identity".into(),
+            ));
+        }
         let decoy_hash = argon2_helper::hash(&SecretString::from(
             "decoy-operator-secret-for-constant-time-on-miss".to_string(),
         ))
@@ -150,6 +163,7 @@ impl OperatorAuthenticator {
         let secret_str = SecretString::from(secret.expose().to_string());
         match argon2_helper::verify(&record.token_hash, &secret_str) {
             Ok(true) => Ok(OperatorIdentity {
+                public_id: record.public_id.clone(),
                 name: record.name.clone(),
                 scope: record.scope.clone(),
                 auth_method: None,
@@ -182,6 +196,7 @@ impl OperatorAuthenticator {
             .find(|r| r.cert_identity.as_deref() == Some(cert_identity));
         if let Some(record) = hit {
             return Ok(OperatorIdentity {
+                public_id: record.public_id.clone(),
                 name: record.name.clone(),
                 scope: record.scope.clone(),
                 auth_method: Some("mtls"),

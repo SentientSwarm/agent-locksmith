@@ -138,6 +138,10 @@ tools: []
     let body: serde_json::Value = resp.json();
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(body["name"], env!("CARGO_PKG_NAME"));
+    assert_eq!(
+        body,
+        agent_locksmith::build_info::document(env!("CARGO_PKG_NAME"))
+    );
 }
 
 #[tokio::test]
