@@ -4,6 +4,11 @@ Locksmith authenticates a registered agent, checks its ACL, then uses that
 agent's explicit account selection. Creating a catalog entry alone grants no
 account access. Start with a disposable instance before upgrading a deployment.
 
+For a customer native MCP service, follow the [complete operator-to-agent
+journey](operator/customer-mcp-journey.md): import and promote a definition,
+select an account, review and grant finite tools, then hand an ordinary agent
+a semantic task. The HTTP development walkthrough below remains separate.
+
 ## Prerequisites and saved smoke
 
 This flow was tested with Rust 1.94.0 and the committed `Cargo.lock`. Lower

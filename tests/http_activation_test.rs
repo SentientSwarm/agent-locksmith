@@ -99,6 +99,8 @@ impl Fixture {
             Some(bindings.clone()),
         ));
         let admin = AdminRegistrationsState {
+            consent: None,
+            local_listener: None,
             repo: regs,
             catalog: Some(catalog),
             resolved_creds: Some(resolved),

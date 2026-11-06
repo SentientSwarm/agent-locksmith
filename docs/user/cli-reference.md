@@ -20,7 +20,40 @@ The CLI also reads:
 - `LOCKSMITH_ADMIN_URL` — same as `--admin-url`.
 - `LOCKSMITH_CA_BUNDLE` — same as `--ca-bundle`.
 
+## Guidance and diagnosis
+
+The daemon's [`GET /skill`](agent-integration/skill-reference.md) distinguishes
+HTTP connections from native MCP tools; it is not a new CLI subcommand. Native
+repair uses existing `tool mcp show`, `agent mcp-grants show`, `agent credentials
+list` and `audit query`. Status reads do not observe upstreams. Deliberate
+observation/review/grant writes use the [native operator guide](operator/native-tool-review.md);
+HTTP env/op/header/legacy OAuth options must not be used as native repair recipes.
+Controlled native OAuth uses the owner-bound [select-oauth flow](operator/native-oauth.md).
+Existing command syntax/help and authentication are unchanged.
+
 ## Subcommands
+
+### `integration` and `tool from-definition` — offline authoring
+
+`integration import --file FILE` saves one strict immutable definition;
+`integration get ID --revision N` reads the exact revision.
+`tool from-definition NAME --definition ID --revision N --auth-profile ID
+--upstream URL [--allow-private-destination]` creates a disabled pinned native
+connection. No provider request, account selection, credential or grant occurs.
+General edits/enable remain refused for these derived instances.
+
+`tool activate-definition NAME --if-match REVISION [--compact]
+[--oauth-profile PROFILE_ID]` deliberately promotes a supported local pin; read
+the opaque `definition_control.revision` from `tool get NAME --format json`.
+Only controlled OAuth declarations use the explicit trusted profile option.
+`tool deactivate-definition NAME --if-match REVISION` disables a pin and clears
+its local authority while retaining sealed accounts. Both commands accept
+`--format json`. A stale revision refuses; use a fresh GET after conflicts or an
+uncertain outcome. An exact current-state retry only reconciles the runtime
+catalog. Activation alone grants nothing: repair ACL, explicit account selection,
+observation, reviews and finite grants, then use fresh sessions. See
+[complete schema, examples and repair limits](operator/integration-definitions.md).
+
 
 ### `bootstrap-operator` — mint operator credential (offline)
 
@@ -71,6 +104,7 @@ locksmith agent set-credential <public_id> <reg> --auth bearer=<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --auth header=<Header>:<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --no-auth
 locksmith agent set-credential <public_id> <reg> --oauth-session <label>
+locksmith agent select-oauth <public_id> <reg> --label <label> --if-match <account-revision>
 locksmith agent unset-credential <public_id> <reg>
 locksmith agent credentials list <public_id>
 ```
@@ -140,11 +174,13 @@ validation and compatibility details.
 |---|---|
 | `--upstream <url>` | Required base URL. Tool/model require absolute HTTP(S), with no userinfo, query or fragment; localhost/IP/private hosts and path prefixes are supported. Infra retains its existing contract. |
 | `--auth <spec>` | Auth shape — see "Auth spec syntax" below. |
-| `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `proxied` server-side. |
+| `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `direct`; native currently requires `direct`. |
 | `--timeout-request <secs>` | Per-request timeout. Defaults server-side. |
 | `--timeout-idle <secs>` | Per-read idle timeout. Defaults server-side. |
 | `--body-limit <bytes>` | Max upstream response body size. Defaults 10 MiB. |
 | `--metadata k=v` | Per-kind metadata. Repeatable. |
+| `--protocol http\|mcp_streamable_http` | Registration protocol; omitted means HTTP, including full replacement updates. Native is tool-only. |
+| `--mcp-config-file <path>` | Strict native JSON config (`protocol_version`, optional `allow_private_destination`), required for native. See [native setup](operator/native-mcp.md). |
 | `--metadata-file <path>` | Complete JSON metadata value, replacing existing metadata without merging. Mutually exclusive with `--metadata`. Supports nested `http_service` descriptions. |
 | `--description '...'` | Free-form description. |
 
@@ -176,15 +212,16 @@ host-specific routing. The OAuth credential management itself uses
 
 ### `oauth` — OAuth session management (operator)
 
-Phase F + Phase G. Requires `LOCKSMITH_OAUTH_SEALING_KEY` set in
-the daemon's env.
+The legacy Phase F + Phase G commands below require
+`LOCKSMITH_OAUTH_SEALING_KEY` in the daemon's environment. They do not manage
+controlled consent accounts.
 
 ```bash
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token <token>
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token-stdin
 locksmith oauth status   <name> [--label <label>]
 locksmith oauth revoke   <name> [--label <label>]
-locksmith oauth list                                # NEW (Phase G)
+locksmith oauth list                                # legacy sessions only
 ```
 
 `bootstrap` takes a refresh token obtained out-of-band (provider's
@@ -206,8 +243,16 @@ degraded, audit_session_id). Never leaks tokens.
 `revoke` clears local session state. Idempotent. Provider-side
 revocation deferred to v1.1+.
 
-`list` enumerates all `(registration, label)` sessions across the
-deployment. Useful for spotting orphaned per-agent sessions.
+`list` enumerates legacy `(registration, label)` sessions across the
+deployment. Controlled owner-bound rows are filtered out; legacy status,
+revoke and bootstrap refuse those rows.
+
+For the optional controlled-only consent profile, use `oauth connect`,
+`oauth attempt-status`, `oauth cancel`, `oauth account-status`,
+`oauth refresh` and `oauth disconnect`. Refresh requires `--label` and the current
+`--if-match` revision; it is manual and grants no agent access. The [controlled consent guide](operator/oauth-consent.md)
+specifies their flags, owner checks, configuration and local disconnect
+precondition. A `connected_unbound` account does not authorize agent calls.
 
 ### `audit` — audit log queries (operator)
 
@@ -344,3 +389,15 @@ review, unavailable-source handling, verification and rollback consequences.
 For a runnable local setup see [getting started](getting-started.md). Execute
 the [saved cutover smoke](../development/explicit-account-bindings-smoke.md)
 to verify daemon/CLI setup, selection, clear/repair and offline migration.
+
+## Native fixed context and diagnosis
+
+`tool mcp review CONNECTION --agent AGENT_ID --file PATH` accepts optional fixed
+nonsecret `context` in its strict JSON request. Saving a review grants nothing.
+`tool mcp show` and `agent mcp-grants show` return safe current-state diagnosis
+without network requests. See [review, repair and downgrade limits](operator/native-context.md).
+
+Native `tool put --mcp-config-file` accepts optional `compact:true` (default false).
+Configure before grants: changing MCP config clears connection/bootstrap scopes,
+selections, observations, reviews and tool grants. See [compact MCP](agent-integration/compact-mcp.md)
+for the complete agent contract and actual prior-daemon startup cost.

@@ -16,11 +16,6 @@ use tokio::time::timeout;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 fn write_operators_yaml(p: &std::path::Path) -> String {
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let op_hash = argon2_helper::hash(&secrecy::SecretString::from(
@@ -79,12 +74,11 @@ async fn file_sealed_owner_snapshot_import_requires_explicit_binding() {
         .mount(&mock)
         .await;
 
-    let agent_port = pick_port();
     let yaml = format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
 shutdown:
@@ -114,17 +108,12 @@ tools:
     let agent_bearer = pre_register_agent(&db, "ping-agent").await;
 
     let cfg = parse_config_str(&yaml).expect("config parses");
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-
-    // Wait for daemon to bind.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let livez = format!("http://127.0.0.1:{agent_port}/livez");
-    while reqwest::get(&livez).await.is_err() {
-        if std::time::Instant::now() > deadline {
-            panic!("agent listener never bound");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // Port 0: the daemon reports the port it bound (AGENT-219).
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    let agent_port = started.addrs.agent.port();
 
     let url = format!("http://127.0.0.1:{agent_port}/api/ping/v1/ping");
     // The real daemon resolved the legacy file at startup; that cached value
@@ -166,12 +155,11 @@ async fn missing_sealed_file_degrades_tool_quietly() {
     let db = dir.path().join("locksmith.db");
     write_operators_yaml(&ops);
 
-    let agent_port = pick_port();
     let yaml = format!(
         r#"
 listen:
   host: "127.0.0.1"
-  port: {agent_port}
+  port: 0
   admin_socket:
     path: "{sock}"
 shutdown:
@@ -203,17 +191,20 @@ tools:
     let agent_bearer = pre_register_agent(&db, "discovery-agent").await;
 
     let cfg = parse_config_str(&yaml).expect("config parses");
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-
-    // Daemon must reach a serving state.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // Daemon must reach a serving state; port 0 resolves here (AGENT-219).
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    let agent_port = started.addrs.agent.port();
     let livez = format!("http://127.0.0.1:{agent_port}/livez");
-    while reqwest::get(&livez).await.is_err() {
-        if std::time::Instant::now() > deadline {
-            panic!("agent listener never bound");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert!(
+        reqwest::get(&livez)
+            .await
+            .expect("livez")
+            .status()
+            .is_success()
+    );
 
     // Deliberately grant the now-configured authless entry.
     let pool = open_and_migrate(&db).await.unwrap();
