@@ -14,8 +14,231 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Verify vendored SDK before native compilation
+        run: |
+          python3 crates/mcp-transport/vendor/check.py
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - name: Qualify pinned native Python consumer
+        run: |
+          uv venv --python 3.13 "$RUNNER_TEMP/native-python"
+          uv pip install --python "$RUNNER_TEMP/native-python/bin/python" -r tests/native_process/requirements.txt
+          "$RUNNER_TEMP/native-python/bin/python" - <<'PY'
+          import importlib.metadata as metadata
+          import json
+          import pathlib
+          import sys
+          assert sys.version_info[:2] == (3, 13), "Python 3.13 required"
+          requirements = pathlib.Path("tests/native_process/requirements.txt").read_text().splitlines()
+          assert len(requirements) == 28
+          for requirement in requirements:
+              name, expected = requirement.split("==")
+              assert metadata.version(name) == expected, name
+          assert metadata.version("mcp") == "2.3.0"
+          print(json.dumps({"qualified_packages": 28, "mcp": "2.3.0", "python": "3.13"}))
+          PY
+          printf 'LOCKSMITH_NATIVE_PYTHON=%s\n' "$RUNNER_TEMP/native-python/bin/python" >> "$GITHUB_ENV"
+      - name: Verify consuming-root SDK resolution
+        run: |
+          cargo metadata --locked --format-version 1 > "$RUNNER_TEMP/native-root-metadata.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          packages = json.loads(pathlib.Path(os.environ["RUNNER_TEMP"], "native-root-metadata.json").read_text())["packages"]
+          rmcp = [p for p in packages if p["name"] == "rmcp"]
+          assert len(rmcp) == 1 and rmcp[0]["version"] == "3.7.0"
+          assert rmcp[0]["source"] is None
+          assert pathlib.Path(rmcp[0]["manifest_path"]).resolve() == root / "crates/mcp-transport/vendor/rmcp/Cargo.toml"
+          package = [p for p in packages if p["name"] == "agent-locksmith"]
+          assert len(package) == 1 and package[0]["version"] == "2.8.0"
+          print("root rmcp resolves to the qualified local ownership patch; root package remains 2.8.0")
+          PY
+      - name: Check out pinned pre-0010 source
+        uses: actions/checkout@v4
+        with:
+          ref: fa2f4d5835a053bf2377e09948d8458017302835
+          path: prior-source
+          persist-credentials: false
+      - name: Preserve the pinned pre-0010 daemon
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/prior-source" rev-parse HEAD)" = "fa2f4d5835a053bf2377e09948d8458017302835"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd
+          mkdir -p "$RUNNER_TEMP/pre-0010-fa2f4d5"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd"
+          printf 'source_commit=fa2f4d5835a053bf2377e09948d8458017302835\n' > "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd" >> "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/pre-0010-fa2f4d5/PROVENANCE.txt"
+      - name: Check out pinned pre-0011 source
+        uses: actions/checkout@v4
+        with:
+          ref: 205a7359714bfaee22ac4ee2a64508400bfcb352
+          path: native-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned pre-0011 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/native-prior-source" rev-parse HEAD)" = "205a7359714bfaee22ac4ee2a64508400bfcb352"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/native-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/pre-0011-205a735"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/pre-0011-205a735/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/pre-0011-205a735/locksmith"
+          printf 'source_commit=205a7359714bfaee22ac4ee2a64508400bfcb352\n' > "$RUNNER_TEMP/pre-0011-205a735/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/pre-0011-205a735/locksmithd" "$RUNNER_TEMP/pre-0011-205a735/locksmith" >> "$RUNNER_TEMP/pre-0011-205a735/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/pre-0011-205a735/PROVENANCE.txt"
+      - name: Check out pinned schema11 source
+        uses: actions/checkout@v4
+        with:
+          ref: 1de53fcf5fa2de41bb03ea7d602690d14784eaa7
+          path: definition-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema11 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/definition-prior-source" rev-parse HEAD)" = "1de53fcf5fa2de41bb03ea7d602690d14784eaa7"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/definition-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema11-1de53fc"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema11-1de53fc/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema11-1de53fc/locksmith"
+          printf 'source_commit=1de53fcf5fa2de41bb03ea7d602690d14784eaa7\n' > "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema11-1de53fc/locksmithd" "$RUNNER_TEMP/schema11-1de53fc/locksmith" >> "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
+      - name: Check out pinned schema12 source
+        uses: actions/checkout@v4
+        with:
+          ref: 4220e62bc381181cf35d4010e95d73adf88f0ea8
+          path: recovery-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema12 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/recovery-prior-source" rev-parse HEAD)" = "4220e62bc381181cf35d4010e95d73adf88f0ea8"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/recovery-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema12-4220e62"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema12-4220e62/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema12-4220e62/locksmith"
+          printf 'source_commit=4220e62bc381181cf35d4010e95d73adf88f0ea8\n' > "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema12-4220e62/locksmithd" "$RUNNER_TEMP/schema12-4220e62/locksmith" >> "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
+      - name: Check out pinned schema13 source
+        uses: actions/checkout@v4
+        with:
+          ref: 3e86ff8a9b1a2c0d08faab83dcd48248baef3b98
+          path: preparation-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema13 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/preparation-prior-source" rev-parse HEAD)" = "3e86ff8a9b1a2c0d08faab83dcd48248baef3b98"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/preparation-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema13-3e86ff8"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema13-3e86ff8/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema13-3e86ff8/locksmith"
+          printf 'source_commit=3e86ff8a9b1a2c0d08faab83dcd48248baef3b98\n' > "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema13-3e86ff8/locksmithd" "$RUNNER_TEMP/schema13-3e86ff8/locksmith" >> "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema13-3e86ff8/PROVENANCE.txt"
+      - name: Check out pinned schema14 source
+        uses: actions/checkout@v4
+        with:
+          ref: 4b777cbe3964ac9652438ad2605d5844e034ba91
+          path: consent-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema14 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/consent-prior-source" rev-parse HEAD)" = "4b777cbe3964ac9652438ad2605d5844e034ba91"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/consent-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema14-4b777cb"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema14-4b777cb/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema14-4b777cb/locksmith"
+          printf 'source_commit=4b777cbe3964ac9652438ad2605d5844e034ba91\n' > "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema14-4b777cb/locksmithd" "$RUNNER_TEMP/schema14-4b777cb/locksmith" >> "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema14-4b777cb/PROVENANCE.txt"
+      - name: Check out pinned schema15 source
+        uses: actions/checkout@v4
+        with:
+          ref: ed502c7bdbf87dad3fc1bf846436e9bb397b23f9
+          path: refresh-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema15 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/refresh-prior-source" rev-parse HEAD)" = "ed502c7bdbf87dad3fc1bf846436e9bb397b23f9"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/refresh-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema15-ed502c7"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema15-ed502c7/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema15-ed502c7/locksmith"
+          printf 'source_commit=ed502c7bdbf87dad3fc1bf846436e9bb397b23f9\n' > "$RUNNER_TEMP/schema15-ed502c7/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema15-ed502c7/locksmithd" "$RUNNER_TEMP/schema15-ed502c7/locksmith" >> "$RUNNER_TEMP/schema15-ed502c7/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema15-ed502c7/PROVENANCE.txt"
+      - name: Check out pinned schema16 source
+        uses: actions/checkout@v4
+        with:
+          ref: 07037772f8f9366e2823871545d47dd676779cda
+          path: native-oauth-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema16 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/native-oauth-prior-source" rev-parse HEAD)" = "07037772f8f9366e2823871545d47dd676779cda"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/native-oauth-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema16-0703777"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema16-0703777/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema16-0703777/locksmith"
+          printf 'source_commit=07037772f8f9366e2823871545d47dd676779cda\n' > "$RUNNER_TEMP/schema16-0703777/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema16-0703777/locksmithd" "$RUNNER_TEMP/schema16-0703777/locksmith" >> "$RUNNER_TEMP/schema16-0703777/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema16-0703777/PROVENANCE.txt"
       - run: cargo test --all
+      - name: Verify OAuth upgrade and prior-binary refusal
+        run: |
+          LOCKSMITH_PRIOR_DAEMON="$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_oauth_upgrade_and_prior_binary_refusal -- --ignored --exact --nocapture
+      - name: Verify native upgrade and prior-binary refusal
+        run: |
+          LOCKSMITH_NATIVE_PRIOR_DAEMON="$RUNNER_TEMP/pre-0011-205a735/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_native_upgrade_and_prior_binary_refusal -- --ignored --exact --nocapture
+      - name: Require actual pinned Python native lifecycle proof
+        run: |
+          set -o pipefail
+          cargo test --locked --test native_process_test -- --nocapture --test-threads=1 2>&1 | tee "$RUNNER_TEMP/native-process.log"
+          python3 - "$RUNNER_TEMP/native-process.log" <<'PY'
+          import json
+          import pathlib
+          import sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          assert "Python consumer skipped" not in text, "Python skip is not acceptance"
+          expected = {"client": "mcp-python-2.3.0", "tls_verified": True, "initialize_list_ping_denial_close": "PASS"}
+          proofs = []
+          for line in text.splitlines():
+              start = line.find('{"client":')
+              if start >= 0:
+                  value, end = json.JSONDecoder().raw_decode(line[start:])
+                  proofs.append(value)
+          assert expected in proofs, "missing actual pinned Python TLS lifecycle proof"
+          print(json.dumps(expected))
+          PY
+      - name: Verify definition migration and prior-binary refusal
+        run: |
+          LOCKSMITH_DEFINITION_PRIOR_DAEMON="$RUNNER_TEMP/schema11-1de53fc/locksmithd" cargo test --locked --test definition_process_test actual_schema11_upgrade_preserves_authority_and_prior_refuses_before_listeners -- --ignored --exact --nocapture
+      - name: Verify refresh recovery migration and prior-binary refusal
+        run: |
+          LOCKSMITH_RECOVERY_PRIOR_DAEMON="$RUNNER_TEMP/schema12-4220e62/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_refresh_upgrade_and_prior_refusal -- --ignored --exact --nocapture
+      - name: Verify native preparation migration and prior-binary refusal
+        run: |
+          LOCKSMITH_PREPARATION_PRIOR_DAEMON="$RUNNER_TEMP/schema13-3e86ff8/locksmithd" cargo test --locked --test native_preparation_process_test actual_schema13_upgrade_and_prior_refusal -- --ignored --exact --nocapture
+      - name: Verify consent migration and prior-binary refusal
+        run: |
+          LOCKSMITH_CONSENT_PRIOR_DAEMON="$RUNNER_TEMP/schema14-4b777cb/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_consent_upgrade_and_prior_refusal -- --ignored --exact --nocapture
+      - name: Verify controlled refresh migration and prior-binary refusal
+        run: |
+          CONTROLLED_PRIOR_DAEMON="$RUNNER_TEMP/schema15-ed502c7/locksmithd" CONTROLLED_PRIOR_CLI="$RUNNER_TEMP/schema15-ed502c7/locksmith" cargo test --locked --test oauth_consent_process_test controlled_refresh_actual_prior_migration_refusal_reopen -- --ignored --exact --nocapture
+      - name: Verify controlled native selection migration and prior-binary refusal
+        run: |
+          CONTROLLED_PRIOR_SCHEMA=16 CONTROLLED_PRIOR_DAEMON="$RUNNER_TEMP/schema16-0703777/locksmithd" CONTROLLED_PRIOR_CLI="$RUNNER_TEMP/schema16-0703777/locksmith" cargo test --locked --test oauth_consent_process_test controlled_refresh_actual_prior_migration_refusal_reopen -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
+      - name: Bounded MCP transport (separate integration prerequisite)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml
+          cargo clippy --locked --manifest-path crates/mcp-transport/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check

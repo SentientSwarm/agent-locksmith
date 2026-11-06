@@ -26,6 +26,9 @@ For the production Docker Compose bundle deployment story, see
 |---|---|
 | [getting-started.md](getting-started.md) | Developer first-contact: build, mint operator credential, register agent, explicitly select an account, make a call. |
 | [cli-reference.md](cli-reference.md) | Complete `locksmith` CLI subcommand and flag reference. |
+| [operator/sealed-state-recovery.md](operator/sealed-state-recovery.md) | Consistent snapshots, independent key recovery and quarantined restore. |
+| [operator/integration-definitions.md](operator/integration-definitions.md) | Strict offline definitions and disabled exact-revision native instances. |
+| [operator/native-mcp.md](operator/native-mcp.md) | Native lifecycle, zero tool authority, current identity and upgrade requirements. |
 | [operator/connector-onboarding.md](operator/connector-onboarding.md) | Operator recipe: validate a reference/customer HTTP service, grant a named agent, select its account and verify the receiving effect. |
 | [architecture.md](architecture.md) | User-level system view: daemon composition, request flow, what state lives where. |
 
@@ -50,6 +53,7 @@ Wiring an agent through a layer8-proxy deployment:
 | Doc | Topic |
 |---|---|
 | [agent-integration/wire-contract.md](agent-integration/wire-contract.md) | What an agent sees: endpoints, headers, error codes, streaming semantics. |
+| [agent-integration/native-mcp.md](agent-integration/native-mcp.md) | Stateful MCP2025-11-25 lifecycle, wire errors and pinned Python client. |
 | [agent-integration/http-services.md](agent-integration/http-services.md) | Construct HTTP calls from typed discovery using only an agent's Locksmith token. |
 | [agent-integration/openclaw.md](agent-integration/openclaw.md) | Openclaw integration recipe (works out-of-box via `*_BASE_URL`). |
 | [agent-integration/hermes.md](agent-integration/hermes.md) | Hermes integration: provider-config block + `*_BASE_URL` paths, multi-agent topologies, OAuth providers. |
@@ -65,3 +69,6 @@ Wiring an agent through a layer8-proxy deployment:
 - [Reviewed migration](concepts/migrating-account-bindings.md) — backup, preview/apply and restart.
 - [Account troubleshooting](operator/account-binding-troubleshooting.md) — error classes and repair.
 - [Saved local smoke](../development/explicit-account-bindings-smoke.md) — actual daemon/CLI SM01–SM05.
+
+- [Controlled operator consent](operator/oauth-consent.md): local TLS identity
+  twin, owner-bound sealed custody and explicit disconnect; no agent activation.
