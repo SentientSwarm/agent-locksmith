@@ -5,6 +5,7 @@ pub mod argon2_helper;
 pub mod audit_sink;
 pub mod auth;
 pub mod auth_v2;
+pub mod build_info;
 pub mod client_pool;
 pub mod codex_body;
 pub mod config;
@@ -27,3 +28,9 @@ pub mod token;
 pub(crate) mod legacy_admission;
 
 pub mod binding_migration;
+
+pub mod native;
+
+pub mod definitions;
+
+pub mod native_authority;

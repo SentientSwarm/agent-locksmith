@@ -24,6 +24,18 @@ For mTLS-deployed agents (`auth_mode: mtls | both`), the bearer
 is replaced by a client certificate; the cert's CN/SAN/URI maps to an
 agent record.
 
+Native entries use the separately bounded [MCP interface](native-mcp.md),
+require current registered identity and never route through `/api`. Manual
+None/live StoredBearer connections support explicitly reviewed per-tool grants
+and committed dispatch; connection visibility alone grants no tool authority.
+An opted-in [compact facade](compact-mcp.md) uses the same authority and dispatcher.
+[Owner-selected controlled OAuth](../operator/native-oauth.md) uses the same finite
+workflow. Supported local definition-backed connections use the separate
+[operator activation workflow](../operator/integration-definitions.md) before
+account and tool authority are granted. Hosted provider adoption remains outside
+this bounded profile.
+Existing HTTP behavior below is preserved.
+
 ## Endpoints
 
 ### `GET /livez` — liveness

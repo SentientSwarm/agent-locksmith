@@ -1,0 +1,66 @@
+[
+  [
+    {
+      "value": {
+        "error": "bad_code_verifier"
+      }
+    },
+    "token_verifier_refused"
+  ],
+  [
+    {
+      "http": 400,
+      "value": {
+        "ok": false,
+        "error": "bad_code_verifier"
+      }
+    },
+    "token_verifier_refused"
+  ],
+  [
+    {
+      "value": {
+        "error": "invalid_code"
+      }
+    },
+    "token_response_refused"
+  ],
+  [
+    {
+      "http": 400,
+      "value": {
+        "error": "invalid_grant"
+      }
+    },
+    "token_http_refused"
+  ],
+  [
+    {
+      "value": {
+        "error": "bad_code_verifier",
+        "error_description": "private-token-canary"
+      }
+    },
+    "token_response_refused"
+  ],
+  [
+    {
+      "raw": "{\"error\":\"bad_code_verifier\",\"error\":\"bad_code_verifier\"}"
+    },
+    "json_refused"
+  ],
+  [
+    {
+      "oversize": true
+    },
+    "token_body_limit"
+  ],
+  [
+    {
+      "value": {
+        "error": null
+      }
+    },
+    "token_response_refused"
+  ]
+]
