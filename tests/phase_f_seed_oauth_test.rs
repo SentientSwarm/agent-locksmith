@@ -84,6 +84,8 @@ async fn ts232_seed_loader_adds_oauth_additively_on_version_bump() {
     // operator-overridden lmstudio (seed=false).
     let now = unix_now();
     let anthropic = Registration {
+        protocol: Default::default(),
+        mcp: None,
         name: "anthropic".to_string(),
         kind: Kind::Model,
         description: "old".to_string(),

@@ -151,11 +151,6 @@ async fn daemon_spawns_sweeper_when_admin_substrate_enabled() {
     let socket = dir.path().join("admin.sock");
     let ops = dir.path().join("operators.yaml");
     let db = dir.path().join("locksmith.db");
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
 
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     std::fs::write(
@@ -177,7 +172,8 @@ async fn daemon_spawns_sweeper_when_admin_substrate_enabled() {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  # Only the admin socket is used; port 0 cannot collide (AGENT-219).
+  port: 0
   admin_socket:
     path: "{sock}"
 operator_credentials_path: "{ops}"

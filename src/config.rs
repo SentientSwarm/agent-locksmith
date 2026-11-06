@@ -10,6 +10,9 @@ use crate::secret::SecretRef;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
+    pub oauth_consent: Option<crate::oauth::consent::config::Config>,
+    #[serde(default)]
+    pub mcp: crate::native::config::Config,
     pub listen: ListenConfig,
     pub inbound_auth: Option<InboundAuthConfig>,
     pub egress_proxy: Option<String>,
@@ -602,6 +605,13 @@ fn parse_with_registry(
     apply_deprecations(&mut value, registry);
     let config: AppConfig = serde_yaml::from_value(value)?;
     validate_response_controls(&config)?;
+    config.mcp.validate()?;
+    if let Some(consent) = &config.oauth_consent {
+        consent.validate()?;
+        if config.listen.admin_socket.is_none() {
+            return Err("oauth_consent requires admin substrate".into());
+        }
+    }
     Ok(config)
 }
 
