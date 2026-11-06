@@ -28,7 +28,7 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.8.0)
+## Highlights (v3.0.0)
 
 - **Offline integration authoring** — strict immutable definitions and disabled
   native instances pinned to exact revisions, with matching operator API/CLI.

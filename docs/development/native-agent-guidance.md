@@ -39,7 +39,7 @@ consumer before inspecting these implementation recipes.
 
 ## Delivery limits
 
-This is a guidance correction within planned 3.0.0, with no package bump,
+This is a guidance correction within 3.0.0, with no separate package bump,
 migration, configuration, SDK or native authority change. Rebuild and restart to
 serve the new embedded guidance; existing HTTP consumers keep their wire
 contract. The controlled smoke does not establish live provider compatibility,

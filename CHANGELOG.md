@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.0
 
 - Own native preparation request bodies before buffering through daemon shutdown,
   retaining independent body and operation budgets.
