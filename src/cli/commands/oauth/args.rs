@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum OauthCmd {
-    /// Create one controlled-linear-v1 consent attempt; prints its URL once.
+    /// Create one controlled or hosted Linear consent attempt; prints its URL once.
     /// No browser is opened and no agent authority is granted.
     Connect {
         name: String,
@@ -31,13 +31,13 @@ pub enum OauthCmd {
         #[arg(allow_hyphen_values = true)]
         attempt: String,
     },
-    /// Read controlled account metadata, revision and current config revision.
+    /// Read owner-bound controlled/hosted account metadata and current revisions.
     AccountStatus {
         name: String,
         #[arg(long)]
         label: String,
     },
-    /// Manually refresh owned controlled custody with its current revision.
+    /// Manually refresh owned controlled/hosted custody with its current revision.
     /// Pending/uncertain custody requires disconnect and fresh consent.
     Refresh {
         name: String,
@@ -47,7 +47,7 @@ pub enum OauthCmd {
         #[arg(long, allow_hyphen_values = true)]
         if_match: String,
     },
-    /// Disconnect controlled custody locally with its current opaque revision.
+    /// Disconnect owned controlled/hosted custody with its current opaque revision.
     Disconnect {
         name: String,
         #[arg(long)]

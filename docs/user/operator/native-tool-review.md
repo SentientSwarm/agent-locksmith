@@ -1,6 +1,7 @@
 # Review and grant native tools
 
 For owner-selected controlled OAuth, see [native OAuth accounts](native-oauth.md).
+Manual hosted Linear accounts use the [fixed hosted profile and selected catalog](hosted-linear.md); they use the same review/grant interface.
 
 Operators can observe, inspect, review and grant a finite set of MCP tools for
 an existing agent's explicit account. Agents can list and call only that current
@@ -49,7 +50,7 @@ locksmith agent set-credential SECOND_AGENT_ID sample --stored-bearer-ref CS_REF
 
 That reference must be live. Rotating one selection preserves a handle still
 selected elsewhere. Env, op, legacy OAuth selections and stored-header accounts remain HTTP-only.
-Controlled OAuth requires the separate owner-bound selection flow linked above.
+Controlled and hosted OAuth require their separate owner-bound selection flows linked above.
 
 Upstreams must use verified HTTPS. Optional restart-only extra trust roots:
 
@@ -141,7 +142,7 @@ The same authenticated operator API works over UDS and admin HTTPS:
 | Method | Path below `/admin/operator` | Body |
 |---|---|---|
 | GET / POST | `/tools/{connection}/mcp/observations/{agent_id}` | POST: `source`, `generation` |
-| PUT | `/tools/{connection}/mcp/reviews/{agent_id}` | `source`, `generation`, `name`, `observed_digest`, `effect`, optional `context` |
+| PUT | `/tools/{connection}/mcp/reviews/{agent_id}` | `source`, `generation`, `name`, `observed_digest`, `effect`, optional `context`, explicit `contract_policy` and `input_restriction` for opted-in v2 |
 | GET / PUT | `/agents/{agent_id}/mcp-grants/{connection}` | PUT: `source`, `generation`, `revision`, `tools` |
 
 Stored ingestion uses PUT `/agents/{agent_id}/credentials/{connection}/credential`
@@ -150,7 +151,12 @@ in example files/logs. Shared live selection uses the ordinary selection route
 with `auth_spec: {kind: stored_bearer, secret_ref: ...}` and
 `require_live_bearer: true`.
 
-Maximums: 32 tools, 48 KiB complete manifest envelope, four pages, 1 MiB aggregate
+Default full-catalog observation admits at most 32 tools in a 48 KiB manifest
+envelope. Explicit [finite-v2 registration selection](native-contract-policy.md#explicit-customer-catalog-selection)
+and [hosted profile selection](hosted-linear.md#selected-catalog-and-wire-policy)
+scan a complete catalog of at most 256 names, publish at most 32 explicitly selected
+full contracts within that same envelope, and report total/selected/omitted counts.
+All modes retain four pages, 1 MiB aggregate
 initialize/list response bytes, 256 KiB per response and 64 KiB per SSE event.
 Eight operations share one process budget. JSON write bodies are at most64 KiB
 with10s body deadline, followed by one10s operation deadline including DB/DNS/
@@ -160,8 +166,13 @@ resets per page. Cleanup attempts DELETE within that deadline; 405 does not
 confirm remote deletion. Submitted SQL/remote/OS-resolver work is not rolled back.
 
 The [supported schema and review contract](../../development/native-tool-review.md)
-is deliberately finite. Unsupported keywords/tool metadata refuse the whole
-observation. Selected bearer echoes in decoded keys/strings also refuse it;
+is deliberately finite. The default is v1; operators can explicitly select
+[finite-v2](native-contract-policy.md) for bounded metadata, scalar input defaults,
+64-value enums and separately reviewed empty arguments. Unsupported keywords/tool metadata in a selected tool
+refuse the whole observation. None/bearer/controlled registrations select the entire catalog by default;
+explicit finite-v2 registration selection may use the same complete bounded scan
+and omission accounting. Hosted profiles may omit unselected tools under their explicit
+profile policy and lossless structural checks. Selected bearer echoes in decoded keys/strings also refuse it;
 this is known-secret screening, not general DLP.
 
 The original migration 0014 started with zero tool preparation and preserved existing accounts,
@@ -192,4 +203,6 @@ This staged route shape does not add OAuth or definition activation.
 
 Current customer activation adds schema 18 and a whole-daemon prior refusal; see
 [definition upgrade/recovery](../changes/integration-definitions.md). Earlier
-schema 14/17 statements above describe their original increments.
+schema 14/17 statements above describe their original increments. Hosted Linear
+adds schema 19 and prior whole-daemon refusal; follow its
+[upgrade and recovery guidance](hosted-linear.md#refresh-failures-and-upgrade).

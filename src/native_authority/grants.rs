@@ -36,13 +36,25 @@ pub async fn review(
     input: &Review,
     secret: Option<&str>,
 ) -> Result<Value> {
+    if input.contract_policy != current.source.contract_policy {
+        return Err(Error("contract_policy_conflict"));
+    }
     let name = &input.name;
     let expected = &input.observed_digest;
     let entry = observed(manifest, name)?;
     if entry["observed_digest"] != *expected {
         return Err(Error("observation_conflict"));
     }
-    let value = protected::create(&entry["tool"], &input.effect, &input.context)?;
+    let value = protected::create_with(
+        &entry["tool"],
+        &input.effect,
+        &input.context,
+        input.contract_policy,
+    )?;
+    if value.get("input_restriction").and_then(Value::as_str) != input.input_restriction.as_deref()
+    {
+        return Err(Error("input_restriction_required"));
+    }
     if let Some(secret) = secret {
         contract::screen(&value, secret).map_err(|_| Error("context_secret"))?;
     }
@@ -99,7 +111,10 @@ async fn validate(
             .bind(&entry.contract_digest).fetch_optional(&mut *c).await?.ok_or(Error("review_required"))?;
         let value = crate::native::json::parse(row.get::<&str, _>("contract").as_bytes())
             .map_err(|_| Error("review_invalid"))?;
-        protected::load(&value)?;
+        let checked = protected::load(&value)?;
+        if checked.policy != current.source.contract_policy {
+            return Err(Error("contract_policy_conflict"));
+        }
         if row.get::<String, _>("observed_digest") != observed["observed_digest"]
             || value["tool"] != observed["tool"]
             || contract::digest("locksmith-native-contract-v1", &value) != entry.contract_digest

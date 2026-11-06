@@ -1,7 +1,7 @@
 //! Finite observation and admitted calls through the accepted bounded client hook.
-use super::wire_format::{response, validate_mode};
-pub use super::wire_format::{validate, validate_hosted};
-use super::{Error, Result, contract};
+use super::wire_format::{response, validate_selection};
+pub use super::wire_format::{validate, validate_hosted, validate_selected_v2, validate_v2};
+use super::{Error, Result, contract, policy::Policy};
 use locksmith_mcp_transport::Client;
 use rmcp::{
     model::ClientJsonRpcMessage,
@@ -20,6 +20,8 @@ pub struct Connection<'a> {
     pub endpoint: Arc<str>,
     pub bearer: Option<&'a str>,
     pub session: Option<Arc<str>>,
+    pub policy: Policy,
+    pub hosted: bool,
     pub selected_tools: Option<&'a [String]>,
 }
 impl Connection<'_> {
@@ -59,7 +61,13 @@ impl Connection<'_> {
                 .map(|v| json!({"cursor":v}))
                 .unwrap_or(json!({}));
             let result = self.rpc(page + 2, "tools/list", params).await?;
-            let mut manifest = append_page(&result, &mut tools, &mut names, self.selected_tools)?;
+            let mut manifest = append_page(
+                &result,
+                &mut tools,
+                &mut names,
+                self.selected_tools,
+                self.policy,
+            )?;
             cursor = result
                 .get("nextCursor")
                 .filter(|v| self.selected_tools.is_none() || !v.is_null())
@@ -70,7 +78,7 @@ impl Connection<'_> {
                     if selected.iter().any(|n| !names.contains(n)) {
                         return Err(Error("selected_tool_missing"));
                     }
-                    manifest["projection"] = json!({"policy":"explicit_profile_tools_v1", "total":names.len(),"selected":tools.len(),"omitted":names.len()-tools.len()});
+                    manifest["projection"] = json!({"policy":if self.hosted {"explicit_profile_tools_v1"} else {"explicit_registration_tools_v1"}, "total":names.len(),"selected":tools.len(),"omitted":names.len()-tools.len()});
                     if manifest.to_string().len() > 48 * 1024 {
                         return Err(Error("manifest_limit"));
                     }
@@ -89,11 +97,16 @@ impl Connection<'_> {
         )
         .map_err(|_| Error("request_invalid"))?;
         let reply = self.send(message).await?;
-        let (value, session) = response(reply, self.selected_tools.is_some()).await?;
+        let (value, session) = response(reply, self.hosted).await?;
         if method == "tools/call" {
             super::call_result::envelope(&value).map_err(|_| Error("upstream_result"))?;
         } else {
-            validate_mode(&value, self.selected_tools.is_some())?;
+            validate_selection(
+                &value,
+                self.hosted,
+                self.policy,
+                self.selected_tools.is_some(),
+            )?;
         }
         if value["id"] != id
             || (method == "initialize" && value["result"].get("protocolVersion").is_none())
@@ -161,6 +174,7 @@ fn append_page(
     tools: &mut Vec<Value>,
     names: &mut BTreeSet<String>,
     selected: Option<&[String]>,
+    policy: Policy,
 ) -> Result<Value> {
     let list = result["tools"].as_array().ok_or(Error("upstream_tools"))?;
     for tool in list {
@@ -173,7 +187,7 @@ fn append_page(
         if selected.is_some_and(|s| !s.iter().any(|n| n == name)) {
             continue;
         }
-        contract::tool(tool)?;
+        contract::tool_with(tool, policy)?;
         tools.push(json!({"tool":tool,"observed_digest":contract::observed(tool)}));
     }
     let manifest = json!({"tools":&tools});
@@ -188,6 +202,40 @@ mod hosted_tests {
     use super::*;
     fn tool(name: &str) -> Value {
         json!({"name":name,"inputSchema":{"type":"object","properties":{},"additionalProperties":false}})
+    }
+    #[test]
+    fn finite_v2_hosted_selected_originals_and_complete_omissions() {
+        let selected = (0..4).map(|i| format!("selected_{i}")).collect::<Vec<_>>();
+        let mut originals = vec![];
+        for name in &selected {
+            originals.push(json!({"name":name,"_meta":{"inert":["synthetic"]},"inputSchema":{"type":"object","properties":{"choice":{"type":"string","enum":(0..45).map(|i|format!("v{i}")).collect::<Vec<_>>(),"default":"v0"}},"additionalProperties":false}}));
+        }
+        let mut all = originals.clone();
+        for i in 0..37 {
+            all.push(tool(&format!("omitted_{i}")));
+        }
+        let page = json!({"tools":all});
+        validate_hosted(&json!({"jsonrpc":"2.0","id":2,"result":page})).unwrap();
+        let mut names = BTreeSet::new();
+        let mut tools = vec![];
+        let manifest =
+            append_page(&page, &mut tools, &mut names, Some(&selected), Policy::V2).unwrap();
+        assert_eq!(names.len(), 41);
+        assert_eq!(tools.len(), 4);
+        for (entry, original) in manifest["tools"].as_array().unwrap().iter().zip(originals) {
+            assert_eq!(entry["tool"], original);
+            assert_eq!(entry["observed_digest"], contract::observed(&original));
+        }
+        assert!(
+            append_page(
+                &page,
+                &mut vec![],
+                &mut BTreeSet::new(),
+                Some(&selected),
+                Policy::V1
+            )
+            .is_err()
+        );
     }
     #[test]
     fn hosted_complete_catalog_projection_keeps_exact_selected_contract() {
@@ -205,7 +253,8 @@ mod hosted_tests {
             "manual remains 32/full grammar"
         );
         let (mut tools, mut names) = (vec![], BTreeSet::new());
-        let manifest = append_page(&page, &mut tools, &mut names, Some(&selected)).unwrap();
+        let manifest =
+            append_page(&page, &mut tools, &mut names, Some(&selected), Policy::V1).unwrap();
         assert_eq!(names.len(), 256);
         assert_eq!(
             manifest["tools"],
@@ -216,7 +265,8 @@ mod hosted_tests {
                 &json!({"tools":[tool("over")] }),
                 &mut tools,
                 &mut names,
-                Some(&selected)
+                Some(&selected),
+                Policy::V1
             )
             .is_err()
         );
@@ -226,6 +276,7 @@ mod hosted_tests {
             &mut tools,
             &mut names,
             Some(&selected),
+            Policy::V1,
         )
         .unwrap();
         assert!(
@@ -233,7 +284,8 @@ mod hosted_tests {
                 &json!({"tools":[tool("omit")] }),
                 &mut tools,
                 &mut names,
-                Some(&selected)
+                Some(&selected),
+                Policy::V1
             )
             .is_err(),
             "omitted duplicate across pages"
@@ -245,7 +297,8 @@ mod hosted_tests {
                 &json!({"tools":[bad]}),
                 &mut vec![],
                 &mut BTreeSet::new(),
-                Some(&selected)
+                Some(&selected),
+                Policy::V1
             )
             .is_err(),
             "selected unsupported schema never normalized"

@@ -4,6 +4,16 @@ use serde_json::{Map, Value};
 
 pub fn validate(schema: &Value, value: &Value) -> Result<()> {
     schema::root(schema)?;
+    checked(schema, value)
+}
+pub fn input(schema: &Value, value: &Value, policy: super::policy::Policy) -> Result<()> {
+    schema::input(schema, policy)?;
+    checked(schema, value)
+}
+pub(super) fn annotation(schema: &Value, value: &Value) -> Result<()> {
+    node(schema, value, 0, &mut 0)
+}
+fn checked(schema: &Value, value: &Value) -> Result<()> {
     if value.to_string().len() > 32 * 1024 {
         return Err(Error("value_limit"));
     }

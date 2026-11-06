@@ -16,6 +16,8 @@ struct Input {
     enabled: bool,
     compact: bool,
     profile: Option<String>,
+    policy: crate::native_authority::policy::Policy,
+    selected_tools: Option<Vec<String>>,
 }
 fn input(bytes: &[u8]) -> Result<Input, Error> {
     let v: Value = super::decode(bytes)?;
@@ -32,11 +34,20 @@ fn input(bytes: &[u8]) -> Result<Input, Error> {
             enabled,
             compact: false,
             profile: None,
+            policy: Default::default(),
+            selected_tools: None,
         });
     }
-    if o.keys()
-        .any(|k| !["enabled", "compact", "oauth_profile_id"].contains(&k.as_str()))
-    {
+    if o.keys().any(|k| {
+        ![
+            "enabled",
+            "compact",
+            "oauth_profile_id",
+            "contract_policy",
+            "selected_tools",
+        ]
+        .contains(&k.as_str())
+    }) {
         return Err(Error::Invalid);
     }
     let compact = o
@@ -47,7 +58,18 @@ fn input(bytes: &[u8]) -> Result<Input, Error> {
         .get("oauth_profile_id")
         .map(|v| v.as_str().map(str::to_owned).ok_or(Error::Invalid))
         .transpose()?;
+    let policy = o
+        .get("contract_policy")
+        .map(|v| serde_json::from_value(v.clone()).map_err(|_| Error::Invalid))
+        .transpose()?
+        .unwrap_or_default();
+    let selected_tools = o
+        .get("selected_tools")
+        .map(|v| serde_json::from_value(v.clone()).map_err(|_| Error::Invalid))
+        .transpose()?;
     Ok(Input {
+        selected_tools,
+        policy,
         enabled,
         compact,
         profile,
@@ -180,15 +202,18 @@ async fn change(
         if !eligibility::mechanism(&declared, &activation) {
             return Err(Error::Invalid);
         }
-        if mcp
-            .definition_activation
-            .as_ref()
-            .is_some_and(|a| a != &activation || mcp.compact != input.compact)
-        {
+        if mcp.definition_activation.as_ref().is_some_and(|a| {
+            a != &activation
+                || mcp.compact != input.compact
+                || mcp.contract_policy != input.policy
+                || mcp.selected_tools != input.selected_tools
+        }) {
             return Err(Error::Conflict);
         }
         mcp.definition_activation = Some(activation);
         mcp.compact = input.compact;
+        mcp.contract_policy = input.policy;
+        mcp.selected_tools = input.selected_tools;
         r.auth = auth;
         r.disabled = false;
         if state.local_listener.as_ref().is_some_and(|(host, port)| {
@@ -200,6 +225,8 @@ async fn change(
     } else {
         // Local revocation must work even when the loaded profile/key is absent.
         mcp.definition_activation = None;
+        mcp.contract_policy = Default::default();
+        mcp.selected_tools = None;
         r.auth = AuthSpec::None;
         r.disabled = true;
     }

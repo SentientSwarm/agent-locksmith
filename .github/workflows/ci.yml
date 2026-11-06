@@ -220,6 +220,22 @@ jobs:
           printf 'source_commit=1a3c1690470492bcfb41ddda61c7b5bb886a1854\n' > "$RUNNER_TEMP/schema18-1a3c169/PROVENANCE.txt"
           sha256sum "$RUNNER_TEMP/schema18-1a3c169/locksmithd" "$RUNNER_TEMP/schema18-1a3c169/locksmith" >> "$RUNNER_TEMP/schema18-1a3c169/PROVENANCE.txt"
           cat "$RUNNER_TEMP/schema18-1a3c169/PROVENANCE.txt"
+      - name: Check out pinned schema19 source
+        uses: actions/checkout@v4
+        with:
+          ref: 7effda33ab409c5c3d3240485ccfdef2b3227d5b
+          path: policy-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema19 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/policy-prior-source" rev-parse HEAD)" = "7effda33ab409c5c3d3240485ccfdef2b3227d5b"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/policy-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema19-7effda3"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema19-7effda3/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema19-7effda3/locksmith"
+          printf 'source_commit=7effda33ab409c5c3d3240485ccfdef2b3227d5b\n' > "$RUNNER_TEMP/schema19-7effda3/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema19-7effda3/locksmithd" "$RUNNER_TEMP/schema19-7effda3/locksmith" >> "$RUNNER_TEMP/schema19-7effda3/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema19-7effda3/PROVENANCE.txt"
       - run: cargo test --all
       - name: Verify OAuth upgrade and prior-binary refusal
         run: |
@@ -277,6 +293,15 @@ jobs:
       - name: Verify controlled custody across hosted Linear migration
         run: |
           CONTROLLED_PRIOR_SCHEMA=18 CONTROLLED_PRIOR_DAEMON="$RUNNER_TEMP/schema18-1a3c169/locksmithd" CONTROLLED_PRIOR_CLI="$RUNNER_TEMP/schema18-1a3c169/locksmith" cargo test --locked --test oauth_consent_process_test controlled_refresh_actual_prior_migration_refusal_reopen -- --ignored --exact --nocapture
+      - name: Verify definition policy migration and prior-binary refusal
+        run: |
+          LOCKSMITH_POLICY_PRIOR_DAEMON="$RUNNER_TEMP/schema19-7effda3/locksmithd" cargo test --locked --test definition_process_test definition_policy_schema19_prior_refusal_reopen -- --ignored --exact --nocapture
+      - name: Verify finite contract policy refusal by the prior reader
+        run: |
+          LOCKSMITH_CONTRACT_PRIOR_DAEMON="$RUNNER_TEMP/schema19-7effda3/locksmithd" cargo test --locked --test native_compact_process_test policy::finite_v2_actual_old_reader_refuses_and_current_reopens -- --ignored --exact --nocapture
+      - name: Verify controlled custody across definition policy migration
+        run: |
+          CONTROLLED_PRIOR_SCHEMA=19 CONTROLLED_PRIOR_DAEMON="$RUNNER_TEMP/schema19-7effda3/locksmithd" CONTROLLED_PRIOR_CLI="$RUNNER_TEMP/schema19-7effda3/locksmith" cargo test --locked --test oauth_consent_process_test controlled_refresh_actual_prior_migration_refusal_reopen -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
       - name: Bounded MCP transport (separate integration prerequisite)

@@ -14,6 +14,12 @@ pub struct ActivationOptions {
     /// Enable the shared compact facade as well as standard MCP.
     #[arg(long)]
     pub compact: bool,
+    /// Explicit finite language for review; changing an active pin requires deactivation first.
+    #[arg(long, value_parser = ["finite-v1", "finite-v2"])]
+    pub contract_policy: Option<String>,
+    /// Exact upstream tool name to select after a complete bounded scan (repeatable, finite-v2 only).
+    #[arg(long = "selected-tool")]
+    pub selected_tools: Vec<String>,
     /// Explicit configured controlled profile ID, only for oauth_provider declarations.
     #[arg(long)]
     pub oauth_profile: Option<String>,
@@ -26,6 +32,12 @@ pub async fn activate(
     options: ActivationOptions,
 ) -> Result<(), CliError> {
     let mut body = json!({"enabled":true,"compact":options.compact});
+    if !options.selected_tools.is_empty() {
+        body["selected_tools"] = json!(options.selected_tools);
+    }
+    if let Some(policy) = options.contract_policy {
+        body["contract_policy"] = policy.into();
+    }
     if let Some(profile) = options.oauth_profile {
         body["oauth_profile_id"] = profile.into();
     }

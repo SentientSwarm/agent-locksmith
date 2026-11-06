@@ -12,7 +12,8 @@ consumer. Activation/account selection are configuration facts, not credential
 readiness or permission to execute a tool.
 
 Manual None, sealed-bearer and deliberately owner-selected
-[controlled OAuth](../operator/native-oauth.md) accounts support finite reviewed tools. Each
+[controlled OAuth](../operator/native-oauth.md) or
+[hosted Linear](../operator/hosted-linear.md) accounts support finite reviewed tools. Each
 call requires the current selected account, current reviewed grant and a fresh
 operator observation (less than60 seconds old, from this daemon run). The list
 is empty when no tools are granted; stale observations require operator repair.

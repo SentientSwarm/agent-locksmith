@@ -127,7 +127,9 @@ contract control arguments; OAuth consent does not supply a project grant.
 A hosted observation scans a complete bounded catalog before publishing anything:
 no more than 256 total names across four pages, no duplicate name (including omitted
 tools), repeated cursor or missing selected name. Every selected tool must satisfy
-the existing full finite schema/annotation contract. Its JSON values and canonical
+the explicitly selected full [finite contract policy](native-contract-policy.md).
+Absent registration policy remains v1; hosted identity or vendor name never opts
+a connection into v2. Its JSON values and canonical
 observed digest are preserved; unsupported selected schemas are refused, never
 rewritten into a weaker schema. SDK normalization that would drop tool fields is
 also refused. The selected manifest stays at most 32 tools/48KiB. This does not
@@ -142,8 +144,9 @@ A completed observation includes:
 These counts appear alongside `manifest.tools` only after complete pagination.
 Omitted tools cannot be reviewed, granted or dispatched through this observation.
 Changing the selected-name list changes profile authority and requires explicit
-account repair; it cannot silently adopt existing custody. Controlled/None/bearer
-profiles keep their original complete 32-tool catalog policy.
+account repair; it cannot silently adopt existing custody. Controlled/None/bearer registrations keep their original complete 32-tool
+catalog policy unless explicitly selecting a finite-v2 registration subset;
+see [customer selection](native-contract-policy.md#explicit-customer-catalog-selection).
 
 Native transport retains 256 KiB response/chunk,64KiB SSE-event,8192 JSON-unit,
 32-depth,128-event and1MiB aggregate client limits, with 10s request/3s connect.

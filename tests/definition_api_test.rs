@@ -32,5 +32,7 @@ mod activation;
 mod credential;
 #[path = "definitions/guards.rs"]
 mod guards;
+#[path = "definitions/policy.rs"]
+mod policy;
 #[path = "definitions/storage.rs"]
 mod storage;

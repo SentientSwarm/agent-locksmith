@@ -35,14 +35,19 @@ not RFC8785/cross-language numeric equivalence. Repeat reviews are immutable
 no-ops. Grant replacement is all-or-nothing and checks every exact review
 against the current complete observation, source and expected set revision.
 
-## Finite supported vocabulary
+## Default finite-v1 vocabulary
 
 Tool members: `name`, optional `title`/`description`, `inputSchema`, optional
 `outputSchema`/`annotations`. Names are1–128 UTF-8 bytes without controls;
 titles at most128 and descriptions at most2048 bytes. Annotations permit only
 `title` and boolean `readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`. Provider hints never substitute for declared effect.
-`icons`, `_meta`, execution/task extensions and other members refuse observation.
+`icons`, `_meta`, execution/task extensions and other members refuse v1 observation.
+An explicit [finite-v2 policy](../user/operator/native-contract-policy.md) adds bounded
+metadata, scalar input defaults/enums and a separately reviewed empty-input
+restriction. Output schemas keep v1. Policy is persisted in McpConfig and Source,
+required in review, stored in the same immutable contract and rechecked against
+current source during grant/effective/dispatch. No second authority store exists.
 
 Input/output roots must be objects. Nested schemas permit a single explicit
 `type`: object/array/string/integer/number/boolean/null. All objects require

@@ -1,6 +1,7 @@
 //! Finite reviewed native authority and one committed tool dispatcher.
 pub mod contract;
 mod numbers;
+pub mod policy;
 pub mod schema;
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]

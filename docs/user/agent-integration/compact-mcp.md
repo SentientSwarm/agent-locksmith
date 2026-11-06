@@ -88,7 +88,8 @@ apply. Unknown admission/remote outcomes do not prove rollback or justify retry.
 Session response-drop retirement is distinct from registry publication.
 
 This bounded facade supports the same finite None/live StoredBearer and
-[owner-selected controlled OAuth](../operator/native-oauth.md) tools as
+[owner-selected controlled OAuth](../operator/native-oauth.md) and manual
+[hosted Linear](../operator/hosted-linear.md) tools as
 [standard native MCP](native-mcp.md). It does not establish hosted provider
 compatibility, tasks, resources, prompts or a model token-efficiency claim.
 [Customer pins](../operator/integration-definitions.md) require separate operator
@@ -118,3 +119,8 @@ actual pre-compact build. Current controlled OAuth also adds schema 17: see its
 
 Current customer activation adds schema 18; retain the
 [whole-daemon upgrade/recovery cost](../changes/integration-definitions.md).
+
+For an operator-selected [finite-v2 contract](../operator/native-contract-policy.md),
+`describe.native_contract` labels the policy, digest and any derived empty-arguments
+restriction. Construct arguments from `input_schema`; defaults are annotations and
+are never filled by Locksmith. Provider metadata remains inert.

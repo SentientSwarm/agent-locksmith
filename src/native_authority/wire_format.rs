@@ -1,4 +1,4 @@
-use super::{Error, Result, contract};
+use super::{Error, Result, contract, policy::Policy};
 use futures_util::StreamExt;
 use locksmith_mcp_transport::{Error as WireError, strict_json};
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse as Reply;
@@ -8,6 +8,14 @@ pub fn validate(value: &Value) -> std::result::Result<(), WireError> {
 }
 pub(super) fn validate_inner(value: &Value) -> Result<()> {
     validate_mode(value, false)
+}
+pub fn validate_v2(value: &Value) -> std::result::Result<(), WireError> {
+    validate_selection(value, false, Policy::V2, false)
+        .map_err(|_| WireError("observation_response_invalid"))
+}
+pub fn validate_selected_v2(value: &Value) -> std::result::Result<(), WireError> {
+    validate_selection(value, false, Policy::V2, true)
+        .map_err(|_| WireError("observation_response_invalid"))
 }
 pub fn validate_hosted(value: &Value) -> std::result::Result<(), WireError> {
     validate_mode(value, true).map_err(|_| WireError("observation_response_invalid"))
@@ -26,6 +34,17 @@ pub(super) fn hosted_notification(value: &Value) -> Result<()> {
     Ok(())
 }
 pub(super) fn validate_mode(value: &Value, hosted: bool) -> Result<()> {
+    validate_policy(value, hosted, Policy::V1)
+}
+pub(super) fn validate_policy(value: &Value, hosted: bool, policy: Policy) -> Result<()> {
+    validate_selection(value, hosted, policy, hosted)
+}
+pub(super) fn validate_selection(
+    value: &Value,
+    hosted: bool,
+    policy: Policy,
+    selected: bool,
+) -> Result<()> {
     if hosted && notification(value) {
         return hosted_notification(value);
     }
@@ -35,19 +54,19 @@ pub(super) fn validate_mode(value: &Value, hosted: bool) -> Result<()> {
     }
     let result = value.get("result").ok_or(Error("upstream_result"))?;
     if result.get("tools").is_some() {
-        list(result, hosted)
+        list(result, hosted, policy, selected)
     } else {
         initialize(result)
     }
 }
-fn list(result: &Value, hosted: bool) -> Result<()> {
+fn list(result: &Value, hosted: bool, policy: Policy, selected: bool) -> Result<()> {
     contract::object(result, &["tools", "nextCursor"])?;
     let tools = result["tools"].as_array().ok_or(Error("upstream_tools"))?;
-    if tools.len() > if hosted { 256 } else { 32 } {
+    if tools.len() > if selected { 256 } else { 32 } {
         return Err(Error("manifest_limit"));
     }
     for tool in tools {
-        if hosted {
+        if hosted || policy == Policy::V2 {
             contract::text(&tool["name"], 128)?;
             // Preserve the actual JSON tool, before SDK normalization can drop fields.
             let decoded: rmcp::model::Tool =
@@ -55,8 +74,9 @@ fn list(result: &Value, hosted: bool) -> Result<()> {
             if serde_json::to_value(decoded).map_err(|_| Error("upstream_tools"))? != *tool {
                 return Err(Error("upstream_tools"));
             }
-        } else {
-            contract::tool(tool)?;
+        }
+        if !selected {
+            contract::tool_with(tool, policy)?;
         }
     }
     if let Some(cursor) = result.get("nextCursor").filter(|v| !hosted || !v.is_null()) {

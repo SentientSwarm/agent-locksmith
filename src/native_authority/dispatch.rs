@@ -49,6 +49,7 @@ impl Runtime {
                 full: approved.tool.clone(),
                 public: approved.public.clone(),
                 context: approved.context.clone(),
+                policy: approved.policy,
             },
             &call.arguments,
         )?;
@@ -76,11 +77,9 @@ impl Runtime {
             endpoint: reg.upstream.clone().into(),
             bearer: bearer.as_ref().map(ExposeSecret::expose_secret),
             session: None,
-            selected_tools: before
-                .current
-                .controlled
-                .as_ref()
-                .and_then(|a| a.selected_tools.as_deref()),
+            policy: before.current.source.contract_policy,
+            selected_tools: before.current.selected_tools(),
+            hosted: before.current.hosted(),
         };
         let result = self
             .prepared(call, &before, control, audit, &mut upstream, trace)

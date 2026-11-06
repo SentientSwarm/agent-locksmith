@@ -40,3 +40,11 @@ mod upgrade18;
 async fn definition_schema17_prior_refusal_reopen() {
     upgrade18::exercise().await;
 }
+
+#[path = "definition_process/upgrade20.rs"]
+mod upgrade20;
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an actual retained schema-19 daemon in LOCKSMITH_POLICY_PRIOR_DAEMON"]
+async fn definition_policy_schema19_prior_refusal_reopen() {
+    upgrade20::exercise().await;
+}
