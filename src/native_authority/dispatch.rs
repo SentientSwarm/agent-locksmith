@@ -76,6 +76,11 @@ impl Runtime {
             endpoint: reg.upstream.clone().into(),
             bearer: bearer.as_ref().map(ExposeSecret::expose_secret),
             session: None,
+            selected_tools: before
+                .current
+                .controlled
+                .as_ref()
+                .and_then(|a| a.selected_tools.as_deref()),
         };
         let result = self
             .prepared(call, &before, control, audit, &mut upstream, trace)
@@ -127,7 +132,15 @@ impl Runtime {
             &reg.upstream,
             addresses,
             1024 * 1024,
-            call_result::envelope,
+            if current
+                .controlled
+                .as_ref()
+                .is_some_and(|a| a.selected_tools.is_some())
+            {
+                call_result::hosted_envelope
+            } else {
+                call_result::envelope
+            },
         )
         .map_err(|_| Error("upstream_client"))
     }

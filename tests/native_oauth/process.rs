@@ -35,6 +35,19 @@ async fn prepare(f: &Fixture, agent: &str) {
     )
     .await;
     assert_eq!(status, 200, "{state}");
+    if f.path().join("hosted-mode").exists() {
+        assert_eq!(
+            state["observation"]["manifest"]["projection"],
+            json!({"policy":"explicit_profile_tools_v1","total":53,"selected":1,"omitted":52})
+        );
+        assert_eq!(
+            state["observation"]["manifest"]["tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
     let tool = state["observation"]["manifest"]["tools"]
         .as_array()
         .unwrap()
@@ -155,6 +168,12 @@ async fn invoke(f: &Fixture, agent: &Value, compact: bool, account: &str) {
     );
 }
 pub async fn journey() {
+    journey_mode(false).await;
+}
+pub async fn hosted_journey() {
+    journey_mode(true).await;
+}
+async fn journey_mode(hosted: bool) {
     let mut f = Fixture::new();
     std::fs::write(f.path().join("refresh-enabled"), "fixture").unwrap();
     std::fs::write(
@@ -164,6 +183,21 @@ pub async fn journey() {
     .unwrap();
     let t = Twin::start(&f);
     let port = configure(&f, &t);
+    if hosted {
+        let config_path = f.path().join("config.yaml");
+        let mut config: Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        config["oauth_consent"]["profiles"][0]["kind"] = json!("linear-hosted-fixture-v1");
+        config["oauth_consent"]["profiles"][0]["selected_tools"] = json!(["read_record"]);
+        std::fs::write(config_path, config.to_string()).unwrap();
+        let mut catalog = manifest();
+        for i in 0..50 {
+            catalog["tools"].as_array_mut().unwrap().push(json!({"name":format!("omitted_{i}"),"inputSchema":{"anyOf":[{"type":"string"},{"type":"object"}]}}));
+        }
+        std::fs::write(f.path().join("native-manifest.json"), catalog.to_string()).unwrap();
+        std::fs::write(f.path().join("hosted-mode"), "fixture").unwrap();
+        std::fs::write(f.path().join("hosted-sse"), "fixture").unwrap();
+    }
     start(&mut f).await;
     native_registration(&f, &t, port).await;
     let created = connect(&f, "native");
@@ -176,6 +210,15 @@ pub async fn journey() {
             .status(),
         200
     );
+    if hosted {
+        let account = f.op(&["oauth", "account-status", "fixture", "--label", "native"]);
+        assert_eq!(account["kind"], "linear_hosted_fixture_v1");
+        assert_eq!(
+            counts(&f).get("tool"),
+            None,
+            "consent creates no tool authority"
+        );
+    }
     let mut agents = Vec::new();
     for name in ["native-x", "native-shared-x"] {
         let a = f.op(&[
@@ -286,7 +329,7 @@ pub async fn journey() {
         1
     );
     println!(
-        "controlled native TLS: X/shared X/Y, standard/compact,12 effects with pre-effect committed audit, refresh/new-session repair and disconnect isolation; arrivals={}",
+        "controlled/hosted-fixture native TLS: X/shared X/Y, standard/compact,12 effects with pre-effect committed audit, refresh/new-session repair and disconnect isolation; arrivals={}",
         counts(&f)
     );
     f.stop();
@@ -429,4 +472,131 @@ async fn native_registration(f: &Fixture, t: &Twin, port: u16) {
         !f.path().join("counts.json").exists(),
         "activation must cause zero provider arrivals"
     );
+}
+
+/// Complete-catalog refusal is tested at the shipping observation API, after real consent.
+pub async fn hosted_catalog_refusals() {
+    let mut f = Fixture::new();
+    std::fs::write(
+        f.path().join("native-manifest.json"),
+        manifest().to_string(),
+    )
+    .unwrap();
+    let t = Twin::start(&f);
+    let port = configure(&f, &t);
+    let config_path = f.path().join("config.yaml");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["oauth_consent"]["profiles"][0]["kind"] = json!("linear-hosted-fixture-v1");
+    config["oauth_consent"]["profiles"][0]["selected_tools"] = json!(["read_record"]);
+    std::fs::write(&config_path, config.to_string()).unwrap();
+    start(&mut f).await;
+    native_registration(&f, &t, port).await;
+    let created = connect(&f, "catalog");
+    assert_eq!(
+        f.http
+            .get(callback(&t, port, &created))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let agent = f.op(&[
+        "agent",
+        "register",
+        "--name",
+        "catalog",
+        "--allowlist",
+        "fixture",
+    ]);
+    let id = agent["public_id"].as_str().unwrap();
+    selection(&f, id, "catalog").await;
+    let selected = manifest()["tools"][2].clone();
+    let omitted = json!({"name":"omitted","inputSchema":{"anyOf":[{"type":"string"}]}});
+    let mut invalid = selected.clone();
+    invalid["inputSchema"] = json!({"anyOf":[{"type":"string"}]});
+    let cases = [
+        (
+            "complete",
+            json!({"start":{"tools":[omitted.clone()],"nextCursor":"last"},"last":{"tools":[selected.clone()],"nextCursor":null}}),
+            true,
+        ),
+        (
+            "missing",
+            json!({"start":{"tools":[omitted.clone()]}}),
+            false,
+        ),
+        (
+            "duplicate-omitted",
+            json!({"start":{"tools":[omitted.clone()],"nextCursor":"last"},"last":{"tools":[selected.clone(),omitted.clone()]}}),
+            false,
+        ),
+        (
+            "repeated-cursor",
+            json!({"start":{"tools":[selected.clone()],"nextCursor":"again"},"again":{"tools":[],"nextCursor":"again"}}),
+            false,
+        ),
+        (
+            "incomplete-four-pages",
+            json!({"start":{"tools":[selected.clone()],"nextCursor":"b"},"b":{"tools":[],"nextCursor":"c"},"c":{"tools":[],"nextCursor":"d"},"d":{"tools":[],"nextCursor":"e"}}),
+            false,
+        ),
+        (
+            "unsupported-selected",
+            json!({"start":{"tools":[invalid]}}),
+            false,
+        ),
+        (
+            "complete-repair",
+            json!({"start":{"tools":[selected.clone(),omitted]}}),
+            true,
+        ),
+    ];
+    let path = format!("/admin/operator/tools/fixture/mcp/observations/{id}");
+    for (name, pages, accepted) in cases {
+        std::fs::write(f.path().join("native-pages.json"), pages.to_string()).unwrap();
+        let (status, before) = request(&f, "GET", &path, None).await;
+        assert_eq!(status, 200);
+        let (status, _) = request(
+            &f,
+            "POST",
+            &path,
+            Some(
+                json!({"source":before["source"],"generation":before["observation"]["generation"]}),
+            ),
+        )
+        .await;
+        assert_eq!(status == 200, accepted, "{name}: status={status}");
+        let (_, after) = request(&f, "GET", &path, None).await;
+        if accepted {
+            assert_eq!(
+                after["observation"]["manifest"]["projection"],
+                json!({"policy":"explicit_profile_tools_v1","total":2,"selected":1,"omitted":1})
+            );
+            assert_eq!(
+                after["observation"]["manifest"]["tools"][0]["tool"],
+                selected
+            );
+        } else {
+            assert_eq!(after["observation"]["status"], "failed");
+            assert!(
+                after["observation"]["manifest"].is_null(),
+                "no partial publication: {name}"
+            );
+        }
+        assert_eq!(counts(&f).get("tool"), None);
+        println!("hosted catalog {name}: accepted={accepted}, zero TOOL");
+    }
+    // Selected-name policy is part of durable authority, even after a same-profile restart.
+    f.stop();
+    config["oauth_consent"]["profiles"][0]["selected_tools"] = json!(["get_user"]);
+    std::fs::write(config_path, config.to_string()).unwrap();
+    start(&mut f).await;
+    assert_ne!(request(&f, "GET", &path, None).await.0, 200);
+    assert_eq!(counts(&f).get("tool"), None);
+    println!(
+        "hosted changed selection policy after restart: old account authority refused, zero TOOL"
+    );
+    f.stop();
+    t.stop();
 }

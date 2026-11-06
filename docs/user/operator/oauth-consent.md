@@ -1,5 +1,9 @@
 # Controlled operator consent
 
+For the fixed hosted Linear profile and its separately named offline twin, see
+[hosted Linear setup](hosted-linear.md). The controlled profile below retains its
+local-only behavior.
+
 For owner-selected controlled OAuth, see [native OAuth accounts](native-oauth.md).
 
 The optional `controlled-linear-v1` profile lets an authenticated operator create,

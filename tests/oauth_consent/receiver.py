@@ -43,6 +43,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, code, value=None):
         raw = b"" if value is None else json.dumps(value).encode()
+        if self._hosted_sse(code, value, raw):
+            return
         # The client may already be gone (an embedding returned with this
         # request in flight). end_headers() writes too, so a closed peer can
         # fail there as well; the caller still records "response attempted".
@@ -56,6 +58,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
             pass
+
+    def _hosted_sse(self, code, value, raw):
+        """Reply as a never-ending SSE stream when the hosted fixture asks."""
+        if not (
+            code == 200
+            and value is not None
+            and self.path == "/mcp/readonly"
+            and (root / "hosted-sse").exists()
+        ):
+            return False
+        self.send_response(code)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Mcp-Session-Id", "fixture-session-204")
+        self.end_headers()
+        notice = {
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {"level": "info", "data": "synthetic"},
+        }
+        try:
+            self.wfile.write(
+                b"data: " + json.dumps(notice).encode() + b"\n\ndata: " + raw + b"\n\n"
+            )
+            self.wfile.flush()
+            # A valid response is decisive; no EOF is supplied within native's
+            # 10s request bound.
+            time.sleep(12)
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+            pass
+        return True
 
     def do_DELETE(self):
         record("delete")
@@ -156,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
         elif method == "notifications/initialized":
             return self.reply(202)
         elif method == "tools/list":
-            result = self._tools_list()
+            result = self._tools_list(message)
         elif method == "tools/call":
             result = self._tools_call(message, native_y)
             if result is None:
@@ -166,7 +198,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400)
         self.reply(200, {"jsonrpc": "2.0", "id": message["id"], "result": result})
 
-    def _tools_list(self):
+    def _tools_list(self, message):
         result = {
             "tools": [
                 {
@@ -192,6 +224,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
         if (root / "native-manifest.json").exists():
             result = json.loads((root / "native-manifest.json").read_text())
+        if (root / "native-pages.json").exists():
+            pages = json.loads((root / "native-pages.json").read_text())
+            cursor = message.get("params", {}).get("cursor", "start")
+            result = pages[cursor]
         if (root / "echo-old-refresh").exists():
             result["tools"][0]["description"] = "fixture-refresh-0"
         return result

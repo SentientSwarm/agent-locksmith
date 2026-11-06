@@ -1,5 +1,9 @@
 # Controlled OAuth accounts for native MCP
 
+For the fixed hosted Linear profile and its separately named offline twin, see
+[hosted Linear setup](hosted-linear.md). The controlled profile below retains its
+local-only behavior.
+
 This local profile connects a controlled HTTPS twin. It does not establish hosted
 Linear/Slack support. Supported [local definition pins](integration-definitions.md)
 require separate deliberate activation. Start with

@@ -1,6 +1,6 @@
 //! Finite observation and admitted calls through the accepted bounded client hook.
-pub use super::wire_format::validate;
-use super::wire_format::{response, validate_inner};
+use super::wire_format::{response, validate_mode};
+pub use super::wire_format::{validate, validate_hosted};
 use super::{Error, Result, contract};
 use locksmith_mcp_transport::Client;
 use rmcp::{
@@ -20,6 +20,7 @@ pub struct Connection<'a> {
     pub endpoint: Arc<str>,
     pub bearer: Option<&'a str>,
     pub session: Option<Arc<str>>,
+    pub selected_tools: Option<&'a [String]>,
 }
 impl Connection<'_> {
     pub async fn initialize(&mut self) -> Result<()> {
@@ -58,12 +59,22 @@ impl Connection<'_> {
                 .map(|v| json!({"cursor":v}))
                 .unwrap_or(json!({}));
             let result = self.rpc(page + 2, "tools/list", params).await?;
-            let manifest = append_page(&result, &mut tools, &mut names)?;
+            let mut manifest = append_page(&result, &mut tools, &mut names, self.selected_tools)?;
             cursor = result
                 .get("nextCursor")
+                .filter(|v| self.selected_tools.is_none() || !v.is_null())
                 .map(|v| contract::text(v, 1024).map(str::to_owned))
                 .transpose()?;
             let Some(next) = cursor.as_ref() else {
+                if let Some(selected) = self.selected_tools {
+                    if selected.iter().any(|n| !names.contains(n)) {
+                        return Err(Error("selected_tool_missing"));
+                    }
+                    manifest["projection"] = json!({"policy":"explicit_profile_tools_v1", "total":names.len(),"selected":tools.len(),"omitted":names.len()-tools.len()});
+                    if manifest.to_string().len() > 48 * 1024 {
+                        return Err(Error("manifest_limit"));
+                    }
+                }
                 return Ok(manifest);
             };
             if !cursors.insert(next.clone()) {
@@ -78,11 +89,11 @@ impl Connection<'_> {
         )
         .map_err(|_| Error("request_invalid"))?;
         let reply = self.send(message).await?;
-        let (value, session) = response(reply).await?;
+        let (value, session) = response(reply, self.selected_tools.is_some()).await?;
         if method == "tools/call" {
             super::call_result::envelope(&value).map_err(|_| Error("upstream_result"))?;
         } else {
-            validate_inner(&value)?;
+            validate_mode(&value, self.selected_tools.is_some())?;
         }
         if value["id"] != id
             || (method == "initialize" && value["result"].get("protocolVersion").is_none())
@@ -149,13 +160,20 @@ fn append_page(
     result: &Value,
     tools: &mut Vec<Value>,
     names: &mut BTreeSet<String>,
+    selected: Option<&[String]>,
 ) -> Result<Value> {
     let list = result["tools"].as_array().ok_or(Error("upstream_tools"))?;
     for tool in list {
         let name = tool["name"].as_str().ok_or(Error("upstream_tools"))?;
-        if tools.len() >= 32 || !names.insert(name.to_owned()) {
+        if names.len() >= if selected.is_some() { 256 } else { 32 }
+            || !names.insert(name.to_owned())
+        {
             return Err(Error("manifest_limit"));
         }
+        if selected.is_some_and(|s| !s.iter().any(|n| n == name)) {
+            continue;
+        }
+        contract::tool(tool)?;
         tools.push(json!({"tool":tool,"observed_digest":contract::observed(tool)}));
     }
     let manifest = json!({"tools":&tools});
@@ -163,4 +181,82 @@ fn append_page(
         return Err(Error("manifest_limit"));
     }
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod hosted_tests {
+    use super::*;
+    fn tool(name: &str) -> Value {
+        json!({"name":name,"inputSchema":{"type":"object","properties":{},"additionalProperties":false}})
+    }
+    #[test]
+    fn hosted_complete_catalog_projection_keeps_exact_selected_contract() {
+        let selected = vec!["selected".to_string()];
+        let mut page = json!({"tools":[tool("selected")]});
+        for i in 0..255 {
+            page["tools"].as_array_mut().unwrap().push(
+                json!({"name":format!("omit_{i}"),"inputSchema":{"anyOf":[{"type":"string"}]}}),
+            );
+        }
+        let envelope = |p: &Value| json!({"jsonrpc":"2.0","id":2,"result":p});
+        assert!(validate_hosted(&envelope(&page)).is_ok());
+        assert!(
+            validate(&envelope(&page)).is_err(),
+            "manual remains 32/full grammar"
+        );
+        let (mut tools, mut names) = (vec![], BTreeSet::new());
+        let manifest = append_page(&page, &mut tools, &mut names, Some(&selected)).unwrap();
+        assert_eq!(names.len(), 256);
+        assert_eq!(
+            manifest["tools"],
+            json!([{"tool":tool("selected"),"observed_digest":contract::observed(&tool("selected"))}])
+        );
+        assert!(
+            append_page(
+                &json!({"tools":[tool("over")] }),
+                &mut tools,
+                &mut names,
+                Some(&selected)
+            )
+            .is_err()
+        );
+        let (mut tools, mut names) = (vec![], BTreeSet::new());
+        append_page(
+            &json!({"tools":[tool("omit")] }),
+            &mut tools,
+            &mut names,
+            Some(&selected),
+        )
+        .unwrap();
+        assert!(
+            append_page(
+                &json!({"tools":[tool("omit")] }),
+                &mut tools,
+                &mut names,
+                Some(&selected)
+            )
+            .is_err(),
+            "omitted duplicate across pages"
+        );
+        let mut bad = tool("selected");
+        bad["inputSchema"] = json!({"anyOf":[{"type":"string"}]});
+        assert!(
+            append_page(
+                &json!({"tools":[bad]}),
+                &mut vec![],
+                &mut BTreeSet::new(),
+                Some(&selected)
+            )
+            .is_err(),
+            "selected unsupported schema never normalized"
+        );
+        for field in ["annotations", "title", "unknown"] {
+            let mut bad = tool("selected");
+            bad[field] = Value::Null;
+            assert!(
+                validate_hosted(&envelope(&json!({"tools":[bad]}))).is_err(),
+                "SDK loss {field}"
+            );
+        }
+    }
 }

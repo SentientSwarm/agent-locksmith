@@ -38,6 +38,14 @@ pub fn checked(tool: &Value, value: &Value) -> Result<()> {
 pub fn envelope(value: &Value) -> std::result::Result<(), locksmith_mcp_transport::Error> {
     raw(value).map_err(|_| locksmith_mcp_transport::Error("call_response_invalid"))
 }
+pub fn hosted_envelope(value: &Value) -> std::result::Result<(), locksmith_mcp_transport::Error> {
+    if super::wire_format::notification(value) {
+        super::wire_format::hosted_notification(value)
+            .map_err(|_| locksmith_mcp_transport::Error("call_response_invalid"))
+    } else {
+        envelope(value)
+    }
+}
 fn raw(value: &Value) -> Result<()> {
     if value
         .get("result")

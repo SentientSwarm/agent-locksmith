@@ -12,6 +12,14 @@
 
 ### Changed
 
+- Add a fixed [hosted Linear OAuth profile](docs/user/operator/hosted-linear.md)
+  and an explicit local fixture kind through existing owner custody, refresh,
+  native selection and finite grants. Hosted observation scans a bounded complete
+  catalog and retains only explicitly selected original contracts with omission
+  counts; unsupported selected schemas refuse. Public callback authority is
+  separate from the loopback TLS bind. Migration 0019 preserves custody/highwater
+  and refuses prior daemons. Live shipping provider adoption remains separate.
+
 - Connect the [local customer MCP journey](docs/user/operator/customer-mcp-journey.md)
   from definition promotion through account selection, finite review/grants,
   ordinary task discovery and deliberate repair. Clarify that controlled refresh
