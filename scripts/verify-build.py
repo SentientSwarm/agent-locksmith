@@ -47,33 +47,38 @@ def strict_json(data):
         raise ValueError('invalid_json') from error
 
 
-def inspect(path):
-    # Keep output in bounded buffers and always reap this owned inspection process.
-    process = subprocess.Popen([str(path.resolve()), '--build-info'], stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, start_new_session=True)
-    deadline = time.monotonic() + TIMEOUT
-    output = bytearray()
-    total = 0
+def collect(process, deadline, capture_stderr=False):
+    output, errors, total = bytearray(), bytearray(), 0
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ, True)
+        selector.register(process.stderr, selectors.EVENT_READ, False)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError('inspection_timeout')
+            for key, _ in selector.select(remaining):
+                data = os.read(key.fd, 4096)
+                if not data:
+                    selector.unregister(key.fileobj)
+                    continue
+                total += len(data)
+                if total > LIMIT:
+                    raise ValueError('inspection_too_large')
+                if key.data:
+                    output.extend(data)
+                else:
+                    errors.extend(data)
+    if process.wait(timeout=max(.001, deadline - time.monotonic())) != 0:
+        raise ValueError('inspection_failed')
+    return (bytes(output), bytes(errors)) if capture_stderr else bytes(output)
+
+
+def execute(path, arguments, *, env=None, cwd=None, capture_stderr=False):
+    """Bounded owned command, shared by identity inspection and native smoke."""
+    process = subprocess.Popen([str(path.resolve()), *arguments], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True, env=env, cwd=cwd)
     try:
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ, True)
-            selector.register(process.stderr, selectors.EVENT_READ, False)
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ValueError('inspection_timeout')
-                for key, _ in selector.select(remaining):
-                    data = os.read(key.fd, 4096)
-                    if not data:
-                        selector.unregister(key.fileobj)
-                        continue
-                    total += len(data)
-                    if total > LIMIT:
-                        raise ValueError('inspection_too_large')
-                    if key.data:
-                        output.extend(data)
-            if process.wait(timeout=max(.001, deadline - time.monotonic())) != 0:
-                raise ValueError('inspection_failed')
+        return collect(process, time.monotonic() + TIMEOUT, capture_stderr)
     except subprocess.TimeoutExpired as error:
         raise ValueError('inspection_timeout') from error
     finally:
@@ -84,7 +89,10 @@ def inspect(path):
         process.wait()
         process.stdout.close()
         process.stderr.close()
-    return strict_json(output)
+
+
+def inspect(path, *, env=None):
+    return strict_json(execute(path, ['--build-info'], env=env))
 
 
 def checksum_entries(path):
@@ -104,7 +112,7 @@ def check_identity(value, name, version, revision):
         raise ValueError('identity_mismatch')
 
 
-def verify(cli, daemon, checksums, version, revision, response=None):
+def verify(cli, daemon, checksums, version, revision, response=None, *, env=None):
     if not re.fullmatch(r'[0-9a-f]{40}', revision) or not version or len(version) > 128:
         raise ValueError('invalid_expected_identity')
     entries = checksum_entries(checksums)
@@ -117,7 +125,7 @@ def verify(cli, daemon, checksums, version, revision, response=None):
         if entries.get(path.name) != hashes[role]:
             raise ValueError('checksum_mismatch')
     for role, path in paths.items():
-        check_identity(inspect(path), role, version, revision)
+        check_identity(inspect(path, env=env), role, version, revision)
     for role, path in paths.items():
         if digest(path) != hashes[role]:
             raise ValueError('checksum_changed')

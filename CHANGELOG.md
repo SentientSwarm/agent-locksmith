@@ -12,6 +12,10 @@
 
 ### Changed
 
+- Add a [nonpublishing native candidate lane](docs/development/native-validation.md)
+  with bounded build, smoke and artifact checks for four targets; local fixtures
+  do not establish platform execution or release publication.
+
 - Decode documented Slack workspace display labels in declared identity checks
   while retaining exact observed IDs, bot refusal and token echo validation;
   expose [closed identity diagnostics](docs/user/operator/slack-identity-diagnostics.md).

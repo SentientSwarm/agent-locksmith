@@ -136,3 +136,10 @@ Git recovers, rebuild and recapture both files. A successful build with unknown
 identity is inspectable but cannot pass this verifier's clean-source requirement.
 Do not relabel a retained file with a newer receipt or infer its source from the
 current checkout after a build.
+
+## Nonpublishing native candidates
+
+The separate [native validation lane](native-validation.md) prepares explicit
+native runner execution and binds the same tested/hashed/uploaded CLI+daemon bytes.
+Local invented fixture checks do not establish native scheduling or optimized
+product success. Tag publication and final packaged UAT remain separate.
