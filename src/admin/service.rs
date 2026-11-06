@@ -399,7 +399,11 @@ impl AdminService {
             return Err(AdminError::InvalidBootstrap);
         }
 
-        let scope_preview = self.bootstrap.preview_scope(public_id.as_str()).await?;
+        let secret_str = SecretString::from(secret.expose().to_string());
+        let scope_preview = self
+            .bootstrap
+            .preview_verified(public_id.as_str(), &secret_str)
+            .await?;
         let allowlist_owned = scope_preview.tool_allowlist.clone();
         let allowlist_slice = allowlist_owned.as_deref();
 
@@ -420,7 +424,6 @@ impl AdminService {
             .await?
             .ok_or(AdminError::AgentNotFound)?;
 
-        let secret_str = SecretString::from(secret.expose().to_string());
         let consumed = self
             .bootstrap
             .consume(public_id.as_str(), &secret_str, agent.id)

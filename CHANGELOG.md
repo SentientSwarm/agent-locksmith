@@ -7,6 +7,9 @@
   deployments had no enrolment path. It needs `listen.admin_socket`; startup
   fails when that is missing, when `host` is not an IP address, or when the
   port or certificate cannot be used.
+- Verify the bootstrap secret before agent registration creates the agent.
+  Previously a caller holding only a token's public id could create and then
+  revoke an agent under any name, permanently reserving that name.
 - Own native preparation request bodies before buffering through daemon shutdown,
   retaining independent body and operation budgets.
 - Fail daemon startup immediately when the admin socket or admin HTTPS port
