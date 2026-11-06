@@ -2,6 +2,11 @@
 
 ## 3.0.0
 
+- Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is
+  enabled. Previously the setting was parsed but nothing bound it, so mtls-only
+  deployments had no enrolment path. It needs `listen.admin_socket`; startup
+  fails when that is missing, when `host` is not an IP address, or when the
+  port or certificate cannot be used.
 - Own native preparation request bodies before buffering through daemon shutdown,
   retaining independent body and operation budgets.
 - Fail daemon startup immediately when the admin socket or admin HTTPS port
