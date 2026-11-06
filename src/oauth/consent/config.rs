@@ -59,7 +59,7 @@ impl Config {
                 return Err(Error("invalid_profile"));
             }
         }
-        Ok(())
+        super::callback_route::validate(&self.profiles)
     }
 }
 impl Profile {
@@ -78,14 +78,6 @@ impl Profile {
             "slack-confidential-fixture-v1" => "slack_confidential_fixture_v1",
             _ => "invalid",
         }
-    }
-    pub(super) fn callback_authority(&self) -> Result<String> {
-        let url = https(&self.redirect_uri, "/oauth/callback")?;
-        Ok(url
-            .origin()
-            .ascii_serialization()
-            .trim_start_matches("https://")
-            .to_owned())
     }
     pub(crate) fn auth_spec(&self) -> crate::registrations::AuthSpec {
         crate::registrations::AuthSpec::OauthPkce {
@@ -191,126 +183,9 @@ pub(super) fn https(raw: &str, path: &str) -> Result<reqwest::Url> {
     }
     Ok(url)
 }
-pub(super) fn managed_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "controlled_linear_v1"
-            | "linear_hosted_v1"
-            | "linear_hosted_fixture_v1"
-            | "slack_confidential_v1"
-            | "slack_confidential_fixture_v1"
-    )
-}
-fn uuid(value: &str) -> bool {
-    value.len() == 36
-        && value.bytes().enumerate().all(|(i, b)| {
-            if [8, 13, 18, 23].contains(&i) {
-                b == b'-'
-            } else {
-                b.is_ascii_hexdigit()
-            }
-        })
-}
+pub(super) use super::config_values::managed_kind;
+use super::config_values::uuid;
 
 #[cfg(test)]
-mod hosted_tests {
-    use super::*;
-    use serde_json::{Value, json};
-    fn configuration(kind: &str, origin: &str, redirect: &str) -> Value {
-        let mut p = json!({"id":"test", "kind":kind, "client_id":"synthetic-client", "client_generation":1,
-            "issuer":origin, "authorization_endpoint":format!("{origin}/authorize"),
-            "token_endpoint":format!("{origin}/token"),"resource":format!("{origin}/mcp/readonly"),
-            "redirect_profile_id":"callback", "redirect_uri":redirect,
-            "expected_workspace":"00000000-0000-0000-0000-000000000041",
-            "expected_user":"00000000-0000-0000-0000-000000000042","ca_path":"synthetic-ca.pem"});
-        if kind != "controlled-linear-v1" {
-            p["selected_tools"] = json!(["get_project", "get_issue"]);
-        }
-        json!({"callback":{"address":"127.0.0.1:24443","cert_path":"synthetic-cert.pem","key_path":"synthetic-key.pem"},"profiles":[p]})
-    }
-    fn valid(v: &Value) -> bool {
-        serde_json::from_value::<Config>(v.clone()).is_ok_and(|c| c.validate().is_ok())
-    }
-    #[test]
-    fn hosted_profiles_fixed_endpoints_public_callback_and_explicit_selection() {
-        let controlled = configuration(
-            "controlled-linear-v1",
-            "https://127.0.0.1:24444",
-            "https://127.0.0.1:24443/oauth/callback",
-        );
-        assert!(valid(&controlled), "unchanged controlled positive control");
-        let hosted = configuration(
-            "linear-hosted-v1",
-            "https://mcp.linear.app",
-            "https://callback.example.test/oauth/callback",
-        );
-        assert!(
-            valid(&hosted),
-            "fixed hosted profile with separately bound public callback"
-        );
-        let fixture = configuration(
-            "linear-hosted-fixture-v1",
-            "https://127.0.0.1:24444",
-            "https://callback.example.test/oauth/callback",
-        );
-        assert!(
-            valid(&fixture),
-            "explicit offline twin uses shipping hosted policy"
-        );
-        for field in [
-            "issuer",
-            "authorization_endpoint",
-            "token_endpoint",
-            "resource",
-        ] {
-            let mut wrong = hosted.clone();
-            wrong["profiles"][0][field] = json!(format!("https://other.example/{}", field));
-            assert!(!valid(&wrong), "{field}");
-        }
-        for uri in [
-            "http://callback.example.test/oauth/callback",
-            "https://user@callback.example.test/oauth/callback",
-            "https://callback.example.test/oauth/callback?extra=1",
-            "https://callback.example.test/other",
-        ] {
-            let mut wrong = hosted.clone();
-            wrong["profiles"][0]["redirect_uri"] = json!(uri);
-            assert!(!valid(&wrong));
-        }
-        for names in [
-            json!([]),
-            json!(["get_project", "get_project"]),
-            json!([""]),
-            json!(vec!["tool"; 33]),
-        ] {
-            let mut wrong = hosted.clone();
-            wrong["profiles"][0]["selected_tools"] = names;
-            assert!(!valid(&wrong));
-        }
-        let mut wrong = fixture.clone();
-        wrong["profiles"][0]["issuer"] = json!("https://mcp.linear.app");
-        assert!(!valid(&wrong));
-        let mut wrong = controlled.clone();
-        wrong["profiles"][0]["redirect_uri"] =
-            json!("https://callback.example.test/oauth/callback");
-        assert!(!valid(&wrong));
-        let before: Profile = serde_json::from_value(controlled["profiles"][0].clone()).unwrap();
-        assert_eq!(
-            serde_json::to_value(before).unwrap(),
-            controlled["profiles"][0],
-            "controlled serialization/digests cannot change"
-        );
-        let mut changed = hosted.clone();
-        changed["profiles"][0]["selected_tools"] = json!(["get_project"]);
-        let profile =
-            |v: &Value| serde_json::from_value::<Profile>(v["profiles"][0].clone()).unwrap();
-        assert_ne!(
-            profile(&hosted).digest().unwrap(),
-            profile(&changed).digest().unwrap()
-        );
-        assert_ne!(
-            profile(&hosted).digest().unwrap(),
-            profile(&fixture).digest().unwrap()
-        );
-    }
-}
+#[path = "config_tests.rs"]
+mod hosted_tests;

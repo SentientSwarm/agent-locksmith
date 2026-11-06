@@ -127,17 +127,16 @@ impl Runtime {
     pub(super) async fn claim(
         &self,
         state: &str,
-        issuer: &str,
+        issuer: Option<&str>,
         authority: &str,
+        path: &str,
     ) -> Result<SqliteRow> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sweep(&mut tx).await?;
         let row = sqlx::query("SELECT * FROM oauth_consent_attempts WHERE state_hash=? AND state='pending' AND run_id=?")
             .bind(digest(state.as_bytes())).bind(&self.run_id).fetch_optional(&mut *tx).await?.ok_or(Error("callback_refused"))?;
         let p = self.profile(row.get("profile_id"))?;
-        if p.issuer != issuer || p.callback_authority()? != authority {
-            return Err(Error("callback_refused"));
-        }
+        p.check_callback(issuer, authority, path)?;
         current(&mut tx, &row, p, &self.run_id, "pending").await?;
         self.resolve_client(&mut tx, row.get("owner_id"), p).await?;
         let id: &str = row.get("id");
@@ -333,7 +332,7 @@ pub(super) async fn registration(
             || auth != expected
             || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"
-            || row.get::<&str, _>("upstream") != p.resource
+            || row.get::<&str, _>("upstream") != p.mcp_endpoint()
         {
             return Err(Error("profile_conflict"));
         }

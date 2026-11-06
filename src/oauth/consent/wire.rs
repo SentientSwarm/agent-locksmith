@@ -130,7 +130,7 @@ impl<'a> Wire<'a> {
             serde_json::from_value(value).map_err(|_| Error("mcp_request_invalid"))?;
         self.client
             .post_message(
-                self.profile.resource.clone().into(),
+                self.profile.mcp_endpoint().into(),
                 message,
                 self.session.clone(),
                 Some(self.token.into()),
@@ -156,7 +156,7 @@ impl<'a> Wire<'a> {
         let accepted = self
             .client
             .delete_session(
-                self.profile.resource.clone().into(),
+                self.profile.mcp_endpoint().into(),
                 session,
                 Some(self.token.into()),
                 headers(),

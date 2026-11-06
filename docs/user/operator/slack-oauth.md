@@ -30,26 +30,39 @@ oauth_consent:
       issuer: https://mcp.slack.com
       authorization_endpoint: https://slack.com/oauth/v2_user/authorize
       token_endpoint: https://slack.com/api/oauth.v2.user.access
-      resource: https://mcp.slack.com/mcp
+      resource: https://mcp.slack.com
       redirect_profile_id: callback
-      redirect_uri: https://callback.example.test/oauth/callback
+      redirect_uri: https://callback.example.test/oauth/callback/slack
       expected_workspace: TTEST001
       expected_user: UTEST001
       ca_path: ./provider-ca.pem
 ```
 
+The OAuth resource is exactly `https://mcp.slack.com`; it is carried in the
+authorization, code-exchange and refresh requests. The MCP transport endpoint is
+separately fixed at `https://mcp.slack.com/mcp`, used for native POST and session
+DELETE. The daemon derives this mapping from the explicit profile kind; there is
+no arbitrary endpoint override, redirect or token-driven audience inference.
 These real-kind endpoints are fixed. The callback authority may differ from the
 literal-loopback local TLS bind; supply matching routing/certificates independently.
-The path is exactly `/oauth/callback`, with no query, fragment or user information.
+Use the dedicated path `/oauth/callback/slack`, with no query, fragment or user
+information. Only this state-bound Slack route permits an absent response `iss`.
+A supplied issuer must still match exactly. Legacy `/oauth/callback` retains
+mandatory issuer checking; see [callback setup and upgrade](slack-callback.md).
 Forwarded headers do not substitute for the configured Host. The CA file adds
 trusted roots to normal TLS verification. Profiles and native CA identity are
 loaded at startup. Client ID/generation, exact endpoints, identities, redirect and
 loaded native roots contribute to current authority.
 
 For an offline twin, use the separately named fixture kind with issuer
-`https://127.0.0.1:19443`, resource `/mcp`, authorization `/oauth/v2_user/authorize`,
+`https://127.0.0.1:19443`, resource `https://127.0.0.1:19443`, MCP endpoint
+`https://127.0.0.1:19443/mcp`, authorization `/oauth/v2_user/authorize`,
 token `/api/oauth.v2.user.access`, and identity `/api/auth.test` on that same origin.
-Use a trusted local test CA. This does not redirect real-kind credentials.
+Use a trusted local test CA. The fixture kind also retains its historical resource
+`https://127.0.0.1:19443/mcp`; both explicit fixture forms use `/mcp` transport.
+Historical fixture URLs retain their parsed same-origin validation and exact
+transport spelling, including an explicit default port.
+That compatibility case does not apply to the real kind or redirect its credentials.
 
 ## Create and activate a customer connection
 
@@ -71,7 +84,7 @@ locksmith tool activate-definition slack --if-match DEFINITION_REVISION \
 ```
 
 A local twin also needs `--allow-private-destination` at creation. Activation
-checks exact declared scopes/resource/profile digest; it performs no provider I/O.
+checks exact declared scopes, derived MCP endpoint and profile digest; it performs no provider I/O.
 Selection scans the complete bounded catalog (256 tools/four pages), retains at
 most 32 exact selected schemas within 48 KiB and reports omissions. Unsupported
 selected contracts refuse; provider metadata never grants authority. See
@@ -156,37 +169,8 @@ The declaration, activation, consent and selection each grant no tools by themse
 
 ## Renewal, retirement and upgrade
 
-Manual `oauth refresh slack --label account-x --if-match REVISION` uses existing
-owned refresh custody. Omitted refresh fields retain an existing refresh token;
-explicit null/malformed/error after claim leaves uncertainty, never restores an
-old possibly consumed pair. Pending refresh cannot replay after crash/restart.
-Disconnect uncertain custody and complete fresh consent deliberately. Successful
-refresh requires reobserve/review/regrant and fresh sessions; reconnect also requires
-reselection. There is no background refresh for this managed profile.
-
-`oauth client retire slack --profile slack-reader --client-generation 1` permanently
-retires that owner/profile generation and invalidates matching pending attempts and
-accounts. Metadata inspection/retirement remains available after connection removal
-or key loss. A replacement requires a larger configured generation and restart,
-deliberate definition deactivation/reactivation against that profile, then a new
-sealed client and fresh consent/selection/review/grants. Repeating or deleting an
-old generation cannot revive it. Client status `configured` confirms a live store
-reference; it does not decrypt the value or attest provider acceptance.
-Live references participate in the existing credential-store sweep protection.
-
-Migration 0021 preserves prior account ciphertext and incarnation highwater,
-introduces client-reference metadata in the existing store and extends the existing
-selection/promotion guards. Back up the database normally before upgrade; old
-schema 20 daemons refuse it before listeners. There is no supported downgrade or
-proof-account import. Existing Linear kinds and default-v1 serialization remain.
-
-Token requests retain 30s/3s request/connect limits; fixed Slack identity 5s/3s and
-native 10s/3s remain distinct from owned outer deadlines. Closed `deadline`/`http`
-diagnostics preserve known classifications without raw error strings; `http` does
-not identify TLS/connect/provider cause. An outer `operation_deadline` can win
-first. No automatic retry is inferred. Historical unknown failures remain unknown.
-
-The executable offline smoke is `cargo test --test oauth_consent_process_test slack_ -- --nocapture`.
-It creates only invented local TLS processes and joins them; use the repository's
-[tested build profile](../../development/build-identity.md). Provider acceptance,
-installation and live customer receiving remain separate.
+See [Slack OAuth lifecycle and upgrades](slack-oauth-lifecycle.md) for refresh
+repair, permanent client retirement, pre-upgrade resource changes, schema
+compatibility and bounded diagnostics. Retire existing old-profile client
+generations with the supported old binary and configuration before changing the
+resource or upgrading.

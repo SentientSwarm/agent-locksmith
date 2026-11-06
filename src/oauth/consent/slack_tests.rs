@@ -3,7 +3,7 @@ use serde_json::json;
 fn profile() -> config::Profile {
     serde_json::from_value(json!({"id":"slack","kind":"slack-confidential-v1","client_id":"synthetic-client","client_generation":1,
         "issuer":"https://mcp.slack.com","authorization_endpoint":"https://slack.com/oauth/v2_user/authorize",
-        "token_endpoint":"https://slack.com/api/oauth.v2.user.access","resource":"https://mcp.slack.com/mcp",
+        "token_endpoint":"https://slack.com/api/oauth.v2.user.access","resource":"https://mcp.slack.com",
         "redirect_profile_id":"callback","redirect_uri":"https://callback.example.test/oauth/callback",
         "expected_workspace":"TTEST001","expected_user":"UTEST001","ca_path":"synthetic.pem","selected_tools":[]})).unwrap()
 }
@@ -128,3 +128,9 @@ fn error_metadata(p: &config::Profile) {
         .is_err()
     );
 }
+
+#[path = "slack_resource_tests.rs"]
+mod resource;
+
+#[path = "slack_metadata_tests.rs"]
+mod metadata;

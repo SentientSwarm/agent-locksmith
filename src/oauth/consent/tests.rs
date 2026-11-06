@@ -114,8 +114,9 @@ impl Fixture {
             .rt
             .claim(
                 &state,
-                &self.rt.config.profiles[0].issuer,
+                Some(&self.rt.config.profiles[0].issuer),
                 "127.0.0.1:19294",
+                "/oauth/callback",
             )
             .await
             .unwrap();
@@ -394,9 +395,14 @@ async fn callback_rejects_duplicate_and_wrong_state_without_consuming_valid_atte
     let f = Fixture::new().await;
     let v = f.start("safe").await;
     assert!(
-        f.rt.claim("wrong", &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
-            .await
-            .is_err()
+        f.rt.claim(
+            "wrong",
+            Some(&f.rt.config.profiles[0].issuer),
+            "127.0.0.1:19294",
+            "/oauth/callback"
+        )
+        .await
+        .is_err()
     );
     let url = reqwest::Url::parse(v["authorization_url"].as_str().unwrap()).unwrap();
     let state = url
@@ -406,18 +412,33 @@ async fn callback_rejects_duplicate_and_wrong_state_without_consuming_valid_atte
         .1
         .into_owned();
     assert!(
-        f.rt.claim(&state, "https://wrong", "127.0.0.1:19294")
-            .await
-            .is_err()
+        f.rt.claim(
+            &state,
+            Some("https://wrong"),
+            "127.0.0.1:19294",
+            "/oauth/callback"
+        )
+        .await
+        .is_err()
     );
     let a =
-        f.rt.claim(&state, &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
-            .await
-            .unwrap();
+        f.rt.claim(
+            &state,
+            Some(&f.rt.config.profiles[0].issuer),
+            "127.0.0.1:19294",
+            "/oauth/callback",
+        )
+        .await
+        .unwrap();
     assert!(
-        f.rt.claim(&state, &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
-            .await
-            .is_err()
+        f.rt.claim(
+            &state,
+            Some(&f.rt.config.profiles[0].issuer),
+            "127.0.0.1:19294",
+            "/oauth/callback"
+        )
+        .await
+        .is_err()
     );
     assert_eq!(a.get::<&str, _>("state"), "exchanging");
     f.rt.pool.close().await;
@@ -587,3 +608,6 @@ mod slack_clients;
 
 #[path = "account_scope_tests.rs"]
 mod account_scope;
+
+#[path = "callback_parser_tests.rs"]
+mod callback_parser;

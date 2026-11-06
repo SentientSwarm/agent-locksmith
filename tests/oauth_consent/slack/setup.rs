@@ -15,15 +15,12 @@ pub(super) fn configure_slack(f: &Fixture, t: &Twin) {
 }
 
 pub(super) fn promote(f: &Fixture, t: &Twin) {
-    let mut d: Value = serde_json::from_str(include_str!(
-        "../../../definitions/customer-controlled.example.json"
-    ))
-    .unwrap();
-    d["id"] = json!("local.slack-fixture");
-    d["auth_profiles"][0]["required_scopes"] = json!(["search:read.public", "channels:history"]);
-    let path = f.path().join("definition.json");
-    std::fs::write(&path, d.to_string()).unwrap();
-    f.op(&["integration", "import", "--file", path.to_str().unwrap()]);
+    create(f, &t.url("/mcp"));
+    activate(f);
+}
+
+pub(super) fn create(f: &Fixture, upstream: &str) {
+    import(f);
     f.op(&[
         "tool",
         "from-definition",
@@ -35,10 +32,9 @@ pub(super) fn promote(f: &Fixture, t: &Twin) {
         "--auth-profile",
         "controlled",
         "--upstream",
-        &t.url("/mcp"),
+        upstream,
         "--allow-private-destination",
     ]);
-    activate(f);
 }
 
 fn activate(f: &Fixture) {
@@ -173,4 +169,16 @@ fn wrong_challenge(url: &mut reqwest::Url) {
         url.set_query(None);
         url.query_pairs_mut().extend_pairs(query);
     }
+}
+
+fn import(f: &Fixture) {
+    let mut d: Value = serde_json::from_str(include_str!(
+        "../../../definitions/customer-controlled.example.json"
+    ))
+    .unwrap();
+    d["id"] = json!("local.slack-fixture");
+    d["auth_profiles"][0]["required_scopes"] = json!(["search:read.public", "channels:history"]);
+    let path = f.path().join("definition.json");
+    std::fs::write(&path, d.to_string()).unwrap();
+    f.op(&["integration", "import", "--file", path.to_str().unwrap()]);
 }
