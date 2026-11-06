@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "id": "builtin.context7",
+  "name": "Context7 candidate",
+  "summary": "Offline setup description; no live compatibility attestation.",
+  "auth_profiles": [
+    {
+      "id": "anonymous",
+      "mechanism": "none",
+      "setup": "Explicit anonymous profile, never a fallback after keyed failure. Live deployment compatibility remains unverified.",
+      "required_scopes": []
+    },
+    {
+      "id": "keyed",
+      "mechanism": "bearer",
+      "setup": "Consult the linked provider documentation and obtain separately accepted provider evidence before activation.",
+      "required_scopes": []
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Descriptive read workflow only; no executable plan or tool grant.",
+      "operations": [
+        "Resolve library identifiers and query documentation"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Review provider setup at https://github.com/upstash/context7. Import this document, then author a disabled connection with its separately supplied HTTPS endpoint.",
+  "limits": [
+    "Dedicated keyed verification pending AGENT-200; anonymous and keyed profiles stay distinct.",
+    "Candidate scopes and lifecycle are unverified in this deployment.",
+    "No credentials, consent, account selection, activation or tool grants are created."
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "https://github.com/upstash/context7",
+    "verified_at": null,
+    "source_revision": null
+  }
+}

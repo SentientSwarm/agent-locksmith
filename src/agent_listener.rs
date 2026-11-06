@@ -14,6 +14,8 @@
 //! accept loop manually with `tokio-rustls` keeps the peer-cert plumb-
 //! ing local and explicit.
 
+mod drain;
+
 use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
@@ -56,42 +58,86 @@ pub async fn bind_and_serve_mtls(
     app: Router,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), io::Error> {
+    let listener = TcpListener::bind(addr).await?;
+    serve_mtls(
+        "agent listener",
+        listener,
+        server_cert_path,
+        server_key_path,
+        ca_bundle_pem,
+        auth_mode,
+        app,
+        shutdown,
+    )
+    .await
+}
+
+/// Serve mTLS on `listener`. `name` labels its log lines, because the
+/// admin HTTPS listener reuses this loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_mtls(
+    name: &'static str,
+    listener: TcpListener,
+    server_cert_path: &Path,
+    server_key_path: &Path,
+    ca_bundle_pem: &str,
+    auth_mode: AuthMode,
+    app: Router,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), io::Error> {
+    let addr = listener.local_addr()?;
     crate::admin::https::install_crypto_provider_once();
 
     let server_config =
         build_server_config(server_cert_path, server_key_path, ca_bundle_pem, auth_mode)?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let listener = TcpListener::bind(addr).await?;
-    info!(addr = %addr, mode = ?auth_mode, "agent listener (mTLS) bound");
+    info!(addr = %addr, mode = ?auth_mode, "{name} (mTLS) bound");
 
     tokio::pin!(shutdown);
+    let stop = tokio_util::sync::CancellationToken::new();
+    let mut connections = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
             biased;
             _ = &mut shutdown => {
-                info!("agent listener (mTLS): shutdown signal observed; closing accept loop");
+                info!("{name} (mTLS): shutdown signal observed; closing accept loop");
                 break;
             }
+            _ = connections.join_next(), if !connections.is_empty() => {},
             accept = listener.accept() => {
                 let (tcp, _peer) = match accept {
                     Ok(p) => p,
                     Err(e) => {
-                        warn!(error = %e, "agent listener: accept failed");
+                        warn!(error = %e, "{name}: accept failed");
                         continue;
                     }
                 };
                 let acceptor = acceptor.clone();
                 let app = app.clone();
-                tokio::spawn(handle_conn(tcp, acceptor, app));
+                connections.spawn(handle_conn(tcp, acceptor, app, stop.child_token()));
             }
         }
     }
+    drain::close(&mut connections, &stop).await;
     Ok(())
 }
 
-async fn handle_conn(tcp: tokio::net::TcpStream, acceptor: TlsAcceptor, app: Router) {
-    let tls = match acceptor.accept(tcp).await {
+async fn handle_conn(
+    tcp: tokio::net::TcpStream,
+    acceptor: TlsAcceptor,
+    app: Router,
+    stop: tokio_util::sync::CancellationToken,
+) {
+    let handshake = tokio::select! {
+        biased;
+        _ = stop.cancelled() => return,
+        result = tokio::time::timeout(std::time::Duration::from_secs(5), acceptor.accept(tcp)) => result,
+    };
+    let Ok(handshake) = handshake else {
+        return;
+    };
+    let tls = match handshake {
         Ok(t) => t,
         Err(e) => {
             // TLS handshake failures are expected (probes, wrong cert,
@@ -125,11 +171,17 @@ async fn handle_conn(tcp: tokio::net::TcpStream, acceptor: TlsAcceptor, app: Rou
         }
     });
 
-    if let Err(e) = ConnBuilder::new(hyper_util::rt::TokioExecutor::new())
-        .serve_connection(io, svc)
-        .await
-    {
-        tracing::debug!(error = %e, "tls connection serve error");
+    let builder = ConnBuilder::new(hyper_util::rt::TokioExecutor::new());
+    let connection = builder.serve_connection(io, svc);
+    tokio::pin!(connection);
+    tokio::select! {
+        result = &mut connection => {
+            if let Err(e) = result { tracing::debug!(error = %e, "tls connection serve error"); }
+        },
+        _ = stop.cancelled() => {
+            connection.as_mut().graceful_shutdown();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut connection).await;
+        }
     }
 }
 

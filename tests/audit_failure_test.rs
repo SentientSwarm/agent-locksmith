@@ -223,6 +223,7 @@ tools: []
     );
 
     let op = agent_locksmith::auth_v2::OperatorIdentity {
+        public_id: "fixture-operator".into(),
         name: "alice".into(),
         scope: None,
         auth_method: None,
