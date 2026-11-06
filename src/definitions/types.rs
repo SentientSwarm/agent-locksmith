@@ -77,6 +77,17 @@ pub struct Pin {
     pub digest: String,
     pub auth_profile_id: String,
 }
+/// Server-derived mapping; never a credential or a grant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Activation {
+    None,
+    StoredBearer,
+    ControlledOauth {
+        profile_id: String,
+        profile_digest: String,
+    },
+}
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Instance {

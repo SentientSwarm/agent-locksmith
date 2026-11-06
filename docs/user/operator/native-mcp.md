@@ -7,7 +7,8 @@ Locksmith supports authenticated MCP **2025-11-25 stateful Streamable HTTP** at
 session lifecycle; they do not approve tools. [Review and grant](native-tool-review.md)
 adds finite useful calls for manual None/live sealed-bearer and deliberately
 selected controlled OAuth accounts. Offline
-[definitions](integration-definitions.md) remain disabled exact revision pins.
+[local customer definitions](integration-definitions.md) start as disabled exact
+revision pins and require dedicated activation before explicit account/tool preparation.
 Use [HTTP onboarding](connector-onboarding.md) for existing HTTP services.
 Provider consent and verified external identity are separate; configuration
 status does not attest provider or per-account credential readiness.

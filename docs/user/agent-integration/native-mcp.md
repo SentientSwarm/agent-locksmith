@@ -1,5 +1,7 @@
 # Native MCP agent interface
 
+Supported local customer pins use the [dedicated operator activation workflow](../operator/integration-definitions.md) before separate account selection and finite tool grants. The agent interface never promotes a definition.
+
 Use your own Locksmith agent identity over the operator-provided verified TLS
 listener. Fetch authenticated [`/skill`](skill-reference.md) for protocol-aware
 guidance, then use JSON discovery rather than Markdown headings. Discover connections with authenticated `GET /tools`; a native entry

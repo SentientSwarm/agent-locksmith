@@ -4,7 +4,8 @@ Use the existing [connection setup](native-mcp.md) and
 [observe, review and grant workflow](native-tool-review.md). A manual native
 connection can use explicit None, a live sealed-bearer selection or
 [owner-selected controlled OAuth](native-oauth.md). Fixed context adds no account
-authority; definitions and native env/op/header accounts remain unsupported.
+authority. [Promoted customer pins](integration-definitions.md) use the same
+path; native env/op/header accounts remain unsupported.
 
 ## Review a fixed value
 
@@ -120,3 +121,7 @@ Planned3.0.0 stays unchanged. This is a bounded local increment; full207/208,
 live provider/customer readiness and release/publication remain separate. See
 [implementation and verification](../../development/native-protected-context.md)
 for diagnostic timing, synchronous filesystem limits and exact test entry points.
+
+Current customer activation adds schema 18 and a whole-daemon prior refusal; see
+[definition upgrade/recovery](../changes/integration-definitions.md). Earlier
+schema 14/17 statements above describe their original increments.

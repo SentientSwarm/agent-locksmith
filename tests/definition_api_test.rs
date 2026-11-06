@@ -26,6 +26,8 @@ async fn immutable_definition_creates_only_a_disabled_pinned_instance() {
     assert!(f.repo.get("customer").await.unwrap().unwrap().disabled);
 }
 
+#[path = "definitions/activation.rs"]
+mod activation;
 #[path = "definitions/credential.rs"]
 mod credential;
 #[path = "definitions/guards.rs"]

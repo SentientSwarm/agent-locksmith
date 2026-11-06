@@ -24,7 +24,11 @@ pub(super) async fn create(
     }
     insert(&state, &registration).await?;
     // Disabled rows need no catalog activation, credential resolution or provider I/O.
-    Ok((StatusCode::CREATED, Json(state.describe(&registration))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(super::promotion::describe(&state, &registration.name).await?),
+    )
+        .into_response())
 }
 fn registration(
     name: String,
@@ -47,6 +51,7 @@ fn registration(
         protocol_version: crate::registrations::protocol::VERSION.into(),
         allow_private_destination: input.allow_private_destination,
         definition: Some(pin),
+        definition_activation: None,
     });
     validate(&r)?;
     Ok(r)

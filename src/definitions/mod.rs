@@ -1,7 +1,9 @@
 //! Immutable offline integration authoring; no credentials or execution.
 pub mod api;
 mod builtin;
+pub(crate) mod eligibility;
 mod instance;
+pub(crate) mod promotion;
 mod types;
 pub mod validate;
 use sha2::{Digest, Sha256};
@@ -16,6 +18,14 @@ pub enum Error {
     Conflict,
     #[error("exact definition revision not found")]
     NotFound,
+    #[error("current definition revision precondition required")]
+    Precondition,
+    #[error(
+        "configuration saved; runtime pending. Read fresh state, then retry with its current revision or restart"
+    )]
+    SavedUnavailable,
+    #[error("definition operation unavailable; read fresh state before repair")]
+    Unavailable,
     #[error("definition storage unavailable")]
     Backend,
 }

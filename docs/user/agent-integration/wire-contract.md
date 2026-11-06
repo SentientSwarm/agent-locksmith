@@ -30,7 +30,10 @@ None/live StoredBearer connections support explicitly reviewed per-tool grants
 and committed dispatch; connection visibility alone grants no tool authority.
 An opted-in [compact facade](compact-mcp.md) uses the same authority and dispatcher.
 [Owner-selected controlled OAuth](../operator/native-oauth.md) uses the same finite
-workflow. Definition-backed activation and hosted provider adoption remain outside this bounded profile.
+workflow. Supported local definition-backed connections use the separate
+[operator activation workflow](../operator/integration-definitions.md) before
+account and tool authority are granted. Hosted provider adoption remains outside
+this bounded profile.
 Existing HTTP behavior below is preserved.
 
 ## Endpoints

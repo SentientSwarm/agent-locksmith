@@ -24,3 +24,6 @@ mod original;
 
 #[path = "native_oauth/fixture.rs"]
 mod controlled;
+
+#[path = "native_dispatch/glue/promotion.rs"]
+mod promotion;

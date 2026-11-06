@@ -12,6 +12,19 @@
 
 ### Changed
 
+- Connect the [local customer MCP journey](docs/user/operator/customer-mcp-journey.md)
+  from definition promotion through account selection, finite review/grants,
+  ordinary task discovery and deliberate repair. Clarify that controlled refresh
+  invalidates existing native authority without creating grants. Provider and
+  release gates remain open.
+
+- Add deliberate CAS-controlled activation/deactivation for immutable `local.*`
+  customer definitions: explicit None, live StoredBearer or configured controlled
+  OAuth. Import/creation/promotion create no account or grant. Full authority
+  repair follows real transitions; current exact-state retries only resync.
+  Migration 0018 refuses older whole-daemon startup. Builtin providers and full
+  readiness remain open. See [setup and recovery](docs/user/operator/integration-definitions.md).
+
 - Add deliberate owner-bound [controlled OAuth native selection](docs/user/operator/native-oauth.md),
   finite preparation and standard/compact dispatch through the existing admission path.
   Refresh/version or trust changes require renewed preparation and a fresh session;

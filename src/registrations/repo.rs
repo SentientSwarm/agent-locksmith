@@ -91,6 +91,12 @@ impl RegistrationRepository {
     /// validation (run via [`crate::registrations::validate_name`] +
     /// pre-insert kind lookup).
     pub async fn create(&self, r: &Registration) -> Result<(), RegistrationError> {
+        if r.mcp
+            .as_ref()
+            .is_some_and(|m| m.definition_activation.is_some())
+        {
+            return Err(RegistrationError::DefinitionPending);
+        }
         let auth_json = serde_json::to_string(&r.auth)
             .map_err(|e| RegistrationError::Backend(format!("serialize auth: {e}")))?;
         let timeouts_json = serde_json::to_string(&r.timeouts)
@@ -178,6 +184,13 @@ impl RegistrationRepository {
     /// caller layer — the repo doesn't enforce, just persists what's
     /// passed).
     pub async fn upsert(&self, r: &Registration) -> Result<(), RegistrationError> {
+        if r.definition_pinned()
+            || r.mcp
+                .as_ref()
+                .is_some_and(|m| m.definition_activation.is_some())
+        {
+            return Err(RegistrationError::DefinitionPending);
+        }
         let auth_json = serde_json::to_string(&r.auth)
             .map_err(|e| RegistrationError::Backend(format!("serialize auth: {e}")))?;
         let timeouts_json = serde_json::to_string(&r.timeouts)
@@ -278,8 +291,13 @@ impl RegistrationRepository {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-pub(super) fn row_to_registration(
+pub(crate) fn row_to_registration(
     row: sqlx::sqlite::SqliteRow,
+) -> Result<Registration, RegistrationError> {
+    row_to_registration_ref(&row)
+}
+pub(crate) fn row_to_registration_ref(
+    row: &sqlx::sqlite::SqliteRow,
 ) -> Result<Registration, RegistrationError> {
     let kind_str: String = row.get(1);
     let kind = match kind_str.as_str() {

@@ -83,7 +83,6 @@ impl Runtime {
         let admission = rows.pop().ok_or(Error("source_unavailable"))?;
         if !admission.agent_active
             || admission.grant.is_err()
-            || admission.registration.definition_pinned()
             || crate::registrations::admission::activation(
                 &admission.registration,
                 Some(&self.catalog.load_full()),
@@ -91,6 +90,13 @@ impl Runtime {
         {
             return Err(Error("connection_not_allowed"));
         }
+        crate::definitions::eligibility::selected(
+            &mut tx,
+            &admission.registration,
+            Some(&selection),
+        )
+        .await
+        .map_err(|_| Error("definition_unavailable"))?;
         let auth = serde_json::to_string(&selection).map_err(|_| Error("source_unavailable"))?;
         // Re-selection is deliberate repair, even for the same stamp. Reuse the
         // existing deletion triggers so no prior finite grants survive silently.

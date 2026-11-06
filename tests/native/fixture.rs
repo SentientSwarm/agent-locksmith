@@ -136,6 +136,7 @@ pub fn native(name: &str) -> Registration {
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,
         definition: None,
+        definition_activation: None,
     });
     r
 }

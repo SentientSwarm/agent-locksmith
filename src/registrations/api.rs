@@ -247,6 +247,7 @@ pub fn unknown_name_response(name: &str) -> Response {
 /// the repo but no in-memory cache exists to invalidate.
 #[derive(Clone)]
 pub struct AdminRegistrationsState {
+    pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
     pub local_listener: Option<(String, u16)>,
     pub repo: Arc<RegistrationRepository>,
     pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
@@ -298,6 +299,21 @@ impl AdminRegistrationsState {
     pub async fn refresh_runtime(
         &self,
     ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
+        self.refresh_runtime_inner(true).await
+    }
+
+    /// Pinned native activation changes no env/op credential reference. Publish
+    /// its catalog without retrying unrelated degraded credential backends.
+    pub(crate) async fn refresh_native_catalog(
+        &self,
+    ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
+        self.refresh_runtime_inner(false).await
+    }
+
+    async fn refresh_runtime_inner(
+        &self,
+        resolve_credentials: bool,
+    ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
         let Some(catalog) = self.catalog.as_ref() else {
             return Ok(()); // Admin-only configuration surface; reads report pending.
         };
@@ -312,7 +328,7 @@ impl AdminRegistrationsState {
             }
         };
 
-        if let Some(creds_swap) = self.resolved_creds.as_ref() {
+        if resolve_credentials && let Some(creds_swap) = self.resolved_creds.as_ref() {
             let extra = crate::secret::resolve_registration_creds_sync_env_only(&new_catalog);
             if !extra.is_empty() {
                 let snap = creds_swap.load();
@@ -329,7 +345,7 @@ impl AdminRegistrationsState {
 
         catalog.store(Arc::new(new_catalog));
 
-        if let Some(resolver) = self.op_resolver.as_ref() {
+        if resolve_credentials && let Some(resolver) = self.op_resolver.as_ref() {
             crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
         }
         Ok(())
@@ -340,7 +356,11 @@ impl AdminRegistrationsState {
         let catalog = self.catalog.as_ref().map(|c| c.load());
         value["configured"] = true.into();
         if registration.definition_pinned() {
-            value["authoring_only"] = true.into();
+            value["authoring_only"] = registration
+                .mcp
+                .as_ref()
+                .is_none_or(|m| m.definition_activation.is_none())
+                .into();
             value["provider_readiness"] = "unverified".into();
         }
         value["activation"] = crate::registrations::admission::activation(
@@ -388,7 +408,14 @@ pub async fn op_get(
                     requested_kind: kind,
                 });
             }
-            (StatusCode::OK, Json(state.describe(&r))).into_response()
+            if r.definition_pinned() {
+                match crate::definitions::promotion::describe(&state, &name).await {
+                    Ok(value) => Json(value).into_response(),
+                    Err(error) => error.into_response(),
+                }
+            } else {
+                (StatusCode::OK, Json(state.describe(&r))).into_response()
+            }
         }
         Ok(None) => unknown_name_response(&name),
         Err(e) => registration_error_response(&e),
@@ -436,7 +463,11 @@ pub async fn op_put(
         return registration_error_response(&RegistrationError::InvalidMcp);
     }
 
-    if body.mcp.as_ref().is_some_and(|m| m.definition.is_some()) {
+    if body
+        .mcp
+        .as_ref()
+        .is_some_and(|m| m.definition.is_some() || m.definition_activation.is_some())
+    {
         return registration_error_response(&RegistrationError::DefinitionPending);
     }
 

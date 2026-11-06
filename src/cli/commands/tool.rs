@@ -13,6 +13,18 @@ use crate::output::Format;
 
 #[derive(Subcommand)]
 pub enum ToolCmd {
+    /// Deliberately activate an eligible local definition; no account, ACL or tool grant is created.
+    ActivateDefinition {
+        name: String,
+        #[command(flatten)]
+        options: super::definition_instance::ActivationOptions,
+    },
+    /// Disable a promoted definition and retire all connection authority; sealed accounts remain.
+    DeactivateDefinition {
+        name: String,
+        #[arg(long)]
+        if_match: String,
+    },
     /// Observe/review native tools; deliberate per-agent grants enable supported calls.
     Mcp {
         #[command(subcommand)]
@@ -52,6 +64,12 @@ pub enum ToolCmd {
 
 pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(), CliError> {
     match cmd {
+        ToolCmd::ActivateDefinition { name, options } => {
+            super::definition_instance::activate(client, format, &name, options).await
+        }
+        ToolCmd::DeactivateDefinition { name, if_match } => {
+            super::definition_instance::deactivate(client, format, &name, &if_match).await
+        }
         ToolCmd::Mcp { command } => super::native_mcp::tool(client, format, command).await,
         ToolCmd::FromDefinition { name, options } => {
             super::definition_instance::run(client, format, &name, options).await

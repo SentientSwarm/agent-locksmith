@@ -296,18 +296,31 @@ pub(super) async fn registration(
     profile: Option<&config::Profile>,
 ) -> Result<(String, i64)> {
     let row = sqlx::query("SELECT r.*,i.instance_id,i.revision FROM registrations r JOIN registration_instances i USING(name) WHERE r.name=?")
-        .bind(name).fetch_optional(c).await?.ok_or(Error("not_found"))?;
+        .bind(name).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
     if let Some(p) = profile {
         let auth: AuthSpec =
             serde_json::from_str(row.get("auth_json")).map_err(|_| Error("profile_conflict"))?;
-        let expected = AuthSpec::OauthPkce {
-            client_id: p.client_id.clone(),
-            redirect_uri: p.redirect_uri.clone(),
-            scopes: vec!["read".into()],
-            auth_url: p.authorization_endpoint.clone(),
-            token_url: p.token_endpoint.clone(),
-            session_label: None,
-        };
+        let expected = p.auth_spec();
+        let r = crate::registrations::repo::row_to_registration_ref(&row)
+            .map_err(|_| Error("profile_conflict"))?;
+        crate::definitions::eligibility::selected(c, &r, None)
+            .await
+            .map_err(|_| Error("profile_conflict"))?;
+        if r.definition_pinned() {
+            let Some(crate::definitions::Activation::ControlledOauth {
+                profile_id,
+                profile_digest,
+            }) = r
+                .mcp
+                .as_ref()
+                .and_then(|m| m.definition_activation.as_ref())
+            else {
+                return Err(Error("profile_conflict"));
+            };
+            if profile_id != &p.id || profile_digest != &p.digest()? {
+                return Err(Error("profile_conflict"));
+            }
+        }
         if auth != expected
             || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"
@@ -359,7 +372,6 @@ fn native_registration_or_http(row: &SqliteRow) -> bool {
     !row.get::<bool, _>("disabled")
         && !row.get::<bool, _>("seed")
         && row.get::<&str, _>("egress") == "direct"
-        && config.definition.is_none()
         && protocol::validate(
             Protocol::McpStreamableHttp,
             Some(&config),

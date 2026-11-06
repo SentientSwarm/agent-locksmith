@@ -27,13 +27,30 @@ pub struct Fixture {
 }
 impl Fixture {
     pub async fn new() -> Self {
+        Self::with_catalog(false).await
+    }
+    pub async fn with_catalog(catalog: bool) -> Self {
+        Self::with_options(catalog, None).await
+    }
+    pub async fn with_options(
+        catalog: bool,
+        op: Option<Arc<agent_locksmith::secret::OpResolver>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let pool = open_and_migrate(&dir.path().join("state.db"))
             .await
             .unwrap();
         let (operator_auth, token) = operator(dir.path());
         let repo = Arc::new(RegistrationRepository::new(pool.clone()));
-        let state = state(&pool, operator_auth, repo.clone());
+        let mut state = state(&pool, operator_auth, repo.clone());
+        state.op_resolver = op;
+        if catalog {
+            state.catalog = Some(Arc::new(ArcSwap::from_pointee(
+                agent_locksmith::registrations::Catalog::from_repo(&repo)
+                    .await
+                    .unwrap(),
+            )));
+        }
         Self {
             server: TestServer::new(build_router(state)),
             pool,
@@ -98,7 +115,9 @@ fn state(
         catalog: None,
         resolved_creds: None,
         oauth: None,
-        agent_creds: None,
+        agent_creds: Some(agent_locksmith::repo::AgentCredentialRepository::new(
+            pool.clone(),
+        )),
         credential_sealing_key: Some(CredentialSealingKey::generate().unwrap()),
         credential_secrets: Some(CredentialSecretsRepository::new(pool.clone())),
         operational_log: None,

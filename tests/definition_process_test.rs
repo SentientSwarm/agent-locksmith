@@ -32,3 +32,11 @@ async fn daemon_cli_definition_authoring_is_disabled_and_has_zero_provider_effec
 async fn actual_schema11_upgrade_preserves_authority_and_prior_refuses_before_listeners() {
     upgrade::exercise().await;
 }
+
+#[path = "definition_process/upgrade18.rs"]
+mod upgrade18;
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an actual retained schema-17 CLI and daemon and their revision"]
+async fn definition_schema17_prior_refusal_reopen() {
+    upgrade18::exercise().await;
+}

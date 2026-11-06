@@ -80,6 +80,16 @@ impl AgentCredentialRepository {
         if matches!(auth_spec, AuthSpec::ControlledOauth { .. }) {
             return Err(RepoError::InvalidGrantTarget);
         }
+        let row = sqlx::query("SELECT * FROM registrations WHERE name=?")
+            .bind(registration)
+            .fetch_optional(&mut *connection)
+            .await?
+            .ok_or(RepoError::InvalidGrantTarget)?;
+        let r = crate::registrations::repo::row_to_registration(row)
+            .map_err(|_| RepoError::InvalidGrantTarget)?;
+        crate::definitions::eligibility::selected(connection, &r, Some(auth_spec))
+            .await
+            .map_err(|_| RepoError::InvalidGrantTarget)?;
         let auth_json = serde_json::to_string(auth_spec)?;
         let now = unix_now();
         let result = sqlx::query(

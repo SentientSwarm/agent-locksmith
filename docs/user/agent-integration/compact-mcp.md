@@ -1,6 +1,7 @@
 # Compact native MCP
 
-Compact is an operator opt-in on a manual native connection. Read authenticated
+Compact is an operator opt-in on a manual native connection or a supported
+[deliberately promoted local customer pin](../operator/integration-definitions.md). Read authenticated
 `GET /tools`: use `compact_path` only when present. The ordinary `path` remains
 available. Both require your current Locksmith identity and explicit selected
 account. Neither a connection nor the three compact tools grants upstream authority.
@@ -86,15 +87,22 @@ session. Existing authority, argument, cancellation and result refusals still
 apply. Unknown admission/remote outcomes do not prove rollback or justify retry.
 Session response-drop retirement is distinct from registry publication.
 
-This bounded facade supports the same finite manual None/live StoredBearer and
+This bounded facade supports the same finite None/live StoredBearer and
 [owner-selected controlled OAuth](../operator/native-oauth.md) tools as
 [standard native MCP](native-mcp.md). It does not establish hosted provider
-compatibility or activate definitions, tasks, resources, prompts or a model token-efficiency claim.
+compatibility, tasks, resources, prompts or a model token-efficiency claim.
+[Customer pins](../operator/integration-definitions.md) require separate operator
+activation; the facade itself never promotes them.
 
 ## Operator opt-in and compatibility
 
-Set `"compact":true` in the connection's `--mcp-config-file` alongside
-`"protocol_version":"2025-11-25"`. Omitted/false serializes without the field.
+For a manual connection, set `"compact":true` in `--mcp-config-file` alongside
+`"protocol_version":"2025-11-25"`. For a supported local customer pin, use
+`tool activate-definition NAME --if-match REVISION --compact` instead; general
+configuration PUTs cannot edit pins. Changing an already promoted pin requires
+deactivate then activate with fresh revisions. See the
+[activation and repair procedure](../operator/integration-definitions.md).
+Omitted/false serializes without the compact field.
 Configure before establishing authority: changing the MCP configuration invalidates
 connection grants/bootstrap scopes, selections, observations, reviews and per-tool
 grants through the existing migration rules. Deliberately restore those and use
@@ -107,3 +115,6 @@ before HTTP listeners become available; this affects the entire daemon.
 Do not downgrade with opted-in rows. The prior-binary test (`tests/native_compact/prior.rs`) checks this against an
 actual pre-compact build. Current controlled OAuth also adds schema 17: see its
 [whole-daemon downgrade refusal and recovery](../operator/native-oauth.md#upgrade-and-evidence-limits). No transparent downgrade is claimed.
+
+Current customer activation adds schema 18; retain the
+[whole-daemon upgrade/recovery cost](../changes/integration-definitions.md).
