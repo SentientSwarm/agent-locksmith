@@ -27,6 +27,11 @@ pub fn io_code(mut error: &(dyn std::error::Error + 'static)) -> Option<&'static
     None
 }
 
+pub(crate) type Result<T> = std::result::Result<T, StreamableHttpError<Error>>;
+pub(crate) fn fail(code: &'static str) -> StreamableHttpError<Error> {
+    StreamableHttpError::Client(Error(code))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,9 +46,4 @@ mod tests {
         assert_eq!(io_code(&Error("invented-secret")), None);
         assert_eq!(io_code(&std::io::Error::other("deadline")), None);
     }
-}
-
-pub(crate) type Result<T> = std::result::Result<T, StreamableHttpError<Error>>;
-pub(crate) fn fail(code: &'static str) -> StreamableHttpError<Error> {
-    StreamableHttpError::Client(Error(code))
 }
