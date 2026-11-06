@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn configure_slack(f: &Fixture, t: &Twin) {
+pub(in crate::consent) fn configure_slack(f: &Fixture, t: &Twin) {
     configure(f, t);
     let path = f.path().join("config.yaml");
     let mut c: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -14,12 +14,12 @@ pub(super) fn configure_slack(f: &Fixture, t: &Twin) {
     std::fs::write(path, c.to_string()).unwrap();
 }
 
-pub(super) fn promote(f: &Fixture, t: &Twin) {
+pub(in crate::consent) fn promote(f: &Fixture, t: &Twin) {
     create(f, &t.url("/mcp"));
     activate(f);
 }
 
-pub(super) fn create(f: &Fixture, upstream: &str) {
+pub(in crate::consent) fn create(f: &Fixture, upstream: &str) {
     import(f);
     f.op(&[
         "tool",
@@ -61,7 +61,7 @@ fn activate(f: &Fixture) {
     );
 }
 
-pub(super) fn provision(f: &Fixture) {
+pub(in crate::consent) fn provision(f: &Fixture) {
     let mut input = tempfile::tempfile().unwrap();
     use std::io::{Seek, Write};
     input.write_all(b"invented-client-secret\n").unwrap();
@@ -98,7 +98,7 @@ fn check_client_status(f: &Fixture, result: &Value) {
     assert_eq!(&status, result);
 }
 
-pub(super) fn connect_slack(f: &Fixture, label: &str) -> Value {
+pub(in crate::consent) fn connect_slack(f: &Fixture, label: &str) -> Value {
     let status = f.op(&["oauth", "account-status", "fixture", "--label", label]);
     f.op(&[
         "oauth",
@@ -119,7 +119,7 @@ pub(super) fn connect_slack(f: &Fixture, label: &str) -> Value {
     ])
 }
 
-pub(super) async fn authorize(f: &Fixture, created: &Value, wrong: bool) -> u16 {
+pub(in crate::consent) async fn authorize(f: &Fixture, created: &Value, wrong: bool) -> u16 {
     f.http
         .get(issue(f, created, wrong).await)
         .timeout(Duration::from_secs(45))
@@ -130,7 +130,7 @@ pub(super) async fn authorize(f: &Fixture, created: &Value, wrong: bool) -> u16 
         .as_u16()
 }
 
-pub(super) async fn issue(f: &Fixture, created: &Value, wrong: bool) -> String {
+pub(in crate::consent) async fn issue(f: &Fixture, created: &Value, wrong: bool) -> String {
     let mut url = reqwest::Url::parse(created["authorization_url"].as_str().unwrap()).unwrap();
     if wrong {
         wrong_challenge(&mut url);

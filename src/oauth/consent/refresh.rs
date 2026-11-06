@@ -83,9 +83,10 @@ impl Runtime {
             )?;
             let result =
                 match operation::identity(&mut wire, profile, &token, Some(&claim.old)).await {
-                    Ok(()) => {
+                    Ok(subject) => {
                         trace.enter("commit");
-                        self.complete_refresh(&claim, &token, &mut trace).await
+                        self.complete_refresh(&claim, &token, subject.as_ref(), &mut trace)
+                            .await
                     }
                     Err(error) => Err(error),
                 };

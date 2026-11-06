@@ -776,3 +776,6 @@ pub mod hosted;
 
 #[path = "slack/mod.rs"]
 pub mod slack;
+
+#[path = "contract/mod.rs"]
+pub mod contract;

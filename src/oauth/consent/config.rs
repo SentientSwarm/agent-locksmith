@@ -28,11 +28,15 @@ pub struct Profile {
     pub resource: String,
     pub redirect_profile_id: String,
     pub redirect_uri: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expected_workspace: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expected_user: String,
     pub ca_path: PathBuf,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<super::contract::Contract>,
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
@@ -53,6 +57,7 @@ impl Config {
             if !ids.insert(&p.id)
                 || (!p.hosted()
                     && !p.slack()
+                    && !p.custom()
                     && p.redirect_uri
                         != format!("https://{}/oauth/callback", self.callback.address))
             {
@@ -63,6 +68,16 @@ impl Config {
     }
 }
 impl Profile {
+    pub(crate) fn custom(&self) -> bool {
+        self.kind == "custom-oauth-v1"
+    }
+    pub(crate) fn confidential(&self) -> bool {
+        self.slack()
+            || self
+                .contract
+                .as_ref()
+                .is_some_and(|c| c.client_auth == "client_secret_post")
+    }
     pub(crate) fn hosted(&self) -> bool {
         matches!(
             self.kind.as_str(),
@@ -71,6 +86,7 @@ impl Profile {
     }
     pub(crate) fn stored_kind(&self) -> &'static str {
         match self.kind.as_str() {
+            "custom-oauth-v1" => "custom_oauth_v1",
             "controlled-linear-v1" => "controlled_linear_v1",
             "linear-hosted-v1" => "linear_hosted_v1",
             "linear-hosted-fixture-v1" => "linear_hosted_fixture_v1",
@@ -95,6 +111,12 @@ impl Profile {
         ))
     }
     fn validate(&self) -> Result<()> {
+        if self.custom() {
+            return super::contract::validate(self);
+        }
+        if self.contract.is_some() {
+            return Err(Error("invalid_profile"));
+        }
         if self.slack() {
             return super::slack::validate(self);
         }
@@ -160,31 +182,9 @@ impl Profile {
         Ok(())
     }
 }
-pub(super) fn endpoint(raw: &str, path: &str) -> Result<reqwest::Url> {
-    let url = https(raw, path)?;
-    if !matches!(url.host_str(), Some("127.0.0.1" | "[::1]")) {
-        return Err(Error("invalid_profile"));
-    }
-    Ok(url)
-}
-pub(super) fn https(raw: &str, path: &str) -> Result<reqwest::Url> {
-    let url = reqwest::Url::parse(raw).map_err(|_| Error("invalid_profile"))?;
-    if raw.len() > 2048
-        || url.scheme() != "https"
-        || url.host_str().is_none()
-        || url.port_or_known_default().is_none_or(|p| p == 0)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != path
-    {
-        return Err(Error("invalid_profile"));
-    }
-    Ok(url)
-}
 pub(super) use super::config_values::managed_kind;
 use super::config_values::uuid;
+pub(super) use super::config_values::{endpoint, https};
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

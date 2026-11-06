@@ -65,7 +65,7 @@ impl Runtime {
         else {
             return Err(Error("invalid_request"));
         };
-        let row=sqlx::query("SELECT kind,owner_id,incarnation,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at FROM oauth_sessions WHERE name=? AND session_label=?")
+        let row=sqlx::query("SELECT kind,owner_id,incarnation,profile_id,profile_digest,workspace_id,user_id,subject_json,client_auth,scope,scope_echoed,token_version,refresh_pending,degraded,access_token_expires_at FROM oauth_sessions WHERE name=? AND session_label=?")
             .bind(name).bind(session_label).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
         if !config::managed_kind(row.get("kind"))
             || row.get::<Option<&str>, _>("owner_id") != Some(owner_id.as_str())
@@ -120,7 +120,7 @@ impl Runtime {
         if view["revision"].as_str() != Some(expected) {
             return Err(Error("source_conflict"));
         }
-        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1')")
+        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1','custom_oauth_v1')")
             .bind(name).bind(label).bind(owner).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
         let selection = AuthSpec::ControlledOauth {
             session_label: label.into(),

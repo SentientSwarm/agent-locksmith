@@ -14,7 +14,7 @@ impl Runtime {
         if !identifier(name) || !identifier(label) {
             return Err(Error("invalid_request"));
         }
-        let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at,scope,scope_echoed,refresh_token_ciphertext IS NOT NULL AS has_refresh FROM oauth_sessions WHERE name=? AND session_label=?")
+        let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,subject_json,client_auth,token_version,refresh_pending,degraded,access_token_expires_at,scope,scope_echoed,refresh_token_ciphertext IS NOT NULL AS has_refresh FROM oauth_sessions WHERE name=? AND session_label=?")
             .bind(name).bind(label).fetch_optional(&mut *c).await?;
         if let Some(row) = row {
             if !config::managed_kind(row.get("kind"))
@@ -92,11 +92,15 @@ impl Runtime {
                 .unwrap()
                 .as_slice(),
             );
-            return Ok(
-                json!({"state":if reconnect {"reconnect_required"} else {"connected_unbound"},"kind":row.get::<&str,_>("kind"),"profile":row.get::<&str,_>("profile_id"),"account_generation":generation,"revision":revision,
-                "config_revision":registration.as_ref().map(|r| r.1),"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":requested_scopes(row.get("kind")),"granted_scope":row.get::<bool,_>("scope_echoed").then(|| row.get::<&str,_>("scope")),
-                "token_version":version,"refresh_pending":pending,"reconnect_required":reconnect,"refresh_available":reason.is_none(),"refresh_unavailable_reason":reason}),
-            );
+            let mut view = json!({"state":if reconnect {"reconnect_required"} else {"connected_unbound"},"kind":row.get::<&str,_>("kind"),"profile":row.get::<&str,_>("profile_id"),"account_generation":generation,"revision":revision,
+                "config_revision":registration.as_ref().map(|r| r.1),"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":requested_scopes(&row),"granted_scope":row.get::<bool,_>("scope_echoed").then(|| row.get::<&str,_>("scope")),
+                "token_version":version,"refresh_pending":pending,"reconnect_required":reconnect,"refresh_available":reason.is_none(),"refresh_unavailable_reason":reason});
+            if row.get::<&str, _>("kind") == "custom_oauth_v1" {
+                view["verified_subject"] =
+                    serde_json::to_value(contract::publication::stored(&row)?)
+                        .map_err(|_| Error("custody_failed"))?;
+            }
+            return Ok(view);
         }
         let (instance, revision) = registration(c, name, None).await?;
         let active = sqlx::query("SELECT id,owner_id FROM oauth_consent_attempts WHERE name=? AND session_label=? AND state IN ('pending','exchanging')")
@@ -117,18 +121,28 @@ impl Runtime {
 pub(super) fn profile_matches(row: &SqliteRow, p: &config::Profile) -> Result<bool> {
     Ok(row.get::<&str, _>("kind") == p.stored_kind()
         && row.get::<&str, _>("profile_digest") == p.digest()?
-        && row.get::<&str, _>("workspace_id") == p.expected_workspace
-        && row.get::<&str, _>("user_id") == p.expected_user)
+        && contract::publication::matches(row, p)?)
 }
 
 // Managed kinds have fixed requested scopes; current config may be removed/replaced.
-fn requested_scopes(kind: &str) -> Vec<&'static str> {
+fn requested_scopes(row: &SqliteRow) -> Vec<String> {
+    let kind: &str = row.get("kind");
+    if kind == "custom_oauth_v1" {
+        return row
+            .get::<&str, _>("scope")
+            .split(' ')
+            .map(str::to_owned)
+            .collect();
+    }
     if matches!(
         kind,
         "slack_confidential_v1" | "slack_confidential_fixture_v1"
     ) {
-        super::slack::SCOPES.to_vec()
+        super::slack::SCOPES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect()
     } else {
-        vec!["read"]
+        vec!["read".to_owned()]
     }
 }

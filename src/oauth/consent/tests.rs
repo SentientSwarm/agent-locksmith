@@ -28,6 +28,7 @@ impl Fixture {
             id: "fixture".into(),
             kind: "controlled-linear-v1".into(),
             selected_tools: vec![],
+            contract: None,
             client_id: "fixture-client".into(),
             client_generation: 1,
             issuer: "https://127.0.0.1:19293".into(),
@@ -165,7 +166,7 @@ async fn owner_absent_revision_and_commit_first_cancel() {
     );
     let token = f.token();
     f.rt.quarantine(&claimed, &token).await.unwrap();
-    let generation = f.rt.publish(&claimed, &token).await.unwrap();
+    let generation = f.rt.publish(&claimed, &token, None).await.unwrap();
     f.rt.cancel("owner", "fixture", created["attempt_id"].as_str().unwrap())
         .await
         .unwrap();
@@ -258,7 +259,10 @@ async fn late_publication_loses_cancel_disconnect_legacy_and_registration_aba() 
                 f.repo.create(&r).await.unwrap();
             }
         }
-        assert!(f.rt.publish(&claimed, &token).await.is_err(), "{action}");
+        assert!(
+            f.rt.publish(&claimed, &token, None).await.is_err(),
+            "{action}"
+        );
         assert_eq!(
             f.rt.account("owner", "fixture", "held").await.unwrap()["state"],
             "absent"
@@ -267,7 +271,7 @@ async fn late_publication_loses_cancel_disconnect_legacy_and_registration_aba() 
         assert_eq!(remaining, 0, "{action}");
         let (_, new) = f.claimed("held").await;
         assert_ne!(new.get::<&str, _>("id"), claimed.get::<&str, _>("id"));
-        assert!(f.rt.publish(&claimed, &token).await.is_err());
+        assert!(f.rt.publish(&claimed, &token, None).await.is_err());
         f.rt.pool.close().await;
     }
 }
@@ -275,7 +279,7 @@ async fn late_publication_loses_cancel_disconnect_legacy_and_registration_aba() 
 async fn restart_expires_attempts_but_not_committed_accounts() {
     let f = Fixture::new().await;
     let (done, a) = f.claimed("done").await;
-    f.rt.publish(&a, &f.token()).await.unwrap();
+    f.rt.publish(&a, &f.token(), None).await.unwrap();
     let pending = f.start("pending").await;
     let (_, exchanging) = f.claimed("exchanging").await;
     let next = Runtime::new(
@@ -324,7 +328,7 @@ async fn deferred_commit_failure_does_not_publish_account_or_connected_attempt()
         f.rt.pool.execute(sql).await.unwrap();
     }
     assert_eq!(
-        f.rt.publish(&a, &f.token()).await.unwrap_err().0,
+        f.rt.publish(&a, &f.token(), None).await.unwrap_err().0,
         "commit_unknown"
     );
     assert_eq!(
@@ -448,7 +452,7 @@ async fn callback_rejects_duplicate_and_wrong_state_without_consuming_valid_atte
 async fn wrong_key_refuses_consent_startup_without_mutating_committed_custody() {
     let f = Fixture::new().await;
     let (_, a) = f.claimed("sealed").await;
-    f.rt.publish(&a, &f.token()).await.unwrap();
+    f.rt.publish(&a, &f.token(), None).await.unwrap();
     let before: Vec<u8> = sqlx::query_scalar(
         "SELECT access_token_ciphertext FROM oauth_sessions WHERE name='fixture'",
     )

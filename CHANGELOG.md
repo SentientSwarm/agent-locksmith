@@ -12,6 +12,8 @@
 
 ### Changed
 
+- Add [declared custom OAuth contracts](docs/user/operator/custom-oauth.md) for exact scopes, independently verified user/workspace or service-principal identities, none/confidential clients and explicit Slack response variants. Existing named contracts remain unchanged. Migration 0022 preserves custody and sequence highwaters; old binaries refuse the new schema.
+
 - Report [closed Slack token metadata reasons](docs/user/operator/slack-token-diagnostics.md)
   through the existing attempt/refresh status path. Missing, null, wrong-type and
   conflicting metadata remain refused without provider values or token hashes.

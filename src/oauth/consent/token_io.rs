@@ -58,7 +58,7 @@ pub(super) fn refreshed(
     client_secret: Option<&str>,
 ) -> Result<Token> {
     refresh_status(status, bytes)?;
-    if p.slack()
+    if (p.slack() || p.custom())
         && parse(bytes)?
             .get("refresh_token")
             .is_some_and(Value::is_null)

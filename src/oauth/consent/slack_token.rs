@@ -54,6 +54,7 @@ pub(super) fn decode(p: &Profile, v: &Value) -> Result<Token> {
         refresh,
         expiry,
         scope_echoed: true,
+        granted_scope: Some(super::slack::SCOPES.join(",")),
     })
 }
 

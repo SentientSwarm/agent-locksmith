@@ -1,7 +1,7 @@
 use super::*;
 const NAMES: [&str; 2] = ["search_messages", "read_thread"];
 
-pub(super) fn select(f: &Fixture, agent: &Value) {
+pub(in crate::consent) fn select(f: &Fixture, agent: &Value) {
     let status = f.op(&["oauth", "account-status", "fixture", "--label", "reader"]);
     f.op(&[
         "agent",
@@ -15,7 +15,7 @@ pub(super) fn select(f: &Fixture, agent: &Value) {
     ]);
 }
 
-pub(super) async fn prepare(f: &Fixture, agent: &Value) {
+pub(in crate::consent) async fn prepare(f: &Fixture, agent: &Value) {
     let id = agent["public_id"].as_str().unwrap();
     let path = format!("/admin/operator/tools/fixture/mcp/observations/{id}");
     let (status, before) = request(f, "GET", &path, None).await;
@@ -55,7 +55,7 @@ async fn review(f: &Fixture, id: &str, state: &Value, name: &str) -> Value {
     json!({"name":name,"contract_digest":result["contract_digest"]})
 }
 
-pub(super) async fn use_both(f: &Fixture, agent: &Value) {
+pub(in crate::consent) async fn use_both(f: &Fixture, agent: &Value) {
     for compact in [false, true] {
         let (path, session) = native::open(f, agent, compact).await;
         calls(f, agent, &path, &session, compact).await;
@@ -74,7 +74,7 @@ pub(super) async fn use_both(f: &Fixture, agent: &Value) {
     }
 }
 
-pub(super) async fn compact_params(
+pub(in crate::consent) async fn compact_params(
     f: &Fixture,
     agent: &Value,
     path: &str,

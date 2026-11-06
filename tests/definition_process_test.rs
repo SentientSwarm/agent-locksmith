@@ -56,3 +56,11 @@ mod upgrade21;
 async fn slack_schema20_prior_refusal_ciphertext_highwater_reopen() {
     upgrade21::exercise().await;
 }
+
+#[path = "definition_process/upgrade22.rs"]
+mod upgrade22;
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an actual retained schema-21 daemon in LOCKSMITH_CONTRACT_PRIOR_DAEMON"]
+async fn contract_schema21_prior_refusal_ciphertext_highwater_reopen() {
+    upgrade22::exercise().await;
+}

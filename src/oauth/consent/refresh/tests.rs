@@ -17,7 +17,7 @@ impl Fixture {
     async fn refreshable(&self, label: &str) -> Value {
         let (_, a) = self.claimed(label).await;
         let token=token::decode(&self.rt.config.profiles[0],br#"{"access_token":"old-synthetic-access","refresh_token":"old-synthetic-refresh","token_type":"Bearer","scope":"read","expires_in":100}"#).unwrap();
-        self.rt.publish(&a, &token).await.unwrap();
+        self.rt.publish(&a, &token, None).await.unwrap();
         self.rt.account("owner", "fixture", label).await.unwrap()
     }
 }
@@ -84,9 +84,10 @@ async fn claim_completion_revision_optionality_and_non_replay() {
         refresh: Some("new-synthetic-refresh".into()),
         expiry: None,
         scope_echoed: false,
+        granted_scope: None,
     };
     let done =
-        f.rt.complete_refresh(&c, &replacement, &mut t)
+        f.rt.complete_refresh(&c, &replacement, None, &mut t)
             .await
             .unwrap();
     assert_eq!(done["token_version"], 2);
@@ -95,7 +96,7 @@ async fn claim_completion_revision_optionality_and_non_replay() {
     assert_eq!(done["token_expires_at"], Value::Null);
     assert_eq!(done["granted_scope"], Value::Null);
     assert!(
-        f.rt.complete_refresh(&c, &replacement, &mut t)
+        f.rt.complete_refresh(&c, &replacement, None, &mut t)
             .await
             .is_err()
     );
@@ -172,8 +173,10 @@ async fn current_match_aba_disconnect_and_unrelated_progress() {
                     access: "late".into(),
                     refresh: Some("late-refresh".into()),
                     expiry: None,
-                    scope_echoed: false
+                    scope_echoed: false,
+                    granted_scope: None
                 },
+                None,
                 &mut trace()
             )
             .await
@@ -234,9 +237,10 @@ async fn deferred_commit_and_exhaustion_preserve_uncertainty() {
         refresh: Some("new-refresh".into()),
         expiry: None,
         scope_echoed: false,
+        granted_scope: None,
     };
     assert_eq!(
-        f.rt.complete_refresh(&c, &replacement, &mut trace())
+        f.rt.complete_refresh(&c, &replacement, None, &mut trace())
             .await
             .unwrap_err()
             .0,
