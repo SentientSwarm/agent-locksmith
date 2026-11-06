@@ -11,7 +11,9 @@ use serde_json::Value;
 
 pub(in crate::oauth::consent) fn decode(p: &Profile, v: &Value) -> Result<Token> {
     let c = p.contract.as_ref().ok_or(Error("invalid_profile"))?;
-    outcome(v, c.token_response == "slack-user-v2")?;
+    if let Err(error) = outcome(v, c.token_response == "slack-user-v2") {
+        return Err(Error(super::super::token_refusal::value(v, None, error.0)));
+    }
     echoes(p, v)?;
     let scope = if c.token_response == "slack-user-v2" {
         super::slack::check(c, v)?

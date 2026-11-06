@@ -50,3 +50,6 @@ mod adverse;
 
 #[cfg(test)]
 mod identity_tests;
+
+#[cfg(test)]
+mod refusal_tests;

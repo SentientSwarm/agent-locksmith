@@ -12,6 +12,12 @@
 
 ### Changed
 
+- Attribute a strictly shaped `bad_code_verifier` token refusal to a closed
+  `token_verifier_refused` reason, and add a stdlib helper that transforms only the
+  authorization challenge in a private connect receipt. Acceptance predicates and
+  explicit account and grant authority are unchanged. See
+  [refusal and lifecycle boundaries](docs/user/operator/oauth-capability-proof.md).
+
 - Add a [nonpublishing native candidate lane](docs/development/native-validation.md)
   with bounded build, smoke and artifact checks for four targets; local fixtures
   do not establish platform execution or release publication.

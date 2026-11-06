@@ -35,11 +35,36 @@ def exchange(h, raw):
         h.server.access, h.server.refresh = 'contract-access-rotated', 'contract-refresh-rotated'
     else:
         assert form['grant_type'] == ['authorization_code']
-        issued = h.server.codes.pop(form['code'][0])
-        digest = base64.urlsafe_b64encode(hashlib.sha256(form['code_verifier'][0].encode()).digest()).decode().rstrip('=')
-        assert issued['code_challenge'] == digest and form['redirect_uri'] == [issued['redirect_uri']]
+        if not initial(h, form):
+            return
+    token_reply(h, token(h))
+
+
+def initial(h, form):
+    issued = h.server.codes.pop(form['code'][0])
+    digest = base64.urlsafe_b64encode(hashlib.sha256(form['code_verifier'][0].encode()).digest()).decode().rstrip('=')
+    assert form['redirect_uri'] == [issued['redirect_uri']]
+    if issued['code_challenge'] != digest:
+        assert digest == (h.server.root / 'original-challenge').read_text()
+        h._record('original_verifier_received')
+        if not (h.server.root / 'accept-wrong-challenge').exists():
+            h._record('verifier_refused')
+            token_reply(h, dict(ok=False, error='bad_code_verifier'))
+            return False
+    else:
         h._record('matched_verifier')
-    h._reply(token(h))
+    return True
+
+
+def token_reply(h, value):
+    path = h.server.root / 'token-case.json'
+    case = json.loads(path.read_text()) if path.exists() else {}
+    raw = case.get('raw', json.dumps(case.get('value', value))).encode()
+    h.send_response(case.get('http', 200))
+    h.send_header('Content-Type', 'application/json')
+    h.send_header('Content-Length', str(len(raw)))
+    h.end_headers()
+    h.wfile.write(raw)
 
 
 def token(h):

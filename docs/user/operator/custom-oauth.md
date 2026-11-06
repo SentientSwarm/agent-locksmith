@@ -117,3 +117,6 @@ Linear/Slack profiles retain their serialized digest and strict behavior.
 Migration 0022 preserves account sequence highwater and existing ciphertexts;
 old binaries refuse the new schema. Back up according to normal operator policy
 before upgrading. Do not move proof grants or keys into this account store.
+
+See [bounded refusal, challenge and lifecycle evidence](oauth-capability-proof.md)
+for closed token diagnostics and the private challenge-only helper.
