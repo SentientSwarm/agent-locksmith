@@ -2,7 +2,156 @@
 
 ## Unreleased
 
+- Own native preparation request bodies before buffering through daemon shutdown,
+  retaining independent body and operation budgets.
+- Fail daemon startup immediately when the admin socket or admin HTTPS port
+  cannot be bound, and stop the daemon with an error-level log when any listener
+  stops before shutdown. Previously the daemon kept serving agents without its
+  admin surface and reported the error only when stopped. Listener "bound" log
+  lines now show the actually bound address, so a configured port 0 is usable.
+
+### Changed
+
+- Report [closed Slack token metadata reasons](docs/user/operator/slack-token-diagnostics.md)
+  through the existing attempt/refresh status path. Missing, null, wrong-type and
+  conflicting metadata remain refused without provider values or token hashes.
+  Acceptance, identity/scope checks and custody are unchanged; reason enums are
+  additive, with no migration. Historical broad failures remain undiagnosed.
+
+- Permit an absent Slack response issuer only at the dedicated, issuer-distinct
+  `/oauth/callback/slack` redirect, with actual Host/path checked against sealed
+  attempt state before claim. Supplied issuer checks and legacy/Linear mandatory
+  issuer behavior remain. [Callback upgrade](docs/user/operator/slack-callback.md)
+  requires a new client generation and explicit reactivation; no migration or
+  automatic custody rebind. Offline TLS controls do not establish live acceptance.
+
+- Separate the fixed Slack OAuth resource `https://mcp.slack.com` from MCP
+  transport `https://mcp.slack.com/mcp` across activation, custody checks and
+  native sessions. The old real-kind `/mcp` resource now refuses explicitly;
+  [deliberate binding repair](docs/user/operator/slack-oauth.md#renewal-retirement-and-upgrade)
+  is required. Existing Linear and local fixture behavior remains. Offline
+  receiving evidence does not establish live Slack confidential-S256 acceptance.
+
+- Add an explicit [confidential Slack user profile](docs/user/operator/slack-oauth.md)
+  through owner-bound sealed client/token custody and customer definition activation.
+  S256/client authentication, exact identities/scopes, finite tool authority and
+  deliberate refresh repair are exercised against an invented TLS receiver.
+  Migration 0021 preserves custody/highwater and permanently retires client generations.
+  Preserve closed deadline/HTTP diagnostics; no live provider acceptance is claimed.
+
+- Add explicit [finite-v2 native contracts](docs/user/operator/native-contract-policy.md)
+  for supported customer None/bearer/OAuth sources through existing review/grants.
+  Customer registrations can explicitly select names after the same complete
+  bounded catalog scan, with declared omissions and no early publication.
+  Preserve bounded inert metadata, scalar default annotations and up to 64 input
+  enum values. Open-empty input requires a digest-bound empty-arguments restriction
+  with a separately labeled callable schema. V1 bytes/output rules remain; old
+  readers refuse the new marker. Migration 0020 permits dedicated definition policy
+  activation/reset while preserving immutable pins and active configuration; prior
+  schema-19 daemons refuse the newer database. No provider acceptance or timeout change.
+
+- Add a fixed [hosted Linear OAuth profile](docs/user/operator/hosted-linear.md)
+  and an explicit local fixture kind through existing owner custody, refresh,
+  native selection and finite grants. Hosted observation scans a bounded complete
+  catalog and retains only explicitly selected original contracts with omission
+  counts; unsupported selected schemas refuse. Public callback authority is
+  separate from the loopback TLS bind. Migration 0019 preserves custody/highwater
+  and refuses prior daemons. Live shipping provider adoption remains separate.
+
+- Connect the [local customer MCP journey](docs/user/operator/customer-mcp-journey.md)
+  from definition promotion through account selection, finite review/grants,
+  ordinary task discovery and deliberate repair. Clarify that controlled refresh
+  invalidates existing native authority without creating grants. Provider and
+  release gates remain open.
+
+- Add deliberate CAS-controlled activation/deactivation for immutable `local.*`
+  customer definitions: explicit None, live StoredBearer or configured controlled
+  OAuth. Import/creation/promotion create no account or grant. Full authority
+  repair follows real transitions; current exact-state retries only resync.
+  Migration 0018 refuses older whole-daemon startup. Builtin providers and full
+  readiness remain open. See [setup and recovery](docs/user/operator/integration-definitions.md).
+
+- Add deliberate owner-bound [controlled OAuth native selection](docs/user/operator/native-oauth.md),
+  finite preparation and standard/compact dispatch through the existing admission path.
+  Refresh/version or trust changes require renewed preparation and a fresh session;
+  reconnect requires reselection. Access-only materialization preserves optional refresh.
+  Migration 0017 refuses older whole-daemon startup; hosted providers remain unproved.
+
+- Add manual owner-bound controlled refresh and explicit fresh-consent repair.
+  Migration 0016 commits pending uncertainty before I/O and exact current custody
+  before success, preserving optional expiry/scope and claimed refresh retention.
+  Status/revisions and the [JSON contract](docs/user/operator/oauth-account-response-v1.schema.json)
+  expose pending/reconnect state. Legacy kind barriers remain; no automatic refresh,
+  hosted provider acceptance or agent/native authority. Prior schema-15 binaries
+  refuse upgraded state; restore only a full prior snapshot under recovery rules.
+
+- Add [controlled operator consent](docs/user/operator/oauth-consent.md) with
+  public-ID ownership, sealed `connected_unbound` custody, strict twin identity
+  checks and revision-checked disconnect. Migration 0015 preserves legacy custody;
+  older binaries refuse the new schema/config. Hosted provider acceptance and
+  native OAuth activation remain outside this increment.
+
+- Document and exercise [sealed-state recovery](docs/user/operator/sealed-state-recovery.md):
+  SQLite-consistent snapshots, separate stored/OAuth key custody, isolated restore
+  and selected-account verification. Missing/wrong keys, revoked-owner quarantine
+  and uncertain refresh remain fail-closed; no new keychain or key-rewrap command.
+
+- Align contributor builds and CI on tested Rust 1.94.0. The
+  [build recipe](docs/development/build-identity.md#build-with-the-tested-recipe)
+  is one command on every host, preserving runtime optimization and native
+  output paths. It distinguishes locally validated macOS ARM64 artifacts from
+  remaining platform work; the release workflow is unchanged, and this is not an
+  MSRV or full release-readiness claim.
+
+- Add configuration-free `--build-info` JSON to both binaries and shared build
+  metadata to `/version`, preserving short version output and release names.
+  `locksmithd --version` now prints the same short form as `locksmith --version`.
+  The [captured-file verifier](docs/development/build-identity.md) checks an
+  independently expected commit, clean source state, binary roles and checksums.
+  These local consistency checks do not establish release or platform readiness.
+
+- Add an explicit per-connection compact MCP facade with pinned local search,
+  complete describe receipts and the existing committed native dispatcher.
+  Standard/compact share session and request limits; fixed context and account
+  authority are unchanged. Opt-in invalidates existing connection/tool authority;
+  older strict-parsing daemons cannot start with opted-in rows. This bounded local
+  increment does not establish provider compatibility or model-efficiency gates.
+
+- Preserve HTTP/native discovery protocol and public paths in authenticated
+  `/skill`, with complete-schema native request guidance, fixed-context/pin and
+  current-grant limits, safely rendered display data and protocol-specific repair.
+  Native connections do not inherit HTTP Codex recipes by name. See the
+  [skill reference](docs/user/agent-integration/skill-reference.md). Guidance reads
+  do not materialize credentials or contact upstreams; auth/cache behavior and
+  existing wire/authority contracts are unchanged. This is bounded AGENT-209 work,
+  not full onboarding/provider/release acceptance; planned 3.0.0 is unchanged.
+
 ### Internal
+
+- Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
+  after its TLS configuration loads. It previously logged both
+  `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,
+  `agent listener (mTLS) bound` with the admin address. The agent listener's
+  messages are unchanged.
+
+- Start daemon integration tests on port 0 and read the bound address back
+  instead of probing a free port and releasing it, which another process could
+  take first under parallel load. The admin HTTPS off-by-default tests now hold
+  the configured port, so a daemon that tried to bind it would fail startup.
+  The explicit-binding smoke keeps a stable port because its upgrade probes run
+  prior binaries.
+
+- Keep symbols in build-time artifacts of release builds
+  (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
+  corrupts proc-macro dylibs, which broke `cargo build --release`; shipped
+  binaries keep the default release stripping.
+
+- Make native ingress/body deadline tests use explicit pending/body barriers and
+  controlled Tokio time, with a nondefault five-second request budget for real
+  authenticated recovery on the same runtime. Production deadlines and authority are unchanged.
+
+- Box finished internal OAuth bootstrap error responses for current-stable
+  Clippy; handlers return the same responses and retain conditional cleanup.
 
 - Give the migration expiry test a ten-second preview setup margin and wait
   from its recorded expiry before apply, retaining the post-expiry conflict
@@ -15,6 +164,130 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### Fixed native context and diagnosis
+
+- Review typed nonsecret fixed top-level values, deliberately grant the exact
+  contract, and expose a truthful callable schema that omits protected fields.
+  Reject any caller override, inject once, validate merged limits and screen the
+  current selected secret before persistence or upstream I/O. Empty context keeps
+  existing bytes/digests. See [operator guidance](docs/user/operator/native-context.md).
+- Refuse a combined schema/context contract that exceeds the grant reader's
+  JSON budget before saving it; keep existing reviews and grants unchanged.
+- Add safe phase/reason/correlation diagnostics, current-state repair hints and
+  observable mirror failure. Missing outcomes remain unknown; checked results
+  survive later cleanup/diagnostic failure when locally available. Async waits
+  are bounded; synchronous filesystem calls are not a hard50ms guarantee.
+- Keep schema14. Accepted pre-context B refuses whole context-bearing mixed
+  inventories; re-upgrade preserves reviews/revocation and needs fresh observation.
+  Planned3.0.0 is unchanged. Bounded207 local acceptance and full207/208/provider
+  and release gates remain separate; [checks and limits](docs/development/native-protected-context.md).
+
+### Native reviewed dispatch
+
+- Enable manual native None/live sealed-bearer tools through current account,
+  observation, reviewed contract and finite grant intersection. A first list
+  pins exact contracts within its original session scope; empty pins cannot
+  expand. Every call validates arguments
+  and commits a safe admission record before one upstream submission.
+- Bound supported text/structured results, enforce known-token screening and
+  preserve uncertain outcomes without retry. Re-observe after60s or restart.
+  Stage B adds no migration; schema14 downgrade retains state but loses positive
+  dispatch. See [agent workflow](docs/user/agent-integration/native-mcp.md) and
+  [implementation/verification](docs/development/native-dispatch.md). Full206,
+  provider/compact and release gates remain open; bounded fixed context is above.
+
+### Native tool preparation
+
+- Add operator-only observe/inspect/review/finite grant replacement for manual
+  native None and sealed-bearer accounts, with matching strict CLI/API. Stage A
+  initially retained empty lists and denial; stage B above adds reviewed calls. See the
+  [workflow, limits and upgrade](docs/user/operator/native-tool-review.md).
+- Use the bounded outbound adapter with duplicate-safe raw response checks,
+  approved-address pinning, verified TLS, finite complete observations and
+  generation/source CAS. Migration0014 starts with zero preparation and refuses
+  schema13 binaries. Drift, binding/config/name lifecycle and restart freshness
+  cannot silently restore prepared authority.
+- Stored bearer stdin ingestion explicitly replaces header shape and commits
+  sealed storage plus selection together; deliberate sharing requires a live
+  reference. This is AGENT-206A only, with no version bump/full206/provider or
+  release acceptance. Useful dispatch is described in stage B above.
+
+### OAuth refresh recovery
+
+- Commit refresh uncertainty before token I/O and publish a rotated pair only
+  after custody commits. Interrupted accounts remain unavailable across restart,
+  even with unexpired old access; status/list expose reconnect-required state.
+  Local revoke plus freshly issued credentials is the explicit recovery path.
+- Migration0013 preserves existing custody/authority and makes schema12 binaries
+  refuse upgraded state. Current bootstrap/inline/background OAuth scopes stop
+  before daemon return releases database ownership. See [recovery and upgrade](docs/user/operator/oauth-recovery.md).
+  This is bounded local AGENT-205 only; consent204, provider policy/live T14,
+  full205 and release gates remain open. Planned3.0.0 is unchanged.
+
+### Integration definition authoring
+
+- Add strict immutable definition import/get and create-only disabled native
+  instances through matching operator CLI/API. Pins include exact revision,
+  content digest and descriptive auth profile; no provider request, credential,
+  account selection or authority is created. Candidate reference/customer
+  examples use the same validation. See [operator workflow](docs/user/operator/integration-definitions.md).
+- Migration0012 preserves existing state and makes older binaries refuse the
+  upgraded database. Derived rows reject general edits/enable; credential
+  attachment and sealed storage now commit together, including rollback on
+  pinned replacement. See [upgrade and limits](docs/user/changes/integration-definitions.md).
+  This is independent AGENT-203 authoring only: full203 and live195/196/200,
+  setup194, G0/G1 and broader release gates remain pending. No version bump.
+
+### Native MCP lifecycle
+
+- Add authenticated stateful MCP2025-11-25 lifecycle at `/mcp/{connection}`
+  (AGENT-202), with native-scoped Host/Origin/input/output limits, current
+  connection authority, bounded joined sessions, replay refusal and shutdown.
+  Tools remain unapproved: empty list and explicit call denial, no upstream
+  credentials or calls. Typed native connections cannot use HTTP `/api`.
+- Migration0011 preserves HTTP accounts/grants/revocations and reviewed receipts,
+  creates zero native/tool authority and makes old binaries refuse upgraded state.
+  Protocol/config changes require connection-grant/account reapproval; one daemon
+  owns each database. See [setup](docs/user/operator/native-mcp.md),
+  [wire contract](docs/user/agent-integration/native-mcp.md) and
+  [backup, recovery and limits](docs/user/changes/native-mcp.md). No version bump.
+
+### Native MCP prerequisite safety
+
+- Reserve MCP session capacity before SDK allocation (AGENT-199). Scoped
+  budgets include initializing and closing sessions; worker/service joins and
+  response cleanup precede release. A pinned SDK ownership patch retains
+  protocol handling and makes stalled-handshake and canceled-close cleanup
+  observable. Absolute lifetime also bounds initialization; dropping its unpolled
+  response retires the session without invalidating consumed final events.
+  See [scope, budgets and limits](docs/development/mcp-sessions.md).
+  Resume/replay are unsupported; already-submitted effects are not rolled back.
+  The prerequisite was accepted at e18da87; AGENT-202 now consumes its pool.
+  Useful authority/dispatch and full G3/release gates remain open.
+
+- Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
+  cumulative SSE response bounds precede collector/JSON decoding; event,
+  depth/work, timeout and cleanup checks apply with explicit unsupported modes.
+  Compression, redirects and automatic replay/resumption are disabled. See
+  [configuration, diagnostics and limits](docs/development/mcp-transport.md).
+  Actual SDK/TLS receiving-process checks distinguish rejected replies from
+  already-arrived tool effects. One GET attempt per transport prevents SDK
+  renewal from resetting limits; conflicting transfer framing is refused and
+  bare CR event delimiters count before parser admission.
+  The library was accepted at f0c4ca8. N1 consumes its session layer but has
+  no reachable outbound operation; later observation/dispatch must use this
+  adapter and prove its actual daemon effects. Full G1 stays open.
+
+### OAuth lifecycle safety
+
+- Reject stale OAuth success, degradation and bootstrap cleanup after revoke,
+  recreation or a newer token write. Tokens become usable only after
+  the intended sealed row commits. Migration 0010 preserves existing custody,
+  grants and selections and prevents older binaries from opening upgraded state.
+  Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
+  Already-admitted work may finish; this does not establish crash-safe rotating
+  refresh, provider proof or release readiness. No version bump.
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an

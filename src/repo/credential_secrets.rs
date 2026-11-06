@@ -47,6 +47,15 @@ impl CredentialSecretsRepository {
     /// override AuthSpec. Never overwrites an existing row — rotation is
     /// insert-new + tombstone-old.
     pub async fn insert(&self, sealed_value: &[u8], nonce: &[u8]) -> Result<String, RepoError> {
+        let mut connection = self.pool.acquire().await?;
+        Self::insert_into(&mut connection, sealed_value, nonce).await
+    }
+
+    pub(crate) async fn insert_into(
+        connection: &mut sqlx::SqliteConnection,
+        sealed_value: &[u8],
+        nonce: &[u8],
+    ) -> Result<String, RepoError> {
         let secret_ref = new_secret_ref()?;
         let now = unix_now();
         sqlx::query(
@@ -57,7 +66,7 @@ impl CredentialSecretsRepository {
         .bind(sealed_value)
         .bind(nonce)
         .bind(now)
-        .execute(&self.pool)
+        .execute(connection)
         .await?;
         Ok(secret_ref)
     }
@@ -116,7 +125,7 @@ impl CredentialSecretsRepository {
         Ok(res.rows_affected())
     }
 
-    /// Tombstone `secret_ref` only if no registration or per-agent override
+    /// Tombstone `secret_ref` only if no registration, per-agent override or live confidential-client binding
     /// still references it. Returns `true` when a live row was tombstoned.
     ///
     /// Every explicit tombstone (rotation, clear) goes through this rather
@@ -137,7 +146,7 @@ impl CredentialSecretsRepository {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Tombstone live rows that no registration or per-agent override
+    /// Tombstone live rows that no registration, per-agent override or live confidential-client binding
     /// references and whose `set_at` is strictly before `set_before`
     /// (unix seconds). Returns the number tombstoned.
     ///
@@ -179,7 +188,8 @@ const UNREFERENCED: &str = "secret_ref NOT IN ( \
      WHERE json_extract(auth_json, '$.secret_ref') IS NOT NULL \
     UNION \
     SELECT json_extract(auth_spec, '$.secret_ref') FROM agent_credential_overrides \
-     WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL)";
+     WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL \
+    UNION SELECT secret_ref FROM oauth_consent_clients WHERE retired_at IS NULL)";
 
 /// Mint an opaque `cs_`-prefixed secret ref from 16 random bytes.
 fn new_secret_ref() -> Result<String, RepoError> {

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "local.customer-bearer",
+  "revision": 1,
+  "name": "Customer bearer fixture",
+  "summary": "Descriptive fixture only",
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "auth_profiles": [
+    {
+      "id": "bearer",
+      "mechanism": "bearer",
+      "setup": "Activate explicitly, then select a live stored bearer",
+      "required_scopes": []
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Read a fixture record",
+      "operations": [
+        "read_record"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Author a disabled connection; no provider call",
+  "limits": [
+    "No live verification"
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "local fixture draft",
+    "verified_at": null,
+    "source_revision": null
+  }
+}

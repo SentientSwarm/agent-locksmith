@@ -11,7 +11,9 @@ curl --fail --silent --show-error \
   -H "Authorization: Bearer $LOCKSMITH_AGENT_TOKEN" "$LOCKSMITH_URL/tools"
 ```
 
-Each listed connection has a `name`, public `path` such as `/api/service`,
+Select `type: "api"` entries for this HTTP contract. Native `type: "mcp"` entries
+use the [native session/schema flow](native-mcp.md) and never inherit an HTTP
+operation from their connection name. Each HTTP connection has a `name`, public `path` such as `/api/service`,
 `description`, `activation`, `account_selected` and `credential_readiness`.
 An optional `http_service` supplies the operation contract below. Entries without
 it remain supported legacy connections: obtain their public API instructions

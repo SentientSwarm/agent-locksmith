@@ -6,8 +6,12 @@ use tracing::error;
 use agent_locksmith::{config, daemon, shutdown::ShutdownCoordinator, telemetry};
 
 #[derive(Parser)]
-#[command(name = "locksmithd", about = "Agent Locksmith daemon")]
+#[command(name = "locksmithd", about = "Agent Locksmith daemon", version)]
 struct Cli {
+    /// Print JSON build identity without loading configuration or starting services.
+    #[arg(long)]
+    build_info: bool,
+
     /// Path to config file
     #[arg(short, long, default_value = "/etc/locksmith/config.yaml")]
     config: PathBuf,
@@ -16,6 +20,10 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    if cli.build_info {
+        println!("{}", agent_locksmith::build_info::document("locksmithd"));
+        return;
+    }
 
     let loaded = config::load_config(&cli.config).unwrap_or_else(|e| {
         eprintln!("Failed to load config from {}: {}", cli.config.display(), e);

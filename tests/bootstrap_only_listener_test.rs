@@ -40,6 +40,7 @@ tools: []
 async fn register_via_bootstrap_token_succeeds() {
     let (_dir, admin) = build_admin().await;
     let op = OperatorIdentity {
+        public_id: "fixture-operator".into(),
         name: "alice".into(),
         scope: None,
         auth_method: None,

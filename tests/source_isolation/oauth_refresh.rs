@@ -115,8 +115,10 @@ async fn selected_refresh_rejection_never_uses_default() {
             .await
             .unwrap()
             .unwrap();
-        assert!(selected.degraded);
+        assert!(selected.refresh_pending);
+        assert!(!selected.degraded);
         assert!(!default.degraded);
+        assert!(!default.refresh_pending);
     }
 }
 
@@ -159,6 +161,7 @@ async fn empty_refresh_response_is_not_dispatched_or_persisted() {
             .unwrap()
             .unwrap();
         assert_eq!(selected.access_token.unwrap().expose_secret(), "expired-X");
-        assert!(selected.degraded);
+        assert!(selected.refresh_pending);
+        assert!(!selected.degraded);
     }
 }

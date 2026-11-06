@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "id": "local.customer-controlled",
+  "revision": 1,
+  "name": "Customer controlled fixture",
+  "summary": "Descriptive fixture only",
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "auth_profiles": [
+    {
+      "id": "controlled",
+      "mechanism": "oauth_provider",
+      "setup": "Activate with an existing trusted controlled profile, then complete owned consent and selection",
+      "required_scopes": [
+        "read"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Read a fixture record",
+      "operations": [
+        "read_record"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Author a disabled connection; no provider call",
+  "limits": [
+    "No live verification"
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "local fixture draft",
+    "verified_at": null,
+    "source_revision": null
+  }
+}
