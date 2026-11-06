@@ -191,7 +191,7 @@ fn build_client_for(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConf
 /// Failures degrade to built-in-roots-only with a warning (never a hard
 /// error and never accept-invalid-certs — a missing CA file must not
 /// silently disable verification).
-fn add_ca_bundle(
+pub(crate) fn add_ca_bundle(
     mut builder: reqwest::ClientBuilder,
     ca_path: &std::path::Path,
 ) -> reqwest::ClientBuilder {

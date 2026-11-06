@@ -20,6 +20,30 @@
 
 ### Changed
 
+- Enforce mTLS revocation on the agent listener. `listen.mtls.blocklist_path`
+  and `listen.mtls.crl_url` were accepted but never reached the validator, so
+  a serial added with `locksmith mtls revoke` or listed in the CA's CRL still
+  authenticated. The daemon now loads both, fetches the CRL before serving and
+  every `crl_refresh_interval_seconds`, and re-reads a changed blocklist every
+  `blocklist_reload_interval_seconds`; refusals audit `revoked_by_blocklist`
+  or `revoked_by_crl`. A CRL (PEM or DER, at most 8 MiB) is applied only when
+  it is complete, a CA certificate in the agent CA bundle that matches its
+  issuer and may sign CRLs signed it, it has a CRL number and an unexpired
+  `nextUpdate`, and neither its CRL number nor its `thisUpdate` goes backwards
+  for that issuer. CRL state is kept per issuer name and signing key, and
+  certs are checked against the CRL of the CA whose key signed them, so one
+  CA's CRL never removes or masks another's revocations, even when two CAs
+  share a name during a rotation. Each issuer's distribution point is pinned
+  once seen, so a CRL for another partition of the same CA is refused. The
+  last good CRL is kept in `mtls-crl-cache.pem` beside the database and
+  reloaded per issuer at startup, even past `nextUpdate`, so a restart while
+  the CA is unreachable keeps known revocations. A failed fetch keeps the
+  previous snapshot and retries within 30 seconds. The fetch trusts the agent
+  CA bundle and `tls.upstream_ca_bundle` as well as public roots. Blocklist
+  serials are canonicalised (`7A:11`, `0x7a11` and `007a11` match `7a11`),
+  non-hex lines are skipped with a warning, and `locksmith mtls revoke`
+  rejects a non-hex serial and replaces the file atomically.
+
 - Attribute a strictly shaped `bad_code_verifier` token refusal to a closed
   `token_verifier_refused` reason, and add a stdlib helper that transforms only the
   authorization challenge in a private connect receipt. Acceptance predicates and

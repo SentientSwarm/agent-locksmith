@@ -351,6 +351,8 @@ async fn run_owned(
     //   the handshake and stamps the peer cert into per-request
     //   extensions for the agent-auth middleware.
     let auth_mode = shared_config.load().listen.auth_mode;
+    // T6.3/T6.4: CRL + emergency blocklist refresher for the agent listener.
+    let mut revocation_task: Option<tokio::task::JoinHandle<()>> = None;
     let mtls_authenticator: Option<Arc<crate::mtls::MtlsAuthenticator>> = match auth_mode {
         crate::config::AuthMode::Bearer => None,
         _ => {
@@ -367,19 +369,41 @@ async fn run_owned(
                     mtls_cfg.ca_bundle_path.display()
                 ))
             })?;
-            let validator = Arc::new(
-                crate::mtls::MtlsValidator::new(&ca_pem)
-                    .map_err(|e| DaemonError::AdminConfig(format!("mtls validator: {e}")))?,
-            );
+            let validator = crate::mtls::MtlsValidator::new(&ca_pem)
+                .map_err(|e| DaemonError::AdminConfig(format!("mtls validator: {e}")))?;
+            let db_path = shared_config
+                .load()
+                .database
+                .as_ref()
+                .map(|d| d.path.clone())
+                .ok_or_else(|| {
+                    DaemonError::AdminConfig("auth_mode mtls/both requires `database.path`".into())
+                })?;
+            // The last good CRL lives beside the database (the state dir).
+            let crl_cache = db_path.with_file_name("mtls-crl-cache.pem");
+            let mut fetch_roots = vec![mtls_cfg.ca_bundle_path.clone()];
+            if let Some(extra) = shared_config
+                .load()
+                .tls
+                .as_ref()
+                .and_then(|t| t.upstream_ca_bundle.clone())
+            {
+                fetch_roots.push(extra);
+            }
+            let revocation =
+                crate::mtls::Revocation::load(&mtls_cfg, &ca_pem, &fetch_roots, &crl_cache)
+                    .await
+                    .map_err(DaemonError::AdminConfig)?;
+            let validator = Arc::new(revocation.attach(validator));
             // Reuse the AgentRepository from the admin substrate when
             // available; fall back to a fresh open against the same DB.
-            let pool = if let Some(db_cfg) = shared_config.load().database.as_ref().cloned() {
-                migrations::open_and_migrate(&db_cfg.path).await?
-            } else {
-                return Err(DaemonError::AdminConfig(
-                    "auth_mode mtls/both requires `database.path`".into(),
-                ));
-            };
+            let pool = migrations::open_and_migrate(&db_path).await?;
+            // Spawned after this block's fallible steps. Like the
+            // sweepers, a later startup error leaves it running until
+            // the runtime drops.
+            if revocation.is_configured() {
+                revocation_task = Some(tokio::spawn(revocation.run(coord.shutdown_signal())));
+            }
             let agents = AgentRepository::new(pool);
             Some(Arc::new(crate::mtls::MtlsAuthenticator::with_audit(
                 validator,
@@ -693,6 +717,9 @@ async fn run_owned(
         if let Some(s) = credential_sweeper_task.as_mut() {
             let _ = s.await;
         }
+        if let Some(s) = revocation_task.as_mut() {
+            let _ = s.await;
+        }
         listener_res
     };
 
@@ -729,6 +756,7 @@ async fn run_owned(
                 sweeper_task.as_mut(),
                 ops_log_sweeper_task.as_mut(),
                 credential_sweeper_task.as_mut(),
+                revocation_task.as_mut(),
                 refresh_task.as_mut(),
             ]
             .into_iter()

@@ -51,7 +51,8 @@ pub async fn run(format: Format, cmd: MtlsCmd) -> Result<(), CliError> {
             blocklist_path,
             reason,
         } => {
-            let normalized = serial.trim().to_ascii_lowercase();
+            let normalized = agent_locksmith::mtls::blocklist::canonical_serial(&serial)
+                .ok_or_else(|| CliError::Usage(format!("`{serial}` is not a hex serial")))?;
             let mut existing = std::fs::read_to_string(&blocklist_path).unwrap_or_default();
             if !existing.is_empty() && !existing.ends_with('\n') {
                 existing.push('\n');
@@ -66,7 +67,10 @@ pub async fn run(format: Format, cmd: MtlsCmd) -> Result<(), CliError> {
             {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&blocklist_path, existing)?;
+            agent_locksmith::mtls::blocklist::write_atomic_keeping_owner(
+                &blocklist_path,
+                existing.as_bytes(),
+            )?;
             eprintln!(
                 "Revoked serial {normalized} in {}",
                 blocklist_path.display()

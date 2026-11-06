@@ -169,7 +169,7 @@ impl MtlsValidator {
             });
         }
         if let Some(crl) = &self.crl
-            && crl.contains(&serial_hex)
+            && crl.revokes(&parsed)
         {
             return Err(MtlsError::RevokedByCRL {
                 serial: serial_hex.clone(),
