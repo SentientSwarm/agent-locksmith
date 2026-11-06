@@ -28,7 +28,7 @@ impl Runtime {
         expected: &Source,
         generation: Option<&str>,
     ) -> Result<Value> {
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current = self.current_for(&mut tx, owner, agent, name).await?;
         current.matches(expected)?;
         let generation = store::reserve(&mut tx, &current, &self.run, generation).await?;
@@ -139,7 +139,7 @@ impl Runtime {
         generation: &str,
         result: Result<Value>,
     ) -> Result<()> {
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         match result {
             Ok(manifest) => {
                 let current = self.current_for(&mut tx, owner, agent, name).await?;

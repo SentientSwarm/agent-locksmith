@@ -15,7 +15,7 @@ impl Runtime {
         trace: &mut Trace,
     ) -> Result<()> {
         control.check()?;
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         self.recheck(&mut tx, call, before).await?;
         let event = event(call, &trace.id);
         control.check()?;
