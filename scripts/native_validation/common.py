@@ -27,7 +27,7 @@ def command(name, args, **kwargs):
     if not path:
         raise ValueError('tool_missing')
     kwargs.setdefault('env', environment())
-    return V.execute(Path(path), args, **kwargs).decode('utf-8')
+    return V.execute(Path(path), args, resolve=False, **kwargs).decode('utf-8')
 
 
 def write(path, value):

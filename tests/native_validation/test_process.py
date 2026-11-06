@@ -23,6 +23,16 @@ class ProcessContract(unittest.TestCase):
         self.private.mkdir(mode=0o700)
         self.addCleanup(self.assert_absent)
 
+    def test_tool_proxy_symlink_keeps_its_invoked_name(self):
+        # rustup proxies may be symlinks to one multicall binary that
+        # dispatches on argv[0]; resolving the link would run rustup itself.
+        tool = self.bin / 'multicall'
+        tool.write_text('#!/bin/sh\necho "${0##*/}"\n')
+        tool.chmod(0o755)
+        (self.bin / 'rustc').symlink_to(tool)
+        with patch.dict(os.environ, {'PATH': str(self.bin)}):
+            self.assertEqual(C.command('rustc', []).strip(), 'rustc')
+
     def assert_absent(self):
         path = self.bin / 'children.jsonl'
         if path.exists():

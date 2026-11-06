@@ -73,9 +73,15 @@ def collect(process, deadline, capture_stderr=False):
     return (bytes(output), bytes(errors)) if capture_stderr else bytes(output)
 
 
-def execute(path, arguments, *, env=None, cwd=None, capture_stderr=False):
-    """Bounded owned command, shared by identity inspection and native smoke."""
-    process = subprocess.Popen([str(path.resolve()), *arguments], stdout=subprocess.PIPE,
+def execute(path, arguments, *, env=None, cwd=None, capture_stderr=False, resolve=True):
+    """Bounded owned command, shared by identity inspection and native smoke.
+
+    Product binaries run from their resolved path. Toolchain proxies pass
+    resolve=False: a rustup proxy may be a symlink to a multicall binary
+    that dispatches on argv[0], so resolving it would run rustup itself.
+    """
+    program = path.resolve() if resolve else path.absolute()
+    process = subprocess.Popen([str(program), *arguments], stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True, env=env, cwd=cwd)
     try:
         return collect(process, time.monotonic() + TIMEOUT, capture_stderr)
