@@ -38,7 +38,9 @@
   last good CRL is kept in `mtls-crl-cache.pem` beside the database and
   reloaded per issuer at startup, even past `nextUpdate`, so a restart while
   the CA is unreachable keeps known revocations. A failed fetch keeps the
-  previous snapshot and retries within 30 seconds. The fetch trusts the agent
+  previous snapshot and retries within 30 seconds. While no CRL has ever been
+  applied (first start with the CA down and no cache), every mTLS client is
+  refused and audited as `crl_unavailable`. The fetch trusts the agent
   CA bundle and `tls.upstream_ca_bundle` as well as public roots. Blocklist
   serials are canonicalised (`7A:11`, `0x7a11` and `007a11` match `7a11`),
   non-hex lines are skipped with a warning, and `locksmith mtls revoke`

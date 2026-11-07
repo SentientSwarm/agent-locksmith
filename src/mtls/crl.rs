@@ -299,6 +299,11 @@ impl CrlStore {
     }
 
     /// Every applied issuer CRL as PEM, for the last-good cache.
+    /// Whether any CRL has been applied (fetched or reloaded from cache).
+    pub fn in_force(&self) -> bool {
+        !self.state.load().issuers.is_empty()
+    }
+
     pub fn to_pem(&self) -> Option<String> {
         let state = self.state.load();
         if state.issuers.is_empty() {

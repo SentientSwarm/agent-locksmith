@@ -39,6 +39,10 @@ pub enum MtlsError {
     RevokedByCRL { serial: String },
     #[error("revoked by local blocklist (serial {serial})")]
     RevokedByBlocklist { serial: String },
+    /// A CRL is configured but none has ever been applied, so revocation
+    /// cannot be checked. Fails closed until a CRL is in force (T6.3).
+    #[error("no CRL in force; revocation status unknown")]
+    CrlUnavailable,
 }
 
 /// Validated identity extracted from a peer certificate. `kind` says
@@ -168,12 +172,15 @@ impl MtlsValidator {
                 serial: serial_hex.clone(),
             });
         }
-        if let Some(crl) = &self.crl
-            && crl.revokes(&parsed)
-        {
-            return Err(MtlsError::RevokedByCRL {
-                serial: serial_hex.clone(),
-            });
+        if let Some(crl) = &self.crl {
+            if !crl.in_force() {
+                return Err(MtlsError::CrlUnavailable);
+            }
+            if crl.revokes(&parsed) {
+                return Err(MtlsError::RevokedByCRL {
+                    serial: serial_hex.clone(),
+                });
+            }
         }
 
         // (4) Identity extraction. CN → SAN_DNS → SAN_URI. Empty

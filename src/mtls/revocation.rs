@@ -12,8 +12,10 @@
 //! CRL is written back to the cache, so a restart while the CA is
 //! unreachable keeps the revocations already known. A failed fetch keeps
 //! the previous snapshot and is retried after at most `CRL_RETRY` instead
-//! of a full `crl_refresh_interval_seconds`. The fetch trusts the built-in
-//! roots plus the agent CA bundle and `tls.upstream_ca_bundle`.
+//! of a full `crl_refresh_interval_seconds`. Until some CRL has been
+//! applied, the validator refuses every mTLS client (fail closed). The
+//! fetch trusts the built-in roots plus the agent CA bundle and
+//! `tls.upstream_ca_bundle`.
 //!
 //! Blocklist: re-read every `blocklist_reload_interval_seconds` when its
 //! modification time or length changes.
@@ -54,7 +56,7 @@ impl CrlSource {
             return;
         };
         let n = self.store.apply_cached(&body);
-        if self.store.to_pem().is_some() {
+        if self.store.in_force() {
             info!(path = %self.cache_path.display(), revoked_count = n, "last good CRL reloaded");
         } else {
             warn!(path = %self.cache_path.display(), "no usable CRL in the cache");
@@ -98,8 +100,12 @@ impl Revocation {
             };
             source.load_cache();
             crl_ok = source.refresh().await;
-            if source.store.to_pem().is_none() {
-                error!(url = %url, "no CRL in force: fetch failed and no valid cached CRL");
+            if !source.store.in_force() {
+                error!(
+                    url = %url,
+                    "no CRL in force: fetch failed and no valid cached CRL; \
+                     mTLS clients are refused until a CRL is applied"
+                );
             }
             crl = Some(source);
         }

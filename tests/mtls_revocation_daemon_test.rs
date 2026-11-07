@@ -27,6 +27,8 @@ const AGENT_SERIAL_HEX: &str = "7a11";
 struct Pki {
     ca_pem: String,
     crl_pem: String,
+    /// Signed by the same CA, revoking nothing.
+    empty_crl_pem: String,
     server_cert_pem: String,
     server_key_pem: String,
     agent_identity_pem: String,
@@ -80,9 +82,21 @@ fn mint_pki() -> Pki {
     .signed_by(&ca, &ca_key)
     .unwrap();
 
+    let empty_crl = CertificateRevocationListParams {
+        this_update: datetime!(2026-01-01 0:00 UTC),
+        next_update: datetime!(2036-01-01 0:00 UTC),
+        crl_number: SerialNumber::from(1u64),
+        issuing_distribution_point: None,
+        revoked_certs: Vec::new(),
+        key_identifier_method: KeyIdMethod::Sha256,
+    }
+    .signed_by(&ca, &ca_key)
+    .unwrap();
+
     Pki {
         ca_pem: ca.pem(),
         crl_pem: crl.pem().unwrap(),
+        empty_crl_pem: empty_crl.pem().unwrap(),
         server_cert_pem: server.pem(),
         server_key_pem: server_key.serialize_pem(),
         agent_identity_pem: format!("{}{}", agent.pem(), agent_key.serialize_pem()),
@@ -292,20 +306,39 @@ async fn crl_revoked_serial_is_refused() {
 
 #[tokio::test]
 async fn crl_from_an_untrusted_signer_is_not_applied() {
+    // A trusted CRL is in force; later fetches return a CRL from another
+    // CA that lists this agent's serial. It must not change the decision.
     let site = Site::new(None).await;
     let impostor = mint_pki(); // same serial, different CA
     let crl = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/ca.crl"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(site.pki.empty_crl_pem.clone()))
+        .up_to_n_times(1)
+        .mount(&crl)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ca.crl"))
         .respond_with(ResponseTemplate::new(200).set_body_string(impostor.crl_pem))
         .mount(&crl)
         .await;
-    let yaml = site.yaml(&format!("    crl_url: \"{}/ca.crl\"", crl.uri()));
+    let yaml = site.yaml(&format!(
+        "    crl_url: \"{}/ca.crl\"\n    crl_refresh_interval_seconds: 1",
+        crl.uri()
+    ));
     let daemon = Running::start(&yaml).await;
+    let client = site.client();
+    assert_eq!(daemon.tools_status(&client).await, 200, "positive control");
+    // Let at least two refreshes fetch the impostor CRL.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while crl.received_requests().await.unwrap().len() < 3 {
+        assert!(Instant::now() < deadline, "CRL refresh did not run");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(
-        daemon.tools_status(&site.client()).await,
+        daemon.tools_status(&client).await,
         200,
-        "an unsigned-by-our-CA CRL must not change revocation state"
+        "a CRL not signed by our CA must not change revocation state"
     );
     daemon.stop().await;
 }
@@ -337,4 +370,50 @@ async fn last_good_crl_survives_a_restart_while_the_ca_is_down() {
         "the cached CRL stays in force when the CA is unreachable"
     );
     restarted.stop().await;
+}
+
+#[tokio::test]
+async fn mtls_is_refused_until_a_crl_is_in_force() {
+    // First start with the CA down and no cache: no CRL has ever been
+    // applied, so revocation cannot be checked and mTLS is refused.
+    let site = Site::new(None).await;
+    let crl = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ca.crl"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&crl)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ca.crl"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(site.pki.empty_crl_pem.clone()))
+        .mount(&crl)
+        .await;
+    let yaml = site.yaml(&format!(
+        "    crl_url: \"{}/ca.crl\"\n    crl_refresh_interval_seconds: 1",
+        crl.uri()
+    ));
+    let daemon = Running::start(&yaml).await;
+    let client = site.client();
+    assert_eq!(
+        daemon.tools_status(&client).await,
+        401,
+        "no CRL in force: the certificate's revocation status is unknown"
+    );
+
+    // Once the CA answers, the retry applies the CRL and the same
+    // client authenticates.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let status = daemon.tools_status(&client).await;
+        if status == 200 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still refused after the CRL became available (status {status})"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    daemon.stop().await;
 }
