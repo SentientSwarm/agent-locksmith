@@ -1,17 +1,42 @@
+"""Shared smoke fixtures. Every target started here is closed at session end."""
+
 import pytest
 
 
-@pytest.fixture(scope="session")
-def t1(request):
+def _plugin(request):
     plugin = getattr(request.config, "qa_plugin", None)
     if plugin is None:
         pytest.fail("run smoke through qa/run.py, which supplies the QA plugin")
-    target = plugin.make_target()
-    try:
+    return plugin
+
+
+@pytest.fixture(scope="session")
+def target_factory(request):
+    """Return start(**LocalTarget kwargs) -> started target; closes all at the end.
+
+    kwargs: config (dict overlay or callable(workdir) -> dict; None values
+    delete keys), env (extra daemon environment), label, upstream (bool).
+    """
+    plugin = _plugin(request)
+    started = []
+
+    def start(**kwargs):
+        target = plugin.make_target(**kwargs)
+        started.append(target)
         target.start()
-        yield target
+        return target
+
+    try:
+        yield start
     finally:
-        target.close()
+        for target in started:
+            target.close()
+
+
+@pytest.fixture(scope="session")
+def t1(target_factory):
+    """The default getting-started daemon (bearer, admin socket, empty catalog)."""
+    return target_factory(label="main")
 
 
 @pytest.fixture(scope="session")

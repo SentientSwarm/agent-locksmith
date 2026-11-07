@@ -28,14 +28,18 @@ class QaPlugin:
         self.target: LocalTarget | None = None
         self.errors: list[str] = []
         self.current = "setup"
+        self.targets: list[LocalTarget] = []
 
     def pytest_configure(self, config) -> None:
         config.qa_plugin = self
 
-    def make_target(self) -> LocalTarget:
-        self.target = LocalTarget(self.bins, self.canaries, self.bundle)
-        self.target.current_case = self.current
-        return self.target
+    def make_target(self, **kwargs) -> LocalTarget:
+        target = LocalTarget(self.bins, self.canaries, self.bundle, **kwargs)
+        target.current_case = self.current
+        self.targets.append(target)
+        if self.target is None:
+            self.target = target
+        return target
 
     def pytest_collection_modifyitems(self, items) -> None:
         for item in items:
@@ -60,13 +64,13 @@ class QaPlugin:
     @pytest.hookimpl(tryfirst=True)
     def pytest_runtest_setup(self, item) -> None:
         self.current = self.by_node.get(item.nodeid, "unbound")
-        if self.target is not None:
-            self.target.current_case = self.current
+        for target in self.targets:
+            target.current_case = self.current
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_call(self, item):
-        if self.target is not None:
-            self.target.current_case = self.by_node.get(item.nodeid, "unbound")
+        for target in self.targets:
+            target.current_case = self.by_node.get(item.nodeid, "unbound")
         yield
 
     def pytest_runtest_logreport(self, report) -> None:

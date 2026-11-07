@@ -1,26 +1,33 @@
 """T1 local-binary target: release binaries, disposable directory, local fakes.
 
 Cases reach the product only through `cli()` and `http()`; every exchange is
-written to the evidence bundle after canary redaction.
+written to the evidence bundle after canary redaction. A target can take a
+config overlay and extra daemon environment, so one session can run several
+differently configured daemons.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .evidence import Bundle
 from .redact import Canaries
@@ -30,7 +37,16 @@ REFERENCE_API = REPO / "examples" / "http-account-service.py"
 SMOKE_X = "synthetic-private-account-x"
 SMOKE_Y = "synthetic-private-account-y"
 STARTUP_TIMEOUT = 20.0
-SECRET_KEYS = {"token", "secret", "wire_token", "access_token", "refresh_token"}
+SECRET_KEYS = {
+    "token",
+    "secret",
+    "wire_token",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+}
+
+Overlay = dict | Callable[[Path], dict] | None
 
 
 class TargetError(Exception):
@@ -43,6 +59,12 @@ class CliResult:
     out: str
     err: str
     json: Any
+
+    @property
+    def error_code(self) -> str | None:
+        """The daemon error code the CLI printed, if any."""
+        match = re.search(r'"code":"([a-z_]+)"', self.err + self.out)
+        return match.group(1) if match else None
 
 
 @dataclass
@@ -73,10 +95,33 @@ def _parse_json(text: str) -> Any:
         return None
 
 
+def merge(base: dict, overlay: dict) -> dict:
+    """Deep-merge overlay into a copy of base; a None value deletes the key."""
+    out = copy.deepcopy(base)
+    for key, value in overlay.items():
+        if value is None:
+            out.pop(key, None)
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
 class LocalTarget:
     name = "t1-local-binary"
 
-    def __init__(self, bins: Path, canaries: Canaries, bundle: Bundle) -> None:
+    def __init__(
+        self,
+        bins: Path,
+        canaries: Canaries,
+        bundle: Bundle,
+        *,
+        config: Overlay = None,
+        env: dict | None = None,
+        label: str = "main",
+        upstream: bool = True,
+    ) -> None:
         self.bins = bins.resolve()
         # Short path outside the bundle: the admin socket path must fit SUN_LEN,
         # and the work directory (operators file, database) is never evidence.
@@ -85,25 +130,56 @@ class LocalTarget:
         canaries.add(str(self.work), "workdir")
         self.canaries = canaries
         self.bundle = bundle
+        self.label = label
+        self.overlay = config
+        self.extra_env = dict(env or {})
+        self.want_upstream = upstream
         self.current_case = "setup"
         self.op_token: str | None = None
         self.procs: dict[str, subprocess.Popen] = {}
         self.port = 0
         self.upstream_url = ""
         self.socket = self.work / "admin.sock"
+        self.config: dict = {}
         canaries.add(SMOKE_X, "smoke-x-credential")
         canaries.add(SMOKE_Y, "smoke-y-credential")
+        for key, value in self.extra_env.items():
+            if "KEY" in key or "SECRET" in key or "TOKEN" in key:
+                canaries.add(value, f"env-{key.lower()}")
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
         os.umask(0o077)
-        self._start_upstream()
-        self._mint_operator()
+        if self.want_upstream and "upstream" not in self.procs:
+            self._start_upstream()
+        if self.op_token is None:
+            self._mint_operator()
         self._write_config()
         self._start_daemon()
 
+    def stop(self, sig: int = signal.SIGTERM, timeout: float = 15.0) -> int:
+        """Stop the daemon only; returns its exit code."""
+        proc = self.procs.pop("locksmithd", None)
+        if proc is None:
+            raise TargetError("locksmithd is not running")
+        if proc.poll() is None:
+            proc.send_signal(sig)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise TargetError(
+                    f"locksmithd ignored signal {sig} for {timeout:.0f}s"
+                ) from None
+        return proc.returncode
+
+    def restart(self) -> None:
+        self.stop()
+        self._start_daemon()
+
     def close(self) -> None:
-        for name, proc in list(self.procs.items()):
+        for proc in list(self.procs.values()):
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
                 try:
@@ -114,7 +190,7 @@ class LocalTarget:
         log = self.work / "locksmithd.log"
         if log.exists():
             self.bundle.transcript(
-                "run", "locksmithd-log", log.read_text(errors="replace")
+                "run", f"locksmithd-{self.label}-log", log.read_text(errors="replace")
             )
         self.procs.clear()
         shutil.rmtree(self.work, ignore_errors=True)
@@ -147,31 +223,41 @@ class LocalTarget:
         self.canaries.add(self.op_token, "operator-token")
         (self.work / "operators.yaml").write_text(result.stdout)
 
-    def _write_config(self) -> None:
-        self.port = free_port()
-        config = f"""listen:
-  host: "127.0.0.1"
-  port: {self.port}
-  auth_mode: bearer
-  admin_socket:
-    path: "{self.socket}"
-operator_credentials_path: "{self.work / "operators.yaml"}"
-database:
-  path: "{self.work / "locksmith.db"}"
-shutdown:
-  drain_window_seconds: 1
-tools: []
-"""
-        (self.work / "config.yaml").write_text(config)
+    def base_config(self) -> dict:
+        return {
+            "listen": {
+                "host": "127.0.0.1",
+                "port": self.port,
+                "auth_mode": "bearer",
+                "admin_socket": {"path": str(self.socket)},
+            },
+            "operator_credentials_path": str(self.work / "operators.yaml"),
+            "database": {"path": str(self.work / "locksmith.db")},
+            "shutdown": {"drain_window_seconds": 1},
+            "tools": [],
+        }
 
-    def _start_daemon(self) -> None:
-        env = {
+    def _write_config(self) -> None:
+        if not self.port:
+            self.port = free_port()
+        overlay = (
+            self.overlay(self.work) if callable(self.overlay) else (self.overlay or {})
+        )
+        self.config = merge(self.base_config(), overlay)
+        self.port = self.config["listen"]["port"]
+        self.write_file("config.yaml", yaml.safe_dump(self.config, sort_keys=False))
+
+    def daemon_env(self) -> dict:
+        return {
             **os.environ,
             "LOCKSMITH_SEED_PATH": "",
             "SMOKE_X": SMOKE_X,
             "SMOKE_Y": SMOKE_Y,
+            **self.extra_env,
         }
-        with open(self.work / "locksmithd.log", "w") as log:
+
+    def _start_daemon(self) -> None:
+        with open(self.work / "locksmithd.log", "a") as log:
             self.procs["locksmithd"] = subprocess.Popen(
                 [
                     str(self.bins / "locksmithd"),
@@ -180,39 +266,88 @@ tools: []
                 ],
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                env=env,
+                env=self.daemon_env(),
             )
-        deadline = time.monotonic() + STARTUP_TIMEOUT
+        self.wait_live()
+
+    def wait_live(self, timeout: float = STARTUP_TIMEOUT) -> None:
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.procs["locksmithd"].poll() is not None:
-                raise TargetError(
-                    f"locksmithd exited {self.procs['locksmithd'].returncode}: {self._log_error()}"
-                )
-            try:
-                if (
-                    self.http("GET", "/livez", record=False).status == 200
-                    and self.socket.exists()
-                ):
-                    return
-            except OSError:
-                pass
+            proc = self.procs.get("locksmithd")
+            if proc is None or proc.poll() is not None:
+                code = proc.returncode if proc else "?"
+                raise TargetError(f"locksmithd exited {code}: {self.log_error()}")
+            if self._live():
+                return
             time.sleep(0.1)
         raise TargetError(
-            f"locksmithd not live after {STARTUP_TIMEOUT:.0f}s: {self._log_error()}"
+            f"locksmithd not live after {timeout:.0f}s: {self.log_error()}"
         )
 
-    def _log_error(self) -> str:
-        """The daemon's last error-level message (full log goes to cases/run/)."""
+    def _live(self) -> bool:
+        if "admin_socket" in self.config.get("listen", {}) and not self.socket.exists():
+            return False
+        if self.config["listen"].get("auth_mode", "bearer") != "bearer":
+            return self._port_open(self.port)
+        try:
+            return self.http("GET", "/livez", record=False).status == 200
+        except OSError:
+            return False
+
+    @staticmethod
+    def _port_open(port: int) -> bool:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    def run_daemon_once(self, timeout: float = 20.0) -> subprocess.CompletedProcess:
+        """Run locksmithd in the foreground against the current config (for refusals to start)."""
+        self._write_config()
+        proc = subprocess.run(
+            [str(self.bins / "locksmithd"), "--config", str(self.work / "config.yaml")],
+            capture_output=True,
+            text=True,
+            env=self.daemon_env(),
+            timeout=timeout,
+            check=False,
+        )
+        self.bundle.transcript(
+            self.current_case,
+            "locksmithd-once",
+            f"exit {proc.returncode}\n--- output\n{proc.stdout}{proc.stderr}",
+        )
+        return proc
+
+    def log_text(self) -> str:
         log = self.work / "locksmithd.log"
-        lines = log.read_text(errors="replace").splitlines() if log.exists() else []
-        for line in reversed(lines):
-            entry = _parse_json(line)
-            if isinstance(entry, dict) and entry.get("level") == "ERROR":
+        return log.read_text(errors="replace") if log.exists() else ""
+
+    def log_events(self) -> list[dict]:
+        return [
+            e
+            for e in (_parse_json(line) for line in self.log_text().splitlines())
+            if isinstance(e, dict)
+        ]
+
+    def log_error(self) -> str:
+        """The daemon's last error-level message (full log goes to cases/run/)."""
+        for entry in reversed(self.log_events()):
+            if entry.get("level") == "ERROR":
                 fields = entry.get("fields", {})
                 return self.canaries.redact(
                     f"{fields.get('message', '')}: {fields.get('error', '')}"
                 )
-        return "no error-level log line; see cases/run/ locksmithd log"
+        return "no error-level log line; see the locksmithd log under cases/run/"
+
+    def write_file(self, name: str, text: str | bytes, mode: int = 0o600) -> Path:
+        path = self.work / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text)
+        path.chmod(mode)
+        return path
 
     # -- product interfaces ----------------------------------------------
     def cli(
@@ -221,29 +356,42 @@ tools: []
         op_token: str | None = None,
         agent_token: str | None = None,
         use_op_token: bool = True,
+        socket_flag: bool = True,
+        stdin: str | None = None,
+        env: dict | None = None,
+        fmt: str | None = "json",
     ) -> CliResult:
-        env = {k: v for k, v in os.environ.items() if not k.startswith("LOCKSMITH_")}
+        run_env = {
+            k: v for k, v in os.environ.items() if not k.startswith("LOCKSMITH_")
+        }
         if use_op_token:
             token = op_token if op_token is not None else self.op_token
             if token is None:
                 raise TargetError("operator token not minted; call start() first")
-            env["LOCKSMITH_OP_TOKEN"] = token
+            run_env["LOCKSMITH_OP_TOKEN"] = token
         if agent_token is not None:
-            env["LOCKSMITH_AGENT_TOKEN"] = agent_token
-        argv = [
-            str(self.bins / "locksmith"),
-            "--socket",
-            str(self.socket),
-            "--format",
-            "json",
-            *args,
-        ]
+            run_env["LOCKSMITH_AGENT_TOKEN"] = agent_token
+        run_env.update(env or {})
+        argv = [str(self.bins / "locksmith")]
+        if socket_flag:
+            argv += ["--socket", str(self.socket)]
+        if fmt:
+            argv += ["--format", fmt]
+        argv += list(args)
         proc = subprocess.run(
-            argv, check=False, capture_output=True, text=True, env=env, timeout=60
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=run_env,
+            timeout=60,
+            input=stdin,
         )
         parsed = _parse_json(proc.stdout)
         self._harvest(parsed)
-        shown = " ".join(["locksmith", *args])
+        shown = " ".join(["locksmith", *args]) + (
+            " <stdin>" if stdin is not None else ""
+        )
         self.bundle.transcript(
             self.current_case,
             "cli",
@@ -256,19 +404,26 @@ tools: []
         method: str,
         path: str,
         token: str | None = None,
-        body: bytes | None = None,
+        body: bytes | str | dict | None = None,
         headers: dict | None = None,
         record: bool = True,
+        base: str | None = None,
+        context: ssl.SSLContext | None = None,
+        timeout: float = 30,
     ) -> HttpResult:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}", data=body, method=method
-        )
+        if isinstance(body, dict):
+            body = json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", **(headers or {})}
+        elif isinstance(body, str):
+            body = body.encode()
+        url = f"{base or f'http://127.0.0.1:{self.port}'}{path}"
+        req = urllib.request.Request(url, data=body, method=method)
         for key, value in (headers or {}).items():
             req.add_header(key, value)
         if token is not None:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
                 status, hdrs, raw = resp.status, dict(resp.headers), resp.read()
         except urllib.error.HTTPError as err:
             status, hdrs, raw = err.code, dict(err.headers), err.read()
