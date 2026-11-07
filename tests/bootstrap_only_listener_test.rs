@@ -40,6 +40,7 @@ tools: []
 async fn register_via_bootstrap_token_succeeds() {
     let (_dir, admin) = build_admin().await;
     let op = OperatorIdentity {
+        public_id: "fixture-operator".into(),
         name: "alice".into(),
         scope: None,
         auth_method: None,
@@ -91,4 +92,48 @@ async fn other_admin_endpoints_are_404() {
         let resp = server.get(path).await;
         resp.assert_status(axum::http::StatusCode::NOT_FOUND);
     }
+}
+
+#[tokio::test]
+async fn wrong_secret_creates_no_agent_and_burns_no_name() {
+    // The bootstrap public id is not secret (audit rows, `bootstrap list`).
+    // Knowing it without the secret must not create, then revoke, an agent
+    // row: revoked rows keep their UNIQUE name, so that would reserve any
+    // name an attacker picks.
+    let (_dir, admin) = build_admin().await;
+    let op = OperatorIdentity {
+        public_id: "fixture-operator".into(),
+        name: "alice".into(),
+        scope: None,
+        auth_method: None,
+    };
+    let minted = admin
+        .mint_bootstrap_token(
+            &op,
+            MintBootstrapInput {
+                tool_allowlist: None,
+                expires_at: None,
+                single_use: true,
+            },
+        )
+        .await
+        .unwrap();
+    let (public_part, secret) = minted.token.split_once('.').unwrap();
+    let flipped = if secret.starts_with('A') { "B" } else { "A" };
+    let forged = format!("{public_part}.{flipped}{}", &secret[1..]);
+
+    let server = TestServer::new(build_router(BootstrapState {
+        admin: Arc::new(admin),
+    }));
+    let resp = server
+        .post("/admin/agent/register")
+        .json(&json!({"bootstrap_token": forged, "name": "victim"}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+
+    let resp = server
+        .post("/admin/agent/register")
+        .json(&json!({"bootstrap_token": minted.token, "name": "victim"}))
+        .await;
+    resp.assert_status_ok();
 }

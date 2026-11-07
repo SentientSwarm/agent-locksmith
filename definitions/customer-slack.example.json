@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "local.customer-slack",
+  "revision": 1,
+  "name": "Customer Slack fixture",
+  "summary": "Descriptive fixture only",
+  "protocol_profiles": [
+    "mcp_streamable_http"
+  ],
+  "auth_profiles": [
+    {
+      "id": "confidential",
+      "mechanism": "oauth_provider",
+      "setup": "Activate with an explicit trusted confidential Slack profile; provision sealed client and complete owned consent",
+      "required_scopes": [
+        "search:read.public",
+        "channels:history"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "read",
+      "summary": "Invented public channel search/read",
+      "operations": [
+        "search_messages",
+        "read_thread"
+      ],
+      "effect": "read"
+    }
+  ],
+  "setup": "Author a disabled connection; no provider call",
+  "limits": [
+    "No live verification"
+  ],
+  "verification": {
+    "level": "candidate",
+    "evidence_ref": "local fixture draft",
+    "verified_at": null,
+    "source_revision": null
+  }
+}

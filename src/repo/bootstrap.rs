@@ -170,6 +170,29 @@ impl BootstrapTokenRepository {
         Ok(serde_json::from_str(&scope_json)?)
     }
 
+    /// [`Self::preview_scope`] after verifying `secret`. Registration
+    /// calls this before creating the agent, so a caller holding only the
+    /// public id (not secret: audit rows, `bootstrap list`) causes no
+    /// writes. [`Self::consume`] still verifies and commits atomically.
+    pub async fn preview_verified(
+        &self,
+        public_id: &str,
+        secret: &SecretString,
+    ) -> Result<BootstrapScope, RepoError> {
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT secret_hash FROM bootstrap_tokens WHERE public_id = ?")
+                .bind(public_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(hash) = hash else {
+            return Err(RepoError::InvalidCredential);
+        };
+        if !argon2_helper::verify(&hash, secret)? {
+            return Err(RepoError::InvalidCredential);
+        }
+        self.preview_scope(public_id).await
+    }
+
     pub async fn list(&self) -> Result<Vec<BootstrapTokenRecord>, RepoError> {
         let rows = sqlx::query_as::<_, BootstrapRow>(
             "SELECT id, public_id, scope, created_by, created_at, expires_at, used_at, \

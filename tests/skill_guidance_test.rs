@@ -10,7 +10,9 @@ fn personal() -> String {
     };
     render_authenticated(
         &identity,
-        &[("reference-ledger".into(), "Text account check".into())],
+        &[
+            serde_json::json!({"name":"reference-ledger","description":"Text account check","type":"api","path":"/api/reference-ledger"}),
+        ],
     )
 }
 
