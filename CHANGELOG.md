@@ -20,6 +20,12 @@
 
 ### Changed
 
+- Document that config changes need a restart. Earlier docs said the YAML
+  config could be hot-reloaded; nothing reloads it, and there is no `SIGHUP`
+  handler or `config reload` command. The architecture guide now lists what
+  changes live through the admin API (registrations, agents, grants,
+  bindings, credentials, OAuth, definitions) and what needs a restart (the
+  config file, operator credentials, certificate paths).
 - Enforce mTLS revocation on the agent listener. `listen.mtls.blocklist_path`
   and `listen.mtls.crl_url` were accepted but never reached the validator, so
   a serial added with `locksmith mtls revoke` or listed in the CA's CRL still

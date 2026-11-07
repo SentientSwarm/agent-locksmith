@@ -106,7 +106,9 @@ cannot consume a credentialed registration default. See
 Read it first if you're contributing code. It does (in order):
 
 1. Parse + validate `AppConfig`.
-2. Construct `Arc<ArcSwap<AppConfig>>` so config can hot-reload.
+2. Construct `Arc<ArcSwap<AppConfig>>`, the one config snapshot the agent
+   router and AdminService share. The YAML file is read once, at startup;
+   see [Changing configuration](#changing-configuration).
 3. Resolve `tool.auth.value: SecretRef` for legacy config.tools entries
    (env vars + sealed files + Vault/AWS stubs).
 4. **Build admin substrate** (only when `listen.admin_socket` is set):
@@ -160,6 +162,31 @@ so the audit log survives volume recreation.
   shared HTTP client.
 - `ResponseControls` cache — compiled regex patterns per tool.
 - `ClientPool` — cached `reqwest::Client` per (name, timeouts, egress).
+
+## Changing configuration
+
+Locksmith reads its YAML config file and `operator_credentials_path` once, at
+startup. There is no `SIGHUP` handler and no `config reload` command. To apply
+an edit to either file, restart `locksmithd`. Startup validates the whole file
+(`deny_unknown_fields`) and refuses to start on any error, so check a changed
+file on a disposable instance or keep the previous copy to roll back.
+
+Everything held in the database changes live through the admin API (CLI over
+the admin socket or admin HTTPS), with no restart:
+
+- tools, models and infra registrations (`locksmith tool|model|infra`);
+- agents, bootstrap tokens, ACLs, grants and account bindings;
+- per-agent and operator credentials, OAuth sessions and consent;
+- integration definitions and native MCP review.
+
+Two files the daemon re-reads on its own: the `listen.mtls.blocklist_path`
+file (every `blocklist_reload_interval_seconds`) and the CRL from
+`listen.mtls.crl_url` (every `crl_refresh_interval_seconds`). Their paths,
+and every TLS certificate and key, still need a restart to change.
+
+Legacy `config.tools` entries are migrated into the registrations table at
+startup. After that, manage those tools through the admin API; an edit to
+`config.tools` does not change an existing registration.
 
 ## Auth surfaces are independent
 
