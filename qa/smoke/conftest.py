@@ -14,16 +14,18 @@ def _plugin(request):
 def target_factory(request):
     """Return start(**LocalTarget kwargs) -> started target; closes all at the end.
 
+    start=False returns an unstarted target (for run_daemon_once refusals).
     kwargs: config (dict overlay or callable(workdir) -> dict; None values
     delete keys), env (extra daemon environment), label, upstream (bool).
     """
     plugin = _plugin(request)
     started = []
 
-    def start(**kwargs):
+    def start(start=True, **kwargs):
         target = plugin.make_target(**kwargs)
         started.append(target)
-        target.start()
+        if start:
+            target.start()
         return target
 
     try:

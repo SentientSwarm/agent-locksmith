@@ -93,3 +93,14 @@ def test_known_gap_requires_ticket(tmp_path):
 def test_duplicate_ids_rejected(tmp_path):
     with pytest.raises(ContractError, match="duplicate"):
         write(tmp_path, ROUTES + [ROUTES[0]])
+
+
+def test_fault_refusals_do_not_block_coverage_but_are_listed(tmp_path):
+    from harness.contract import fault_gaps
+
+    routes = [dict(ROUTES[0], fault_refusals=["backend_error"])] + ROUTES[1:]
+    contract = write(tmp_path, routes)
+    records = [rec(["r.list"], "positive")]
+    assert coverage(contract, records)["r.list"] == "PASS"
+    assert fault_gaps(contract, records) == ["r.list: backend_error (fault-only)"]
+    assert fault_gaps(contract, records + [rec(["r.list"], "refusal", codes=["backend_error"])]) == []

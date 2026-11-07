@@ -44,6 +44,21 @@ pass.
 A contract entry is exercised only when a passing positive case covers it and
 passing refusal cases produce every refusal code the entry lists.
 
+Entry fields beyond `refusals`:
+
+- `fault_refusals`: documented codes reachable only with an injected fault or a
+  race (`fault_reason` says which). They do not hold back PR coverage, are
+  listed in the manifest as `fault_only_unexercised`, and fail a release run
+  until a case produces them or an owner-approved known gap covers them.
+- `audit_causes`: reasons that appear only in audit rows, not on the wire.
+- `not_product`: compiled test fixtures; always NOT_APPLICABLE.
+
+Areas and their files: `AGT` agent listener and proxy, `ADM` admin socket
+operator and agent self-service, `CAT` catalog, custody and definitions,
+`TLS` mTLS, revocation, admin HTTPS and the bootstrap listener, `NAT` native
+MCP, `OAU` OAuth custody and consent, `DMN` daemon behaviours and offline CLI.
+Area fakes live in `qa/fakes/<area>_*.py`; `qa/fakes/pki.py` is shared.
+
 ## Writing a case
 
 ```python

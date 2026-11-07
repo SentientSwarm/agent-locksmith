@@ -74,6 +74,11 @@ class HttpResult:
     text: str
     json: Any
 
+    def header(self, name: str) -> str | None:
+        """Case-insensitive response header lookup."""
+        wanted = name.lower()
+        return next((v for k, v in self.headers.items() if k.lower() == wanted), None)
+
     @property
     def code(self) -> str | None:
         """The error envelope's code, if any."""
@@ -174,8 +179,23 @@ class LocalTarget:
                 ) from None
         return proc.returncode
 
-    def restart(self) -> None:
+    def restart(self, config: Overlay = None) -> None:
+        """Stop and start the daemon; a new overlay (if given) is written first."""
         self.stop()
+        if config is not None:
+            self.overlay = config
+            self._write_config()
+        self._start_daemon()
+
+    def reconfigure(self, config: Overlay) -> None:
+        """Replace the overlay and rewrite config.yaml without starting (daemon must be stopped)."""
+        if "locksmithd" in self.procs:
+            raise TargetError("stop the daemon before reconfigure()")
+        self.overlay = config
+        self._write_config()
+
+    def start_daemon(self) -> None:
+        """Start the daemon against the current config.yaml (after stop() or reconfigure())."""
         self._start_daemon()
 
     def close(self) -> None:
@@ -248,13 +268,10 @@ class LocalTarget:
         self.write_file("config.yaml", yaml.safe_dump(self.config, sort_keys=False))
 
     def daemon_env(self) -> dict:
-        return {
-            **os.environ,
-            "LOCKSMITH_SEED_PATH": "",
-            "SMOKE_X": SMOKE_X,
-            "SMOKE_Y": SMOKE_Y,
-            **self.extra_env,
-        }
+        """Daemon environment; RUST_LOG is dropped so `logging.level` decides."""
+        inherited = {k: v for k, v in os.environ.items() if k != "RUST_LOG"}
+        return {**inherited, "LOCKSMITH_SEED_PATH": "", "SMOKE_X": SMOKE_X, "SMOKE_Y": SMOKE_Y,
+                **self.extra_env}
 
     def _start_daemon(self) -> None:
         with open(self.work / "locksmithd.log", "a") as log:
@@ -302,6 +319,9 @@ class LocalTarget:
 
     def run_daemon_once(self, timeout: float = 20.0) -> subprocess.CompletedProcess:
         """Run locksmithd in the foreground against the current config (for refusals to start)."""
+        os.umask(0o077)
+        if self.op_token is None:
+            self._mint_operator()
         self._write_config()
         proc = subprocess.run(
             [str(self.bins / "locksmithd"), "--config", str(self.work / "config.yaml")],
@@ -429,6 +449,7 @@ class LocalTarget:
             status, hdrs, raw = err.code, dict(err.headers), err.read()
         text = raw.decode(errors="replace")
         result = HttpResult(status, hdrs, text, _parse_json(text))
+        self._harvest(result.json)
         if record:
             auth = " (bearer)" if token is not None else ""
             self.bundle.transcript(

@@ -178,3 +178,17 @@ def _gap_open(gap: dict | None, today: dt.date) -> bool:
     expires = gap["expires"]
     expires = expires if isinstance(expires, dt.date) else dt.date.fromisoformat(str(expires))
     return today <= expires
+
+
+def fault_gaps(contract: Contract, records: list[CaseRecord], today: dt.date | None = None) -> list[str]:
+    """Fault-only refusal codes no passing case produced (release blockers unless a gap is open)."""
+    today = today or dt.date.today()
+    gaps: list[str] = []
+    for entry in contract.entries():
+        wanted = entry.get("fault_refusals", [])
+        if not wanted or _gap_open(contract.known_gaps.get(entry["id"]), today):
+            continue
+        produced = {c for r in records if entry["id"] in r.covers and r.status is Status.PASS
+                    and r.kind == "refusal" for c in r.codes}
+        gaps += [f"{entry['id']}: {code} (fault-only)" for code in wanted if code not in produced]
+    return gaps

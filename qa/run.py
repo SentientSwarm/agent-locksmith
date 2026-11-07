@@ -19,7 +19,7 @@ sys.path.insert(0, str(QA))
 
 import pytest
 
-from harness.contract import check_source, coverage, load
+from harness.contract import check_source, coverage, fault_gaps, load
 from harness.evidence import Bundle
 from harness.plugin import QaPlugin
 from harness.redact import Canaries, scan_bundle
@@ -104,7 +104,10 @@ def main(argv: list[str]) -> int:
     cov = coverage(contract, records)
     passed, reasons = gate(records, contract.floors, args.mode)
     reasons = errors + reasons
+    faults = fault_gaps(contract, records)
+    bundle.write_manifest({"fault_only_unexercised": faults})
     if args.mode == "release":
+        reasons += [f"surface {gap}" for gap in faults]
         reasons += [
             f"surface {eid} {status}"
             for eid, status in sorted(cov.items())
