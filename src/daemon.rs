@@ -747,10 +747,14 @@ async fn run_owned(
             Ok(())
         }
         Err(_) => {
-            warn!("drain window exceeded; finishing bounded owned cleanup");
-            finish_task(&mut agent_task).await;
+            warn!("drain window exceeded; closing listeners and finishing bounded owned cleanup");
+            // The window is the in-flight requests' whole grace period
+            // (config.example.yaml, m1 runbook): close the listeners now,
+            // dropping requests still in flight, then give owned background
+            // work its bounded cleanup.
+            close_task(&mut agent_task).await;
             for (_, task) in admin_tasks.iter_mut() {
-                finish_task(task).await;
+                close_task(task).await;
             }
             for task in [
                 sweeper_task.as_mut(),
@@ -1338,6 +1342,15 @@ pub async fn start_with_drain_window(
             Err(e) => Err(DaemonError::Server(format!("daemon task failed: {e}"))),
         },
     }
+}
+
+async fn close_task<T>(task: &mut tokio::task::JoinHandle<T>) {
+    // A completed handle may already have been consumed by the drain future.
+    if task.is_finished() {
+        return;
+    }
+    task.abort();
+    let _ = (&mut *task).await;
 }
 
 async fn finish_task<T>(task: &mut tokio::task::JoinHandle<T>) {

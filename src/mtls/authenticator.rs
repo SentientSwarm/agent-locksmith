@@ -86,7 +86,16 @@ impl MtlsAuthenticator {
         let Some(repo) = self.audit.clone() else {
             return;
         };
-        let serial = identity.map(|i| i.serial_hex.clone());
+        // Revocation refusals carry the refused cert's serial even though no
+        // identity was produced (m6-mtls-revocation runbook: `.details.serial_hex`).
+        let serial = identity
+            .map(|i| i.serial_hex.clone())
+            .or_else(|| match error {
+                MtlsError::RevokedByCRL { serial } | MtlsError::RevokedByBlocklist { serial } => {
+                    Some(serial.clone())
+                }
+                _ => None,
+            });
         let kind = match error {
             MtlsError::UntrustedChain => "untrusted_chain",
             MtlsError::Expired => "cert_expired",

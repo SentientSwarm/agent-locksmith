@@ -1098,7 +1098,7 @@ async fn record_body_read_error(
     audit_record(audit, event).await;
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({"error": {"message": "Failed to read request body", "type": "bad_request"}})),
+        Json(json!({"error": {"message": "Failed to read request body", "type": "bad_request", "code": "bad_request"}})),
     )
         .into_response()
 }
@@ -1158,6 +1158,7 @@ async fn record_response_content_type_disallowed(
             "error": {
                 "message": "upstream content-type not allowed",
                 "type": "response_content_type_disallowed",
+                "code": "response_content_type_disallowed",
             }
         })),
     )
@@ -1241,7 +1242,7 @@ async fn record_upstream_error(
     audit_record(audit, event).await;
     (
         status,
-        Json(json!({"error": {"message": message, "type": kind}})),
+        Json(json!({"error": {"message": message, "type": kind, "code": kind}})),
     )
         .into_response()
 }
@@ -1312,7 +1313,7 @@ async fn record_upstream_body_read_error(
     audit_record(audit, event).await;
     (
         StatusCode::BAD_GATEWAY,
-        Json(json!({"error": {"message": "upstream body read failed", "type": "upstream_error"}})),
+        Json(json!({"error": {"message": "upstream body read failed", "type": "upstream_error", "code": "upstream_error"}})),
     )
         .into_response()
 }
@@ -1339,7 +1340,7 @@ async fn record_response_size_exceeded_buffered(
     (
         StatusCode::BAD_GATEWAY,
         Json(json!({
-            "error": {"message": "response too large", "type": "response_size_exceeded"}
+            "error": {"message": "response too large", "type": "response_size_exceeded", "code": "response_size_exceeded"}
         })),
     )
         .into_response()

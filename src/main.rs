@@ -25,12 +25,16 @@ async fn main() {
         return;
     }
 
+    // Logging starts first so config-load warnings (deprecated fields) are kept.
+    let logging = telemetry::init_bootstrap();
     let loaded = config::load_config(&cli.config).unwrap_or_else(|e| {
         eprintln!("Failed to load config from {}: {}", cli.config.display(), e);
         std::process::exit(1);
     });
-
-    telemetry::init_logging(loaded.logging.as_ref());
+    if let Err(e) = logging.apply(loaded.logging.as_ref()) {
+        eprintln!("Failed to open logging.file: {e}");
+        std::process::exit(1);
+    }
 
     let drain_window = Duration::from_secs(loaded.shutdown.drain_window_seconds);
     let coord = ShutdownCoordinator::install(drain_window);

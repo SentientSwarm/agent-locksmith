@@ -291,6 +291,9 @@ pub fn build_router(state: UdsState) -> Router {
         .layer(axum::middleware::from_fn(
             crate::oauth::consent::api::protect_errors,
         ))
+        .layer(axum::middleware::map_response(
+            crate::admin::error_envelope::fill_error_type,
+        ))
 }
 
 /// Bind a Unix domain socket at `path` with mode `0o660`. Removes a stale
