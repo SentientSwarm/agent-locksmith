@@ -22,7 +22,6 @@
 use crate::config::{EgressMode, ToolTimeouts};
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository, validate_name,
-    validate_upstream,
 };
 use serde::Deserialize;
 use serde_json::Value as Json;
@@ -69,6 +68,10 @@ struct SeedCatalog {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SeedEntry {
+    #[serde(default)]
+    protocol: super::Protocol,
+    #[serde(default)]
+    mcp: Option<super::McpConfig>,
     name: String,
     kind: Kind,
     #[serde(default)]
@@ -104,6 +107,14 @@ pub fn seed_path_from_env() -> Option<PathBuf> {
 /// parse/validation errors return Err so daemon.rs can decide whether
 /// to ABORT startup.
 pub async fn load_or_skip(repo: &RegistrationRepository, path: &Path) -> Result<(), SeedLoadError> {
+    load_for_listener(repo, path, None).await
+}
+
+pub async fn load_for_listener(
+    repo: &RegistrationRepository,
+    path: &Path,
+    listener: Option<(&str, u16)>,
+) -> Result<(), SeedLoadError> {
     if !path.exists() {
         info!(
             path = %path.display(),
@@ -113,7 +124,22 @@ pub async fn load_or_skip(repo: &RegistrationRepository, path: &Path) -> Result<
     }
     let contents = std::fs::read_to_string(path)
         .map_err(|e| SeedLoadError::Io(format!("read {}: {e}", path.display())))?;
-    apply_catalog(repo, &contents).await
+    let catalog: SeedCatalog =
+        serde_yaml::from_str(&contents).map_err(|e| SeedLoadError::Parse(format!("yaml: {e}")))?;
+    if let Some((host, port)) = listener {
+        for entry in &catalog.entries {
+            if entry.protocol == super::Protocol::McpStreamableHttp
+                && super::protocol::is_self(&entry.upstream, host, port)
+            {
+                return Err(SeedLoadError::Entry {
+                    name: entry.name.clone(),
+                    kind: entry.kind.to_string(),
+                    error: RegistrationError::InvalidMcp,
+                });
+            }
+        }
+    }
+    apply_catalog_parsed(repo, catalog).await
 }
 
 /// Test-friendly variant — takes the catalog YAML as a string directly.
@@ -151,6 +177,17 @@ async fn apply_catalog_parsed(
     // Validate every entry up-front. Catch malformed catalogs before
     // we touch the DB.
     for entry in &catalog.entries {
+        if entry
+            .mcp
+            .as_ref()
+            .is_some_and(|m| m.definition.is_some() || m.definition_activation.is_some())
+        {
+            return Err(SeedLoadError::Entry {
+                name: entry.name.clone(),
+                kind: entry.kind.to_string(),
+                error: RegistrationError::DefinitionPending,
+            });
+        }
         if let Some(metadata) = &entry.metadata {
             super::http_service::from_metadata(metadata).map_err(|error| SeedLoadError::Entry {
                 name: entry.name.clone(),
@@ -158,7 +195,15 @@ async fn apply_catalog_parsed(
                 error,
             })?;
         }
-        validate_upstream(entry.kind, &entry.upstream).map_err(|error| SeedLoadError::Entry {
+        super::protocol::validate(
+            entry.protocol,
+            entry.mcp.as_ref(),
+            entry.kind,
+            entry.egress.unwrap_or_default(),
+            &entry.upstream,
+            entry.metadata.as_ref(),
+        )
+        .map_err(|error| SeedLoadError::Entry {
             name: entry.name.clone(),
             kind: entry.kind.to_string(),
             error,
@@ -260,6 +305,8 @@ fn entry_to_registration(
     };
     Ok(Registration {
         name: entry.name,
+        protocol: entry.protocol,
+        mcp: entry.mcp,
         kind,
         description: entry.description,
         upstream: entry.upstream,

@@ -18,7 +18,6 @@
 use crate::auth_v2::AgentIdentity;
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository, validate_name,
-    validate_upstream,
 };
 use axum::Json;
 use axum::extract::State;
@@ -46,23 +45,37 @@ pub async fn list_public(
     let Some(identity) = identity else {
         return Ok(Vec::new());
     };
-    let rows = repo
+    let mut rows = repo
         .http_admissions(identity, None)
         .await
         .map_err(|_| RegistrationError::Backend("admission state unavailable".into()))?;
+    if kind == Kind::Tool {
+        rows.extend(
+            repo.native_admissions(identity, None)
+                .await
+                .map_err(|_| RegistrationError::Backend("admission state unavailable".into()))?,
+        );
+    }
     Ok(rows
         .into_iter()
         .filter(|r| r.discoverable(kind, catalog))
         .map(|r| {
             let mut value = json!({
                 "name": r.registration.name,
-                "type": "api",
-                "path": format!("/api/{}", r.registration.name),
+                "type": if r.registration.protocol == super::Protocol::Http {"api"} else {"mcp"},
+                "path": format!("/{}/{}", if r.registration.protocol == super::Protocol::Http {"api"} else {"mcp"}, r.registration.name),
                 "description": r.registration.description,
                 "activation": "active",
                 "account_selected": r.account.is_some(),
                 "credential_readiness": "not_checked",
             });
+            if r.registration.protocol == super::Protocol::McpStreamableHttp {
+                value["protocol_version"] = super::protocol::VERSION.into();
+                value["tool_authority"] = "reviewed_per_agent".into();
+                if r.registration.mcp.as_ref().is_some_and(|c| c.compact) {
+                    value["compact_path"] = format!("/mcp/{}/compact", r.registration.name).into();
+                }
+            }
             if let Ok(Some(service)) = super::http_service::from_metadata(&r.registration.metadata)
             {
                 value["http_service"] = json!(service);
@@ -81,6 +94,10 @@ pub async fn list_public(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PutBody {
+    #[serde(default)]
+    pub protocol: super::Protocol,
+    #[serde(default)]
+    pub mcp: Option<super::McpConfig>,
     /// Optional. Defaults to empty string.
     #[serde(default)]
     pub description: String,
@@ -122,6 +139,8 @@ pub struct PutCredentialBody {
 pub fn registration_to_admin_json(r: &Registration) -> Value {
     json!({
         "name": r.name,
+        "protocol": r.protocol,
+        "mcp": r.mcp,
         "kind": r.kind,
         "description": r.description,
         "upstream": r.upstream,
@@ -144,6 +163,10 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
 /// envelope stays uniform across all locksmith error sources.
 fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static str, &'static str) {
     match err {
+        RegistrationError::DefinitionPending => {
+            (StatusCode::CONFLICT, "conflict", "definition_pending")
+        }
+        RegistrationError::InvalidMcp => (StatusCode::BAD_REQUEST, "bad_request", "invalid_mcp"),
         RegistrationError::InvalidHttpService => (
             StatusCode::BAD_REQUEST,
             "bad_request",
@@ -224,6 +247,8 @@ pub fn unknown_name_response(name: &str) -> Response {
 /// the repo but no in-memory cache exists to invalidate.
 #[derive(Clone)]
 pub struct AdminRegistrationsState {
+    pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
+    pub local_listener: Option<(String, u16)>,
     pub repo: Arc<RegistrationRepository>,
     pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
@@ -274,6 +299,21 @@ impl AdminRegistrationsState {
     pub async fn refresh_runtime(
         &self,
     ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
+        self.refresh_runtime_inner(true).await
+    }
+
+    /// Pinned native activation changes no env/op credential reference. Publish
+    /// its catalog without retrying unrelated degraded credential backends.
+    pub(crate) async fn refresh_native_catalog(
+        &self,
+    ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
+        self.refresh_runtime_inner(false).await
+    }
+
+    async fn refresh_runtime_inner(
+        &self,
+        resolve_credentials: bool,
+    ) -> Result<(), crate::registrations::admission::AdmissionUnavailable> {
         let Some(catalog) = self.catalog.as_ref() else {
             return Ok(()); // Admin-only configuration surface; reads report pending.
         };
@@ -288,7 +328,7 @@ impl AdminRegistrationsState {
             }
         };
 
-        if let Some(creds_swap) = self.resolved_creds.as_ref() {
+        if resolve_credentials && let Some(creds_swap) = self.resolved_creds.as_ref() {
             let extra = crate::secret::resolve_registration_creds_sync_env_only(&new_catalog);
             if !extra.is_empty() {
                 let snap = creds_swap.load();
@@ -305,16 +345,24 @@ impl AdminRegistrationsState {
 
         catalog.store(Arc::new(new_catalog));
 
-        if let Some(resolver) = self.op_resolver.as_ref() {
+        if resolve_credentials && let Some(resolver) = self.op_resolver.as_ref() {
             crate::secret::resync_op_references(resolver, catalog, self.agent_creds.as_ref()).await;
         }
         Ok(())
     }
 
-    fn describe(&self, registration: &Registration) -> Value {
+    pub(crate) fn describe(&self, registration: &Registration) -> Value {
         let mut value = registration_to_admin_json(registration);
         let catalog = self.catalog.as_ref().map(|c| c.load());
         value["configured"] = true.into();
+        if registration.definition_pinned() {
+            value["authoring_only"] = registration
+                .mcp
+                .as_ref()
+                .is_none_or(|m| m.definition_activation.is_none())
+                .into();
+            value["provider_readiness"] = "unverified".into();
+        }
         value["activation"] = crate::registrations::admission::activation(
             registration,
             catalog.as_deref().map(|c| c.as_ref()),
@@ -360,7 +408,14 @@ pub async fn op_get(
                     requested_kind: kind,
                 });
             }
-            (StatusCode::OK, Json(state.describe(&r))).into_response()
+            if r.definition_pinned() {
+                match crate::definitions::promotion::describe(&state, &name).await {
+                    Ok(value) => Json(value).into_response(),
+                    Err(error) => error.into_response(),
+                }
+            } else {
+                (StatusCode::OK, Json(state.describe(&r))).into_response()
+            }
         }
         Ok(None) => unknown_name_response(&name),
         Err(e) => registration_error_response(&e),
@@ -383,13 +438,37 @@ pub async fn op_put(
     if let Err(e) = validate_name(&name) {
         return registration_error_response(&e);
     }
-    if let Err(e) = validate_upstream(kind, &body.upstream) {
+    if let Err(e) = super::protocol::validate(
+        body.protocol,
+        body.mcp.as_ref(),
+        kind,
+        body.egress.unwrap_or_default(),
+        &body.upstream,
+        body.metadata.as_ref(),
+    ) {
         return registration_error_response(&e);
     }
     if let Some(metadata) = &body.metadata
         && let Err(e) = super::http_service::from_metadata(metadata)
     {
         return registration_error_response(&e);
+    }
+
+    if body.protocol == super::Protocol::McpStreamableHttp
+        && state
+            .local_listener
+            .as_ref()
+            .is_some_and(|(host, port)| super::protocol::is_self(&body.upstream, host, *port))
+    {
+        return registration_error_response(&RegistrationError::InvalidMcp);
+    }
+
+    if body
+        .mcp
+        .as_ref()
+        .is_some_and(|m| m.definition.is_some() || m.definition_activation.is_some())
+    {
+        return registration_error_response(&RegistrationError::DefinitionPending);
     }
 
     // Kind-aware auth resolution.
@@ -414,6 +493,11 @@ pub async fn op_put(
     // Phase J / M2 (CCS-2): an `op` custody reference must use the `op://`
     // scheme. Reject a malformed reference at register-time so it never
     // reaches the resolver (which would otherwise silently degrade it).
+    if matches!(auth, AuthSpec::ControlledOauth { .. }) {
+        return registration_error_response(&RegistrationError::InvalidMetadata(
+            "selection_only".into(),
+        ));
+    }
     if let Err(msg) = auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }
@@ -422,6 +506,9 @@ pub async fn op_put(
     let now = unix_now();
     let (created_at, disabled) = match state.repo.get(&name).await {
         Ok(Some(existing)) => {
+            if existing.definition_pinned() {
+                return registration_error_response(&RegistrationError::DefinitionPending);
+            }
             if existing.kind != kind {
                 return registration_error_response(&RegistrationError::WrongKind {
                     existing_kind: existing.kind,
@@ -436,6 +523,8 @@ pub async fn op_put(
 
     let r = Registration {
         name: name.clone(),
+        protocol: body.protocol,
+        mcp: body.mcp,
         kind,
         description: body.description,
         upstream: body.upstream,
@@ -509,6 +598,9 @@ pub async fn op_enable(
 ) -> Response {
     match state.repo.get(&name).await {
         Ok(Some(r)) => {
+            if r.definition_pinned() {
+                return registration_error_response(&RegistrationError::DefinitionPending);
+            }
             if r.kind != kind {
                 return registration_error_response(&RegistrationError::WrongKind {
                     existing_kind: r.kind,
@@ -544,8 +636,9 @@ pub async fn op_enable(
 ///
 /// Fetches the registration (404 on absent / kind mismatch); when the
 /// sealing key + store aren't configured, 404s (the feature gate). Seals
-/// the value → inserts a fresh `credential_secrets` row → mints a new
-/// `secret_ref`. Preserves the current header name if the registration
+/// the value, then rechecks the registration and atomically inserts custody
+/// plus the auth attachment. A refusal rolls back both. Preserves the current
+/// header name if the registration
 /// already injects a `Header`/`StoredHeader` (→ `StoredHeader`), else
 /// `StoredBearer`. Tombstones the prior stored ref on rotation. Returns a
 /// shape-only `{secret_ref, set_at}` — the value is NEVER echoed (CCS-1).
@@ -568,6 +661,9 @@ pub async fn op_put_credential(
         Ok(None) => return unknown_name_response(&name),
         Err(e) => return registration_error_response(&e),
     };
+    if existing.definition_pinned() {
+        return registration_error_response(&RegistrationError::DefinitionPending);
+    }
     if existing.kind != kind {
         return registration_error_response(&RegistrationError::WrongKind {
             existing_kind: existing.kind,
@@ -585,44 +681,16 @@ pub async fn op_put_credential(
             )));
         }
     };
-    let secret_ref = match secrets.insert(&sealed, &nonce).await {
-        Ok(r) => r,
-        Err(e) => {
-            return registration_error_response(&RegistrationError::Backend(format!(
-                "credential store insert failed: {e}"
-            )));
-        }
-    };
-
-    // Preserve the header name for header-shaped auth (env, stored or op);
-    // else bearer.
-    let new_auth = match existing.auth.header_name() {
-        Some(header) => AuthSpec::StoredHeader {
-            header: header.to_string(),
-            secret_ref: secret_ref.clone(),
-        },
-        None => AuthSpec::StoredBearer {
-            secret_ref: secret_ref.clone(),
-        },
-    };
-
-    // Capture the prior stored ref BEFORE overwriting so rotation can
-    // tombstone the old sealed row after the upsert commits.
-    let old_ref = existing.auth.stored_secret_ref().map(|s| s.to_string());
-
-    // An operator-set credential makes the row operator-owned (mirrors
-    // `op_put`): a seed row left at `seed=true` would be refreshed — and its
-    // stored credential silently overwritten — on the next catalog bump.
+    let old_ref = existing.auth.stored_secret_ref().map(str::to_owned);
     let now = unix_now();
-    let updated = Registration {
-        auth: new_auth,
-        seed: false,
-        updated_at: now,
-        ..existing
+    let secret_ref = match state
+        .repo
+        .store_credential(&existing, &sealed, &nonce)
+        .await
+    {
+        Ok(reference) => reference,
+        Err(e) => return registration_error_response(&e),
     };
-    if let Err(e) = state.repo.upsert(&updated).await {
-        return registration_error_response(&e);
-    }
 
     // Tombstone the rotated ref only after the upsert succeeds, so a
     // failed write never orphans the live secret.
@@ -664,6 +732,9 @@ pub async fn op_delete_credential(
         Ok(None) => return unknown_name_response(&name),
         Err(e) => return registration_error_response(&e),
     };
+    if existing.definition_pinned() {
+        return registration_error_response(&RegistrationError::DefinitionPending);
+    }
     if existing.kind != kind {
         return registration_error_response(&RegistrationError::WrongKind {
             existing_kind: existing.kind,

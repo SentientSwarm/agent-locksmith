@@ -63,6 +63,10 @@ sudo systemctl restart locksmith
 
 Full propagation timing: `mtls.crl_refresh_interval_seconds` (default 3600). Tune down if your incident response SLA requires faster propagation.
 
+A restart fetches the CRL before the listener serves. If the CA is unreachable, the daemon reloads the last good CRL from `mtls-crl-cache.pem` beside the database (re-verifying each issuer's signature; an expired one still applies, with a warning), and retries every 30 seconds. When it has neither, it logs `no CRL in force` at error level and refuses every mTLS client, audited as `mtls_auth_failure reason=crl_unavailable`, until a CRL is applied: revocation cannot be checked, so it fails closed. Bearer clients on an `auth_mode: both` listener are unaffected. Keep the CA reachable on first start, or seed `mtls-crl-cache.pem` from another instance. The CRL may be served as PEM or DER; the fetch trusts the agent CA bundle and `tls.upstream_ca_bundle`, so a private step-ca root works without extra configuration. Only complete CRLs are applied: delta CRLs and CRLs scoped to CA or attribute certificates are refused. Serve one full CRL per issuer. The first accepted CRL pins that issuer's issuing distribution point (step-ca's `/1.0/crl` default is fine, whatever `crl_url` is); a later CRL naming a different one is refused. Partitioned CRLs and delta CRLs are not supported, and CRLs signed with RSA-PSS or P-521 are refused (the log names the signature error).
+
+CRL state is kept per CA key, so a CA re-initialised with a new key starts fresh. If a CA keeps its name and key but restarts its CRL numbers or changes its `idpURL`, every fetch is refused and logged at error level. Stop the daemon, delete `mtls-crl-cache.pem`, and start it again.
+
 ---
 
 ## 3. Verify the revoke landed

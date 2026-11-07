@@ -133,11 +133,6 @@ async fn daemon_mirrors_audit_inserts_to_jsonl() {
     let ops = dir.path().join("operators.yaml");
     let db = dir.path().join("locksmith.db");
     let jsonl = dir.path().join("audit.jsonl");
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
 
     let op_tok = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let op_token_wire = op_tok.wire_format();
@@ -157,7 +152,8 @@ async fn daemon_mirrors_audit_inserts_to_jsonl() {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {port}
+  # Only the admin socket is used; port 0 cannot collide (AGENT-219).
+  port: 0
   admin_socket:
     path: "{sock}"
 operator_credentials_path: "{ops}"

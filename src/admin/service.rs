@@ -26,7 +26,7 @@ pub enum AdminError {
     AgentNotFound,
     #[error("not authorized")]
     NotAuthorized,
-    #[error("grant_target_invalid: select a currently configured HTTP tool or model")]
+    #[error("grant_target_invalid: select a currently configured tool or model connection")]
     InvalidGrantTarget,
     #[error("backend: {0}")]
     Backend(String),
@@ -160,6 +160,7 @@ pub struct ToolInfo {
 
 #[derive(Clone)]
 pub struct AdminService {
+    native_authority: Option<std::sync::Arc<crate::native_authority::runtime::Runtime>>,
     agents: AgentRepository,
     bootstrap: BootstrapTokenRepository,
     config: std::sync::Arc<arc_swap::ArcSwap<crate::config::AppConfig>>,
@@ -176,6 +177,24 @@ pub struct AdminService {
 }
 
 impl AdminService {
+    pub fn with_native_authority(
+        mut self,
+        runtime: std::sync::Arc<crate::native_authority::runtime::Runtime>,
+    ) -> Self {
+        self.native_authority = Some(runtime);
+        self
+    }
+    pub fn native_authority(
+        &self,
+    ) -> Option<std::sync::Arc<crate::native_authority::runtime::Runtime>> {
+        self.native_authority.clone()
+    }
+
+    pub(super) fn local_listener(&self) -> (String, u16) {
+        let cfg = self.config.load();
+        (cfg.listen.host.clone(), cfg.listen.port)
+    }
+
     pub fn new(
         agents: AgentRepository,
         bootstrap: BootstrapTokenRepository,
@@ -200,6 +219,7 @@ impl AdminService {
             audit,
             resolved_creds: None,
             operational_log: None,
+            native_authority: None,
         }
     }
 
@@ -220,6 +240,7 @@ impl AdminService {
             audit,
             resolved_creds: Some(resolved_creds),
             operational_log: None,
+            native_authority: None,
         }
     }
 
@@ -378,7 +399,11 @@ impl AdminService {
             return Err(AdminError::InvalidBootstrap);
         }
 
-        let scope_preview = self.bootstrap.preview_scope(public_id.as_str()).await?;
+        let secret_str = SecretString::from(secret.expose().to_string());
+        let scope_preview = self
+            .bootstrap
+            .preview_verified(public_id.as_str(), &secret_str)
+            .await?;
         let allowlist_owned = scope_preview.tool_allowlist.clone();
         let allowlist_slice = allowlist_owned.as_deref();
 
@@ -399,7 +424,6 @@ impl AdminService {
             .await?
             .ok_or(AdminError::AgentNotFound)?;
 
-        let secret_str = SecretString::from(secret.expose().to_string());
         let consumed = self
             .bootstrap
             .consume(public_id.as_str(), &secret_str, agent.id)

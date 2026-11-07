@@ -97,7 +97,16 @@ async fn version(f: &Fixture) {
         .json()
         .await
         .unwrap();
-    assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
+    if f.prior {
+        // A retained prior binary reports its own release, not this one.
+        let reported = version["version"].as_str().unwrap_or_default();
+        assert!(
+            !reported.is_empty() && reported.split('.').all(|p| p.parse::<u32>().is_ok()),
+            "prior daemon version is not a release number"
+        );
+    } else {
+        assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
+    }
     println!(
         "SM01 daemon version={}, actual CLI/UDS, loopback synthetic fixture",
         version["version"]

@@ -15,6 +15,9 @@ pub struct Fixture {
     pub port: u16,
     pub daemon: Option<Guard>,
     pub starts: usize,
+    /// Whether the running daemon is a retained prior binary rather than
+    /// this build, so version checks can tell the two apart.
+    pub prior: bool,
     pub http: reqwest::Client,
     pub tokens: std::cell::RefCell<Vec<String>>,
 }
@@ -32,8 +35,17 @@ impl Fixture {
         let config = dir.path().join("config.yaml");
         let socket = dir.path().join("admin.sock");
         let db = dir.path().join("locksmith.db");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
+        // A stable probed port, unlike the other daemon tests (AGENT-219):
+        // the upgrade probes restart the same config under prior binaries,
+        // which log the configured address rather than the bound one. A
+        // collision cannot be mistaken for readiness, because `ready` also
+        // requires this fixture's own admin socket, which a daemon that
+        // failed to bind the agent port never creates.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let operator = super::setup::operator(dir.path());
         let http = reqwest::Client::builder()
             .no_proxy()
@@ -50,6 +62,7 @@ impl Fixture {
             port,
             daemon: None,
             starts: 0,
+            prior: false,
             http,
             tokens: std::cell::RefCell::new(Vec::new()),
         };
@@ -57,6 +70,9 @@ impl Fixture {
         f
     }
     pub async fn start(&mut self) {
+        self.start_with_env(&[]).await;
+    }
+    pub async fn start_with_env(&mut self, env: &[(&str, &str)]) {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(&self.socket);
         let log = self.path().join(format!("daemon-{}.log", self.starts));
@@ -65,6 +81,10 @@ impl Fixture {
         c.env("SMOKE_X", super::upstream::X)
             .env("SMOKE_Y", super::upstream::Y)
             .env("SMOKE_EMPTY", "");
+        c.envs(env.iter().copied());
+        self.prior = env
+            .iter()
+            .any(|(k, v)| *k == "LOCKSMITHD_BIN" && *v != super::process::DAEMON);
         c.stdout(Stdio::from(std::fs::File::create(&log).unwrap()));
         c.stderr(Stdio::from(
             std::fs::OpenOptions::new().append(true).open(log).unwrap(),

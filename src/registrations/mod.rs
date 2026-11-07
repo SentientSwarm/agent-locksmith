@@ -19,9 +19,12 @@ pub mod admission;
 pub mod api;
 pub mod auth_spec;
 pub mod catalog;
+mod credential;
+mod definitions;
 pub mod http_service;
 pub mod kind;
 pub mod legacy_bootstrap;
+pub mod protocol;
 pub mod repo;
 pub mod seed_loader;
 pub mod validators;
@@ -29,12 +32,19 @@ pub mod validators;
 pub use auth_spec::AuthSpec;
 pub use catalog::Catalog;
 pub use kind::Kind;
+pub use protocol::{McpConfig, Protocol};
 pub use repo::{Registration, RegistrationRepository};
 pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name, validate_upstream};
 
 /// Registration-layer errors. Wire-rendering happens in `api.rs` (E.3).
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RegistrationError {
+    #[error("definition-derived connection is disabled pending provider and promotion contracts")]
+    DefinitionPending,
+
+    #[error("invalid native MCP configuration; use the documented HTTPS tool profile")]
+    InvalidMcp,
+
     #[error(
         "invalid http_service: use the version 1 request_response JSON contract with relative operation paths"
     )]

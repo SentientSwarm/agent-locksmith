@@ -95,6 +95,7 @@ impl MtlsAuthenticator {
             MtlsError::NoIdentity => "no_identity",
             MtlsError::RevokedByCRL { .. } => "revoked_by_crl",
             MtlsError::RevokedByBlocklist { .. } => "revoked_by_blocklist",
+            MtlsError::CrlUnavailable => "crl_unavailable",
         };
         let msg = error.to_string();
         // Audit emit happens on a tokio task because authenticate_cert

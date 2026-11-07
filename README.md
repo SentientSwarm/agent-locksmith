@@ -28,7 +28,18 @@ The agent discovers available tools via `GET /tools` (kind=tool) and
 `GET /models` (kind=model). Discovery is per-agent ACL-filtered. Internal
 middleware (`kind=infra`) is operator-only.
 
-## Highlights (v2.8.0)
+## Highlights (v3.0.0)
+
+- **Offline integration authoring** — strict immutable definitions and disabled
+  native instances pinned to exact revisions, with matching operator API/CLI.
+  No provider verification, credential, account selection or grant is implied.
+  See [authoring setup](docs/user/operator/integration-definitions.md).
+- **Native MCP sessions and reviewed tools** — authenticated stateful2025-11-25
+  sessions with finite current per-agent contracts, explicit None/sealed-bearer
+  accounts and committed admission before one useful call. See [operator setup](docs/user/operator/native-mcp.md),
+  [review/grants](docs/user/operator/native-tool-review.md) and the
+  [agent interface](docs/user/agent-integration/native-mcp.md). Stale observations
+  require deliberate refresh; unknown outcomes never cause automatic replay.
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
@@ -121,9 +132,14 @@ catalog management), `oauth` (operator — OAuth session bootstrap), `audit`,
 ### Build
 
 ```bash
-cargo build --release
-# binaries: target/release/{locksmithd,locksmith}
+cargo +1.94.0 build --locked --release --bins
+# binaries: target/release/{locksmith,locksmithd}
 ```
+
+Rust 1.94.0 is the tested compiler, not a minimum-version promise. Optimized
+builds are validated locally on macOS ARM64; other platforms remain unproved. See the
+[build recipe and identity checks](docs/development/build-identity.md#build-with-the-tested-recipe)
+for prerequisites, explicit-target paths and evidence limits.
 
 ### Configure
 
@@ -364,6 +380,8 @@ For the canonical deployment story:
     full `locksmith` CLI surface.
 
 - **Engineering docs (per-component)**:
+  - [Bounded MCP transport prerequisite](docs/development/mcp-transport.md) —
+    separate library checks, configuration, diagnostics and integration limits.
   - [`docs/v2/SPEC.md`](docs/v2/SPEC.md) — engineering spec with task
     references (T1.x, T2.x, …).
   - [`docs/v2/HANDOFF.md`](docs/v2/HANDOFF.md) — cold-start handoff for
