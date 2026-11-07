@@ -213,9 +213,9 @@ accounts or independent grants. If agents intentionally share one account,
 select the same label with identical client/endpoint metadata. Provider grant
 policies must be verified with that provider; the local smoke does not test them.
 
-**`oauth bootstrap` warns at the time of the trap.** When a
-non-default label is bootstrapped and other labels exist under the
-same registration, the response carries a `warnings` field:
+**`oauth bootstrap` warns at the time of the trap.** When any
+label (including `default`) is bootstrapped and other labels exist under
+the same registration, the response carries a `warnings` field:
 
 ```json
 {

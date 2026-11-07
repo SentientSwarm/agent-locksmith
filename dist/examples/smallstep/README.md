@@ -57,7 +57,7 @@ when registering the agent (next step).
 On the operator host:
 
 ```bash
-TOKEN=$(locksmith bootstrap mint --single-use --format json | jq -r .token)
+TOKEN=$(locksmith bootstrap mint --format json | jq -r .token)
 echo "Bootstrap token: $TOKEN"
 ```
 

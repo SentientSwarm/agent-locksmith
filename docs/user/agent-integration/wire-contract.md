@@ -197,42 +197,48 @@ When response controls are configured (`max_size_bytes` /
 on the policy:
 
 - `max_size_bytes` only → stream with size cap (truncates with
-  marker if exceeded).
+  marker if exceeded; see below).
 - `redaction_patterns` → buffer the whole response, apply regex,
   then return.
 - `content_type_allowlist` → stream-time pre-check.
 
 ## Error envelope
 
-All locksmith-side errors render as:
+Every error locksmith generates on the proxy path renders as:
 
 ```json
 {
   "error": {
-    "type": "...",     // bad_request | not_found | conflict | auth_error | authz_error | upstream_error | timeout | response_size_exceeded | response_content_type_disallowed
+    "type": "...",     // auth_error | authz_error | not_found | bad_request | payload_too_large | availability_error | upstream_error | timeout | response_size_exceeded | response_content_type_disallowed
     "code": "...",     // specific machine-readable code
     "message": "..."   // human-readable explanation
   }
 }
 ```
 
-Common codes:
+An error status returned by the upstream itself (for example a provider's
+429 or 500) passes through with the upstream's own body; it is not wrapped
+in this envelope.
+
+Codes:
 
 | HTTP | type | code | When |
 |---|---|---|---|
-| 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code). |
-| 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
-| 404 | `not_found` | (no code) | Tool name not registered. |
-| 400 | `bad_request` | (varies) | Malformed body / param. |
-| 502 | `upstream_error` | (varies) | Upstream provider returned 5xx or unreachable. |
-| 504 | `timeout` | `timeout` | Upstream took longer than configured timeout. |
-| 503 | `auth_error` | `credential_unresolved` | Selected source unavailable; no alternate/default dispatch. |
+| 400 | `bad_request` | `bad_request` | Request body unreadable or larger than the registration's body limit. |
+| 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code), or the agent is no longer active. |
 | 401 | `auth_error` | `agent_identity_required` | Identityless request to a credentialed registration. |
+| 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
+| 404 | `not_found` | `tool_not_found` | Allowlisted name that is not registered or not enabled. |
+| 413 | `payload_too_large` | `codex_body_too_large` | Codex `/responses` request body over 1 MiB. |
+| 502 | `upstream_error` | `upstream_error` | Upstream unreachable, the request to it failed, or its response body could not be read. |
+| 502 | `response_content_type_disallowed` | `response_content_type_disallowed` | M7 content-type allowlist rejected the response. |
+| 502 | `response_size_exceeded` | `response_size_exceeded` | M7 size cap exceeded on a buffered response (redaction configured). Streamed responses are truncated instead; see below. |
+| 503 | `availability_error` | `connection_not_active` | Registration is not active in the running daemon (for example, persisted and runtime state differ). |
+| 503 | `auth_error` | `credential_unresolved` | Selected source unavailable; no alternate/default dispatch. |
 | 503 | `auth_error` | `oauth_session_missing` | OAuth tool but no session bootstrapped. |
 | 503 | `auth_error` | `oauth_refresh_failed` | OAuth session degraded; operator action required. |
 | 503 | `auth_error` | `oauth_sealing_key_unset` | OAuth tool but daemon has no sealing key. |
-| 502 | `upstream_error` | `response_content_type_disallowed` | M7 content-type allowlist rejected the response. |
-| 502 | `upstream_error` | `response_size_exceeded` | M7 size cap exceeded. |
+| 504 | `timeout` | `timeout` | Upstream took longer than configured timeout. |
 
 For 403, the operator checks audit `details.reason`: `account_binding_missing`
 requires `locksmith agent credentials list <agent-public-id>` then deliberate
@@ -243,10 +249,11 @@ repair that source, and never retry with an alternate account/default/no auth.
 See [binding troubleshooting](../operator/account-binding-troubleshooting.md).
 
 **Existence-leak avoidance (Q-8)**: agent-facing errors don't reveal
-whether a name exists in the catalog. A request to `/api/nonexistent/...`
-with a valid bearer returns 404 generic; without a bearer returns
-401. The 404 doesn't differentiate "tool exists but ACL denies"
-(that's 403) from "tool doesn't exist".
+whether a name exists in the catalog. Without a valid bearer every
+`/api/{name}/...` request returns 401. With a valid bearer, a name outside
+the agent's allowlist returns 403 `tool_not_allowed` whether or not it is
+registered. 404 `tool_not_found` is returned only for a name the agent is
+allowed that is not registered or not enabled.
 
 ## Streaming contract details
 
@@ -255,9 +262,12 @@ For Anthropic / OpenAI / streaming completion-style:
 - Upstream response `Content-Type: text/event-stream` flows through
   unchanged.
 - Heartbeat / keepalive frames are forwarded as-is.
-- Stream truncation (size cap exceeded) emits a marker frame:
-  `data: {"locksmith":{"truncated":true,"observed_bytes":N,"cap_bytes":M}}\n\n`
-  followed by `data: [DONE]\n\n`.
+- Stream truncation (size cap exceeded): locksmith forwards the bytes
+  that fit under the cap, appends the literal marker
+  `\n{"_locksmith":"response_size_exceeded"}\n`, and ends the stream.
+  The status stays as sent (usually 200). The marker is not an SSE
+  `data:` frame and no `[DONE]` frame follows, so a client should treat
+  an unterminated stream that ends with this marker as truncated.
 
 ## Audit fields agents can correlate against
 

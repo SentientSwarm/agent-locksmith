@@ -78,7 +78,9 @@ When an agent calls `POST /api/anthropic/v1/messages` with
      OAuth    → selected session's access token.
    ↓
 8. Egress route:
-     egress: proxied  → HTTP CONNECT through pipelock
+     egress: proxied  → through the egress proxy (pipelock): https
+                        upstreams tunnel via CONNECT; http upstreams
+                        are sent as absolute-form requests
      egress: direct   → straight to upstream
    ↓
 9. Stream the response back to the agent.

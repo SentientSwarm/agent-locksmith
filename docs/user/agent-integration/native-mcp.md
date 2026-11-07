@@ -67,7 +67,11 @@ Deliberate regrant of an identical previously pinned contract can be effective.
 Use unique safe-integer IDs (absolute value at most 9007199254740991) or nonempty
 strings of at most 64 UTF-8 bytes without control characters. Initialization,
 outstanding and completed request IDs share a bounded 256-ID ledger; reuse is
-409 and exhaustion is 429. Open a new session only after closing the old one.
+409 `request_id_reused`. A session also has a message budget (default 256)
+that counts notifications. Exhausting either budget returns 429 `session_limit`
+(or `request_id_limit`) with `Retry-After: 1` and closes the session; the next
+request on it returns 404 `session_unavailable`, so open a new session.
+Otherwise, open a new session only after closing the old one.
 Valid request params may include `_meta: {"progressToken": ID}` or empty `_meta`
 for standard SDK compatibility. Progress is not emitted. Other metadata, task
 extensions, arbitrary envelope fields and negotiated client capabilities reject.
@@ -131,11 +135,22 @@ provides this policy; see [its contract](../../development/mcp-transport.md).
 
 ## Errors and limits
 
-HTTP 400 is malformed protocol/session input, 406/415 is media negotiation,
-413 oversized body, 431 oversized headers, 401 invalid/current identity,
-403 denied grant/binding/Host/Origin, 404 unavailable session/connection,
-408 total request deadline, 409 repeated ID, 429 finite capacity with
-`Retry-After: 1`, and 503 unavailable state/activation or shutdown.
+HTTP errors carry `{"error":{"code","message"}}`. Read `code`:
+
+| HTTP | Meaning | `code` values |
+|---|---|---|
+| 400 | Malformed protocol/session input | `protocol_version`, `session_required`, `initialize_has_session`, `initialization_incomplete`, `unexpected_body`, `query_unsupported`, `resume_unsupported`, `duplicate_header`, `host_required` |
+| 401 | Invalid or no longer current identity | `invalid_credential` (bearer, shared agent envelope), `agent_identity_required`, `agent_inactive` |
+| 403 | Denied grant, binding, Host or Origin | `connection_not_allowed`, `account_selection_required`, `host_denied`, `origin_denied` |
+| 404 | Unavailable session or connection | `session_unavailable`, `session_closed`, `connection_unavailable`, `authority_changed`, `compact_unavailable` |
+| 405 / 406 / 415 | Method or media negotiation | `method_not_allowed` / `accept` / `content_type` |
+| 408 | Total request deadline or cancellation | `request_deadline`, `request_cancelled` |
+| 409 | Repeated request ID | `request_id_reused` |
+| 413 / 431 | Oversized body / headers | `request_body_limit` / `headers_too_large` |
+| 429 | Finite capacity, with `Retry-After: 1` | `session_limit`, `request_id_limit`, `ingress_limit` |
+| 503 | Unavailable state or activation, or shutdown | `connection_not_active`, `native_store_unavailable`, `native_scope_unavailable`, `native_boundary_missing`, `invalid_native_configuration`, `shutting_down` |
+
+Other refusals from the protocol layer use `protocol_request_refused`.
 JSON-RPC -32700/-32600/-32601/-32602 mean parse/envelope/method/params refusal.
 Tool denial is -32050. Errors reflect only valid bounded request IDs; invalid
 or oversized IDs become `id: null`. Errors are bounded and do not expose

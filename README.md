@@ -112,9 +112,12 @@ middleware (`kind=infra`) is operator-only.
   unresolvable credential fails the request loudly (503) instead of
   forwarding it stripped.
 - **Operational-log stream (Phase J, v2.8.0)** — secret-free operational
-  events (config, registry, OAuth, proxy, credential resolution) in their
-  own table with independent retention, queried via
-  `GET /admin/operator/logs?level=&component=`.
+  events in their own table with independent retention, queried via
+  `GET /admin/operator/logs?level=&component=&since_ms=&until_ms=&limit=&offset=`.
+  `level` is one of `info`, `warn`, `error` (exact match, not a minimum);
+  `component` is one of `oauth`, `registry`, `agent`, `proxy`, `config`.
+  Other values return 400 `invalid_level` / `invalid_component`.
+  `until_ms` is exclusive; `limit` defaults to 100.
 
 ## Two-binary layout
 
@@ -245,13 +248,15 @@ GET    /admin/operator/logs                      operational-log query (Phase J)
 
 ### Error envelope (§4.7.9)
 
-Every error renders as:
+Every error locksmith generates (agent listener and admin API) renders as
+the envelope below. Upstream error bodies pass through unchanged, and native
+MCP errors have their own shape.
 
 ```json
 { "error": { "type": "...", "code": "...", "message": "..." } }
 ```
 
-Codes include `name_in_use`, `reserved_name`, `auth_required`,
+Codes include `reserved_name`, `auth_required`,
 `wrong_kind`, `model_auth_required`, `tool_not_allowed`,
 `invalid_credential`, `oauth_session_missing`, `oauth_refresh_failed`,
 `oauth_sealing_key_unset`, etc. The agent-facing surface follows
@@ -278,7 +283,9 @@ listen:
   admin_socket:
     path: "/var/run/locksmith/admin.sock"
   admin_https:                # optional; v2.0.0+
-    bind_address: "0.0.0.0:9201"
+    enabled: true             # default false: block is ignored
+    host: "0.0.0.0"           # default 127.0.0.1
+    port: 9201
     auth_mode: bearer | mtls | both
     cert_path: "..."
     key_path: "..."

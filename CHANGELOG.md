@@ -26,6 +26,31 @@
   changes live through the admin API (registrations, agents, grants,
   bindings, credentials, OAuth, definitions) and what needs a restart (the
   config file, operator credentials, certificate paths).
+- Correct docs and CLI help that described behaviour the product does not
+  have: audit event classes and `--until-ms`, `--body-limit` (request
+  bodies only) and the egress default, proxy error codes and the stream
+  truncation marker, mTLS handshake refusals, and several commands and
+  flags that do not exist.
+- Give every admin error a `type`. Admin socket, admin HTTPS and
+  bootstrap-listener errors carried only `code` and `message`; `type` is
+  now filled from the HTTP status (for example `auth_error` for 401,
+  `not_found` for 404) when a handler did not set one. Existing `code`
+  values are unchanged.
+- Add `code` to proxy errors that lacked one: 400 `bad_request`, 502
+  `upstream_error`, 502 `response_content_type_disallowed`, 502
+  `response_size_exceeded` and 504 `timeout`. Their `type` values are
+  unchanged.
+- Log deprecated config fields. Logging now starts before the config is
+  read, so the one-time warning for each deprecated field reaches the log;
+  it was previously dropped.
+- Honour `logging.file`. The setting was accepted but ignored; log lines
+  now go to that file (appended, created with mode 0640) instead of
+  stdout, and startup fails if it cannot be opened.
+- Make the shutdown drain window a hard bound. Requests still in flight
+  when it ends are dropped and the listeners close; previously each
+  listener could take up to six more seconds.
+- Record the refused certificate's serial in `details.serial_hex` of
+  `revoked_by_crl` and `revoked_by_blocklist` audit rows; it was null.
 - Enforce mTLS revocation on the agent listener. `listen.mtls.blocklist_path`
   and `listen.mtls.crl_url` were accepted but never reached the validator, so
   a serial added with `locksmith mtls revoke` or listed in the CA's CRL still
@@ -186,9 +211,9 @@
 
 - Add the `qa/` black-box qualification harness: a surface contract checked
   against every route and CLI command, PASS/FAIL/NOT_EXERCISED/NOT_APPLICABLE
-  statuses with per-area floors, redaction-scanned evidence bundles, and a
-  first smoke slice (health, agent enrolment, one proxied call with its
-  refusals) run against the release binaries in CI. See `qa/README.md`.
+  statuses with per-area floors, redaction-scanned evidence bundles, and
+  about 300 smoke cases covering every route, CLI command and daemon
+  behaviour, run against the release binaries in CI. See `qa/README.md`.
 - Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
   after its TLS configuration loads. It previously logged both
   `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,

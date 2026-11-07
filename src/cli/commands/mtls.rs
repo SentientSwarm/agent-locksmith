@@ -2,7 +2,7 @@
 //!
 //! `revoke <serial>` adds a serial to the local emergency blocklist.
 //! `list-blocklist` prints the current blocklist contents.
-//! `crl-status` reports CRL freshness from the daemon (when reachable).
+//! `crl-status` is a placeholder that points at the daemon log.
 //!
 //! For v0.7.0 the blocklist commands are local file operations — they
 //! manipulate `mtls.blocklist_path` directly. The daemon picks up the
@@ -38,9 +38,10 @@ pub enum MtlsCmd {
         #[arg(long)]
         blocklist_path: PathBuf,
     },
-    /// Read the daemon's CRL state. Stub for v0.7.0 — currently
-    /// reports the configured URL only; rich state surfaces in a
-    /// future admin endpoint.
+    /// Placeholder: does not contact the daemon or report CRL state.
+    /// Read CRL state from the daemon log (`CRL applied`, `CRL refresh
+    /// failed`, `CRL refused`) and from `mtls-crl-cache.pem` beside the
+    /// database file.
     CrlStatus,
 }
 
@@ -89,11 +90,12 @@ pub async fn run(format: Format, cmd: MtlsCmd) -> Result<(), CliError> {
             Ok(())
         }
         MtlsCmd::CrlStatus => {
-            // v0.7.0 placeholder — real impl awaits an admin endpoint
-            // exposing the CrlStore snapshot. For now we just point
-            // operators at the daemon log for refresh-failure diagnosis.
+            // Placeholder until an admin endpoint exposes the CrlStore
+            // snapshot; points operators at where CRL state is recorded.
             eprintln!(
-                "crl-status: stub. Consult `journalctl -u locksmith | grep CRL` for refresh logs."
+                "crl-status: not implemented. Read CRL state from the daemon log \
+                 (`CRL applied`, `CRL refresh failed`, `CRL refused`) and from \
+                 mtls-crl-cache.pem beside the database file."
             );
             Ok(())
         }

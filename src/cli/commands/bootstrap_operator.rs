@@ -35,7 +35,7 @@ pub struct BootstrapOperatorArgs {
     pub name: String,
 
     /// Append a YAML comment header explaining the file shape.
-    /// Default true; pass `--no-header` for a minimal output suitable
+    /// Default true; pass `--header false` for a minimal output suitable
     /// for piping into a sealed-cred mechanism.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub header: bool,

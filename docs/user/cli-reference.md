@@ -177,7 +177,7 @@ validation and compatibility details.
 | `--egress direct\|proxied` | Whether to route through the egress proxy. Defaults `direct`; native currently requires `direct`. |
 | `--timeout-request <secs>` | Per-request timeout. Defaults server-side. |
 | `--timeout-idle <secs>` | Per-read idle timeout. Defaults server-side. |
-| `--body-limit <bytes>` | Max upstream response body size. Defaults 10 MiB. |
+| `--body-limit <bytes>` | Max size of the agent's request body forwarded upstream. A larger body returns 400 `bad_request`. Defaults 10 MiB. |
 | `--metadata k=v` | Per-kind metadata. Repeatable. |
 | `--protocol http\|mcp_streamable_http` | Registration protocol; omitted means HTTP, including full replacement updates. Native is tool-only. |
 | `--mcp-config-file <path>` | Strict native JSON config (`protocol_version`, optional `allow_private_destination`), required for native. See [native setup](operator/native-mcp.md). |
@@ -233,8 +233,8 @@ in `oauth_sessions` (AES-GCM with `LOCKSMITH_OAUTH_SEALING_KEY`).
 registration, defaulting to `"default"`. Use distinct labels (e.g.,
 `hermes`, `openclaw`) when bootstrapping per-agent OAuth from
 different upstream accounts. Label must be ascii alphanumeric / `-`
-/ `_`. Bootstrapping a non-default label when other labels exist
-under the same registration emits a single-grant warning — see
+/ `_`. Bootstrapping any label (including `default`) when other labels
+exist under the same registration emits a single-grant warning — see
 [`concepts/per-agent-credentials.md`](concepts/per-agent-credentials.md).
 
 `status` shows session state (present, label, scope, expires_at,
@@ -267,10 +267,10 @@ Filter flags:
 | Flag | Description |
 |---|---|
 | `--since-ms <ms>` | Unix ms epoch (events at or after). |
-| `--until-ms <ms>` | Unix ms epoch (events at or before). |
+| `--until-ms <ms>` | Unix ms epoch (events before; exclusive). |
 | `--agent <public_id>` | Filter to one agent. |
 | `--tool <name>` | Filter to one tool/model name. |
-| `--event-class <class>` | `auth\|proxy\|agent\|operator\|secret\|security\|admin`. |
+| `--event-class <class>` | `proxy\|operator\|security`. Other values return 400 `invalid_event_class`. |
 | `--decision <d>` | `allowed\|denied\|error`. |
 | `--limit <n>` | Default 100. |
 | `--offset <n>` | Default 0. |
@@ -278,19 +278,32 @@ Filter flags:
 ### `export` — operator-visible state snapshot (UC-10)
 
 ```bash
-locksmith export agents              # JSON of agent records
-locksmith export bootstrap-tokens    # JSON of bootstrap tokens
-locksmith export tools               # JSON of legacy config.tools
+locksmith export agents --format json   # snapshot of agent records
 ```
+
+`agents` is the only export.
 
 Useful for backup or migration scripts.
 
 ### `mtls` — mTLS-related operations (M6)
 
 ```bash
-locksmith mtls verify --ca <path> --cert <path>   # offline cert validation
-locksmith mtls show-bindings                       # current cert→agent mapping
+locksmith mtls revoke <serial> --blocklist-path <path> [--reason '...']
+locksmith mtls list-blocklist --blocklist-path <path>
+locksmith mtls crl-status
 ```
+
+`revoke` appends a hex cert serial (case-insensitive) to the local emergency
+blocklist file; `--reason` is written as a `# comment` line above it.
+`list-blocklist` prints the serials in that file. Both edit or read the file
+directly and do not contact the daemon. `--blocklist-path` must match
+`listen.mtls.blocklist_path`; the daemon picks up changes on its next reload
+poll.
+
+`crl-status` does not contact the daemon and reports no CRL state. Read CRL
+state from the daemon log (`CRL applied`, `CRL refresh failed; prior snapshot
+retained`, `CRL refused` lines) and from `mtls-crl-cache.pem`, the last good
+CRL, stored beside the database file.
 
 ### Self-service (agent token required)
 

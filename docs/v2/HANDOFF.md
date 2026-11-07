@@ -122,8 +122,10 @@ tools:
 Streaming SSE under 5 MB passes through unchanged (R-N6 first-byte ≤100ms preserved). Over the cap, the proxy emits `STREAM_TRUNCATION_MARKER` and an audit row. Tools with `redaction_patterns` set take the buffered path; matches replaced with `[REDACTED:<pattern_id>]`; audit records `pattern_id` + `matches` count + SHA-256 hash of cleartext (not the cleartext).
 
 ```bash
-locksmith audit query --event response_redaction --format json | jq
-locksmith audit query --event response_size_exceeded --since-ms <yesterday> --format json
+locksmith audit query --event-class proxy --format json \
+  | jq '.[] | select(.event == "response_redaction")'
+locksmith audit query --event-class proxy --since-ms <yesterday> --format json \
+  | jq '.[] | select(.event == "response_size_exceeded")'
 ```
 
 Full operational guide: `docs/v2/runbooks/m7-response-controls.md`.
@@ -156,7 +158,7 @@ EOF
 sudo systemctl restart locksmith
 
 # Onboard an agent through the bootstrap-only listener (no operator creds needed)
-TOKEN=$(locksmith bootstrap mint --single-use --format json | jq -r .token)
+TOKEN=$(locksmith bootstrap mint --format json | jq -r .token)
 curl -X POST https://locksmith.example.com:9202/admin/agent/register \
     --cacert /etc/locksmith/agents-ca.crt \
     -H 'content-type: application/json' \

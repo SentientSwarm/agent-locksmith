@@ -244,8 +244,8 @@ same label with identical complete provider metadata. Verify grant policies
 with the provider; the synthetic local tests do not prove provider behavior.
 
 `locksmith oauth bootstrap` warns at the time of the trap. When you
-bootstrap a non-default label and other labels already exist for the
-same registration, the response includes a `warnings` field:
+bootstrap any label, including `default`, and other labels already exist
+for the same registration, the response includes a `warnings` field:
 
 ```json
 {
@@ -270,8 +270,13 @@ to step back.
 ## Refresh task
 
 The owned background task wakes every 30 seconds and selects non-degraded,
-non-pending sessions whose access expiry is within 300 seconds. It rechecks the
-current row under the same per-label lock used by bootstrap and inline refresh.
+non-pending sessions whose access expiry is within 300 seconds. It refreshes a
+session only when its registration is active and at least one agent has
+selected that registration and label; all such selections must carry identical
+provider metadata, or the refresh is skipped with a warning. A bootstrapped
+session that no agent has selected is not refreshed in the background. It
+rechecks the current row under the same per-label lock used by bootstrap and
+inline refresh.
 No transaction spans provider I/O. Shutdown cancels current OAuth scopes and
 joins them before the daemon releases database ownership.
 

@@ -93,7 +93,9 @@ The grant list is finite, includes no unknown names, and can be empty. You may
 select only grant rows when all bindings are already preserved or no entry is
 eligible. Select at least one grant or binding proposal. Leave `preserve` and `skip` entries,
 all source metadata, inventory, snapshot and format fields unchanged. The tool
-rejects other edits. To select a different source, repair/reselect it through the
+rejects other edits. A plan that selects nothing, selects a non-`propose` entry,
+or changes any other value (including a proposed `auth_spec`) exits **5**
+`migration_conflict`. To select a different source, repair/reselect it through the
 existing operator commands and generate a fresh preview; do not hand-edit the
 proposed AuthSpec. It does not guess an account from a partial legacy selection.
 Regenerate and review plans made with an older tool that omitted legacy metadata.
@@ -144,7 +146,10 @@ recreate that binding. Missing/corrupt receipts also fail closed when the
 revision/post-state no longer matches. Never delete migration receipts or the
 revision to retry an old plan. Generate and review a fresh plan instead.
 
-Invalid inputs exit **2** (`migration_invalid`); database/schema/permission or
+Invalid inputs exit **2** (`migration_invalid`): a plan or legacy config file
+that cannot be read or parsed, a plan with unknown fields or wrong types, or
+malformed ACL data in the database. A well-formed plan whose content does not
+match the current preview exits **5**, as above. Database/schema/permission or
 write failures exit **1** (`migration_database`). Errors omit SQL and source
 contents. A failed insertion, including a failed receipt write, rolls back all
 grants, bindings and bookkeeping.

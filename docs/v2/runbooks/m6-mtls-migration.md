@@ -20,7 +20,7 @@ Each step is a daemon restart. Move the whole fleet to `both` first; verify; the
 
 Prep:
 1. Provision the agent CA bundle (see `m6-mtls-onboarding.md` §2).
-2. Decide how you'll bind cert_identity to existing agents (SQL UPDATE in v0.7.0; CLI in v0.7.x).
+2. Bind each existing agent to its cert identity with `locksmith agent set-cert-identity <public_id> <cert_identity>` (CN, SAN DNS or SAN URI).
 3. Plan the agent-side cert rollout — usually Ansible / a config management run that drops cert+key on each host.
 
 Daemon config:
@@ -50,7 +50,7 @@ listen:
   auth_mode: mtls
 ```
 
-Restart. Bearer requests now fail with 401 `invalid_credential`. Agents WITHOUT certs cannot authenticate.
+Restart. The listener now requires a client certificate during the TLS handshake. A client without a certificate, or with one from a CA outside `ca_bundle_path`, is refused during the handshake (TLS alert `certificate_required` or `unknown_ca`). There is no HTTP response and no audit row, so a bearer-only agent sees a TLS error, not a 401.
 
 The bootstrap-only listener (T6.8) stays available so new agents can register without certs and pick up their cert as part of onboarding.
 
@@ -90,9 +90,10 @@ Empty result = whole fleet has rotated. Safe to flip to `mtls`.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Agent fails authentication after stage B | cert_identity not set on agent record | Set it (SQL or future CLI), have agent retry |
-| `untrusted_chain` audit row | Agent's cert was issued by a different CA than `ca_bundle_path` | Re-issue the cert from the right CA OR add the issuing CA to the bundle |
-| `cert_expired` audit row | Agent cert past notAfter | Re-issue via your CA's renewal flow |
+| Agent gets 401 `invalid_credential` after stage B | cert_identity not set on agent record | Set it with `locksmith agent set-cert-identity`, have agent retry |
+| Agent's TLS handshake fails (`unknown_ca`); no audit row | Agent's cert was issued by a different CA than `ca_bundle_path` | Re-issue the cert from the right CA OR add the issuing CA to the bundle |
+| Agent's TLS handshake fails (`certificate_required`); no audit row | Agent sent no client cert under `auth_mode: mtls` | Install the cert on the agent, or roll back to `both` |
+| Agent's TLS handshake fails (`certificate_expired`); no audit row | Agent cert past notAfter | Re-issue via your CA's renewal flow |
 | All agents fail simultaneously | Wrong CA bundle path or unreadable | Check `journalctl -u locksmith` for the load error; restart |
 
 ---

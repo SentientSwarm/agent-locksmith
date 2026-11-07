@@ -64,7 +64,7 @@ Per D-10, registering an agent doesn't require operator credentials — only a b
 
 ```bash
 # Operator-side: mint a single-use bootstrap token.
-TOKEN=$(locksmith bootstrap mint --single-use --format json | jq -r .token)
+TOKEN=$(locksmith bootstrap mint --format json | jq -r .token)
 
 # Agent-side: register without any other credentials.
 curl -X POST https://locksmith.example.com:9202/admin/agent/register \
@@ -119,8 +119,9 @@ curl --cacert /etc/locksmith/agents-ca.crt \
      https://locksmith.example.com:9200/api/openai/v1/models
 
 # Should succeed. Then check the audit row:
-locksmith audit query --event proxy_request --limit 1 --format json | jq
-# auth_method: "mtls"  (after listener wiring lands; see §8 below)
+locksmith audit query --event-class proxy --format json \
+  | jq '[.[] | select(.event == "proxy_request")][0]'
+# auth_method: "mtls"
 ```
 
 ---
@@ -157,16 +158,11 @@ Tailscale-only access is a common pattern.
 
 ---
 
-## 8. v0.7.0 scope note
+## 8. Handshake behavior
 
-The cert-validation infrastructure (validator, CRL, blocklist, authenticator, audit threading) is fully landed and tested. The agent listener bind path that requires client certs at TLS handshake is the one piece deferred to v0.7.x — full client-cert acceptance through axum-server's `RustlsConfig` requires custom `ClientCertVerifier` + peer-cert injection into request extensions. Until that lands:
+With `auth_mode: mtls`, the agent listener and admin HTTPS require a client certificate during the TLS handshake. A client without a certificate, or with one that does not chain to `ca_bundle_path`, is refused during the handshake (TLS alert `certificate_required` or `unknown_ca`). There is no HTTP response and no audit row for these refusals. With `auth_mode: both`, a client may connect without a certificate and authenticate with a bearer token.
 
-- `MtlsAuthenticator::authenticate_cert` is callable in-process.
-- The bootstrap-only listener IS bound and functional (no client-cert acceptance needed).
-- `auth_mode` config parses and is observable via `state.config.load().listen.auth_mode`.
-- Tests cover the validator + authenticator + audit flows end-to-end.
-
-The wiring step is "plumb the rustls peer cert through to a middleware that calls MtlsAuthenticator." Tracked as a v0.7.x follow-up.
+On the agent listener, after the handshake Locksmith checks the CRL and blocklist and maps the cert identity to an agent (`locksmith agent set-cert-identity`). Failures at this stage return 401 `invalid_credential` and write a `security` audit row (`mtls_auth_failure` or `mtls_unknown_identity`). A request that presents a certificate is authenticated by the certificate only; under `both` it does not fall back to a bearer token.
 
 ---
 

@@ -59,7 +59,7 @@ pub struct PutOpts {
     #[arg(long)]
     pub auth: Option<String>,
 
-    /// Egress: `direct` or `proxied`. Defaults to `proxied` server-side.
+    /// Egress: `direct` or `proxied`. Defaults to `direct` server-side.
     #[arg(long)]
     pub egress: Option<String>,
 
@@ -71,8 +71,9 @@ pub struct PutOpts {
     #[arg(long = "timeout-idle")]
     pub timeout_idle: Option<u64>,
 
-    /// Maximum response body size accepted from the upstream, in bytes.
-    /// Defaults server-side (10 MiB).
+    /// Maximum size of the agent's request body forwarded upstream, in
+    /// bytes. Larger bodies are refused with 400. Defaults server-side
+    /// (10 MiB).
     #[arg(long = "body-limit")]
     pub body_limit: Option<u64>,
 

@@ -121,11 +121,13 @@ Three new event types under `event_class=proxy`:
 
 All carry `auth_method=bearer` (M2 default; M6 mTLS deployments populate `mtls`).
 
-Filter by event:
+Filter by event (the CLI has no `--event` flag; filter on `.event` with `jq`):
 
 ```bash
-locksmith audit query --event response_redaction --format json | jq
-locksmith audit query --event response_size_exceeded --since-ms <yesterday> --format json
+locksmith audit query --event-class proxy --format json \
+  | jq '.[] | select(.event == "response_redaction")'
+locksmith audit query --event-class proxy --since-ms <yesterday> --format json \
+  | jq '.[] | select(.event == "response_size_exceeded")'
 ```
 
 ---
