@@ -32,11 +32,12 @@ impl Twin {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             assert!(child.0.try_wait().unwrap().is_none());
-            if let Ok(bytes) = std::fs::read(f.path().join("provider-port.json")) {
-                return Self {
-                    child,
-                    port: serde_json::from_slice(&bytes).unwrap(),
-                };
+            // The twin may be mid-write: retry until the file parses.
+            if let Ok(port) = std::fs::read(f.path().join("provider-port.json"))
+                .map_err(|_| ())
+                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|_| ()))
+            {
+                return Self { child, port };
             }
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(10));

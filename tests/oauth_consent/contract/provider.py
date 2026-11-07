@@ -89,5 +89,6 @@ server.access, server.refresh = 'contract-access-1', 'contract-refresh-1'
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / 'server.pem', root / 'server.key')
 server.socket = context.wrap_socket(server.socket, server_side=True)
-(root / 'provider-port.json').write_text(json.dumps(server.server_port))
+(root / 'provider-port.new').write_text(json.dumps(server.server_port))
+(root / 'provider-port.new').replace(root / 'provider-port.json')
 server.serve_forever(poll_interval=0.05)
