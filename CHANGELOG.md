@@ -184,6 +184,11 @@
 
 ### Internal
 
+- Add the `qa/` black-box qualification harness: a surface contract checked
+  against every route and CLI command, PASS/FAIL/NOT_EXERCISED/NOT_APPLICABLE
+  statuses with per-area floors, redaction-scanned evidence bundles, and a
+  first smoke slice (health, agent enrolment, one proxied call with its
+  refusals) run against the release binaries in CI. See `qa/README.md`.
 - Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
   after its TLS configuration loads. It previously logged both
   `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,

@@ -1,0 +1,1000 @@
+# Locksmith product surface contract (qa/README.md).
+# Every route literal in src/ and every `locksmith` leaf command must appear
+# here; `python qa/run.py` fails closed otherwise. `refusals` lists the
+# documented error codes a route can return; an entry counts as exercised
+# only when a passing positive case and passing refusal cases producing
+# every listed code cover it. Known gaps need a ticket and an expiry of at
+# most 30 days, and only the owner approves them.
+version: 1
+floors:
+  HEALTH: 4
+  ENROL: 5
+  PROXY: 6
+routes:
+- id: bootstrap.POST./admin/agent/register
+  listener: bootstrap
+  method: POST
+  path: /admin/agent/register
+  source:
+    file: src/admin/bootstrap_listener.rs
+    route: /admin/agent/register
+  refusals:
+  - invalid_credential
+  - agent_name_conflict
+- id: admin.GET./admin/operator/agents
+  listener: admin
+  method: GET
+  path: /admin/operator/agents
+  source:
+    file: src/admin/uds.rs
+    route: /agents
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/agents
+  listener: admin
+  method: POST
+  path: /admin/operator/agents
+  source:
+    file: src/admin/uds.rs
+    route: /agents
+  refusals:
+  - invalid_credential
+  - agent_name_conflict
+  - grant_target_invalid
+- id: admin.GET./admin/operator/agents/{public_id}
+  listener: admin
+  method: GET
+  path: /admin/operator/agents/{public_id}
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}
+  refusals:
+  - invalid_credential
+  - agent_not_found
+- id: admin.PATCH./admin/operator/agents/{public_id}
+  listener: admin
+  method: PATCH
+  path: /admin/operator/agents/{public_id}
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}
+  refusals:
+  - invalid_credential
+  - agent_not_found
+  - grant_target_invalid
+- id: admin.PATCH./admin/operator/agents/{public_id}/cert_identity
+  listener: admin
+  method: PATCH
+  path: /admin/operator/agents/{public_id}/cert_identity
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/cert_identity
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/agents/{public_id}/credentials
+  listener: admin
+  method: GET
+  path: /admin/operator/agents/{public_id}/credentials
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/agents/{public_id}/credentials/{registration}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/agents/{public_id}/credentials/{registration}
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{public_id}/credentials/{registration}
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}
+  refusals:
+  - invalid_credential
+  - selection_only
+  - invalid_op_reference
+- id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}/credential
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{public_id}/credentials/{registration}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}/credential
+  refusals:
+  - invalid_credential
+  - invalid_stored_credential
+  - credential_store_unconfigured
+- id: admin.POST./admin/operator/agents/{public_id}/revoke
+  listener: admin
+  method: POST
+  path: /admin/operator/agents/{public_id}/revoke
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/revoke
+  refusals:
+  - invalid_credential
+  - agent_not_found
+- id: admin.GET./admin/operator/audit
+  listener: admin
+  method: GET
+  path: /admin/operator/audit
+  source:
+    file: src/admin/uds.rs
+    route: /audit
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/bootstrap_tokens
+  listener: admin
+  method: GET
+  path: /admin/operator/bootstrap_tokens
+  source:
+    file: src/admin/uds.rs
+    route: /bootstrap_tokens
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/bootstrap_tokens
+  listener: admin
+  method: POST
+  path: /admin/operator/bootstrap_tokens
+  source:
+    file: src/admin/uds.rs
+    route: /bootstrap_tokens
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/bootstrap_tokens/{public_id}/revoke
+  listener: admin
+  method: POST
+  path: /admin/operator/bootstrap_tokens/{public_id}/revoke
+  source:
+    file: src/admin/uds.rs
+    route: /bootstrap_tokens/{public_id}/revoke
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/agent/deregister
+  listener: admin
+  method: POST
+  path: /admin/agent/deregister
+  source:
+    file: src/admin/uds.rs
+    route: /deregister
+  refusals: &id001
+  - invalid_credential
+- id: admin.GET./admin/operator/infra
+  listener: admin
+  method: GET
+  path: /admin/operator/infra
+  source:
+    file: src/admin/uds.rs
+    route: /infra
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/infra/{name}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/infra/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/infra/{name}
+  listener: admin
+  method: GET
+  path: /admin/operator/infra/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}
+  refusals:
+  - invalid_credential
+  - unknown_name
+- id: admin.PUT./admin/operator/infra/{name}
+  listener: admin
+  method: PUT
+  path: /admin/operator/infra/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}
+  refusals:
+  - invalid_credential
+  - invalid_upstream
+  - invalid_name
+  - reserved_name
+  - auth_required
+  - invalid_metadata
+  - wrong_kind
+- id: admin.DELETE./admin/operator/infra/{name}/credential
+  listener: admin
+  method: DELETE
+  path: /admin/operator/infra/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/infra/{name}/credential
+  listener: admin
+  method: PUT
+  path: /admin/operator/infra/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/infra/{name}/enable
+  listener: admin
+  method: POST
+  path: /admin/operator/infra/{name}/enable
+  source:
+    file: src/admin/uds.rs
+    route: /infra/{name}/enable
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/logs
+  listener: admin
+  method: GET
+  path: /admin/operator/logs
+  source:
+    file: src/admin/uds.rs
+    route: /logs
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/models
+  listener: admin
+  method: GET
+  path: /admin/operator/models
+  source:
+    file: src/admin/uds.rs
+    route: /models
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/models/{name}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/models/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/models/{name}
+  listener: admin
+  method: GET
+  path: /admin/operator/models/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}
+  refusals:
+  - invalid_credential
+  - unknown_name
+- id: admin.PUT./admin/operator/models/{name}
+  listener: admin
+  method: PUT
+  path: /admin/operator/models/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}
+  refusals:
+  - invalid_credential
+  - invalid_upstream
+  - invalid_name
+  - reserved_name
+  - auth_required
+  - invalid_metadata
+  - wrong_kind
+  - model_auth_required
+- id: admin.DELETE./admin/operator/models/{name}/credential
+  listener: admin
+  method: DELETE
+  path: /admin/operator/models/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/models/{name}/credential
+  listener: admin
+  method: PUT
+  path: /admin/operator/models/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/models/{name}/enable
+  listener: admin
+  method: POST
+  path: /admin/operator/models/{name}/enable
+  source:
+    file: src/admin/uds.rs
+    route: /models/{name}/enable
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/oauth
+  listener: admin
+  method: GET
+  path: /admin/operator/oauth
+  source:
+    file: src/admin/uds.rs
+    route: /oauth
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/oauth/{name}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/oauth/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /oauth/{name}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/oauth/{name}
+  listener: admin
+  method: GET
+  path: /admin/operator/oauth/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /oauth/{name}
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/oauth/{name}/bootstrap
+  listener: admin
+  method: POST
+  path: /admin/operator/oauth/{name}/bootstrap
+  source:
+    file: src/admin/uds.rs
+    route: /oauth/{name}/bootstrap
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - not_oauth_registration
+- id: admin.ANY./admin/agent/register
+  listener: admin
+  method: ANY
+  path: /admin/agent/register
+  source:
+    file: src/admin/uds.rs
+    route: /register
+  refusals:
+  - invalid_credential
+  - agent_name_conflict
+- id: admin.POST./admin/agent/rotate
+  listener: admin
+  method: POST
+  path: /admin/agent/rotate
+  source:
+    file: src/admin/uds.rs
+    route: /rotate
+  refusals: *id001
+- id: admin.GET./admin/agent/status
+  listener: admin
+  method: GET
+  path: /admin/agent/status
+  source:
+    file: src/admin/uds.rs
+    route: /status
+  refusals: *id001
+- id: admin.GET./admin/agent/tools
+  listener: admin
+  method: GET
+  path: /admin/agent/tools
+  source:
+    file: src/admin/uds.rs
+    route: /tools
+  refusals: *id001
+- id: admin.GET./admin/operator/tools
+  listener: admin
+  method: GET
+  path: /admin/operator/tools
+  source:
+    file: src/admin/uds.rs
+    route: /tools
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/tools-legacy
+  listener: admin
+  method: GET
+  path: /admin/operator/tools-legacy
+  source:
+    file: src/admin/uds.rs
+    route: /tools-legacy
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/tools/{name}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/tools/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}
+  refusals:
+  - invalid_credential
+  - unknown_name
+- id: admin.GET./admin/operator/tools/{name}
+  listener: admin
+  method: GET
+  path: /admin/operator/tools/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}
+  refusals:
+  - invalid_credential
+  - unknown_name
+- id: admin.PUT./admin/operator/tools/{name}
+  listener: admin
+  method: PUT
+  path: /admin/operator/tools/{name}
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}
+  refusals:
+  - invalid_credential
+  - invalid_upstream
+  - invalid_name
+  - reserved_name
+  - auth_required
+  - invalid_metadata
+  - wrong_kind
+- id: admin.DELETE./admin/operator/tools/{name}/credential
+  listener: admin
+  method: DELETE
+  path: /admin/operator/tools/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/tools/{name}/credential
+  listener: admin
+  method: PUT
+  path: /admin/operator/tools/{name}/credential
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}/credential
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/enable
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/enable
+  source:
+    file: src/admin/uds.rs
+    route: /tools/{name}/enable
+  refusals:
+  - invalid_credential
+- id: agent.ANY./api/{tool_name}/{*path}
+  listener: agent
+  method: ANY
+  path: /api/{tool_name}/{*path}
+  source:
+    file: src/app.rs
+    route: /api/{tool_name}/{*path}
+  refusals:
+  - agent_identity_required
+  - invalid_credential
+  - tool_not_allowed
+  - account_binding_missing
+  - tool_not_found
+  - bad_request
+  - codex_body_too_large
+  - connection_not_active
+  - selected_credential_unavailable
+  - account_binding_unavailable
+  - credential_unresolved
+  - oauth_sealing_key_unset
+  - oauth_session_missing
+  - oauth_refresh_failed
+  - response_content_type_disallowed
+  - response_size_exceeded
+  - upstream_error
+  - timeout
+- id: agent.GET./health
+  listener: agent
+  method: GET
+  path: /health
+  source:
+    file: src/app.rs
+    route: /health
+  refusals: []
+- id: agent.GET./livez
+  listener: agent
+  method: GET
+  path: /livez
+  source:
+    file: src/app.rs
+    route: /livez
+  refusals: []
+- id: agent.ANY./mcp/{name}
+  listener: agent
+  method: ANY
+  path: /mcp/{name}
+  source:
+    file: src/app.rs
+    route: /mcp/{name}
+  refusals:
+  - query_unsupported
+  - protocol_version
+  - session_required
+  - initialize_has_session
+  - initialization_incomplete
+  - host_required
+  - duplicate_header
+  - unexpected_body
+  - resume_unsupported
+  - agent_identity_required
+  - agent_inactive
+  - origin_denied
+  - host_denied
+  - connection_not_allowed
+  - account_selection_required
+  - connection_unavailable
+  - session_unavailable
+  - session_closed
+  - authority_changed
+  - method_not_allowed
+  - accept
+  - request_deadline
+  - request_id_reused
+  - request_body_limit
+  - content_type
+  - ingress_limit
+  - request_id_limit
+  - headers_too_large
+  - shutting_down
+  - connection_not_active
+- id: agent.ANY./mcp/{name}/compact
+  listener: agent
+  method: ANY
+  path: /mcp/{name}/compact
+  source:
+    file: src/app.rs
+    route: /mcp/{name}/compact
+  refusals:
+  - query_unsupported
+  - protocol_version
+  - session_required
+  - initialize_has_session
+  - initialization_incomplete
+  - host_required
+  - duplicate_header
+  - unexpected_body
+  - resume_unsupported
+  - agent_identity_required
+  - agent_inactive
+  - origin_denied
+  - host_denied
+  - connection_not_allowed
+  - account_selection_required
+  - connection_unavailable
+  - session_unavailable
+  - session_closed
+  - authority_changed
+  - method_not_allowed
+  - accept
+  - request_deadline
+  - request_id_reused
+  - request_body_limit
+  - content_type
+  - ingress_limit
+  - request_id_limit
+  - headers_too_large
+  - shutting_down
+  - connection_not_active
+  - compact_unavailable
+- id: agent.GET./models
+  listener: agent
+  method: GET
+  path: /models
+  source:
+    file: src/app.rs
+    route: /models
+  refusals: *id001
+- id: agent.GET./readyz
+  listener: agent
+  method: GET
+  path: /readyz
+  source:
+    file: src/app.rs
+    route: /readyz
+  refusals:
+  - not_ready
+- id: agent.GET./skill
+  listener: agent
+  method: GET
+  path: /skill
+  source:
+    file: src/app.rs
+    route: /skill
+  refusals: *id001
+- id: agent.GET./tools
+  listener: agent
+  method: GET
+  path: /tools
+  source:
+    file: src/app.rs
+    route: /tools
+  refusals: *id001
+- id: agent.GET./version
+  listener: agent
+  method: GET
+  path: /version
+  source:
+    file: src/app.rs
+    route: /version
+  refusals: []
+- id: admin.GET./admin/operator/integration-definitions/{id}/revisions/{revision}
+  listener: admin
+  method: GET
+  path: /admin/operator/integration-definitions/{id}/revisions/{revision}
+  source:
+    file: src/definitions/api.rs
+    route: /integration-definitions/{id}/revisions/{revision}
+  refusals:
+  - invalid_credential
+  - definition_not_found
+- id: admin.PUT./admin/operator/integration-definitions/{id}/revisions/{revision}
+  listener: admin
+  method: PUT
+  path: /admin/operator/integration-definitions/{id}/revisions/{revision}
+  source:
+    file: src/definitions/api.rs
+    route: /integration-definitions/{id}/revisions/{revision}
+  refusals:
+  - invalid_credential
+  - definition_invalid
+  - definition_conflict
+- id: admin.PUT./admin/operator/tools/{name}/definition-activation
+  listener: admin
+  method: PUT
+  path: /admin/operator/tools/{name}/definition-activation
+  source:
+    file: src/definitions/api.rs
+    route: /tools/{name}/definition-activation
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/from-definition
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/from-definition
+  source:
+    file: src/definitions/api.rs
+    route: /tools/{name}/from-definition
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/agents/{agent}/mcp-grants/{name}
+  listener: admin
+  method: GET
+  path: /admin/operator/agents/{agent}/mcp-grants/{name}
+  source:
+    file: src/native_authority/api.rs
+    route: /agents/{agent}/mcp-grants/{name}
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/agents/{agent}/mcp-grants/{name}
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{agent}/mcp-grants/{name}
+  source:
+    file: src/native_authority/api.rs
+    route: /agents/{agent}/mcp-grants/{name}
+  refusals:
+  - invalid_credential
+  - if_match_required
+  - grant_conflict
+- id: admin.PUT./admin/operator/agents/{agent}/oauth-selection/{name}
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{agent}/oauth-selection/{name}
+  source:
+    file: src/native_authority/api.rs
+    route: /agents/{agent}/oauth-selection/{name}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/tools/{name}/mcp/observations/{agent}
+  listener: admin
+  method: GET
+  path: /admin/operator/tools/{name}/mcp/observations/{agent}
+  source:
+    file: src/native_authority/api.rs
+    route: /tools/{name}/mcp/observations/{agent}
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/mcp/observations/{agent}
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/mcp/observations/{agent}
+  source:
+    file: src/native_authority/api.rs
+    route: /tools/{name}/mcp/observations/{agent}
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/tools/{name}/mcp/reviews/{agent}
+  listener: admin
+  method: PUT
+  path: /admin/operator/tools/{name}/mcp/reviews/{agent}
+  source:
+    file: src/native_authority/api.rs
+    route: /tools/{name}/mcp/reviews/{agent}
+  refusals:
+  - invalid_credential
+  - if_match_required
+- id: admin.DELETE./admin/operator/tools/{name}/oauth/accounts/{label}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/tools/{name}/oauth/accounts/{label}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/accounts/{label}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/tools/{name}/oauth/accounts/{label}
+  listener: admin
+  method: GET
+  path: /admin/operator/tools/{name}/oauth/accounts/{label}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/accounts/{label}
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/oauth/accounts/{label}/refresh
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/oauth/accounts/{label}/refresh
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/accounts/{label}/refresh
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/oauth/attempts
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/oauth/attempts
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/attempts
+  refusals:
+  - invalid_credential
+  - not_found
+- id: admin.DELETE./admin/operator/tools/{name}/oauth/attempts/{id}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/tools/{name}/oauth/attempts/{id}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/attempts/{id}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/tools/{name}/oauth/attempts/{id}
+  listener: admin
+  method: GET
+  path: /admin/operator/tools/{name}/oauth/attempts/{id}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/attempts/{id}
+  refusals:
+  - invalid_credential
+- id: admin.POST./admin/operator/tools/{name}/oauth/client
+  listener: admin
+  method: POST
+  path: /admin/operator/tools/{name}/oauth/client
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/client
+  refusals:
+  - invalid_credential
+- id: admin.DELETE./admin/operator/tools/{name}/oauth/clients/{profile}/{generation}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/tools/{name}/oauth/clients/{profile}/{generation}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/clients/{profile}/{generation}
+  refusals:
+  - invalid_credential
+- id: admin.GET./admin/operator/tools/{name}/oauth/clients/{profile}/{generation}
+  listener: admin
+  method: GET
+  path: /admin/operator/tools/{name}/oauth/clients/{profile}/{generation}
+  source:
+    file: src/oauth/consent/api.rs
+    route: /tools/{name}/oauth/clients/{profile}/{generation}
+  refusals:
+  - invalid_credential
+- id: callback.ANY./oauth/callback{,/slack,/custom/{redirect_profile_id}}
+  listener: callback
+  method: ANY
+  path: /oauth/callback{,/slack,/custom/{redirect_profile_id}}
+  source:
+    file: src/oauth/consent/server.rs
+    route: '*fallback*'
+  refusals:
+  - callback_refused
+- id: test_fixture.POST./token
+  listener: test_fixture
+  method: POST
+  path: /token
+  source:
+    file: src/oauth/refresh/recovery_process/provider.rs
+    route: /token
+  refusals: []
+  not_product: fake provider token endpoint compiled for recovery tests only
+cli:
+- id: cli.agent.credentials.list
+  command: agent credentials list
+- id: cli.agent.get
+  command: agent get
+- id: cli.agent.list
+  command: agent list
+- id: cli.agent.mcp-grants.replace
+  command: agent mcp-grants replace
+- id: cli.agent.mcp-grants.show
+  command: agent mcp-grants show
+- id: cli.agent.modify
+  command: agent modify
+- id: cli.agent.register
+  command: agent register
+- id: cli.agent.revoke
+  command: agent revoke
+- id: cli.agent.select-oauth
+  command: agent select-oauth
+- id: cli.agent.set-cert-identity
+  command: agent set-cert-identity
+- id: cli.agent.set-credential
+  command: agent set-credential
+- id: cli.agent.unset-credential
+  command: agent unset-credential
+- id: cli.audit.query
+  command: audit query
+- id: cli.bootstrap.list
+  command: bootstrap list
+- id: cli.bootstrap.mint
+  command: bootstrap mint
+- id: cli.bootstrap.revoke
+  command: bootstrap revoke
+- id: cli.bootstrap-operator
+  command: bootstrap-operator
+- id: cli.export.agents
+  command: export agents
+- id: cli.infra.delete
+  command: infra delete
+- id: cli.infra.enable
+  command: infra enable
+- id: cli.infra.get
+  command: infra get
+- id: cli.infra.list
+  command: infra list
+- id: cli.infra.put
+  command: infra put
+- id: cli.integration.get
+  command: integration get
+- id: cli.integration.import
+  command: integration import
+- id: cli.migrate-bindings.apply
+  command: migrate-bindings apply
+- id: cli.migrate-bindings.preview
+  command: migrate-bindings preview
+- id: cli.model.delete
+  command: model delete
+- id: cli.model.enable
+  command: model enable
+- id: cli.model.get
+  command: model get
+- id: cli.model.list
+  command: model list
+- id: cli.model.put
+  command: model put
+- id: cli.mtls.crl-status
+  command: mtls crl-status
+- id: cli.mtls.list-blocklist
+  command: mtls list-blocklist
+- id: cli.mtls.revoke
+  command: mtls revoke
+- id: cli.oauth.account-status
+  command: oauth account-status
+- id: cli.oauth.attempt-status
+  command: oauth attempt-status
+- id: cli.oauth.bootstrap
+  command: oauth bootstrap
+- id: cli.oauth.cancel
+  command: oauth cancel
+- id: cli.oauth.client.retire
+  command: oauth client retire
+- id: cli.oauth.client.set
+  command: oauth client set
+- id: cli.oauth.client.status
+  command: oauth client status
+- id: cli.oauth.connect
+  command: oauth connect
+- id: cli.oauth.disconnect
+  command: oauth disconnect
+- id: cli.oauth.list
+  command: oauth list
+- id: cli.oauth.refresh
+  command: oauth refresh
+- id: cli.oauth.revoke
+  command: oauth revoke
+- id: cli.oauth.status
+  command: oauth status
+- id: cli.rotate
+  command: rotate
+- id: cli.status
+  command: status
+- id: cli.tool.activate-definition
+  command: tool activate-definition
+- id: cli.tool.deactivate-definition
+  command: tool deactivate-definition
+- id: cli.tool.delete
+  command: tool delete
+- id: cli.tool.enable
+  command: tool enable
+- id: cli.tool.from-definition
+  command: tool from-definition
+- id: cli.tool.get
+  command: tool get
+- id: cli.tool.list
+  command: tool list
+- id: cli.tool.mcp.observe
+  command: tool mcp observe
+- id: cli.tool.mcp.review
+  command: tool mcp review
+- id: cli.tool.mcp.show
+  command: tool mcp show
+- id: cli.tool.put
+  command: tool put
+behaviours:
+- id: beh.config.validation
+  summary: 'Config load: ${VAR} expansion, deprecations, deny_unknown_fields; invalid config exits 1'
+- id: beh.config.restart-only
+  summary: Config file and operator credentials read once at startup; no reload
+- id: beh.daemon.single-instance
+  summary: Second daemon on the same database is refused (advisory lock)
+- id: beh.migrations.forward-only
+  summary: Embedded migrations apply on start; a prior binary refuses a newer schema
+- id: beh.seed.catalog
+  summary: Seed catalog and legacy config.tools bootstrap into registrations
+- id: beh.creds.startup-resolution
+  summary: Credentials resolved at startup; unresolved config credentials fail readiness
+- id: beh.retention.audit-and-logs
+  summary: Audit and operational-log retention sweepers delete expired rows
+- id: beh.retention.credential-store
+  summary: Credential-store sweeper tombstones then deletes unreferenced sealed values
+- id: beh.oauth.refresh-task
+  summary: Background OAuth refresh before expiry; recovery barrier
+- id: beh.shutdown.drain
+  summary: SIGTERM/SIGINT drain window; any listener exiting early stops the daemon
+- id: beh.audit.jsonl-mirror
+  summary: Audit rows mirrored to a rotating JSONL file
+- id: beh.oplog.store
+  summary: Operational log events stored and queryable
+- id: beh.egress.proxied
+  summary: 'egress: proxied routes upstream calls through the CONNECT proxy'
+- id: beh.tls.upstream-ca
+  summary: tls.upstream_ca_bundle adds trust roots for HTTPS upstreams
+- id: beh.response-controls
+  summary: Size cap, content-type allowlist and redaction (hash only in audit)
+- id: beh.codex.fixups
+  summary: Codex account header, /responses body fixup and required headers
+- id: beh.proxy.header-strip
+  summary: Agent Authorization, x-api-key and target auth header are stripped
+- id: beh.secret.backends
+  summary: env, file-sealed, op, stored backends resolve; file-sealed rejects loose modes
+- id: beh.mtls.identity
+  summary: mTLS cert identity (CN, SAN DNS, SAN URI) maps to an agent
+- id: beh.mtls.revocation
+  summary: CRL and blocklist refuse revoked certs; no CRL in force refuses mTLS
+- id: beh.readyz.semantics
+  summary: /readyz refuses identityless credentialed setups and unresolved config credentials
+- id: beh.native.limits
+  summary: Native MCP session limits, deadlines and Origin/Host allowlists
+- id: beh.telemetry.logging
+  summary: JSON logs at logging.level, optional logging.file
+- id: beh.bootstrap-listener
+  summary: bootstrap_only listener binds and enrols with a bootstrap token
+journeys: []
+known_gaps: []
