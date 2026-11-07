@@ -22,11 +22,6 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 struct TestPki {
     ca_pem: String,
     server_cert_pem: String,
@@ -60,8 +55,6 @@ fn mint_pki(host: &str) -> TestPki {
 struct Fixture {
     _dir: TempDir,
     socket_path: PathBuf,
-    https_port: u16,
-    tcp_port: u16,
     op_token_wire: String,
     pki: TestPki,
     cert_path: PathBuf,
@@ -101,8 +94,6 @@ fn build_fixture() -> Fixture {
     Fixture {
         _dir: dir,
         socket_path,
-        https_port: pick_port(),
-        tcp_port: pick_port(),
         op_token_wire,
         pki,
         cert_path,
@@ -117,13 +108,14 @@ fn config_yaml(f: &Fixture) -> String {
         r#"
 listen:
   host: "127.0.0.1"
-  port: {tcp}
+  port: 0
   admin_socket:
     path: "{sock}"
   admin_https:
     enabled: true
     host: "127.0.0.1"
-    port: {https}
+    # OS-assigned; the daemon reports the bound port (AGENT-219).
+    port: 0
     cert_path: "{cert}"
     key_path: "{key}"
 shutdown:
@@ -133,8 +125,6 @@ database:
   path: "{db}"
 tools: []
 "#,
-        tcp = f.tcp_port,
-        https = f.https_port,
         sock = f.socket_path.display(),
         cert = f.cert_path.display(),
         key = f.key_path.display(),
@@ -166,10 +156,14 @@ async fn wait_for_https(host: &str, port: u16, ca_pem: &str) -> reqwest::Client 
 async fn admin_https_create_and_list_agent_round_trip() {
     let f = build_fixture();
     let cfg = parse_config_str(&config_yaml(&f)).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    let https_port = started.addrs.admin_https.expect("admin HTTPS bound").port();
 
-    let client = wait_for_https("127.0.0.1", f.https_port, &f.pki.ca_pem).await;
-    let base = format!("https://127.0.0.1:{}", f.https_port);
+    let client = wait_for_https("127.0.0.1", https_port, &f.pki.ca_pem).await;
+    let base = format!("https://127.0.0.1:{https_port}");
     let bearer = format!("Bearer {}", f.op_token_wire);
 
     // Create an agent over HTTPS.
@@ -272,9 +266,13 @@ async fn admin_https_bootstrap_register_works_without_bearer() {
     // register endpoint must accept a bootstrap-only request.
     let f = build_fixture();
     let cfg = parse_config_str(&config_yaml(&f)).unwrap();
-    let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
-    let client = wait_for_https("127.0.0.1", f.https_port, &f.pki.ca_pem).await;
-    let base = format!("https://127.0.0.1:{}", f.https_port);
+    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(5))
+        .await
+        .expect("daemon starts");
+    let (coord, handle) = (started.coord, started.handle);
+    let https_port = started.addrs.admin_https.expect("admin HTTPS bound").port();
+    let client = wait_for_https("127.0.0.1", https_port, &f.pki.ca_pem).await;
+    let base = format!("https://127.0.0.1:{https_port}");
     let op_bearer = format!("Bearer {}", f.op_token_wire);
 
     // Mint a bootstrap token via the operator surface.

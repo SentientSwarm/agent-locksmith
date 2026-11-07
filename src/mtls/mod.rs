@@ -15,9 +15,11 @@
 pub mod authenticator;
 pub mod blocklist;
 pub mod crl;
+pub mod revocation;
 pub mod validator;
 
 pub use authenticator::MtlsAuthenticator;
 pub use blocklist::Blocklist;
 pub use crl::{CrlState, CrlStore};
+pub use revocation::Revocation;
 pub use validator::{MtlsError, MtlsIdentity, MtlsValidator};

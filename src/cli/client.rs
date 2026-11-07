@@ -165,12 +165,53 @@ impl CliClient {
         Ok(())
     }
 
+    pub async fn json_if_match<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        auth: Auth<'_>,
+        expected: &str,
+    ) -> Result<T, CliError> {
+        self.json_body_if_match(method, path, auth, None, expected)
+            .await
+    }
+    pub async fn json_body_if_match<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        auth: Auth<'_>,
+        body: Option<&Value>,
+        expected: &str,
+    ) -> Result<T, CliError> {
+        let (status, bytes) = self
+            .raw_headers(method, path, auth, body, &[("if-match", expected)])
+            .await?;
+        if !(200..300).contains(&status) {
+            return Err(CliError::Server {
+                status,
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+            });
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     async fn raw(
         &self,
         method: &str,
         path: &str,
         auth: Auth<'_>,
         body: Option<&Value>,
+    ) -> Result<(u16, bytes::Bytes), CliError> {
+        self.raw_headers(method, path, auth, body, &[]).await
+    }
+
+    async fn raw_headers(
+        &self,
+        method: &str,
+        path: &str,
+        auth: Auth<'_>,
+        body: Option<&Value>,
+        extra: &[(&str, &str)],
     ) -> Result<(u16, bytes::Bytes), CliError> {
         let auth_header_value: String = match auth {
             Auth::Operator(t) | Auth::Agent(t) => format!("Bearer {t}"),
@@ -180,6 +221,7 @@ impl CliClient {
             Transport::Uds(uds) => {
                 let mut headers: Vec<(&str, &str)> =
                     vec![("authorization", auth_header_value.as_str())];
+                headers.extend_from_slice(extra);
                 if body.is_some() {
                     headers.push(("content-type", "application/json"));
                 }
@@ -193,6 +235,9 @@ impl CliClient {
                 let mut req = client
                     .request(m, &url)
                     .header("authorization", &auth_header_value);
+                for (key, value) in extra {
+                    req = req.header(*key, *value);
+                }
                 if let Some(b) = body_bytes {
                     req = req.header("content-type", "application/json").body(b);
                 }

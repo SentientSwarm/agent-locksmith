@@ -199,6 +199,9 @@ pub fn catalog_op_references(catalog: &Catalog) -> Vec<String> {
     let mut out = Vec::new();
     for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
         for r in catalog.iter_enabled_by_kind(kind) {
+            if r.protocol != crate::registrations::Protocol::Http {
+                continue;
+            }
             if let Some(reference) = r.auth.op_reference()
                 && seen.insert(reference.to_string())
             {
@@ -231,6 +234,12 @@ pub async fn resync_op_references(
         match repo.list_all().await {
             Ok(rows) => references.extend(
                 rows.iter()
+                    .filter(|o| {
+                        catalog
+                            .load()
+                            .lookup_any(&o.registration)
+                            .is_none_or(|r| r.protocol == crate::registrations::Protocol::Http)
+                    })
                     .filter_map(|o| o.auth_spec.op_reference().map(str::to_string)),
             ),
             Err(e) => {

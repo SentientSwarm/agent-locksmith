@@ -52,6 +52,7 @@ tools: []
 
 fn op() -> OperatorIdentity {
     OperatorIdentity {
+        public_id: "fixture-operator".into(),
         name: "alice".into(),
         scope: None,
         auth_method: None,

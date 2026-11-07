@@ -122,40 +122,10 @@ impl AuditRepository {
     /// Callers that need to know about a failure can inspect the returned
     /// `Result`; production code typically logs and discards.
     pub async fn record(&self, event: &AuditEvent) -> Result<(), RepoError> {
-        let details_json = event
-            .details
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-        sqlx::query(
-            "INSERT INTO audit \
-             (ts, event_class, event, agent_public_id, operator_name, tool, \
-              upstream_host, method, path, status, latency_ms, decision, \
-              auth_method, origin_ip, details) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(event.ts_ms)
-        .bind(event.event_class.as_str())
-        .bind(&event.event)
-        .bind(event.agent_public_id.as_deref())
-        .bind(event.operator_name.as_deref())
-        .bind(event.tool.as_deref())
-        .bind(event.upstream_host.as_deref())
-        .bind(event.method.as_deref())
-        .bind(event.path.as_deref())
-        .bind(event.status.map(i64::from))
-        .bind(event.latency_ms.map(|l| l as i64))
-        .bind(event.decision.as_str())
-        .bind(event.auth_method.as_deref())
-        .bind(event.origin_ip.as_deref())
-        .bind(details_json)
-        .execute(&self.pool)
-        .await?;
-        // JSONL mirror — best-effort, errors logged + swallowed inside
-        // the sink so audit insertion can't ever fail mid-mirror.
-        if let Some(sink) = &self.sink {
-            sink.append(event).await;
-        }
+        let mut connection = self.pool.acquire().await?;
+        self.insert_on(&mut connection, event).await?;
+        drop(connection);
+        self.mirror(event).await;
         Ok(())
     }
 
@@ -303,3 +273,6 @@ fn parse_decision(s: &str) -> Result<Decision, RepoError> {
         )))),
     }
 }
+
+#[path = "audit_write.rs"]
+mod write;

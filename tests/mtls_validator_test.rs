@@ -159,3 +159,16 @@ fn validator_load_rejects_malformed_ca_pem() {
     let err = MtlsValidator::new("this is not a PEM").unwrap_err();
     assert!(matches!(err, MtlsError::MalformedCert(_)), "got: {err:?}");
 }
+
+#[test]
+fn validate_fails_closed_while_no_crl_is_in_force() {
+    // A configured CRL that has never been applied cannot say whether the
+    // certificate is revoked, so validation refuses it (T6.3).
+    let ca = mint_ca();
+    let leaf = mint_leaf(&ca, Some("agent-7"), &[], &[], None, None);
+    let store = agent_locksmith::mtls::CrlStore::trusting(&ca.ca_pem).unwrap();
+    let v = MtlsValidator::new(&ca.ca_pem)
+        .unwrap()
+        .with_crl(std::sync::Arc::new(store));
+    assert!(matches!(v.validate(&leaf), Err(MtlsError::CrlUnavailable)));
+}

@@ -19,6 +19,7 @@ use crate::secret::ResolvedCreds;
 use std::collections::HashMap;
 
 pub struct AppState {
+    pub native: Arc<crate::native::Runtime>,
     pub config: Arc<ArcSwap<AppConfig>>,
     pub started_at: Instant,
     pub client_pool: ClientPool,
@@ -399,10 +400,51 @@ pub fn build_app_full_with_phase_k(
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     op_resolver: Option<Arc<crate::secret::OpResolver>>,
 ) -> Router {
+    let native = crate::native::Runtime::new(
+        config.load().mcp.clone(),
+        registrations.clone(),
+        catalog.clone(),
+    );
+    build_app_full_with_native(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        oauth,
+        agent_creds,
+        credential_sealing_key,
+        credential_secrets,
+        operational_log,
+        op_resolver,
+        native,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_native(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
+    agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    op_resolver: Option<Arc<crate::secret::OpResolver>>,
+    native: Arc<crate::native::Runtime>,
+) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     drop(snapshot);
     let state = Arc::new(AppState {
+        native,
         config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
@@ -421,7 +463,16 @@ pub fn build_app_full_with_phase_k(
         op_resolver,
     });
 
+    router(state)
+}
+
+fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/mcp/{name}", routing::any(crate::native::endpoint))
+        .route(
+            "/mcp/{name}/compact",
+            routing::any(crate::native::compact_endpoint),
+        )
         // k8s-style health endpoints (INF-3 / Q-18). Unauthenticated by
         // design — orchestrators should not need credentials to probe the
         // process. /health is preserved as an alias to /livez for
@@ -451,6 +502,10 @@ pub fn build_app_full_with_phase_k(
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::native::boundary,
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -519,10 +574,7 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Build metadata. Unauthenticated; useful for incident response and
 /// debugging. INF-3.
 async fn version_handler() -> Json<Value> {
-    Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "name": env!("CARGO_PKG_NAME"),
-    }))
+    Json(crate::build_info::document(env!("CARGO_PKG_NAME")))
 }
 
 /// `/skill` — auth-optional. Dispatches to the personalized form when
@@ -551,20 +603,8 @@ async fn skill_handler(
             // post-Phase-E that always returned empty for catalog
             // deployments because tools live in the registrations table.
             let listing = catalog_listing(&state, Some(id), crate::registrations::Kind::Tool).await;
-            let available: Vec<(String, String)> = listing
-                .into_iter()
-                .filter_map(|v| {
-                    let name = v.get("name")?.as_str()?.to_string();
-                    let description = v
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Some((name, description))
-                })
-                .collect();
             skill_response(
-                crate::skill::render_authenticated(id, &available),
+                crate::skill::render_authenticated(id, &listing),
                 "private, no-cache, no-store",
             )
         }

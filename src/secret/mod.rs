@@ -101,6 +101,9 @@ pub fn resolve_registration_creds_sync_env_only(
     let mut out = HashMap::new();
     for kind in [Kind::Tool, Kind::Model, Kind::Infra] {
         for r in catalog.iter_enabled_by_kind(kind) {
+            if r.protocol != crate::registrations::Protocol::Http {
+                continue;
+            }
             let env_var = match &r.auth {
                 AuthSpec::None => continue,
                 AuthSpec::Header { env_var, .. } => env_var,
@@ -117,7 +120,9 @@ pub fn resolve_registration_creds_sync_env_only(
                 // tokens live in the oauth_sessions cache, populated by the
                 // bootstrap CLI (Phase F.4) and refreshed by the daemon's
                 // background task (Phase F.3). Skip here.
-                AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. } => continue,
+                AuthSpec::ControlledOauth { .. }
+                | AuthSpec::OauthPkce { .. }
+                | AuthSpec::OauthDeviceCode { .. } => continue,
             };
             let Ok(value) = std::env::var(env_var) else {
                 warn!(
