@@ -6,3 +6,4 @@ __pycache__/
 
 # v2 handoff archive (contents already in docs/v2/{kickoff,roadmap}.md)
 docs/v2/files.zip
+.qa-venv/

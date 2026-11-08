@@ -355,3 +355,36 @@ jobs:
           cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml
           cargo clippy --locked --manifest-path crates/mcp-transport/Cargo.toml --all-targets -- -D warnings
           cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check
+
+  qa-smoke:
+    name: QA smoke (T1 local binaries)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - name: Build release binaries
+        run: cargo build --locked --release --bins
+      - name: Install QA harness dependencies
+        run: |
+          uv venv --python 3.13 "$RUNNER_TEMP/qa-python"
+          uv pip install --python "$RUNNER_TEMP/qa-python/bin/python" -r qa/requirements.txt
+      - name: Test the QA harness
+        env:
+          QA_BINS: ${{ github.workspace }}/target/release
+        run: |
+          "$RUNNER_TEMP/qa-python/bin/python" -m pytest -c qa/pytest.ini qa/tests -q
+      - name: Run QA smoke
+        run: |
+          "$RUNNER_TEMP/qa-python/bin/python" qa/run.py --bins target/release --mode pr --out "$RUNNER_TEMP/qa-evidence"
+      - name: Upload QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-evidence
+          path: ${{ runner.temp }}/qa-evidence
+          if-no-files-found: error

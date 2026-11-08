@@ -130,8 +130,9 @@ Every CLI subcommand routes through the same handler functions whether transport
 Per D-10, bootstrap-token register stands on its own — it's the only admin endpoint reachable without operator auth. This works over HTTPS exactly as over UDS:
 
 ```bash
-# Operator mints a single-use bootstrap token (locally or remotely):
-locksmith bootstrap mint --single-use
+# Operator mints a bootstrap token (locally or remotely). Tokens are
+# single-use by default; pass --reusable to allow multiple registrations.
+locksmith bootstrap mint
 
 # Output: lkbt_...
 

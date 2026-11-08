@@ -25,7 +25,9 @@ This is the recommended production shape on systemd hosts.
 /etc/locksmith/credentials/openai.enc      # encrypted blob (sealed via systemd-creds)
 /etc/locksmith/operators.yaml              # operator credential hashes (M2)
 /var/lib/locksmith/locksmith.db            # SQLite DB (locksmith-owned, 0600)
-/var/log/locksmith/audit.jsonl             # JSONL audit mirror (M3)
+/var/log/locksmith/audit.jsonl.YYYY-MM-DD[.N]  # JSONL audit mirror (M3): audit.jsonl_path plus
+                                           # a UTC date suffix; .N when a day's file hits
+                                           # the size cap. Nothing is written to audit.jsonl itself.
 /run/locksmith/admin.sock                  # admin UDS (M2)
 /run/credentials/locksmith/openai_token    # systemd drops decrypted creds here at start
 ```

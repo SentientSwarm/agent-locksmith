@@ -1,6 +1,6 @@
 # Error envelope
 
-The uniform JSON shape locksmith returns for every authentication and authorization failure. User-level reference; authoritative version: `agents-stack/docs/spec/v<X.Y.Z>.md` §4.7.9 and `agents-stack/docs/adrs/0002-uniform-error-envelope.md`.
+The uniform JSON shape locksmith returns for errors it generates on the agent listener and on the admin API (UDS, admin HTTPS and the bootstrap listener). It does not apply to error bodies passed through from an upstream, which reach the agent unchanged, or to native MCP JSON-RPC errors, which have their own shape (see [native MCP](../agent-integration/native-mcp.md)). User-level reference; authoritative version: `agents-stack/docs/spec/v<X.Y.Z>.md` §4.7.9 and `agents-stack/docs/adrs/0002-uniform-error-envelope.md`.
 
 ## The shape
 
@@ -8,13 +8,29 @@ The uniform JSON shape locksmith returns for every authentication and authorizat
 {
   "error": {
     "message": "<human-readable, intentionally generic>",
-    "type":    "auth_error" | "authz_error",
+    "type":    "<error category, e.g. auth_error | authz_error | bad_request>",
     "code":    "<stable machine-readable discriminator>"
   }
 }
 ```
 
-Three fields, every error response, every time. The `code` field is the stable contract; `message` is for humans and may evolve; `type` distinguishes "you're not who you say" (auth_error) from "you are who you say but you can't do that" (authz_error).
+Three fields, every error response, every time. The `code` field is the stable contract; `message` is for humans and may evolve; `type` is a coarse category. For example it distinguishes "you're not who you say" (auth_error) from "you are who you say but you can't do that" (authz_error).
+
+Proxy-path types and codes are listed in the [wire contract](../agent-integration/wire-contract.md#error-envelope). On the admin API, when a handler does not set `type`, locksmith fills it from the HTTP status:
+
+| HTTP | type |
+|------|------|
+| 400 and other 4xx not listed | `bad_request` |
+| 401 | `auth_error` |
+| 403 | `authz_error` |
+| 404 | `not_found` |
+| 408, 504 | `timeout` |
+| 409 | `conflict` |
+| 428 | `precondition_required` |
+| 429 | `rate_limited` |
+| 502 | `upstream_error` |
+| 503 | `unavailable` |
+| other 5xx | `internal_error` |
 
 ## The type / code matrix
 
@@ -23,12 +39,15 @@ Three fields, every error response, every time. The `code` field is the stable c
 | 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed, unknown public_id, wrong-namespace, expired, revoked, secret-mismatch — any reason at all. The wire **does not** distinguish between these (see Q-8 below). |
 | 401 | `auth_error` | `internal_error` | Internal failure during auth (DB unreachable, etc.). The audit log carries the discriminating cause. |
 | 403 | `authz_error` | `tool_not_allowed` | Valid identity, but ACL denies or the explicit account binding is missing; inspect the operator audit reason. |
-| 409 | `conflict` | `wrong_kind` | (v2.0.0+) Operation references a name registered under a different kind (e.g., `PUT /admin/models/anthropic` when anthropic is `kind=tool`). |
+| 409 | `conflict` | `wrong_kind` | (v2.0.0+) Operation references a name registered under a different kind (e.g., `PUT /admin/models/anthropic` when anthropic is `kind=tool`). Cross-kind name reuse returns this code. |
 | 400 | `bad_request` | `reserved_name` | (v2.0.0+) Admin operation tried to register a name on the reserved list (`livez`, `readyz`, `version`, `health`, `skill`, `tools`, `models`, `admin`, `api`). |
+| 400 | `bad_request` | `invalid_name` | Admin operation used a registration name that fails name validation. |
+| 400 | `bad_request` | `invalid_metadata` | Registration metadata fails per-kind validation. |
+| 400 | `bad_request` | `invalid_mcp` | Native MCP registration config is invalid. See [native setup](../operator/native-mcp.md). |
+| 400 / 404 / 409 / 428 / 503 | `bad_request` / `not_found` / `conflict` / `precondition_required` / `unavailable` | `definition_invalid` / `definition_not_found` / `definition_conflict` / `definition_precondition_required` / `definition_unavailable` | Integration definition operations. See [integration definitions](../operator/integration-definitions.md). |
 | 400 | `bad_request` | `auth_required` | (v2.0.0+) Admin operation registered `kind=tool` without `auth:` — must state `auth: none` explicitly for authless tools. |
 | 400 | `bad_request` | `invalid_upstream` | Operator tool/model destination is not an absolute HTTP(S) base URL, or contains userinfo, query or fragment. Validation does not echo the URL; no row, grant or selection changes. See [operator onboarding](../operator/connector-onboarding.md). |
 | 400 | `bad_request` | `invalid_http_service` | Optional service metadata fails the strict versioned [HTTP descriptor contract](../agent-integration/http-services.md). Static error does not echo authored content; no row, grant or selection changes. |
-| 409 | `conflict` | `name_in_use` | (v2.0.0+) Cross-kind name reuse (e.g., a name already exists with a different kind). |
 | 503 | `auth_error` | `credential_unresolved` | Selected environment/stored/1Password source unavailable or selection unreadable. No alternate/default dispatch. |
 | 503 | `auth_error` | `oauth_session_missing` / `oauth_refresh_failed` / `oauth_sealing_key_unset` | Selected OAuth session unavailable; operator diagnosis required. |
 | 401 | `auth_error` | `agent_identity_required` | Identityless legacy request to a credentialed registration. |

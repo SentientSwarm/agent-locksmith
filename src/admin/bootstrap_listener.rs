@@ -40,6 +40,9 @@ pub struct BootstrapState {
 pub fn build_router(state: BootstrapState) -> Router {
     Router::new()
         .route("/admin/agent/register", post(handle_register))
+        .layer(axum::middleware::map_response(
+            crate::admin::error_envelope::fill_error_type,
+        ))
         .with_state(state)
 }
 

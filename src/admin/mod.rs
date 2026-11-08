@@ -7,6 +7,7 @@
 //! HTTPS listener and the M6 bootstrap-only listener.
 
 pub mod bootstrap_listener;
+pub mod error_envelope;
 pub mod https;
 pub mod service;
 pub mod uds;
