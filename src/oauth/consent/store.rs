@@ -118,20 +118,25 @@ impl Runtime {
         }
         sqlx::query(&format!("UPDATE oauth_consent_attempts SET state='canceled',reason='disconnected',updated_at=?,version=version+1,{WIPE} WHERE name=? AND session_label=? AND owner_id=? AND state IN ('pending','exchanging')"))
             .bind(now()).bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind='controlled_linear_v1' AND owner_id=?")
+        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1') AND owner_id=?")
             .bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(
             json!({"state":"disconnected","account_generation":current["account_generation"],"remote_revocation":"unsupported"}),
         )
     }
-    pub(super) async fn claim(&self, state: &str, issuer: &str) -> Result<SqliteRow> {
+    pub(super) async fn claim(
+        &self,
+        state: &str,
+        issuer: &str,
+        authority: &str,
+    ) -> Result<SqliteRow> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sweep(&mut tx).await?;
         let row = sqlx::query("SELECT * FROM oauth_consent_attempts WHERE state_hash=? AND state='pending' AND run_id=?")
             .bind(digest(state.as_bytes())).bind(&self.run_id).fetch_optional(&mut *tx).await?.ok_or(Error("callback_refused"))?;
         let p = self.profile(row.get("profile_id"))?;
-        if p.issuer != issuer {
+        if p.issuer != issuer || p.callback_authority()? != authority {
             return Err(Error("callback_refused"));
         }
         current(&mut tx, &row, p, &self.run_id, "pending").await?;
@@ -182,7 +187,7 @@ impl Runtime {
         }
         current(&mut tx, &live, p, &self.run_id, "exchanging").await?;
         let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM oauth_sessions WHERE kind='controlled_linear_v1'",
+            "SELECT count(*) FROM oauth_sessions WHERE kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1')",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -197,8 +202,8 @@ impl Runtime {
             .transpose()?;
         sqlx::query(&format!("UPDATE oauth_consent_attempts SET state='connected',updated_at=?,stage='committed',reason=NULL,{WIPE} WHERE id=?"))
             .bind(now()).bind(a.get::<&str,_>("id")).execute(&mut *tx).await?;
-        let inserted = sqlx::query("INSERT INTO oauth_sessions(name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,access_token_expires_at,scope,scope_echoed,created_at,updated_at) VALUES(?,?,'controlled_linear_v1',?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *")
-            .bind(a.get::<&str,_>("name")).bind(a.get::<&str,_>("session_label")).bind(a.get::<&str,_>("owner_id"))
+        let inserted = sqlx::query("INSERT INTO oauth_sessions(name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,access_token_expires_at,scope,scope_echoed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *")
+            .bind(a.get::<&str,_>("name")).bind(a.get::<&str,_>("session_label")).bind(p.stored_kind()).bind(a.get::<&str,_>("owner_id"))
             .bind(&p.id).bind(p.digest()?).bind(&p.expected_workspace).bind(&p.expected_user)
             .bind(access).bind(an).bind(refresh.as_ref().map(|x| &x.0)).bind(refresh.as_ref().map(|x| &x.1))
             .bind(token.expiry).bind(if token.scope_echoed {"read"} else {""}).bind(token.scope_echoed)
@@ -307,6 +312,9 @@ pub(super) async fn registration(
             .await
             .map_err(|_| Error("profile_conflict"))?;
         if r.definition_pinned() {
+            if p.hosted() {
+                return Err(Error("profile_conflict"));
+            }
             let Some(crate::definitions::Activation::ControlledOauth {
                 profile_id,
                 profile_digest,
@@ -321,7 +329,8 @@ pub(super) async fn registration(
                 return Err(Error("profile_conflict"));
             }
         }
-        if auth != expected
+        if (p.hosted() && row.get::<&str, _>("protocol") != "mcp_streamable_http")
+            || auth != expected
             || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"
             || row.get::<&str, _>("upstream") != p.resource

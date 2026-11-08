@@ -17,7 +17,7 @@ impl Runtime {
         let row = sqlx::query("SELECT incarnation,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at,scope_echoed,refresh_token_ciphertext IS NOT NULL AS has_refresh FROM oauth_sessions WHERE name=? AND session_label=?")
             .bind(name).bind(label).fetch_optional(&mut *c).await?;
         if let Some(row) = row {
-            if row.get::<&str, _>("kind") != "controlled_linear_v1"
+            if !config::managed_kind(row.get("kind"))
                 || row.get::<Option<&str>, _>("owner_id") != Some(owner)
             {
                 return Err(Error("not_found"));
@@ -91,7 +91,7 @@ impl Runtime {
                 .as_slice(),
             );
             return Ok(
-                json!({"state":if reconnect {"reconnect_required"} else {"connected_unbound"},"kind":"controlled_linear_v1","profile":row.get::<&str,_>("profile_id"),"account_generation":generation,"revision":revision,
+                json!({"state":if reconnect {"reconnect_required"} else {"connected_unbound"},"kind":row.get::<&str,_>("kind"),"profile":row.get::<&str,_>("profile_id"),"account_generation":generation,"revision":revision,
                 "config_revision":registration.as_ref().map(|r| r.1),"token_expires_at":row.get::<Option<i64>,_>("access_token_expires_at"),"identity_verified":true,"requested_scopes":["read"],"granted_scope":if row.get::<bool,_>("scope_echoed") {Some("read")} else {None},
                 "token_version":version,"refresh_pending":pending,"reconnect_required":reconnect,"refresh_available":reason.is_none(),"refresh_unavailable_reason":reason}),
             );
@@ -113,7 +113,8 @@ impl Runtime {
 }
 
 pub(super) fn profile_matches(row: &SqliteRow, p: &config::Profile) -> Result<bool> {
-    Ok(row.get::<&str, _>("profile_digest") == p.digest()?
+    Ok(row.get::<&str, _>("kind") == p.stored_kind()
+        && row.get::<&str, _>("profile_digest") == p.digest()?
         && row.get::<&str, _>("workspace_id") == p.expected_workspace
         && row.get::<&str, _>("user_id") == p.expected_user)
 }

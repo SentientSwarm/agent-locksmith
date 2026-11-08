@@ -74,7 +74,11 @@ async fn write(
         .credential_sealing_key
         .as_ref()
         .ok_or_else(unavailable)?;
-    let mut tx = creds.pool.begin().await.map_err(|_| unavailable())?;
+    let mut tx = creds
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|_| unavailable())?;
     let (header, old_ref) = shape(&mut tx, agent.id, registration, &body).await?;
     let (sealed, nonce) = key
         .seal(body.value.expose_secret().as_bytes())

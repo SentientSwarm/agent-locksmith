@@ -140,3 +140,64 @@ async fn controlled_pending_migration_preserves_all_columns_and_deleted_highwate
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn hosted_migration_preserves_schema18_rows_highwater_and_kind_barriers() -> Result<(), Error>
+{
+    for keep in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("prior.db");
+        let mut c = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await?;
+        let mut old = sqlx::migrate!();
+        old.migrations = old
+            .iter()
+            .filter(|m| m.version <= 18)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into();
+        old.run(&mut c).await?;
+        sqlx::query("INSERT INTO oauth_sessions(incarnation,name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,created_at,updated_at,token_version,refresh_pending) VALUES(7,'controlled','label','controlled_linear_v1','owner','profile','digest','workspace','user',X'0102',X'0304',12,34,8,1)").execute(&mut c).await?;
+        sqlx::query("INSERT INTO oauth_sessions(incarnation,name,refresh_token_ciphertext,refresh_token_nonce,created_at,updated_at) VALUES(99,'gone',X'05',X'06',12,34)").execute(&mut c).await?;
+        sqlx::query("DELETE FROM oauth_sessions WHERE incarnation=99 OR ?=0")
+            .bind(keep)
+            .execute(&mut c)
+            .await?;
+        let before:Vec<String>=sqlx::query_scalar("SELECT json_array(incarnation,name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,hex(access_token_ciphertext),hex(access_token_nonce),access_token_expires_at,refresh_token_ciphertext,refresh_token_nonce,token_version,refresh_pending,created_at,updated_at) FROM oauth_sessions").fetch_all(&mut c).await?;
+        c.close().await?;
+        let pool = migrations::open_and_migrate(&path).await?;
+        let after:Vec<String>=sqlx::query_scalar("SELECT json_array(incarnation,name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,hex(access_token_ciphertext),hex(access_token_nonce),access_token_expires_at,refresh_token_ciphertext,refresh_token_nonce,token_version,refresh_pending,created_at,updated_at) FROM oauth_sessions").fetch_all(&pool).await?;
+        assert_eq!(before, after);
+        for kind in ["linear_hosted_v1", "linear_hosted_fixture_v1"] {
+            assert!(
+                sqlx::query(
+                    "INSERT INTO oauth_sessions(name,kind,created_at,updated_at) VALUES(?,?,1,2)"
+                )
+                .bind(kind)
+                .bind(kind)
+                .execute(&pool)
+                .await
+                .is_err()
+            );
+            let generation:i64=sqlx::query_scalar("INSERT INTO oauth_sessions(name,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,created_at,updated_at) VALUES(?,?,'owner','profile','digest','workspace','user',X'01',X'02',1,2) RETURNING incarnation").bind(kind).bind(kind).fetch_one(&pool).await?;
+            assert!(generation > 99);
+        }
+        assert_eq!(
+            OauthSessionRepository::new(pool.clone())
+                .list_all()
+                .await?
+                .len(),
+            0
+        );
+        assert!(matches!(
+            old.run(&pool).await,
+            Err(sqlx::migrate::MigrateError::VersionMissing(19))
+        ));
+        pool.close().await;
+    }
+    Ok(())
+}

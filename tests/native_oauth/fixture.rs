@@ -20,6 +20,7 @@ pub fn profile(path: &Path, port: u16) -> Profile {
     Profile {
         id: "controlled".into(),
         kind: "controlled-linear-v1".into(),
+        selected_tools: vec![],
         client_id: "fixture-client".into(),
         client_generation: 1,
         issuer: issuer.clone(),

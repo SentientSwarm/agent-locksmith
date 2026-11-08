@@ -45,7 +45,7 @@ impl AgentCredentialRepository {
         registration: &str,
         auth_spec: &AuthSpec,
     ) -> Result<(), RepoError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         Self::set_into(&mut tx, agent_id, registration, auth_spec).await?;
         tx.commit().await?;
         Ok(())
@@ -60,7 +60,7 @@ impl AgentCredentialRepository {
         let AuthSpec::StoredBearer { secret_ref } = auth else {
             return Err(RepoError::InvalidGrantTarget);
         };
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let live: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_secrets WHERE secret_ref=? AND tombstoned_at IS NULL)")
             .bind(secret_ref).fetch_one(&mut *tx).await?;
         if !live {
@@ -262,6 +262,31 @@ mod tests {
         assert_eq!(back.auth_spec, spec);
         assert_eq!(back.agent_id, id);
         assert_eq!(back.registration, "lmstudio");
+    }
+
+    /// A concurrent writer that commits between this transaction's reads and
+    /// its write must make `set` wait, not fail. A deferred transaction would
+    /// read a snapshot first and then get SQLITE_BUSY on its stale snapshot.
+    #[tokio::test]
+    async fn set_waits_for_a_concurrent_writer_instead_of_failing() {
+        use sqlx::Connection;
+        let (dir, agents, creds) = fresh().await;
+        let id = make_agent(&agents, "hermes").await;
+        let url = format!("sqlite://{}", dir.path().join("db.sqlite").display());
+        let mut writer = sqlx::SqliteConnection::connect(&url).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE contention(x INTEGER)")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        sqlx::raw_sql("BEGIN IMMEDIATE; INSERT INTO contention VALUES(1);")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+        let spec = AuthSpec::None;
+        let set = tokio::spawn(async move { creds.set(id, "lmstudio", &spec).await });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::raw_sql("COMMIT").execute(&mut writer).await.unwrap();
+        set.await.unwrap().expect("set waits for the writer");
     }
 
     #[tokio::test]

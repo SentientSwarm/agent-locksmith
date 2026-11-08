@@ -23,11 +23,11 @@ pub async fn exercise() {
     f.stop();
     let before = snapshot(&f);
     f.start_with_env(setup::ENV).await;
-    assert_eq!(oauth_upgrade::version(&f), "18");
+    assert_eq!(oauth_upgrade::version(&f), "19");
     assert_eq!(
         snapshot(&f),
         before,
-        "migrations 0015-0018 changed legacy custody"
+        "migrations 0015-0019 changed legacy custody"
     );
     assert_eq!(
         migration::sqlite(&f, &f.db, "SELECT DISTINCT kind FROM oauth_sessions;").trim(),
@@ -41,7 +41,7 @@ pub async fn exercise() {
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.cleanup();
     println!(
-        "actual schema 14 -> 18 preserves sealed custody, incarnations, versions, high-water and grants; prior refuses before listeners; restart passes"
+        "actual schema 14 -> 19 preserves sealed custody, incarnations, versions, high-water and grants; prior refuses before listeners; restart passes"
     );
 }
 

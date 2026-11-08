@@ -74,7 +74,9 @@ fn bound_https_addr(daemon: &mut std::process::Child, timeout: Duration) -> Stri
 
 fn wait_for_socket(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
-    while !path.exists() {
+    // The socket file appears at bind(), before listen(); only a successful
+    // connect proves the daemon is accepting.
+    while std::os::unix::net::UnixStream::connect(path).is_err() {
         if Instant::now() > deadline {
             panic!("daemon did not bind {} within {timeout:?}", path.display());
         }

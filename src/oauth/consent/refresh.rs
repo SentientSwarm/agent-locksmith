@@ -119,7 +119,7 @@ impl Runtime {
             .await?
             .ok_or(Error("source_conflict"))?;
         let profile = self.profile(&claim.profile_id)?;
-        if row.get::<&str, _>("kind") != "controlled_linear_v1"
+        if !config::managed_kind(row.get("kind"))
             || row.get::<Option<&str>, _>("owner_id") != Some(&claim.owner)
             || row.get::<i64, _>("incarnation") != claim.generation
             || row.get::<i64, _>("token_version") != claim.version

@@ -127,10 +127,15 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
 
 async fn callback(State(rt): State<Arc<Runtime>>, req: Request) -> Response {
     let parsed = parameters(&rt, &req);
+    let authority = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     let result = match parsed {
         Ok((state, issuer, code)) => rt
             .owner
-            .run(rt.callback(&state, &issuer, code.as_deref()))
+            .run(rt.callback(&state, &issuer, code.as_deref(), authority))
             .await
             .unwrap_or(Err(Error("shutting_down"))),
         Err(e) => Err(e),
@@ -155,8 +160,10 @@ pub(super) fn parameters(rt: &Runtime, req: &Request) -> Result<(String, String,
         || req.uri().path() != "/oauth/callback"
         || req.uri().to_string().len() > 8192
         || req.headers().get_all("host").iter().count() != 1
-        || req.headers().get("host").and_then(|v| v.to_str().ok())
-            != Some(rt.config.callback.address.to_string().as_str())
+        || !rt.config.profiles.iter().any(|p| {
+            p.callback_authority().ok().as_deref()
+                == req.headers().get("host").and_then(|v| v.to_str().ok())
+        })
         || req
             .headers()
             .keys()

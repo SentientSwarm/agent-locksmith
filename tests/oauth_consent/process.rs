@@ -769,3 +769,6 @@ pub mod refresh;
 
 #[path = "../native_oauth/process.rs"]
 pub mod native;
+
+#[path = "hosted.rs"]
+pub mod hosted;

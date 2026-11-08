@@ -5,7 +5,7 @@ impl OauthSessionRepository {
     /// `locksmith oauth revoke <name> [--label <label>]`. Does NOT
     /// call the provider's revoke endpoint (deferred to v1.1+).
     pub async fn delete(&self, name: &str, session_label: &str) -> Result<bool, OauthSessionError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let kind: Option<String> =
             sqlx::query_scalar("SELECT kind FROM oauth_sessions WHERE name=? AND session_label=?")
                 .bind(name)

@@ -27,6 +27,7 @@ impl Fixture {
         let profile = config::Profile {
             id: "fixture".into(),
             kind: "controlled-linear-v1".into(),
+            selected_tools: vec![],
             client_id: "fixture-client".into(),
             client_generation: 1,
             issuer: "https://127.0.0.1:19293".into(),
@@ -111,7 +112,11 @@ impl Fixture {
             .into_owned();
         let row = self
             .rt
-            .claim(&state, &self.rt.config.profiles[0].issuer)
+            .claim(
+                &state,
+                &self.rt.config.profiles[0].issuer,
+                "127.0.0.1:19294",
+            )
             .await
             .unwrap();
         (value, row)
@@ -389,7 +394,7 @@ async fn callback_rejects_duplicate_and_wrong_state_without_consuming_valid_atte
     let f = Fixture::new().await;
     let v = f.start("safe").await;
     assert!(
-        f.rt.claim("wrong", &f.rt.config.profiles[0].issuer)
+        f.rt.claim("wrong", &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
             .await
             .is_err()
     );
@@ -400,13 +405,17 @@ async fn callback_rejects_duplicate_and_wrong_state_without_consuming_valid_atte
         .unwrap()
         .1
         .into_owned();
-    assert!(f.rt.claim(&state, "https://wrong").await.is_err());
+    assert!(
+        f.rt.claim(&state, "https://wrong", "127.0.0.1:19294")
+            .await
+            .is_err()
+    );
     let a =
-        f.rt.claim(&state, &f.rt.config.profiles[0].issuer)
+        f.rt.claim(&state, &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
             .await
             .unwrap();
     assert!(
-        f.rt.claim(&state, &f.rt.config.profiles[0].issuer)
+        f.rt.claim(&state, &f.rt.config.profiles[0].issuer, "127.0.0.1:19294")
             .await
             .is_err()
     );

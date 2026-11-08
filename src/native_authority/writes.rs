@@ -52,7 +52,7 @@ impl Runtime {
             self.materialize_for(Some(owner), agent, name, &input.source)
                 .await?
         };
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current = self.current_for(&mut tx, owner, agent, name).await?;
         current.matches(&input.source)?;
         let manifest = store::ready(&mut tx, &current, &self.run, &input.generation).await?;
@@ -78,7 +78,7 @@ impl Runtime {
         name: &str,
         input: Replace,
     ) -> Result<Value> {
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current = self.current_for(&mut tx, owner, agent, name).await?;
         current.matches(&input.source)?;
         let manifest = store::ready(&mut tx, &current, &self.run, &input.generation).await?;

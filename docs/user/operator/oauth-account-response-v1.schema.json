@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:locksmith:controlled-oauth-account-response:v1",
-  "title": "Controlled account status and refresh response v1",
+  "title": "Owner-bound OAuth account status and refresh response v1",
   "oneOf": [
     {
       "type": "object",
@@ -14,7 +14,11 @@
           ]
         },
         "kind": {
-          "const": "controlled_linear_v1"
+          "enum": [
+            "controlled_linear_v1",
+            "linear_hosted_v1",
+            "linear_hosted_fixture_v1"
+          ]
         },
         "profile": {
           "type": "string"

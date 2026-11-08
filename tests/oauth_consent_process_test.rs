@@ -84,3 +84,24 @@ async fn controlled_native_actual_consent_selection_dispatch_and_refresh() {
 async fn controlled_native_refresh_disconnect_and_expiry_before_admission() {
     consent::native::races().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_native_actual_consent_projection_selection_dispatch_and_refresh() {
+    consent::native::hosted_journey().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_public_callback_is_bound_to_selected_attempt_not_other_profile() {
+    consent::hosted::public_callback().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an explicit retained schema-18 daemon"]
+async fn hosted_actual_schema18_refusal_and_current_reopen() {
+    consent::hosted::prior_upgrade().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_catalog_refuses_partial_missing_duplicate_and_changed_policy() {
+    consent::native::hosted_catalog_refusals().await;
+}

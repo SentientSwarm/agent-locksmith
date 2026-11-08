@@ -28,7 +28,7 @@ impl Runtime {
         expected: &Source,
         generation: Option<&str>,
     ) -> Result<Value> {
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         let current = self.current_for(&mut tx, owner, agent, name).await?;
         current.matches(expected)?;
         let generation = store::reserve(&mut tx, &current, &self.run, generation).await?;
@@ -54,13 +54,21 @@ impl Runtime {
         let bearer = self
             .materialize_for(Some(owner), agent, name, &current.source)
             .await?;
+        let selected_tools = current
+            .controlled
+            .as_ref()
+            .and_then(|a| a.selected_tools.as_deref());
         let client = locksmith_mcp_transport::Client::pinned(
             Default::default(),
             self.current_roots(current),
             &reg.upstream,
             addresses,
             1024 * 1024,
-            wire::validate,
+            if selected_tools.is_some() {
+                wire::validate_hosted
+            } else {
+                wire::validate
+            },
         )
         .map_err(|_| Error("upstream_client"))?;
         let mut connection = wire::Connection {
@@ -68,6 +76,7 @@ impl Runtime {
             endpoint: reg.upstream.clone().into(),
             bearer: bearer.as_ref().map(ExposeSecret::expose_secret),
             session: None,
+            selected_tools,
         };
         let result = connection.observe().await;
         // No background cleanup: a stalled DELETE shares the enclosing deadline.
@@ -130,7 +139,7 @@ impl Runtime {
         generation: &str,
         result: Result<Value>,
     ) -> Result<()> {
-        let mut tx = self.repo.pool.begin().await?;
+        let mut tx = self.repo.pool.begin_with("BEGIN IMMEDIATE").await?;
         match result {
             Ok(manifest) => {
                 let current = self.current_for(&mut tx, owner, agent, name).await?;

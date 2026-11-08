@@ -15,6 +15,7 @@ pub(crate) struct Account {
     pub expires_at: Option<i64>,
     pub roots_digest: String,
     pub roots: Vec<Certificate>,
+    pub selected_tools: Option<Vec<String>>,
 }
 pub(super) fn load_roots(config: &config::Config) -> Result<HashMap<String, Roots>> {
     config
@@ -66,7 +67,7 @@ impl Runtime {
         };
         let row=sqlx::query("SELECT kind,owner_id,incarnation,profile_id,profile_digest,workspace_id,user_id,token_version,refresh_pending,degraded,access_token_expires_at FROM oauth_sessions WHERE name=? AND session_label=?")
             .bind(name).bind(session_label).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
-        if row.get::<&str, _>("kind") != "controlled_linear_v1"
+        if !config::managed_kind(row.get("kind"))
             || row.get::<Option<&str>, _>("owner_id") != Some(owner_id.as_str())
         {
             return Err(Error("not_found"));
@@ -100,6 +101,7 @@ impl Runtime {
             expires_at,
             roots_digest: roots.digest.clone(),
             roots: roots.certificates.clone(),
+            selected_tools: p.hosted().then(|| p.selected_tools.clone()),
         })
     }
     pub(crate) async fn native_selection(
@@ -117,7 +119,7 @@ impl Runtime {
         if view["revision"].as_str() != Some(expected) {
             return Err(Error("source_conflict"));
         }
-        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind='controlled_linear_v1'")
+        let row=sqlx::query("SELECT incarnation,profile_id,profile_digest FROM oauth_sessions WHERE name=? AND session_label=? AND owner_id=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1')")
             .bind(name).bind(label).bind(owner).fetch_optional(&mut *c).await?.ok_or(Error("not_found"))?;
         let selection = AuthSpec::ControlledOauth {
             session_label: label.into(),

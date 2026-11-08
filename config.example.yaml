@@ -119,7 +119,9 @@ tools:
 # This is per-registration metadata (not a global mcp setting); see
 # docs/user/agent-integration/compact-mcp.md for toggle/downgrade costs.
 
-# Optional controlled-only operator consent (off when omitted):
-# See docs/user/operator/oauth-consent.md for the complete oauth_consent example,
-# callback TLS configuration, public-client metadata and migration 0015 costs.
-# This profile does not enable hosted Linear/Slack or agent OAuth use.
+# Optional owner-bound operator consent (off when omitted):
+# See docs/user/operator/oauth-consent.md for controlled local profiles and
+# docs/user/operator/hosted-linear.md for fixed hosted Linear profiles, the
+# selected_tools list, callback TLS configuration and migration 0019 costs.
+# Consent alone creates no agent authority; select, observe, review and grant
+# explicitly. Hosted fixture and real-provider profiles remain distinct.

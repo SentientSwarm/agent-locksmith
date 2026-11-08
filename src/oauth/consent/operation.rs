@@ -10,13 +10,14 @@ impl Runtime {
         state: &str,
         issuer: &str,
         code: Option<&str>,
+        authority: &str,
     ) -> Result<()> {
         let _permit = self
             .operations
             .try_acquire()
             .map_err(|_| Error("capacity"))?;
         let outer_deadline = tokio::time::Instant::now() + Duration::from_secs(40);
-        let attempt = tokio::time::timeout_at(outer_deadline, self.claim(state, issuer))
+        let attempt = tokio::time::timeout_at(outer_deadline, self.claim(state, issuer, authority))
             .await
             .map_err(|_| Error("operation_incomplete"))??;
         let id: &str = attempt.get("id");

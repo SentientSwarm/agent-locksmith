@@ -52,7 +52,7 @@ pub(super) fn client(p: &config::Profile) -> Result<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(if p.hosted() { 30 } else { 5 }))
         .connect_timeout(Duration::from_secs(3));
     for c in
         reqwest::Certificate::from_pem_bundle(&roots(p)?).map_err(|_| Error("tls_unavailable"))?
