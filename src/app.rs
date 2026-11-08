@@ -574,10 +574,7 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Build metadata. Unauthenticated; useful for incident response and
 /// debugging. INF-3.
 async fn version_handler() -> Json<Value> {
-    Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "name": env!("CARGO_PKG_NAME"),
-    }))
+    Json(crate::build_info::document(env!("CARGO_PKG_NAME")))
 }
 
 /// `/skill` — auth-optional. Dispatches to the personalized form when

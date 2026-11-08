@@ -5,6 +5,7 @@ pub mod argon2_helper;
 pub mod audit_sink;
 pub mod auth;
 pub mod auth_v2;
+pub mod build_info;
 pub mod client_pool;
 pub mod codex_body;
 pub mod config;
