@@ -9,12 +9,12 @@ pub mod failures;
 pub mod lifecycle;
 pub mod metadata;
 pub mod metadata_refresh;
-mod receiving;
+pub(super) mod receiving;
 mod reconnect;
 pub mod resource;
 pub mod resource_denials;
 pub mod retirement;
-mod setup;
+pub(super) mod setup;
 
 pub async fn journey() {
     let (mut f, twin) = failures::ready().await;

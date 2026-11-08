@@ -181,3 +181,6 @@ async fn slack_resource_endpoint_promotion_refuses_without_mutation() {
 async fn slack_resource_echo_refuses_publication_and_refresh_replay() {
     consent::slack::resource_denials::echo().await;
 }
+
+#[path = "oauth_consent/contract_tests.rs"]
+mod contract_tests;

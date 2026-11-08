@@ -35,8 +35,7 @@ pub(crate) fn mechanism(p: &AuthProfile, activation: &Activation) -> bool {
             p.required_scopes.is_empty()
         }
         (Mechanism::OauthProvider, Activation::ControlledOauth { .. }) => {
-            p.required_scopes == ["read"]
-                || p.required_scopes == ["search:read.public", "channels:history"]
+            !p.required_scopes.is_empty()
         }
         _ => false,
     }

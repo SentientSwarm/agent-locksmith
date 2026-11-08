@@ -59,11 +59,12 @@ impl Runtime {
             .bind(deadline).bind(now()).bind(now()).bind(ct).bind(nonce).execute(&mut *tx).await?;
         let mut url =
             reqwest::Url::parse(&p.authorization_endpoint).map_err(|_| Error("invalid_profile"))?;
+        let scope = p.scope();
         url.query_pairs_mut().extend_pairs([
             ("response_type", "code"),
             ("client_id", &p.client_id),
             ("redirect_uri", &p.redirect_uri),
-            ("scope", p.scope()),
+            ("scope", scope.as_str()),
             ("resource", &p.resource),
             ("state", &state),
             ("code_challenge_method", "S256"),
@@ -117,7 +118,7 @@ impl Runtime {
         }
         sqlx::query(&format!("UPDATE oauth_consent_attempts SET state='canceled',reason='disconnected',updated_at=?,version=version+1,{WIPE} WHERE name=? AND session_label=? AND owner_id=? AND state IN ('pending','exchanging')"))
             .bind(now()).bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1') AND owner_id=?")
+        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1','custom_oauth_v1') AND owner_id=?")
             .bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(
@@ -174,8 +175,14 @@ impl Runtime {
         }
         Ok(())
     }
-    pub(super) async fn publish(&self, a: &SqliteRow, token: &token::Token) -> Result<i64> {
+    pub(super) async fn publish(
+        &self,
+        a: &SqliteRow,
+        token: &token::Token,
+        subject: Option<&contract::Subject>,
+    ) -> Result<i64> {
         let p = self.profile(a.get("profile_id"))?;
+        let subject = contract::publication::facts(p, subject)?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let live = sqlx::query("SELECT * FROM oauth_consent_attempts WHERE id=?")
             .bind(a.get::<&str, _>("id"))
@@ -186,7 +193,7 @@ impl Runtime {
         }
         current(&mut tx, &live, p, &self.run_id, "exchanging").await?;
         let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM oauth_sessions WHERE kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1')",
+            "SELECT count(*) FROM oauth_sessions WHERE kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1','custom_oauth_v1')",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -201,12 +208,12 @@ impl Runtime {
             .transpose()?;
         sqlx::query(&format!("UPDATE oauth_consent_attempts SET state='connected',updated_at=?,stage='committed',reason=NULL,{WIPE} WHERE id=?"))
             .bind(now()).bind(a.get::<&str,_>("id")).execute(&mut *tx).await?;
-        let inserted = sqlx::query("INSERT INTO oauth_sessions(name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,access_token_expires_at,scope,scope_echoed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *")
+        let inserted = sqlx::query("INSERT INTO oauth_sessions(name,session_label,kind,owner_id,profile_id,profile_digest,workspace_id,user_id,access_token_ciphertext,access_token_nonce,refresh_token_ciphertext,refresh_token_nonce,access_token_expires_at,scope,scope_echoed,created_at,updated_at,subject_json,client_auth) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *")
             .bind(a.get::<&str,_>("name")).bind(a.get::<&str,_>("session_label")).bind(p.stored_kind()).bind(a.get::<&str,_>("owner_id"))
-            .bind(&p.id).bind(p.digest()?).bind(&p.expected_workspace).bind(&p.expected_user)
+            .bind(&p.id).bind(p.digest()?).bind(subject.workspace).bind(subject.user)
             .bind(access).bind(an).bind(refresh.as_ref().map(|x| &x.0)).bind(refresh.as_ref().map(|x| &x.1))
-            .bind(token.expiry).bind(if token.scope_echoed {p.scope()} else {""}).bind(token.scope_echoed)
-            .bind(now()).bind(now()).fetch_one(&mut *tx).await?;
+            .bind(token.expiry).bind(token.granted_scope.as_deref().unwrap_or("")).bind(token.scope_echoed)
+            .bind(now()).bind(now()).bind(subject.encoded).bind(subject.client_auth).fetch_one(&mut *tx).await?;
         // Verify the inserted custody before COMMIT, including nullable refresh.
         let decoded = self.key.unseal(
             inserted.get("access_token_ciphertext"),
@@ -328,7 +335,8 @@ pub(super) async fn registration(
                 return Err(Error("profile_conflict"));
             }
         }
-        if ((p.hosted() || p.slack()) && row.get::<&str, _>("protocol") != "mcp_streamable_http")
+        if ((p.hosted() || p.slack() || p.custom())
+            && row.get::<&str, _>("protocol") != "mcp_streamable_http")
             || auth != expected
             || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"

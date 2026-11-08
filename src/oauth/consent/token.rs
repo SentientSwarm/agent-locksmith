@@ -8,10 +8,11 @@ pub(super) struct Token {
     pub refresh: Option<SecretString>,
     pub expiry: Option<i64>,
     pub scope_echoed: bool,
+    pub granted_scope: Option<String>,
 }
 impl Token {
     pub fn encode(&self) -> SecretString {
-        json!({"access":self.access.expose_secret(),"refresh":self.refresh.as_ref().map(|t| t.expose_secret()),"expiry":self.expiry,"scope_echoed":self.scope_echoed}).to_string().into()
+        json!({"access":self.access.expose_secret(),"refresh":self.refresh.as_ref().map(|t| t.expose_secret()),"expiry":self.expiry,"scope_echoed":self.scope_echoed,"granted_scope":self.granted_scope}).to_string().into()
     }
     pub fn screen(&self, value: &Value) -> Result<()> {
         fn contains(v: &Value, secret: &str) -> bool {
@@ -52,11 +53,13 @@ pub(super) fn client(p: &config::Profile) -> Result<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(if p.hosted() || p.slack() {
-            30
-        } else {
-            5
-        }))
+        .timeout(Duration::from_secs(
+            if p.hosted() || p.slack() || p.custom() {
+                30
+            } else {
+                5
+            },
+        ))
         .connect_timeout(Duration::from_secs(3));
     for c in
         reqwest::Certificate::from_pem_bundle(&roots(p)?).map_err(|_| Error("tls_unavailable"))?
@@ -96,6 +99,9 @@ pub(super) fn secret(v: &Value) -> Result<SecretString> {
 }
 pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
     let v = parse(bytes)?;
+    if p.custom() {
+        return super::contract::decode(p, &v);
+    }
     if p.slack() {
         return super::slack_token::decode(p, &v);
     }
@@ -137,6 +143,7 @@ pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
         refresh,
         expiry,
         scope_echoed: v.get("scope").is_some(),
+        granted_scope: v.get("scope").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -147,12 +154,13 @@ pub(super) async fn refresh(
     client_secret: Option<&str>,
 ) -> Result<Token> {
     let refresh = old.refresh.as_ref().ok_or(Error("refresh_unavailable"))?;
+    let scope = p.scope();
     let mut form = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh.expose_secret()),
         ("client_id", &p.client_id),
         ("resource", &p.resource),
-        ("scope", p.scope()),
+        ("scope", scope.as_str()),
     ];
     confidential(p, client_secret, &mut form)?;
     let (status, bytes) = super::token_io::post(p, client, &form).await?;
@@ -164,7 +172,7 @@ fn confidential<'a>(
     secret: Option<&'a str>,
     form: &mut Vec<(&'a str, &'a str)>,
 ) -> Result<()> {
-    if p.slack() {
+    if p.confidential() {
         form.push(("client_secret", secret.ok_or(Error("client_unavailable"))?));
     } else if secret.is_some() {
         return Err(Error("profile_conflict"));

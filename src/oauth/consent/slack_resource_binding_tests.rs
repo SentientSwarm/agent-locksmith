@@ -24,7 +24,7 @@ async fn published(f: &Fixture) -> (Value, AuthSpec) {
         .unwrap();
     let token = slack_token::decode(p, &json!({"ok":true,"access_token":"invented-access","refresh_token":"invented-refresh","token_type":"user","authed_user":{"id":"UTEST001","scope":"channels:history,search:read.public"},"team":{"id":"TTEST001"}})).unwrap();
     f.rt.quarantine(&claim, &token).await.unwrap();
-    f.rt.publish(&claim, &token).await.unwrap();
+    f.rt.publish(&claim, &token, None).await.unwrap();
     selection(f).await
 }
 

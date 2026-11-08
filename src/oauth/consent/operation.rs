@@ -35,9 +35,9 @@ impl Runtime {
         let mut wire = wire::Wire::new(self, a, token.access.expose_secret(), stage.clone())?;
         let checked = match identity(&mut wire, p, &token, None).await {
             Err(error) => Err(error),
-            Ok(()) => {
+            Ok(subject) => {
                 *stage.lock().expect("stage") = "publication";
-                self.publish(a, &token).await.map(|_| ())
+                self.publish(a, &token, subject.as_ref()).await.map(|_| ())
             }
         };
         // Retain the checked outcome outside cleanup and the outer timeout.
@@ -75,9 +75,14 @@ pub(super) async fn identity(
     p: &config::Profile,
     token: &token::Token,
     old: Option<&token::Token>,
-) -> Result<()> {
+) -> Result<Option<contract::Subject>> {
+    if p.custom() {
+        return contract::verify(w, p, token, old).await.map(Some);
+    }
     if p.slack() {
-        return super::slack_identity::verify(w, p, token, old).await;
+        return super::slack_identity::verify(w, p, token, old)
+            .await
+            .map(|_| None);
     }
     let initialized = w.initialize().await?;
     token.screen(&initialized)?;
@@ -158,7 +163,7 @@ pub(super) async fn identity(
             }));
         }
     }
-    Ok(())
+    Ok(None)
 }
 fn object(result: &Value) -> Result<Value> {
     if result["isError"] == true {

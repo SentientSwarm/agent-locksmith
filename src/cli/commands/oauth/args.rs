@@ -17,12 +17,12 @@ pub enum OauthCmd {
         profile: String,
         #[arg(long)]
         client_generation: u64,
-        /// Configured redirect profile. Slack without response iss requires /oauth/callback/slack.
+        /// Configured redirect profile; declared contracts bind their exact callback mode and route.
         #[arg(long)]
         redirect_profile: String,
         #[arg(long)]
         expected_config_revision: i64,
-        /// Exact requested scopes. Slack requires search:read.public,channels:history.
+        /// Exact requested scopes from the configured named or declared contract.
         #[arg(long, value_delimiter = ',', default_value = "read")]
         scopes: Vec<String>,
     },

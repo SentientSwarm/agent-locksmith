@@ -80,7 +80,7 @@ pub enum AgentCmd {
     /// Select an explicit account: auth, None, OAuth, or sealed bearer.
     /// Managed native OAuth uses the separate owner-bound `select-oauth` command.
     SetCredential(SetCredentialArgs),
-    /// Delegate an owned controlled Linear, hosted Linear or confidential Slack OAuth account after granting the connection ACL.
+    /// Delegate an owned managed native OAuth account (named or declared contract) after granting the connection ACL.
     /// Reobserve, review and grant finite tools before using a new native session.
     SelectOauth {
         #[arg(allow_hyphen_values = true)]

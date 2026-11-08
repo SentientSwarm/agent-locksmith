@@ -16,6 +16,9 @@ impl Profile {
     }
     /// Transport is fixed by the validated profile kind, never inferred from a token.
     pub(crate) fn mcp_endpoint(&self) -> String {
+        if let Some(c) = &self.contract {
+            return c.mcp_endpoint.clone();
+        }
         match self.kind.as_str() {
             "slack-confidential-v1" => "https://mcp.slack.com/mcp".into(),
             "slack-confidential-fixture-v1" if self.resource == self.issuer => {
@@ -25,17 +28,30 @@ impl Profile {
         }
     }
     pub(crate) fn scopes(&self) -> Vec<String> {
+        if let Some(c) = &self.contract {
+            return c.scope.required.clone();
+        }
         if self.slack() {
             SCOPES.map(str::to_owned).into()
         } else {
             vec!["read".into()]
         }
     }
-    pub(super) fn scope(&self) -> &'static str {
+    pub(super) fn scope(&self) -> String {
+        if let Some(c) = &self.contract {
+            return c
+                .scope
+                .required
+                .join(if c.scope.request_separator == "comma" {
+                    ","
+                } else {
+                    " "
+                });
+        }
         if self.slack() {
-            "search:read.public,channels:history"
+            "search:read.public,channels:history".to_owned()
         } else {
-            "read"
+            "read".to_owned()
         }
     }
     pub(super) fn identity_endpoint(&self) -> String {

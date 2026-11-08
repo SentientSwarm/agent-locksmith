@@ -30,10 +30,11 @@ pub(super) fn parameters(rt: &Runtime, req: &Request) -> Result<Parameters> {
 
 fn target(rt: &Runtime, req: &Request) -> Result<()> {
     if req.method() != axum::http::Method::GET
-        || !matches!(
-            req.uri().path(),
-            callback_route::GENERIC | callback_route::SLACK
-        )
+        || !rt
+            .config
+            .profiles
+            .iter()
+            .any(|p| p.callback_uri().is_ok_and(|u| u.path() == req.uri().path()))
         || req.uri().scheme().is_some()
         || req.uri().authority().is_some()
         || req.uri().to_string().len() > 8192

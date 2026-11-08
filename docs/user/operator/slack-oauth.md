@@ -7,6 +7,11 @@ Offline tests do not establish actual app eligibility, installed scopes, provide
 S256 enforcement or live MCP schema compatibility. No app registration, installation,
 credential discovery or browser automation occurs.
 
+For an explicitly declared root/nested user-token variant, see
+[declared OAuth contracts](custom-oauth.md). Switching contracts changes the digest
+and requires the documented confidential generation/reconnect workflow. The named
+profiles below retain the original strict nested-user contract.
+
 ## Configure the profile
 
 Use an already configured confidential client, exact trusted workspace/user IDs,

@@ -57,11 +57,11 @@ runs during creation. HTTP and manually authored native connections retain
 Only a `local.*` pin can be promoted. The declared profile fixes the permitted
 selection mechanism: `none` with empty scopes requires explicit None; `bearer`
 with empty scopes requires a live stored bearer reference; `oauth_provider`
-with exactly `["read"]` requires an explicitly configured controlled Linear profile. The exact Slack scopes `search:read.public` and
-`channels:history` require an explicit confidential Slack profile. Each OAuth
-declaration must match that profile's exact resource and scope policy. Header
-profiles, other scope combinations and all bundled `builtin.*` profiles remain
-refused. Candidate/fixture labels never grant eligibility.
+requires a configured managed profile with the exact declared scopes and MCP endpoint.
+Named controlled Linear and confidential Slack profiles retain their fixed scopes;
+[declared custom OAuth](custom-oauth.md) supports other explicit scope contracts.
+Hosted Linear remains a separate manual path. All bundled `builtin.*` profiles remain
+refused by this local activation path. Candidate/fixture labels never grant eligibility.
 
 The [bearer example](../../../definitions/customer-bearer.example.json) and
 [controlled example](../../../definitions/customer-controlled.example.json)

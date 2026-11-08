@@ -20,7 +20,7 @@ pub struct ActivationOptions {
     /// Exact upstream tool name to select after a complete bounded scan (repeatable, finite-v2 only).
     #[arg(long = "selected-tool")]
     pub selected_tools: Vec<String>,
-    /// Configured controlled Linear or confidential Slack profile ID for oauth_provider declarations. Hosted Linear uses manual connections.
+    /// Configured named or declared OAuth profile ID. Hosted Linear uses manual connections.
     #[arg(long)]
     pub oauth_profile: Option<String>,
 }

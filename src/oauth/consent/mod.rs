@@ -8,6 +8,7 @@ mod client_api;
 mod clients;
 pub mod config;
 mod config_values;
+pub mod contract;
 pub(crate) mod native;
 mod operation;
 mod refresh;
@@ -178,3 +179,6 @@ async fn validate_key(pool: &SqlitePool, key: &SealingKey) -> Result<()> {
 
 #[cfg(test)]
 mod slack_tests;
+
+#[cfg(test)]
+mod contract_tests;

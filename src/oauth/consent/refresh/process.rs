@@ -127,7 +127,7 @@ async fn killed_workers_preserve_pending_or_complete_pair_without_replay() {
         .unwrap();
         let (_, a) = f.claimed("crash").await;
         let token=token::decode(&f.rt.config.profiles[0],br#"{"access_token":"fixture-access-204","refresh_token":"fixture-refresh-0","token_type":"Bearer"}"#).unwrap();
-        f.rt.publish(&a, &token).await.unwrap();
+        f.rt.publish(&a, &token, None).await.unwrap();
         if point == "consumed" {
             std::fs::write(root.join("hold-refresh"), "held").unwrap();
         }

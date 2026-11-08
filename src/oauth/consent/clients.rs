@@ -8,7 +8,7 @@ pub(super) async fn current(
     owner: &str,
     p: &config::Profile,
 ) -> Result<()> {
-    if p.slack() {
+    if p.confidential() {
         row(c, owner, p).await?;
     }
     Ok(())
@@ -27,7 +27,7 @@ impl Runtime {
         owner: &str,
         p: &config::Profile,
     ) -> Result<Option<SecretString>> {
-        if !p.slack() {
+        if !p.confidential() {
             return Ok(None);
         }
         let key = self
@@ -92,7 +92,7 @@ impl Runtime {
 
     pub(super) fn client_profile(&self, id: &str, generation: u64) -> Result<&config::Profile> {
         let p = self.profile(id)?;
-        if !p.slack() || p.client_generation != generation {
+        if !p.confidential() || p.client_generation != generation {
             return Err(Error("profile_conflict"));
         }
         Ok(p)

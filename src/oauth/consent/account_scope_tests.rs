@@ -3,10 +3,17 @@ use super::*;
 async fn reviewer_scoped_account(echoed: bool) -> Fixture {
     let f = Fixture::new().await;
     let (_, a) = f.claimed("scope-custody").await;
-    let mut token = f.token();
-    token.scope_echoed = echoed;
+    let token = if echoed {
+        token::decode(
+            &f.rt.config.profiles[0],
+            br#"{"access_token":"fixture-access","token_type":"Bearer","scope":"read"}"#,
+        )
+        .unwrap()
+    } else {
+        f.token()
+    };
     f.rt.quarantine(&a, &token).await.unwrap();
-    f.rt.publish(&a, &token).await.unwrap();
+    f.rt.publish(&a, &token, None).await.unwrap();
     f
 }
 
