@@ -23,7 +23,7 @@ pub enum ModelCmd {
         /// Registration name.
         name: String,
         #[command(flatten)]
-        opts: PutOpts,
+        opts: Box<PutOpts>,
     },
     /// Delete a model.
     Delete {
@@ -42,7 +42,7 @@ pub async fn run(client: &CliClient, format: Format, cmd: ModelCmd) -> Result<()
         ModelCmd::List => registration::do_list(client, format, CliKind::Model).await,
         ModelCmd::Get { name } => registration::do_get(client, format, CliKind::Model, &name).await,
         ModelCmd::Put { name, opts } => {
-            registration::do_put(client, format, CliKind::Model, &name, opts).await
+            registration::do_put(client, format, CliKind::Model, &name, *opts).await
         }
         ModelCmd::Delete { name } => {
             registration::do_delete(client, format, CliKind::Model, &name).await

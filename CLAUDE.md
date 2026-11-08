@@ -146,8 +146,9 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
    - `Mtls` / `Both`: TLS-terminated TCP via `agent_listener::bind_and_serve_mtls`. The handshake verifies client certs against `listen.mtls.ca_bundle_path`; the resolved peer cert is stamped into request extensions for `auth::auth_middleware` to consume. `MtlsAuthenticator` (in `src/mtls/`) maps cert identity (CN → SAN_DNS → SAN_URI) to an agent row, applies CRL + local blocklist, and emits `auth_method=mtls` audit rows.
 6. **Admin UDS listener** — at `listen.admin_socket.path`. AdminService handlers live in `src/admin/service.rs`; the UDS shim is `src/admin/uds.rs`.
 7. **Admin HTTPS listener** (M4, off by default) — same `UdsState` / handlers, different transport. Supports `Bearer`, `Mtls`, or `Both` independently of the agent listener. Operator client certs map to operators via `OperatorRecord.cert_identity`.
-8. **Bootstrap-only listener** (M6 / C-4) — separate single-endpoint TLS listener for agent enrollment that doesn't require operator credentials.
-9. **OAuth refresh task** (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set) — `tokio` task scanning `oauth_sessions` for tokens nearing expiry; refreshes via `oauth::refresh::run`. Per-session `Mutex<()>` (`RefreshLockMap`) prevents racing with on-demand proxy refresh.
+8. **Native MCP lifecycle** — `/mcp/{connection}` uses current agent identity, typed registrations and explicit connection selections. The root consumes the accepted bounded session manager through one process pool. N1 supports initialization/ping/empty tools/list and always denies tools/call; no upstream MCP operation is reachable yet. See [native MCP architecture](docs/development/native-mcp.md) for migration0011, finite budgets, shutdown ownership and remaining gates.
+9. **Bootstrap-only listener** (M6 / C-4) — separate single-endpoint TLS listener for agent enrollment that doesn't require operator credentials.
+10. **OAuth refresh task** (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set) — `tokio` task scanning `oauth_sessions` for tokens nearing expiry; refreshes via `oauth::refresh::run`. Per-session `Mutex<()>` (`RefreshLockMap`) prevents racing with on-demand proxy refresh.
 
 Both listeners share one `ShutdownCoordinator` with a configurable drain window (`shutdown.drain_window_seconds`, default 30s).
 
@@ -160,6 +161,7 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 /skill                                         auth-optional (personalised when bearer present)
 /tools                                         agent-authenticated; kind=tool, ACL-filtered
 /models                                        agent-authenticated; kind=model, ACL-filtered
+/mcp/{connection}                             current AgentIdentity; native lifecycle only
 /api/{tool_name}/{*path}                       agent-authenticated; bearer or mtls
                                                → proxy::proxy_handler
 ```

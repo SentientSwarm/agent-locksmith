@@ -100,3 +100,11 @@ mod oauth_upgrade;
 async fn actual_daemon_oauth_upgrade_and_prior_binary_refusal() {
     oauth_upgrade::exercise().await;
 }
+#[path = "explicit_binding_smoke/native_upgrade.rs"]
+mod native_upgrade;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires LOCKSMITH_NATIVE_PRIOR_DAEMON and sibling CLI from accepted pre-0011 revision"]
+async fn actual_daemon_native_upgrade_and_prior_binary_refusal() {
+    native_upgrade::exercise().await;
+}

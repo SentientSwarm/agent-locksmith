@@ -156,7 +156,12 @@ native two-client/provider/schema/migration evidence remain required. G2 still
 needs AGENT-205. Full native/provider acceptance remains separate from this
 public source projection; no release readiness is claimed.
 
-The public projection preserves the accepted adapter bytes; its current
-receiving checks and Linux CI remain pending at source preparation. Historical
-SDK/wire/Python checks above do not establish execution on this public tree.
+The public adapter prerequisite was received separately at2fb3f1d; this N1
+projection preserves its implementation and limits. Exact-candidate native
+Rust/Python/process checks and Linux CI remain pending at source preparation.
 CI uses the existing root target directory for both independent manifests.
+
+AGENT-202 now consumes the bounded session manager in the
+[native daemon lifecycle](native-mcp.md). The outbound client remains a separate
+proof here: no N1 daemon operation resolves upstream credentials or invokes it.
+Later observation/dispatch must use this hook and repeat receiving-effect tests.

@@ -19,6 +19,20 @@
   their behavior.
 
 
+### Native MCP lifecycle
+
+- Add authenticated stateful MCP2025-11-25 lifecycle at `/mcp/{connection}`
+  (AGENT-202), with native-scoped Host/Origin/input/output limits, current
+  connection authority, bounded joined sessions, replay refusal and shutdown.
+  Tools remain unapproved: empty list and explicit call denial, no upstream
+  credentials or calls. Typed native connections cannot use HTTP `/api`.
+- Migration0011 preserves HTTP accounts/grants/revocations and reviewed receipts,
+  creates zero native/tool authority and makes old binaries refuse upgraded state.
+  Protocol/config changes require connection-grant/account reapproval; one daemon
+  owns each database. See [setup](docs/user/operator/native-mcp.md),
+  [wire contract](docs/user/agent-integration/native-mcp.md) and
+  [backup, recovery and limits](docs/user/changes/native-mcp.md). No version bump.
+
 ### Native MCP prerequisite safety
 
 - Reserve MCP session capacity before SDK allocation (AGENT-199). Scoped
@@ -29,8 +43,8 @@
   response retires the session without invalidating consumed final events.
   See [scope, budgets and limits](docs/development/mcp-sessions.md).
   Resume/replay are unsupported; already-submitted effects are not rolled back.
-  This separate prerequisite still requires native integration and independent
-  acceptance; it does not expose a new route or clear all G3/release gates.
+  The prerequisite was accepted at e18da87; AGENT-202 now consumes its pool.
+  Useful authority/dispatch and full G3/release gates remain open.
 
 - Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
   cumulative SSE response bounds precede collector/JSON decoding; event,
@@ -41,9 +55,9 @@
   already-arrived tool effects. One GET attempt per transport prevents SDK
   renewal from resetting limits; conflicting transfer framing is refused and
   bare CR event delimiters count before parser admission.
-  This separate library needs AGENT-202 daemon
-  integration and independent acceptance; it does not ship native MCP, clear
-  all G1 requirements, bump the root version or change installed services.
+  The library was accepted at f0c4ca8. N1 consumes its session layer but has
+  no reachable outbound operation; later observation/dispatch must use this
+  adapter and prove its actual daemon effects. Full G1 stays open.
 
 ### OAuth lifecycle safety
 

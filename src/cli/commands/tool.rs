@@ -25,7 +25,7 @@ pub enum ToolCmd {
         /// Registration name.
         name: String,
         #[command(flatten)]
-        opts: PutOpts,
+        opts: Box<PutOpts>,
     },
     /// Delete a tool. Operator rows are removed; seed rows are flipped to disabled=1.
     Delete {
@@ -44,7 +44,7 @@ pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(),
         ToolCmd::List => registration::do_list(client, format, CliKind::Tool).await,
         ToolCmd::Get { name } => registration::do_get(client, format, CliKind::Tool, &name).await,
         ToolCmd::Put { name, opts } => {
-            registration::do_put(client, format, CliKind::Tool, &name, opts).await
+            registration::do_put(client, format, CliKind::Tool, &name, *opts).await
         }
         ToolCmd::Delete { name } => {
             registration::do_delete(client, format, CliKind::Tool, &name).await

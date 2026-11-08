@@ -1,10 +1,10 @@
 # Bounded MCP session ownership prerequisite
 
 AGENT-199 extends the separate [MCP transport library](../../crates/mcp-transport/README.md)
-with `sessions::Pool<T>` and per-request `Scoped<T>` managers. It is an isolated
-production prerequisite: neither binary exposes native MCP yet. AGENT-202 owns
-daemon composition, HTTP error mapping and migration. Root versions, installed
-services, existing HTTP/OAuth authority and credentials remain unchanged.
+with `sessions::Pool<T>` and per-request `Scoped<T>` managers. AGENT-199 was accepted locally at e18da87 after independent QA/review.
+[AGENT-202](native-mcp.md) consumes its shared pool in the actual daemon with
+current identity, native HTTP error mapping and migration. Useful tool dispatch
+and broader G3 remain later work. Root versions and installed services are unchanged.
 
 ## Integrating verified authority
 
@@ -115,7 +115,7 @@ unchanged disconnect evidence is recorded with the delivery checkpoint. Original
 research failures remain historical evidence. Isolated prerequisite acceptance
 does not itself clear complete G3/native/provider/release gates.
 
-This public source projection preserves the accepted session implementation and
-SDK ownership patch. Exact-candidate Rust/process checks, local dependency
-resolution and fresh Linux CI remain receiving work; historical acceptance
-is not execution evidence for this public tree.
+The public session prerequisite was received separately at205a735; this N1
+projection preserves its implementation and SDK ownership patch. New native
+Rust/Python/process checks and Linux CI remain receiving work; the separate
+prerequisite acceptance does not establish native execution on this public tree.

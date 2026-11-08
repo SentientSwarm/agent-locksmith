@@ -19,6 +19,7 @@ use crate::secret::ResolvedCreds;
 use std::collections::HashMap;
 
 pub struct AppState {
+    pub native: Arc<crate::native::Runtime>,
     pub config: Arc<ArcSwap<AppConfig>>,
     pub started_at: Instant,
     pub client_pool: ClientPool,
@@ -399,10 +400,51 @@ pub fn build_app_full_with_phase_k(
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     op_resolver: Option<Arc<crate::secret::OpResolver>>,
 ) -> Router {
+    let native = crate::native::Runtime::new(
+        config.load().mcp.clone(),
+        registrations.clone(),
+        catalog.clone(),
+    );
+    build_app_full_with_native(
+        config,
+        audit,
+        resolved_creds,
+        mtls_authenticator,
+        agent_auth,
+        registrations,
+        catalog,
+        oauth,
+        agent_creds,
+        credential_sealing_key,
+        credential_secrets,
+        operational_log,
+        op_resolver,
+        native,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_full_with_native(
+    config: Arc<ArcSwap<AppConfig>>,
+    audit: Option<AuditRepository>,
+    resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    mtls_authenticator: Option<Arc<MtlsAuthenticator>>,
+    agent_auth: Option<Arc<dyn AgentAuthenticator>>,
+    registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
+    catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
+    oauth: Option<OauthRuntime>,
+    agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    credential_sealing_key: Option<crate::secret::CredentialSealingKey>,
+    credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
+    operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    op_resolver: Option<Arc<crate::secret::OpResolver>>,
+    native: Arc<crate::native::Runtime>,
+) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     drop(snapshot);
     let state = Arc::new(AppState {
+        native,
         config,
         started_at: Instant::now(),
         client_pool: ClientPool::new(),
@@ -421,7 +463,12 @@ pub fn build_app_full_with_phase_k(
         op_resolver,
     });
 
+    router(state)
+}
+
+fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/mcp/{name}", routing::any(crate::native::endpoint))
         // k8s-style health endpoints (INF-3 / Q-18). Unauthenticated by
         // design — orchestrators should not need credentials to probe the
         // process. /health is preserved as an alias to /livez for
@@ -451,6 +498,10 @@ pub fn build_app_full_with_phase_k(
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::native::boundary,
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

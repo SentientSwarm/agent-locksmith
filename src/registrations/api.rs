@@ -18,7 +18,6 @@
 use crate::auth_v2::AgentIdentity;
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository, validate_name,
-    validate_upstream,
 };
 use axum::Json;
 use axum::extract::State;
@@ -46,23 +45,34 @@ pub async fn list_public(
     let Some(identity) = identity else {
         return Ok(Vec::new());
     };
-    let rows = repo
+    let mut rows = repo
         .http_admissions(identity, None)
         .await
         .map_err(|_| RegistrationError::Backend("admission state unavailable".into()))?;
+    if kind == Kind::Tool {
+        rows.extend(
+            repo.native_admissions(identity, None)
+                .await
+                .map_err(|_| RegistrationError::Backend("admission state unavailable".into()))?,
+        );
+    }
     Ok(rows
         .into_iter()
         .filter(|r| r.discoverable(kind, catalog))
         .map(|r| {
             let mut value = json!({
                 "name": r.registration.name,
-                "type": "api",
-                "path": format!("/api/{}", r.registration.name),
+                "type": if r.registration.protocol == super::Protocol::Http {"api"} else {"mcp"},
+                "path": format!("/{}/{}", if r.registration.protocol == super::Protocol::Http {"api"} else {"mcp"}, r.registration.name),
                 "description": r.registration.description,
                 "activation": "active",
                 "account_selected": r.account.is_some(),
                 "credential_readiness": "not_checked",
             });
+            if r.registration.protocol == super::Protocol::McpStreamableHttp {
+                value["protocol_version"] = super::protocol::VERSION.into();
+                value["tool_authority"] = "none".into();
+            }
             if let Ok(Some(service)) = super::http_service::from_metadata(&r.registration.metadata)
             {
                 value["http_service"] = json!(service);
@@ -81,6 +91,10 @@ pub async fn list_public(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PutBody {
+    #[serde(default)]
+    pub protocol: super::Protocol,
+    #[serde(default)]
+    pub mcp: Option<super::McpConfig>,
     /// Optional. Defaults to empty string.
     #[serde(default)]
     pub description: String,
@@ -122,6 +136,8 @@ pub struct PutCredentialBody {
 pub fn registration_to_admin_json(r: &Registration) -> Value {
     json!({
         "name": r.name,
+        "protocol": r.protocol,
+        "mcp": r.mcp,
         "kind": r.kind,
         "description": r.description,
         "upstream": r.upstream,
@@ -144,6 +160,7 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
 /// envelope stays uniform across all locksmith error sources.
 fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static str, &'static str) {
     match err {
+        RegistrationError::InvalidMcp => (StatusCode::BAD_REQUEST, "bad_request", "invalid_mcp"),
         RegistrationError::InvalidHttpService => (
             StatusCode::BAD_REQUEST,
             "bad_request",
@@ -224,6 +241,7 @@ pub fn unknown_name_response(name: &str) -> Response {
 /// the repo but no in-memory cache exists to invalidate.
 #[derive(Clone)]
 pub struct AdminRegistrationsState {
+    pub local_listener: Option<(String, u16)>,
     pub repo: Arc<RegistrationRepository>,
     pub catalog: Option<Arc<arc_swap::ArcSwap<crate::registrations::Catalog>>>,
     pub resolved_creds: Option<Arc<arc_swap::ArcSwap<crate::secret::ResolvedCreds>>>,
@@ -383,13 +401,29 @@ pub async fn op_put(
     if let Err(e) = validate_name(&name) {
         return registration_error_response(&e);
     }
-    if let Err(e) = validate_upstream(kind, &body.upstream) {
+    if let Err(e) = super::protocol::validate(
+        body.protocol,
+        body.mcp.as_ref(),
+        kind,
+        body.egress.unwrap_or_default(),
+        &body.upstream,
+        body.metadata.as_ref(),
+    ) {
         return registration_error_response(&e);
     }
     if let Some(metadata) = &body.metadata
         && let Err(e) = super::http_service::from_metadata(metadata)
     {
         return registration_error_response(&e);
+    }
+
+    if body.protocol == super::Protocol::McpStreamableHttp
+        && state
+            .local_listener
+            .as_ref()
+            .is_some_and(|(host, port)| super::protocol::is_self(&body.upstream, host, *port))
+    {
+        return registration_error_response(&RegistrationError::InvalidMcp);
     }
 
     // Kind-aware auth resolution.
@@ -436,6 +470,8 @@ pub async fn op_put(
 
     let r = Registration {
         name: name.clone(),
+        protocol: body.protocol,
+        mcp: body.mcp,
         kind,
         description: body.description,
         upstream: body.upstream,
