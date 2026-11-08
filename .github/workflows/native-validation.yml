@@ -1,0 +1,99 @@
+name: Native candidate validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  native:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build bounded native candidate
+        shell: bash
+        run: |
+          python3 -B scripts/native-validate.py build --target "${{ matrix.target }}" \
+            --expected-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/native-candidate"
+      - name: Smoke the frozen candidate bytes
+        shell: bash
+        run: |
+          python3 -B scripts/native-validate.py smoke --target "${{ matrix.target }}" \
+            --expected-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/native-candidate"
+      - name: Preserve candidate or closed failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-candidate-${{ github.run_attempt }}-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/native-candidate/locksmith-*
+            ${{ runner.temp }}/native-candidate/locksmithd-*
+            ${{ runner.temp }}/native-candidate/*.json
+            ${{ runner.temp }}/native-candidate/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    needs: native
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-candidate-${{ github.run_attempt }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/native-input
+      - name: Require all four jobs and the same eight executed bytes
+        if: ${{ always() }}
+        env:
+          NATIVE_JOB_RESULT: ${{ needs.native.result }}
+        run: |
+          python3 -B scripts/native-validate.py aggregate --job-result "$NATIVE_JOB_RESULT" \
+            --directory "$RUNNER_TEMP/native-input" --output "$RUNNER_TEMP/native-complete" \
+            --expected-revision "$GITHUB_SHA"
+      - name: Upload complete candidate evidence, never a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-complete-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-complete/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve closed aggregation refusal
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-incomplete-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-complete/failure-*.json
+          if-no-files-found: warn
+          retention-days: 7

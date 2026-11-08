@@ -64,7 +64,10 @@ refuses. No token shape establishes identity by itself.
 
 Identity bodies are JSON objects. `workspace-user-v1` requires observed
 `workspace_id` and `user_id`; `service-principal-v1` requires `subject_id`.
-`slack-auth-test-v1` requires `ok:true`, `team_id` and `user_id`, with no bot claim.
+`slack-auth-test-v1` requires `ok:true`, exact `team_id` and `user_id`, with no bot claim.
+Its optional `team` display label is a string, distinct from a token response
+`team.id` object. Display labels never establish identity. See
+[identity diagnostics](slack-identity-diagnostics.md).
 Missing, null, conflicting or wrong identities, duplicate JSON fields, secret
 echoes and oversized responses refuse. No configured expectation is copied into
 an observed identity. Unknown response fields confer no authority.
@@ -114,3 +117,6 @@ Linear/Slack profiles retain their serialized digest and strict behavior.
 Migration 0022 preserves account sequence highwater and existing ciphertexts;
 old binaries refuse the new schema. Back up according to normal operator policy
 before upgrading. Do not move proof grants or keys into this account store.
+
+See [bounded refusal, challenge and lifecycle evidence](oauth-capability-proof.md)
+for closed token diagnostics and the private challenge-only helper.

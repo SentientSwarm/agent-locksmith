@@ -37,7 +37,16 @@ pub(super) async fn post(
 use super::token::{Token, decode};
 use secrecy::ExposeSecret;
 pub(super) fn checked_decode(p: &Profile, bytes: &[u8], known: Option<&str>) -> Result<Token> {
-    let token = decode(p, bytes)?;
+    let token = match decode(p, bytes) {
+        Err(error) if p.custom() && error.0 == "token_verifier_refused" => {
+            return Err(Error(super::token_refusal::bytes(
+                bytes,
+                known,
+                "token_response_refused",
+            )));
+        }
+        result => result?,
+    };
     if known.is_some_and(|s| {
         token.access.expose_secret().contains(s)
             || token
@@ -88,4 +97,21 @@ fn refresh_status(status: reqwest::StatusCode, bytes: &[u8]) -> Result<()> {
         return Err(Error("token_http_refused"));
     }
     Ok(())
+}
+
+pub(super) fn exchange_status(
+    p: &Profile,
+    status: reqwest::StatusCode,
+    bytes: &[u8],
+    known: Option<&str>,
+) -> Result<()> {
+    if status == reqwest::StatusCode::OK {
+        return Ok(());
+    }
+    let reason = if p.custom() && status == reqwest::StatusCode::BAD_REQUEST {
+        super::token_refusal::bytes(bytes, known, "token_http_refused")
+    } else {
+        "token_http_refused"
+    };
+    Err(Error(reason))
 }

@@ -84,9 +84,7 @@ pub(super) async fn exchange(
     ];
     confidential(p, client_secret, &mut form)?;
     let (status, bytes) = super::token_io::post(p, &client(p)?, &form).await?;
-    if status != reqwest::StatusCode::OK {
-        return Err(Error("token_http_refused"));
-    }
+    super::token_io::exchange_status(p, status, &bytes, client_secret)?;
     super::token_io::checked_decode(p, &bytes, client_secret)
 }
 pub(super) fn secret(v: &Value) -> Result<SecretString> {
