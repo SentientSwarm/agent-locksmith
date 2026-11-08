@@ -79,6 +79,8 @@ AES-GCM:
 
 ```sql
 CREATE TABLE oauth_sessions (
+    incarnation                INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_version              INTEGER NOT NULL DEFAULT 0 CHECK(typeof(token_version) = 'integer' AND token_version >= 0),
     name                       TEXT NOT NULL,
     session_label              TEXT NOT NULL DEFAULT 'default',  -- Phase G
     refresh_token_ciphertext   BLOB NOT NULL,
@@ -91,7 +93,7 @@ CREATE TABLE oauth_sessions (
     account_id                 TEXT,                             -- Phase G2; extracted from JWT
     created_at                 INTEGER NOT NULL,
     updated_at                 INTEGER NOT NULL,
-    PRIMARY KEY (name, session_label)
+    UNIQUE (name, session_label)
 );
 ```
 
@@ -281,7 +283,8 @@ proxy-hot-path refresh.
 
 If a refresh attempt fails:
 
-1. The session is marked `degraded = 1`.
+1. The original incarnation/version is conditionally marked `degraded = 1`;
+   a stale failure cannot degrade a replacement or newer token pair.
 2. Audit emits `oauth_refresh_failed` with `details.cause`:
    `revoked` / `provider_5xx` / `network_error` / `bad_response`.
 3. The background task does **not** retry on its own — operator
@@ -297,9 +300,11 @@ If a refresh attempt fails:
      }
    }
    ```
-5. Operator runs `locksmith oauth bootstrap <name> --label <selected-label>
+5. Operator revokes the failed local session, then runs `locksmith oauth bootstrap <name> --label <selected-label>
    --refresh-token-stdin < private-refresh-token.txt` with a fresh token.
-   On success, `degraded` clears and both ciphertext columns are replaced.
+   On success, the fresh incarnation contains the committed pair. Follow
+   [recovery and migration guidance](../operator/oauth-recovery.md), including
+   the remaining crash/ambiguous-rotation limits and required durable-refresh follow-up.
 
 ADR-0005 D6. Auto-retry was rejected because persistent failure
 (revoked token, provider deprecation) is operator-visible work, and
