@@ -40,7 +40,6 @@ it shows a consent page, issues tokens and answers "who is this token for?":
 
 <!-- uat:step service bg -->
 ```sh
-export MCP_PORT="${MCP_PORT:-9400}"
 RECORDS_CLIENT_SECRET="$(cat "$LOCKSMITH_HOME/records-client-secret.txt")" \
   python3 "$LOCKSMITH_SRC/examples/mcp-records-service.py" --port "$MCP_PORT" --oauth \
   --cert "$LOCKSMITH_HOME/pki/server.pem" --key "$LOCKSMITH_HOME/pki/server.key"
@@ -64,7 +63,6 @@ listener and the declared profile:
 
 <!-- uat:step config -->
 ```sh
-export CALLBACK_PORT="${CALLBACK_PORT:-9444}"
 PROVIDER="https://127.0.0.1:$MCP_PORT"
 cat > "$LOCKSMITH_HOME/config.yaml" <<EOF
 listen:

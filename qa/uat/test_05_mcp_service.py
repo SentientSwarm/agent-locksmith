@@ -1,12 +1,13 @@
 """Journey 5: connect an MCP service (operator, agent). Guide: docs/guide/05-mcp-service.md."""
 
 import json
-import socket
 import ssl
 import urllib.request
 from pathlib import Path
 
 import pytest
+
+from harness.uat import daemon_ready, port_open
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "guide"
 PAGE = "05-mcp-service.md"
@@ -20,11 +21,6 @@ def case(n, kind="positive", covers=(), persona="OPR"):
         kind=kind,
         covers=[f"guide:05-mcp-service#{c}" for c in covers],
     )
-
-
-def port_open(port):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
-        return True
 
 
 def counts(j):
@@ -43,7 +39,7 @@ def test_mcp_connection_registers_active(journey):
     journey.prereq(GUIDE / "04-enrol-agents.md", "pki")
     journey.start("service", ready=lambda: port_open(journey.var("MCP_PORT")))
     journey.run("config")
-    journey.start("start", ready=lambda: port_open(journey.var("LOCKSMITH_PORT")))
+    journey.start("start", ready=lambda: daemon_ready(journey, "LOCKSMITH_PORT"))
     out = journey.run("register").out
     assert "protocol: mcp_streamable_http" in out and "activation: active" in out
 

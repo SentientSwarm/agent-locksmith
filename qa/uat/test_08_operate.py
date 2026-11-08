@@ -2,10 +2,11 @@
 
 import json
 import signal
-import socket
 from pathlib import Path
 
 import pytest
+
+from harness.uat import daemon_ready, port_open
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "guide"
 PAGE = "08-operate.md"
@@ -22,11 +23,6 @@ def case(n, kind="positive", covers=(), persona="OPR"):
     )
 
 
-def port_open(port):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
-        return True
-
-
 def restart(j):
     """The reader's Control-C and rerun of journey 2's start command."""
     assert j.stop("daemon", signal.SIGTERM) == 0
@@ -35,7 +31,7 @@ def restart(j):
 
 def start_daemon(j):
     j.start_from(
-        HTTP, "start", "daemon", ready=lambda: port_open(j.var("LOCKSMITH_PORT"))
+        HTTP, "start", "daemon", ready=lambda: daemon_ready(j, "LOCKSMITH_PORT")
     )
 
 

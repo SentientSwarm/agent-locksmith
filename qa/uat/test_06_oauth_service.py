@@ -1,13 +1,14 @@
 """Journey 6: connect an OAuth service (owner, operator, agent). Guide: docs/guide/06-oauth-service.md."""
 
 import json
-import socket
 import ssl
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+
+from harness.uat import daemon_ready, port_open
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "guide"
 PAGE = "06-oauth-service.md"
@@ -21,11 +22,6 @@ def case(n, kind="positive", covers=(), persona="OPR"):
         kind=kind,
         covers=[f"guide:06-oauth-service#{c}" for c in covers],
     )
-
-
-def port_open(port):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
-        return True
 
 
 def counts(j):
@@ -63,13 +59,12 @@ def test_profile_connection_and_client_are_configured(journey):
     journey.canaries.add(secret, "oauth-client-secret")
     journey.start("service", ready=lambda: port_open(journey.var("MCP_PORT")))
     journey.run("keys")
+    journey.secret_file("oauth-sealing.key", "oauth-sealing-key")
+    journey.secret_file("credential-sealing.key", "credential-sealing-key")
     journey.run("config")
     journey.start(
         "start",
-        ready=lambda: (
-            port_open(journey.var("LOCKSMITH_PORT"))
-            and port_open(journey.var("CALLBACK_PORT"))
-        ),
+        ready=lambda: daemon_ready(journey, "LOCKSMITH_PORT", "CALLBACK_PORT"),
     )
     out = journey.run("definition").out
     assert '"activation": "active"' in out

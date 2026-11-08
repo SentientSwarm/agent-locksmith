@@ -53,7 +53,7 @@ class Provider:
         if not self._valid_request(q):
             return 400, {}, b"invalid authorization request"
         hidden = "".join(
-            f'<input type="hidden" name="{k}" value="{html.escape(v)}">'
+            f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">'
             for k, v in q.items()
         )
         scopes = "".join(

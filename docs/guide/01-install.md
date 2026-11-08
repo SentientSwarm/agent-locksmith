@@ -32,18 +32,23 @@ locksmithd --version
 ## Choose a home for this instance
 
 Everything this instance owns lives in one private directory. Pick a free
-port for agents (9200 here) and tell the CLI where the admin socket will be:
+port for agents (9200 here), tell the CLI where the admin socket will be, and
+fix the ports of the services later journeys run beside Locksmith:
 
 <!-- uat:step home -->
 ```sh
 export LOCKSMITH_HOME="$HOME/locksmith"
 export LOCKSMITH_PORT="${LOCKSMITH_PORT:-9200}"
 export LOCKSMITH_SOCKET="$LOCKSMITH_HOME/admin.sock"
+export BOOTSTRAP_PORT="${BOOTSTRAP_PORT:-9202}" REFERENCE_PORT="${REFERENCE_PORT:-9300}"
+export MCP_PORT="${MCP_PORT:-9400}" CALLBACK_PORT="${CALLBACK_PORT:-9444}"
 mkdir -p "$LOCKSMITH_HOME"
 chmod 700 "$LOCKSMITH_HOME"
 ```
 
 `LOCKSMITH_SOCKET` saves you passing `--socket` to every `locksmith` command.
+The journeys run commands in more than one terminal. Run this block in every
+terminal you open, so they all agree on the directory and the ports.
 
 ## Create an operator credential
 
@@ -109,7 +114,7 @@ daemon imports it on first start. Set `LOCKSMITH_SEED_PATH=""` to skip it.
 
 ## Check that it answers
 
-In another terminal (with the same variables exported), ask the agent port
+In another terminal (after running the [home block](#choose-a-home-for-this-instance)), ask the agent port
 whether the daemon is alive and ready, and which version it runs:
 
 <!-- uat:step health -->

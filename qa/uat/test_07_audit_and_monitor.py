@@ -1,10 +1,11 @@
 """Journey 7: audit and monitor (auditor, operator). Guide: docs/guide/07-audit-and-monitor.md."""
 
 import json
-import socket
 from pathlib import Path
 
 import pytest
+
+from harness.uat import daemon_ready, port_open
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "guide"
 PAGE = "07-audit-and-monitor.md"
@@ -20,17 +21,12 @@ def case(n, kind="positive", covers=(), persona="AUD"):
     )
 
 
-def port_open(port):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
-        return True
-
-
 @case(1, covers=["config", "service", "start", "traffic"], persona="OPR")
 def test_records_configured_and_traffic_made(journey):
     journey.prereq(GUIDE / "01-install.md", "home", "operator")
     journey.run("config")
     journey.start("service", ready=lambda: port_open(journey.var("REFERENCE_PORT")))
-    journey.start("start", ready=lambda: port_open(journey.var("LOCKSMITH_PORT")))
+    journey.start("start", ready=lambda: daemon_ready(journey, "LOCKSMITH_PORT"))
     journey.prereq(
         GUIDE / "02-http-service.md",
         "register-service",
@@ -67,7 +63,9 @@ def test_audit_records_refusals_and_admin_changes(journey):
 def test_operational_and_process_logs_are_readable(journey):
     oplog = journey.run("oplog").out
     # Operator-path agent registration writes no `agent` event yet (AGENT-221).
-    assert "registry\tregistration_created" in oplog and "config\tconfig_loaded" in oplog
+    assert (
+        "registry\tregistration_created" in oplog and "config\tconfig_loaded" in oplog
+    )
     process = [json.loads(line) for line in journey.run("process-log").out.splitlines()]
     assert process and all("level" in p for p in process)
 

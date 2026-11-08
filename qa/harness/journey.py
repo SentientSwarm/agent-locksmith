@@ -282,9 +282,22 @@ class Journey:
         self._harvest(result.out)
         return result
 
+    def secret_file(self, path: str, label: str) -> None:
+        """Treat a file's contents as a secret (for keys passed only as a command prefix)."""
+        self.canaries.add(
+            Path(self.var("LOCKSMITH_HOME"), path).read_text().strip(), label
+        )
+
+    def _is_public(self, value: str) -> bool:
+        """A value printed as a whole token in the published guide is not a secret."""
+        return (
+            re.search(rf"(?<![\w.-]){re.escape(value)}(?![\w.-])", self.public)
+            is not None
+        )
+
     def _harvest(self, out: str) -> None:
         for key, value in self.env.items():
-            if SECRET_ENV.search(key) and value not in self.public:
+            if SECRET_ENV.search(key) and not self._is_public(value):
                 self.canaries.add(value, f"env-{key.lower()}")
         for key, value in SECRET_FIELD.findall(out):
             self.canaries.add(value, f"field-{key}")

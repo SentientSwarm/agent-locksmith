@@ -36,7 +36,6 @@ service from journey 2 as well, if it is not already running:
 
 <!-- uat:step service bg -->
 ```sh
-export REFERENCE_PORT="${REFERENCE_PORT:-9300}"
 python3 "$LOCKSMITH_SRC/examples/http-account-service.py" --port "$REFERENCE_PORT"
 ```
 

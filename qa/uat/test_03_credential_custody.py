@@ -61,6 +61,7 @@ def stub_op(j):
 def test_daemon_mounts_the_sealed_store(journey):
     journey.prereq(GUIDE / "01-install.md", "home", "operator", "config")
     journey.run("sealing-key")
+    journey.secret_file("credential-sealing.key", "credential-sealing-key")
     stub_op(journey)
     journey.start(
         "service",

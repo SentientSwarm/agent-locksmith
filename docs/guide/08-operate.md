@@ -124,5 +124,5 @@ locksmith --format json agent list --include-revoked \
 ![A revoked agent is refused](img/08-operate/revoke.svg)
 
 Revocation keeps the agent's record and audit history. The name stays taken.
-`agent list` and `agent get` hide revoked agents; add `--include-revoked`
-to `agent list` to see them.
+`agent list` hides revoked agents, and `agent get` by public ID does not
+find them; add `--include-revoked` to `agent list` to see them.

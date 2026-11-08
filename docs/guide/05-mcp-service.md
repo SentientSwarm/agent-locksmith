@@ -19,7 +19,6 @@ deletes one. Run it in its own terminal with the server certificate:
 
 <!-- uat:step service bg -->
 ```sh
-export MCP_PORT="${MCP_PORT:-9400}"
 python3 "$LOCKSMITH_SRC/examples/mcp-records-service.py" --port "$MCP_PORT" \
   --cert "$LOCKSMITH_HOME/pki/server.pem" --key "$LOCKSMITH_HOME/pki/server.key"
 ```

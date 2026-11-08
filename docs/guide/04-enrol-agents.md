@@ -54,7 +54,6 @@ opens a second TLS port that serves exactly one endpoint, enrolment:
 
 <!-- uat:step config -->
 ```sh
-export BOOTSTRAP_PORT="${BOOTSTRAP_PORT:-9202}"
 cat > "$LOCKSMITH_HOME/config.yaml" <<EOF
 listen:
   host: "127.0.0.1"
@@ -88,7 +87,6 @@ Start the reference service and the daemon as in journey 2:
 
 <!-- uat:step service bg -->
 ```sh
-export REFERENCE_PORT="${REFERENCE_PORT:-9300}"
 python3 "$LOCKSMITH_SRC/examples/http-account-service.py" --port "$REFERENCE_PORT"
 ```
 

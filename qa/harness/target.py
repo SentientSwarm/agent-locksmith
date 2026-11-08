@@ -464,16 +464,7 @@ class LocalTarget:
             return json.loads(resp.read())
 
     def build_info(self) -> dict:
-        info = {}
-        for name in ("locksmith", "locksmithd"):
-            out = subprocess.run(
-                [str(self.bins / name), "--build-info"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            info[name] = json.loads(out.stdout)
-        return info
+        return build_info(self.bins)
 
     def _harvest(self, value: Any) -> None:
         """Register any secret-named field in CLI output as a canary before it is recorded."""
@@ -486,3 +477,17 @@ class LocalTarget:
         elif isinstance(value, list):
             for item in value:
                 self._harvest(item)
+
+
+def build_info(bins: Path) -> dict:
+    """Build identity of both binaries, as `--build-info` reports it."""
+    info = {}
+    for name in ("locksmith", "locksmithd"):
+        out = subprocess.run(
+            [str(bins / name), "--build-info"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        info[name] = json.loads(out.stdout)
+    return info

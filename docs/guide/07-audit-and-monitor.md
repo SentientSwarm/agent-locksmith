@@ -56,7 +56,6 @@ with account X in the daemon's environment:
 
 <!-- uat:step service bg -->
 ```sh
-export REFERENCE_PORT="${REFERENCE_PORT:-9300}"
 python3 "$LOCKSMITH_SRC/examples/http-account-service.py" --port "$REFERENCE_PORT"
 ```
 

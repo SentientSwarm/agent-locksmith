@@ -1,11 +1,12 @@
 """Journey 4: enrol agents with bootstrap tokens and certificates. Guide: docs/guide/04-enrol-agents.md."""
 
 import json
-import socket
 import urllib.request
 from pathlib import Path
 
 import pytest
+
+from harness.uat import daemon_ready, port_open
 
 GUIDE = Path(__file__).resolve().parents[2] / "docs" / "guide"
 PAGE = "04-enrol-agents.md"
@@ -19,11 +20,6 @@ def case(n, kind="positive", covers=(), persona="OPR"):
         kind=kind,
         covers=[f"guide:04-enrol-agents#{c}" for c in covers],
     )
-
-
-def port_open(port):
-    with socket.create_connection(("127.0.0.1", int(port)), timeout=1):
-        return True
 
 
 def counts(j):
@@ -42,10 +38,7 @@ def test_tls_listeners_start(journey):
     journey.start("service", ready=lambda: port_open(journey.var("REFERENCE_PORT")))
     journey.start(
         "start",
-        ready=lambda: (
-            port_open(journey.var("LOCKSMITH_PORT"))
-            and port_open(journey.var("BOOTSTRAP_PORT"))
-        ),
+        ready=lambda: daemon_ready(journey, "LOCKSMITH_PORT", "BOOTSTRAP_PORT"),
     )
     log = journey.log("start")
     assert "bootstrap-only listener bound" in log

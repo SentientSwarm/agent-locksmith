@@ -30,6 +30,9 @@ Not yet covered here: upgrading an existing 2.x instance (see the
 - `$LOCKSMITH_HOME` is the private directory that holds this instance's
   configuration, database and credentials. The journeys use
   `~/locksmith`; choose your own.
+- Each journey uses more than one terminal. Run journey 1's
+  [home block](01-install.md#choose-a-home-for-this-instance) in every
+  terminal you open; it sets the directory and every port the journeys use.
 - Values such as tokens are kept in environment variables and never printed.
   In the figures they appear as `<redacted:…>`.
 - Ports in the figures are whichever free ports the test run chose, not the

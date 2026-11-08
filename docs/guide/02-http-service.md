@@ -30,7 +30,6 @@ checkout, then run it in its own terminal:
 
 <!-- uat:step service bg -->
 ```sh
-export REFERENCE_PORT="${REFERENCE_PORT:-9300}"
 python3 "$LOCKSMITH_SRC/examples/http-account-service.py" --port "$REFERENCE_PORT"
 ```
 
