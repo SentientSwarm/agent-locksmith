@@ -190,9 +190,11 @@ class Journey:
     def var(self, name: str) -> str:
         return self.env.get(name, "")
 
-    def browser(self) -> figure.Browser:
+    def browser(self, trust_dev_ca: bool = False) -> figure.Browser:
         if self._browser is None:
-            self._browser = figure.Browser()
+            self._browser = figure.Browser(trust_dev_ca)
+            note = "browser steps driven by headless Chrome (Playwright)"
+            self.substitute(note + (", accepting the development CA" if trust_dev_ca else ""))
         return self._browser
 
     def browser_shot(self, name: str) -> None:

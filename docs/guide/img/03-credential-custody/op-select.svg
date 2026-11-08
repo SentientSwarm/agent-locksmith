@@ -19,89 +19,89 @@
         font-weight: 700;
     }
 
-    .terminal-3526547659-matrix {
+    .terminal-3173963963-matrix {
         font-family: Fira Code, monospace;
         font-size: 20px;
         line-height: 24.4px;
         font-variant-east-asian: full-width;
     }
 
-    .terminal-3526547659-title {
+    .terminal-3173963963-title {
         font-size: 18px;
         font-weight: bold;
         font-family: arial;
     }
 
-    .terminal-3526547659-r1 { fill: #98a84b;font-weight: bold }
-.terminal-3526547659-r2 { fill: #c5c8c6 }
-.terminal-3526547659-r3 { fill: #98a84b }
+    .terminal-3173963963-r1 { fill: #98a84b;font-weight: bold }
+.terminal-3173963963-r2 { fill: #c5c8c6 }
+.terminal-3173963963-r3 { fill: #98a84b }
     </style>
 
     <defs>
-    <clipPath id="terminal-3526547659-clip-terminal">
+    <clipPath id="terminal-3173963963-clip-terminal">
       <rect x="0" y="0" width="1219.0" height="316.2" />
     </clipPath>
-    <clipPath id="terminal-3526547659-line-0">
+    <clipPath id="terminal-3173963963-line-0">
     <rect x="0" y="1.5" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-1">
+<clipPath id="terminal-3173963963-line-1">
     <rect x="0" y="25.9" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-2">
+<clipPath id="terminal-3173963963-line-2">
     <rect x="0" y="50.3" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-3">
+<clipPath id="terminal-3173963963-line-3">
     <rect x="0" y="74.7" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-4">
+<clipPath id="terminal-3173963963-line-4">
     <rect x="0" y="99.1" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-5">
+<clipPath id="terminal-3173963963-line-5">
     <rect x="0" y="123.5" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-6">
+<clipPath id="terminal-3173963963-line-6">
     <rect x="0" y="147.9" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-7">
+<clipPath id="terminal-3173963963-line-7">
     <rect x="0" y="172.3" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-8">
+<clipPath id="terminal-3173963963-line-8">
     <rect x="0" y="196.7" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-9">
+<clipPath id="terminal-3173963963-line-9">
     <rect x="0" y="221.1" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-10">
+<clipPath id="terminal-3173963963-line-10">
     <rect x="0" y="245.5" width="1220" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-3526547659-line-11">
+<clipPath id="terminal-3173963963-line-11">
     <rect x="0" y="269.9" width="1220" height="24.65"/>
             </clipPath>
     </defs>
 
-    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1236" height="365.2" rx="8"/><text class="terminal-3526547659-title" fill="#c5c8c6" text-anchor="middle" x="618" y="27">03-credential-custody:&#160;op-select</text>
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1236" height="365.2" rx="8"/><text class="terminal-3173963963-title" fill="#c5c8c6" text-anchor="middle" x="618" y="27">03-credential-custody:&#160;op-select</text>
             <g transform="translate(26,22)">
             <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
             <circle cx="22" cy="0" r="7" fill="#febc2e"/>
             <circle cx="44" cy="0" r="7" fill="#28c840"/>
             </g>
         
-    <g transform="translate(9, 41)" clip-path="url(#terminal-3526547659-clip-terminal)">
+    <g transform="translate(9, 41)" clip-path="url(#terminal-3173963963-clip-terminal)">
     
-    <g class="terminal-3526547659-matrix">
-    <text class="terminal-3526547659-r1" x="0" y="20" textLength="658.8" clip-path="url(#terminal-3526547659-line-0)">$&#160;curl&#160;-fsS&#160;--unix-socket&#160;&quot;$LOCKSMITH_SOCKET&quot;&#160;-X&#160;PUT&#160;\</text><text class="terminal-3526547659-r2" x="1220" y="20" textLength="12.2" clip-path="url(#terminal-3526547659-line-0)">
-</text><text class="terminal-3526547659-r3" x="0" y="44.4" textLength="1073.6" clip-path="url(#terminal-3526547659-line-1)">&#160;&#160;&#160;&#160;-H&#160;&quot;Authorization:&#160;Bearer&#160;$LOCKSMITH_OP_TOKEN&quot;&#160;-H&#160;&#x27;Content-Type:&#160;application/json&#x27;&#160;\</text><text class="terminal-3526547659-r2" x="1220" y="44.4" textLength="12.2" clip-path="url(#terminal-3526547659-line-1)">
-</text><text class="terminal-3526547659-r3" x="0" y="68.8" textLength="1134.6" clip-path="url(#terminal-3526547659-line-2)">&#160;&#160;&#160;&#160;-d&#160;&#x27;{&quot;auth_spec&quot;:{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents/accounts-y/credential&quot;}}&#x27;&#160;\</text><text class="terminal-3526547659-r2" x="1220" y="68.8" textLength="12.2" clip-path="url(#terminal-3526547659-line-2)">
-</text><text class="terminal-3526547659-r3" x="0" y="93.2" textLength="1085.8" clip-path="url(#terminal-3526547659-line-3)">&#160;&#160;&#160;&#160;&quot;http://locksmith/admin/operator/agents/$REPORTING_BOT_ID/credentials/accounts&quot;;&#160;echo</text><text class="terminal-3526547659-r2" x="1220" y="93.2" textLength="12.2" clip-path="url(#terminal-3526547659-line-3)">
-</text><text class="terminal-3526547659-r1" x="0" y="117.6" textLength="658.8" clip-path="url(#terminal-3526547659-line-4)">$&#160;locksmith&#160;agent&#160;credentials&#160;list&#160;&quot;$REPORTING_BOT_ID&quot;</text><text class="terminal-3526547659-r2" x="1220" y="117.6" textLength="12.2" clip-path="url(#terminal-3526547659-line-4)">
-</text><text class="terminal-3526547659-r2" x="0" y="142" textLength="1220" clip-path="url(#terminal-3526547659-line-5)">{&quot;agent_public_id&quot;:&quot;QziYUmGJfE5E8uy9EPAuRw&quot;,&quot;auth_spec&quot;:{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents</text><text class="terminal-3526547659-r2" x="1220" y="142" textLength="12.2" clip-path="url(#terminal-3526547659-line-5)">
-</text><text class="terminal-3526547659-r2" x="0" y="166.4" textLength="622.2" clip-path="url(#terminal-3526547659-line-6)">/accounts-y/credential&quot;},&quot;registration&quot;:&quot;accounts&quot;}</text><text class="terminal-3526547659-r2" x="1220" y="166.4" textLength="12.2" clip-path="url(#terminal-3526547659-line-6)">
-</text><text class="terminal-3526547659-r2" x="0" y="190.8" textLength="1171.2" clip-path="url(#terminal-3526547659-line-7)">auth_spec&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;created_at&#160;&#160;registration&#160;&#160;</text><text class="terminal-3526547659-r2" x="1220" y="190.8" textLength="12.2" clip-path="url(#terminal-3526547659-line-7)">
-</text><text class="terminal-3526547659-r2" x="0" y="215.2" textLength="122" clip-path="url(#terminal-3526547659-line-8)">updated_at</text><text class="terminal-3526547659-r2" x="1220" y="215.2" textLength="12.2" clip-path="url(#terminal-3526547659-line-8)">
-</text><text class="terminal-3526547659-r2" x="0" y="239.6" textLength="1171.2" clip-path="url(#terminal-3526547659-line-9)">--------------------------------------------------------------------&#160;&#160;----------&#160;&#160;------------&#160;&#160;</text><text class="terminal-3526547659-r2" x="1220" y="239.6" textLength="12.2" clip-path="url(#terminal-3526547659-line-9)">
-</text><text class="terminal-3526547659-r2" x="0" y="264" textLength="122" clip-path="url(#terminal-3526547659-line-10)">----------</text><text class="terminal-3526547659-r2" x="1220" y="264" textLength="12.2" clip-path="url(#terminal-3526547659-line-10)">
-</text><text class="terminal-3526547659-r2" x="0" y="288.4" textLength="1171.2" clip-path="url(#terminal-3526547659-line-11)">{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents/accounts-y/credential&quot;}&#160;&#160;1794155457&#160;&#160;accounts&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-3526547659-r2" x="1220" y="288.4" textLength="12.2" clip-path="url(#terminal-3526547659-line-11)">
-</text><text class="terminal-3526547659-r2" x="0" y="312.8" textLength="122" clip-path="url(#terminal-3526547659-line-12)">1794155457</text><text class="terminal-3526547659-r2" x="1220" y="312.8" textLength="12.2" clip-path="url(#terminal-3526547659-line-12)">
+    <g class="terminal-3173963963-matrix">
+    <text class="terminal-3173963963-r1" x="0" y="20" textLength="658.8" clip-path="url(#terminal-3173963963-line-0)">$&#160;curl&#160;-fsS&#160;--unix-socket&#160;&quot;$LOCKSMITH_SOCKET&quot;&#160;-X&#160;PUT&#160;\</text><text class="terminal-3173963963-r2" x="1220" y="20" textLength="12.2" clip-path="url(#terminal-3173963963-line-0)">
+</text><text class="terminal-3173963963-r3" x="0" y="44.4" textLength="1073.6" clip-path="url(#terminal-3173963963-line-1)">&#160;&#160;&#160;&#160;-H&#160;&quot;Authorization:&#160;Bearer&#160;$LOCKSMITH_OP_TOKEN&quot;&#160;-H&#160;&#x27;Content-Type:&#160;application/json&#x27;&#160;\</text><text class="terminal-3173963963-r2" x="1220" y="44.4" textLength="12.2" clip-path="url(#terminal-3173963963-line-1)">
+</text><text class="terminal-3173963963-r3" x="0" y="68.8" textLength="1134.6" clip-path="url(#terminal-3173963963-line-2)">&#160;&#160;&#160;&#160;-d&#160;&#x27;{&quot;auth_spec&quot;:{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents/accounts-y/credential&quot;}}&#x27;&#160;\</text><text class="terminal-3173963963-r2" x="1220" y="68.8" textLength="12.2" clip-path="url(#terminal-3173963963-line-2)">
+</text><text class="terminal-3173963963-r3" x="0" y="93.2" textLength="1085.8" clip-path="url(#terminal-3173963963-line-3)">&#160;&#160;&#160;&#160;&quot;http://locksmith/admin/operator/agents/$REPORTING_BOT_ID/credentials/accounts&quot;;&#160;echo</text><text class="terminal-3173963963-r2" x="1220" y="93.2" textLength="12.2" clip-path="url(#terminal-3173963963-line-3)">
+</text><text class="terminal-3173963963-r1" x="0" y="117.6" textLength="658.8" clip-path="url(#terminal-3173963963-line-4)">$&#160;locksmith&#160;agent&#160;credentials&#160;list&#160;&quot;$REPORTING_BOT_ID&quot;</text><text class="terminal-3173963963-r2" x="1220" y="117.6" textLength="12.2" clip-path="url(#terminal-3173963963-line-4)">
+</text><text class="terminal-3173963963-r2" x="0" y="142" textLength="1220" clip-path="url(#terminal-3173963963-line-5)">{&quot;agent_public_id&quot;:&quot;iQGu0aWScFrNjMsrQzF62A&quot;,&quot;auth_spec&quot;:{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents</text><text class="terminal-3173963963-r2" x="1220" y="142" textLength="12.2" clip-path="url(#terminal-3173963963-line-5)">
+</text><text class="terminal-3173963963-r2" x="0" y="166.4" textLength="622.2" clip-path="url(#terminal-3173963963-line-6)">/accounts-y/credential&quot;},&quot;registration&quot;:&quot;accounts&quot;}</text><text class="terminal-3173963963-r2" x="1220" y="166.4" textLength="12.2" clip-path="url(#terminal-3173963963-line-6)">
+</text><text class="terminal-3173963963-r2" x="0" y="190.8" textLength="1171.2" clip-path="url(#terminal-3173963963-line-7)">auth_spec&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;created_at&#160;&#160;registration&#160;&#160;</text><text class="terminal-3173963963-r2" x="1220" y="190.8" textLength="12.2" clip-path="url(#terminal-3173963963-line-7)">
+</text><text class="terminal-3173963963-r2" x="0" y="215.2" textLength="122" clip-path="url(#terminal-3173963963-line-8)">updated_at</text><text class="terminal-3173963963-r2" x="1220" y="215.2" textLength="12.2" clip-path="url(#terminal-3173963963-line-8)">
+</text><text class="terminal-3173963963-r2" x="0" y="239.6" textLength="1171.2" clip-path="url(#terminal-3173963963-line-9)">--------------------------------------------------------------------&#160;&#160;----------&#160;&#160;------------&#160;&#160;</text><text class="terminal-3173963963-r2" x="1220" y="239.6" textLength="12.2" clip-path="url(#terminal-3173963963-line-9)">
+</text><text class="terminal-3173963963-r2" x="0" y="264" textLength="122" clip-path="url(#terminal-3173963963-line-10)">----------</text><text class="terminal-3173963963-r2" x="1220" y="264" textLength="12.2" clip-path="url(#terminal-3173963963-line-10)">
+</text><text class="terminal-3173963963-r2" x="0" y="288.4" textLength="1171.2" clip-path="url(#terminal-3173963963-line-11)">{&quot;kind&quot;:&quot;op_bearer&quot;,&quot;reference&quot;:&quot;op://Agents/accounts-y/credential&quot;}&#160;&#160;1794155831&#160;&#160;accounts&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-3173963963-r2" x="1220" y="288.4" textLength="12.2" clip-path="url(#terminal-3173963963-line-11)">
+</text><text class="terminal-3173963963-r2" x="0" y="312.8" textLength="122" clip-path="url(#terminal-3173963963-line-12)">1794155831</text><text class="terminal-3173963963-r2" x="1220" y="312.8" textLength="12.2" clip-path="url(#terminal-3173963963-line-12)">
 </text>
     </g>
     </g>

@@ -15,9 +15,11 @@ those runs, so what you see is what the current release does.
 | 2 | [Connect an HTTP service](02-http-service.md) | register a service, register an agent, select its account, call through Locksmith, deny and repair |
 | 3 | [Keep credentials in Locksmith](03-credential-custody.md) | seal credentials under a key, select 1Password references, see fail-closed behaviour |
 | 4 | [Enrol agents](04-enrol-agents.md) | enrol with bootstrap tokens, identify agents by client certificate, revoke a certificate |
+| 5 | [Connect an MCP service](05-mcp-service.md) | observe an MCP server, review and grant one tool, use it as the agent |
+| 6 | [Connect an OAuth service](06-oauth-service.md) | declare a provider contract, approve access in the browser, let an agent act as the account |
 
-More journeys follow the same pattern: native MCP tools, OAuth services,
-audit and monitoring, and day-two operations.
+More journeys follow the same pattern: audit and monitoring, and day-two
+operations.
 
 ## Conventions
 

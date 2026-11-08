@@ -68,12 +68,16 @@ def terminal(path: Path, title: str, code: str, output: str) -> None:
 class Browser:
     """Headless installed Chrome for consent-page screenshots."""
 
-    def __init__(self) -> None:
+    def __init__(self, trust_dev_ca: bool = False) -> None:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(channel="chrome", headless=True)
-        self.page = self._browser.new_page(viewport={"width": 1100, "height": 760})
+        # A development CA is not in Chrome's trust store; a reader clicks
+        # through the warning, the run accepts it (and records that).
+        self.page = self._browser.new_page(
+            viewport={"width": 900, "height": 560}, ignore_https_errors=trust_dev_ca
+        )
 
     def shot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

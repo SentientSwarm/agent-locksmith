@@ -5,8 +5,10 @@ A stand-in for a customer MCP server, for trying Locksmith's native MCP path
 (docs/guide/05-mcp-service.md). It serves streamable HTTP MCP at /mcp with two
 tools, `read_record` (read) and `delete_record` (write), over a few fixed
 invoices, and reports what it received at GET /counts. With --bearer-env it
-requires `Authorization: Bearer <value of that env var>`. It binds loopback
-only and never logs request contents.
+requires `Authorization: Bearer <value of that env var>`. With --oauth it is
+also the OAuth provider (records_oauth.py, docs/guide/06-oauth-service.md) and
+requires an access token it issued. It binds loopback only and never logs
+request contents.
 """
 
 import argparse
@@ -15,6 +17,9 @@ import os
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+from records_oauth import Provider
 
 PROTOCOL = "2025-11-25"
 RECORDS = {
@@ -96,24 +101,41 @@ def result_for(message):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     bearer = None
+    provider = None
 
     def log_message(self, *_args):
         pass  # Never log credentials or request contents.
 
-    def reply(self, status, body=b"", content_type="application/json"):
+    def reply(self, status, body=b"", content_type="application/json", headers=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Mcp-Session-Id", "records-service-session")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/counts":
+        url = urlsplit(self.path)
+        if url.path == "/counts":
             with LOCK:
                 self.reply(200, json.dumps(COUNTS).encode())
-            return
-        self.reply(405)
+        elif self.provider and url.path in ("/authorize", "/authorize/decision"):
+            query = {k: v[0] for k, v in parse_qs(url.query).items()}
+            handle = self.provider.authorize if url.path == "/authorize" else self.provider.decide
+            status, headers, body = handle(query)
+            self.reply(status, body, headers.pop("Content-Type", "text/plain"), headers)
+        elif self.provider and url.path == "/whoami":
+            status, body = self.provider.whoami(self.headers.get("Authorization"))
+            self.reply(status, json.dumps(body).encode())
+        else:
+            self.reply(405)
+
+    def authorized(self):
+        if self.provider is not None:
+            return self.provider.authorized(self.headers.get("Authorization"))
+        return self.bearer is None or self.headers.get("Authorization") == f"Bearer {self.bearer}"
 
     def do_DELETE(self):
         self.reply(204)
@@ -123,13 +145,15 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         with LOCK:
             COUNTS["received"] += 1
+        if self.provider and self.path == "/token":
+            form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
+            status, body = self.provider.token(form)
+            self.reply(status, json.dumps(body).encode())
+            return
         if self.path != "/mcp":
             self.reply(404)
             return
-        if (
-            self.bearer is not None
-            and self.headers.get("Authorization") != f"Bearer {self.bearer}"
-        ):
+        if not self.authorized():
             with LOCK:
                 COUNTS["unauthorized"] += 1
             self.reply(401)
@@ -158,9 +182,15 @@ def main():
     parser.add_argument(
         "--bearer-env", help="require Authorization: Bearer <value of this env var>"
     )
+    parser.add_argument("--oauth", action="store_true", help="also act as the OAuth provider")
+    parser.add_argument("--client-id", default="records-client")
+    parser.add_argument("--client-secret-env", default="RECORDS_CLIENT_SECRET")
+    parser.add_argument("--scope", default="invoices:read", help="space-separated scopes to grant")
     args = parser.parse_args()
     if args.bearer_env:
         Handler.bearer = os.environ[args.bearer_env]
+    if args.oauth:
+        Handler.provider = Provider(args.client_id, os.environ[args.client_secret_env], args.scope)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
