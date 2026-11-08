@@ -139,7 +139,7 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
 
 `daemon::run` (in `src/daemon.rs`) is the single composition root. Everything below is wired from there:
 
-1. **Shared config** — `Arc<ArcSwap<AppConfig>>`. The agent router and the AdminService both observe the same snapshot, so hot reload (T1.5) is unified across surfaces. The `deny_unknown_fields` schema is in `src/config.rs`.
+1. **Shared config** — `Arc<ArcSwap<AppConfig>>`. The agent router and the AdminService both observe the same snapshot. Nothing stores to it after startup: the YAML is read once, and config edits need a restart (see `docs/user/architecture.md#changing-configuration`). The `deny_unknown_fields` schema is in `src/config.rs`.
 2. **Credential resolution** — two paths converge into one `ResolvedCreds` map:
    - **`config.tools` legacy path**: `secret::SecretResolver` resolves each `tool.auth.value: SecretRef` at startup. Backends in `src/secret/`: `EnvBackend` (incl. legacy `${VAR}` strings), `FileSealedBackend` (systemd-creds-decrypted files; rejects group/world-readable), Vault + AWS stubs.
    - **Phase E registrations path**: after seed_loader + legacy_bootstrap populate the registrations table, `secret::resolve_registration_creds_sync_env_only` walks `AuthSpec::Header` / `AuthSpec::Bearer` entries and resolves their env vars into the same map. OAuth registrations skip this path (their tokens live in the `oauth_sessions` cache).
@@ -237,7 +237,7 @@ docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineeri
 
 - **Secrets discipline.** Anything secret rides in `secrecy::SecretString` (zeroized on drop). It must never appear in log fields, error messages, HTTP responses, audit rows, or test fixtures committed to the repo. The redaction subsystem hashes cleartext into audit, never the cleartext itself.
 - **`deny_unknown_fields`** is on every config struct. Adding a field means a schema change — bump tests in `tests/config_*` and the example config alongside.
-- **Hot-reload carve-out.** Listener-shape config (admin_https paths, mTLS cert paths, bind ports) requires a daemon restart by design; tools/audit/retention/response_controls are reload-safe via the shared `ArcSwap<AppConfig>`. T2.20 (extending hot reload to remaining non-listener fields) is on the post-v2 backlog.
+- **No config hot reload.** The YAML config and operator credentials file are read once at startup; any edit needs a restart. Database-backed state (registrations, agents, grants, bindings, credentials, OAuth, definitions) changes live through the admin API. Only the mTLS blocklist file and the CRL refresh on their own. Config reload (SPEC C-18, T2.20) is not implemented.
 - **Auth surfaces are independent.** Agent listener (`listen.auth_mode`) and admin HTTPS (`listen.admin_https.auth_mode`) each pick `bearer | mtls | both` separately. The UDS admin listener uses operator bearer tokens only (peer-uid gate is the OS).
 - **Audit is one schema, two sinks.** Every event goes through `AuditRepository::record`, which writes to SQLite and optionally appends to a size-rotating JSONL mirror. New event types extend `EventClass` / `event` strings — keep them stable; runbooks and CLI queries grep against them.
 - **Cloud routing.** Tools mark `egress: proxied` (preferred) or legacy `cloud: true` to route through `egress_proxy` (typically Pipelock). LAN tools use `egress: direct` and bypass the CONNECT proxy.

@@ -78,7 +78,7 @@ The mitigations matrix in §4 is the load-bearing artifact: every claim "M5 hard
 
 **Surface:** an attacker modifies `/etc/locksmith/config.yaml` to redirect tools, extend allowlists, or swap secret backends.
 
-**Mitigation (M5/T5.2):** systemd unit ships `ProtectSystem=strict` so the daemon itself cannot write `/etc`. Tampering requires root + bypass of file system ACLs. M2 hot-reload validates new configs before swap; an unparseable config is rejected, leaving the running config intact.
+**Mitigation (M5/T5.2):** systemd unit ships `ProtectSystem=strict` so the daemon itself cannot write `/etc`. Tampering requires root + bypass of file system ACLs. Config is read only at startup and fully validated (`deny_unknown_fields`); an invalid file stops the daemon from starting rather than being partly applied. There is no hot reload, so a tampered file takes effect only on restart.
 
 **Residual risk:** root tampering plus restart can swap the config. Defense is filesystem ACL hygiene + audit alerting.
 
@@ -117,7 +117,7 @@ Attached debugger, cold-boot RAM extraction. Out of scope.
 | T3 — memory scrape at shutdown | Medium | `/proc/$pid/mem` dumps | `secrecy::SecretString` zeroize + `MemoryDenyWriteExecute` | M5/T5.1 + T5.2 | `dist/systemd/locksmith.service.template` |
 | T4 — token brute-force | Low | Network listener | argon2id (Q-13 params) + decoy-on-miss + (future T2.11 rate limit) | M2 | `tests/auth_v2_*` |
 | T5 — lateral movement via stolen agent token | Medium | Network listener | Per-agent allowlist + audit | M2 + M3 | `tests/audit_proxy_test.rs` |
-| T6 — config tampering | Medium | `/etc/locksmith/` | `ProtectSystem=strict` + hot-reload validate-before-swap | M5/T5.2 + M2 | systemd template + `tests/config_*` |
+| T6 — config tampering | Medium | `/etc/locksmith/` | `ProtectSystem=strict` + validate-at-startup (no hot reload) | M5/T5.2 + M2 | systemd template + `tests/config_*` |
 | T7 — running-process memory | Critical | locksmith uid | **Out of scope** | — | — |
 | T8 — kernel exploit / root | Critical | Host root | **Out of scope** | — | — |
 | T9 — side channels | Critical | Host CPU | **Out of scope** | — | — |
