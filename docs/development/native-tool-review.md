@@ -1,11 +1,9 @@
 # Native operator preparation (AGENT-206A)
 
 [Operator workflow and API](../user/operator/native-tool-review.md) describes the
-consumer surface. Stage A adds no positive agent dispatcher: `src/native/handler.rs`
-remains empty-list/call-denial. Stage B is a separate concern and must consume
-current prepared state, validate arguments/results and commit admission audit
-before any useful tool submission. No full206/provider/G1/G3 acceptance follows
-from this slice.
+consumer surface. Stage A prepared authority; [stage B dispatch](native-dispatch.md)
+now consumes its exact current intersection. [Fixed context](native-protected-context.md)
+extends the immutable review. Full206/provider/compact gates remain separate.
 
 `src/native_authority/` reuses registration admission, full catalog activation,
 explicit agent selections, the sealed credential store, SQLite and the accepted
@@ -30,6 +28,8 @@ The observed digest covers the entire supported tool under
 `locksmith-native-tool-v1`; the reviewed digest covers
 `{tool,context:{},effect,retry:"never"}` under `locksmith-native-contract-v1`.
 Domain bytes, NUL separator and recursively key-sorted JSON feed SHA-256.
+Nonempty fixed context adds its map/profile to the same domain; the full tool
+remains stored. Empty/omitted context preserves these bytes.
 Arrays and pinned serde_json number representation remain significant. This is
 not RFC8785/cross-language numeric equivalence. Repeat reviews are immutable
 no-ops. Grant replacement is all-or-nothing and checks every exact review
@@ -54,8 +54,7 @@ min/maxItems, minimum/maximum must have valid numeric types/order. Ordering
 preserves parsed64-bit integers, including when compared with floating bounds;
 it does not round integer bounds through floating-point conversion. Depth is8 and
 schema nodes128. Every other keyword is unsupported, including refs, regex,
-formats, composition, conditional and remote/file retrieval. This stage checks
-structural support; it does not yet mediate call arguments or tool results.
+formats, composition, conditional and remote/file retrieval. This grammar also bounds the stage B argument/output-schema evaluator.
 
 Raw JSON and every SSE data message pass duplicate-member parsing and the
 supported response validator before SDK conversion. Unknown tool/schema members
@@ -70,7 +69,8 @@ static and SDK payload tracing remains filtered; no general DLP claim.
 The accepted `StreamableHttpClient` hook performs initialize, initialized,
 at most four sequential list pages and best-effort DELETE. Caller checks IDs,
 result kinds, protocol and session consistency; no SDK worker/GET/retry is
-started. No tool-call method is reachable. Every approved DNS answer is pinned
+started. Operator observation cannot call tools; stage B uses a separate final
+admission transaction before one call through the same bounded hook. Every approved DNS answer is pinned
 to the exact endpoint's resolver with no fallback. The caller validates actual
 addresses; literal IPs must match the pinned set. TLS verifies normal hostname
 and system/additional roots. Daemon startup installs its existing Rustls crypto

@@ -68,7 +68,7 @@ async fn refusals(f: &fixture::Fixture, receiver: &receiver::Receiver, token: &s
         let response = wire::post(f, token, Some(id), body).await;
         let text = response.text().await.unwrap();
         assert!(text.contains(if method == "tools/call" {
-            "tool_not_approved"
+            "tools_list_required"
         } else {
             "method_not_found"
         }));

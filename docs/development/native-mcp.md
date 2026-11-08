@@ -2,12 +2,10 @@
 
 The composition root now serves `/mcp/{connection}` with the existing registered
 bearer/mTLS identity, current SQLite authority and one process-wide accepted199
-session pool. This is N1 lifecycle integration, with **zero tool authority**.
-No agent path resolves an upstream credential, observes upstream tools or invokes
-a provider. [206A operator preparation](native-tool-review.md) is a separate bounded
-operator path; it does not add an agent dispatcher. `tools/list` is empty; `tools/call` returns -32050/tool_not_approved.
-Connection grants and account selections are prerequisites for local lifecycle,
-never imported tool approvals. Raw HTTP admission and discovery filter protocol.
+session pool. N1 originally supplied zero tool authority. [Operator preparation](native-tool-review.md)
+and [reviewed dispatch](native-dispatch.md) now add a bounded manual None/live
+StoredBearer path. Connection grants remain lifecycle prerequisites and never
+imply tool approvals. Raw HTTP admission/discovery continue to filter protocol.
 
 Public contracts: [operator setup](../user/operator/native-mcp.md),
 [agent interface](../user/agent-integration/native-mcp.md), and
@@ -34,8 +32,8 @@ entry/created/joined/released counters after pool shutdown completes.
 
 Existing198 whole-response outbound bounds are preserved and tested separately.
 The original N1 had no reachable daemon outbound hook. 206A operator preparation
-now consumes the accepted hook; later dispatch integration must
-consume those bounds at the real selected-credential observation/call boundary,
+and reviewed dispatch consume the accepted hook at the real selected-credential
+observation/call boundary,
 enforce DNS/connected-address and trust policy, and repeat receiving-effect tests.
 No protected tool schema is compiled here; later207 retains jsonschema0.60.1
 with remote/file retrieval disabled. Adding an unused validator proves nothing.
@@ -95,15 +93,16 @@ advance authority. Policy/selection changes and any registration revision do.
 
 Protocol/config/destination/egress mutation clears connection ACLs, bootstrap
 scopes and selections transactionally. Existing HTTP state/receipts/revocations
-are preserved by the migration. 206A adds prepared tool-grant writers/tables; no positive
-dispatcher branch exists. Old binaries refuse unknown applied migration0011
+are preserved by the migration. 206A adds prepared tool-grant writers/tables; B adds the separately documented
+committed dispatcher. Old binaries refuse unknown applied migration0011
 before listeners; one database sidecar lock prevents two supported daemon
 instances sharing that state. See the public backup/rollback requirements.
 
 Audit `native_lifecycle`/`native_tool_denied` is best-effort (50ms diagnostic
 budget), containing operation/agent/connection and no arguments, IDs or auth data.
-It is not206's committed tool-admission boundary. The original S3 disconnect
-oracle remains separately attributed until real dispatch/admission exists.
+It is not the committed tool-admission boundary. B adds `mcp_admitted` and
+bounded outcome records. Its original S3 replay uses production adapters with
+separate hashes; see the [dispatch checks](native-dispatch.md).
 
 ## Reproducible checks
 
@@ -158,10 +157,9 @@ candidate QA and reviewer verdicts remain separate from builder observations.
 
 N1 covers actual inbound lifecycle parts of MCP-01/02/05/06, raw-route AUTH-04,
 and versioned migration OPS-02 with bounded T04/T09/T12/T13 assertions. It does
-not complete useful tool/result/error semantics, protected schemas, committed
-authority/audit races or upstream bounds through a reachable daemon hook.
-203/206/207/208 retain those assertions and complete two-client/provider/customer
-acceptance. G1/G3 remain open; G0/G2/G4 and release/build/recovery/publication gates
+not by itself complete useful dispatch. The bounded B increment adds reviewed
+argument/result checks, committed admission and two local SDK consumers; general
+protected context, provider/customer and full206/207/208 acceptance remain separate. G1/G3 remain open; G0/G2/G4 and release/build/recovery/publication gates
 are unchanged. Debug/local tests are not optimized/four-platform/live evidence.
 
 SDK payload tracing is suppressed even when `RUST_LOG` enables `rmcp`.

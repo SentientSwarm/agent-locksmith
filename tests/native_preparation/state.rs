@@ -105,7 +105,7 @@ async fn close_owns_waiting_operation_and_rejects_registration() {
     let start = Arc::new(tokio::sync::Notify::new());
     let (r, d, n) = (rt.clone(), done.clone(), start.clone());
     let task = tokio::spawn(async move {
-        r.scoped(async move {
+        r.scoped::<serde_json::Value, _>(async move {
             let _lease = Dropped(d);
             n.notify_one();
             std::future::pending().await
@@ -119,7 +119,7 @@ async fn close_owns_waiting_operation_and_rejects_registration() {
     assert!(done.load(Ordering::SeqCst));
     assert_eq!(rt.slots.available_permits(), 8);
     assert!(
-        rt.scoped(async { panic!("must not enter after close") })
+        rt.scoped::<serde_json::Value, _>(async { panic!("must not enter after close") })
             .await
             .is_err()
     );

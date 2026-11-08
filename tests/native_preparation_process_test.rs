@@ -24,7 +24,7 @@ mod upgrade_http;
 #[path = "native_process/wire.rs"]
 mod wire;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn actual_cli_tls_observe_review_grant_and_refuse_calls() {
+async fn actual_cli_tls_observe_review_grant_and_refuse_unapproved_calls() {
     flow::journey().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

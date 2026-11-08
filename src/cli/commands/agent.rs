@@ -10,7 +10,7 @@ use crate::output::{Format, print};
 
 #[derive(Subcommand)]
 pub enum AgentCmd {
-    /// Inspect or replace finite prepared MCP grants; does not enable calls.
+    /// Inspect or replace finite reviewed native MCP tool grants.
     McpGrants {
         #[command(subcommand)]
         command: super::native_mcp::GrantsCmd,
@@ -77,9 +77,8 @@ pub enum AgentCmd {
         #[arg(long, conflicts_with = "cert_identity")]
         clear: bool,
     },
-    /// Phase G: pin a per-agent credential override on a registration.
-    /// One of `--auth bearer=ENV`, `--auth header=H:ENV`, `--no-auth`,
-    /// or `--oauth-session LABEL` is required.
+    /// Select an explicit account: auth, None, OAuth, or sealed bearer.
+    /// Native MCP supports only `--no-auth` or sealed bearer selections.
     SetCredential(SetCredentialArgs),
     /// Remove an agent's explicit account binding. Subsequent requests to
     /// this registration are denied until a binding is set again. Idempotent.

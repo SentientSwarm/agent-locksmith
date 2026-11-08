@@ -60,16 +60,24 @@ impl Runtime {
         let observation = store::observation(&mut tx, &current, &self.run).await?;
         let revision = store::revision(&mut tx, &current).await?;
         let tools = super::grants::entries(&mut tx, &current).await?;
+        let effective = self.effective(&mut tx, agent, name).await;
+        let names: Vec<_> = effective
+            .as_ref()
+            .map(|s| s.tools.keys().cloned().collect())
+            .unwrap_or_default();
+        let availability = effective.as_ref().err().map(|e| e.0);
+        let diagnostics = super::readiness::describe(&observation, tools.len(), availability);
         tx.commit().await?;
         Ok(
             json!({"source":current.source,"observation":observation,"grant_revision":revision,
-            "tools":tools,"prepared_only":true,"callable":false}),
+            "tools":tools,"prepared_only":false,"dispatch_enabled":true,
+            "callable":!names.is_empty(),"effective_tools":names,"unavailable":availability,"requires_session_list":true,"diagnostics":diagnostics}),
         )
     }
-    pub async fn scoped<F: std::future::Future<Output = Result<Value>>>(
+    pub async fn scoped<T, F: std::future::Future<Output = Result<T>>>(
         &self,
         future: F,
-    ) -> Result<Value> {
+    ) -> Result<T> {
         self.owner
             .run(async {
                 let _permit = self

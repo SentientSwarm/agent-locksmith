@@ -1,6 +1,7 @@
 use super::{Result, grants, runtime::Runtime, source::Source, store};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10,6 +11,8 @@ pub struct Review {
     pub name: String,
     pub observed_digest: String,
     pub effect: String,
+    #[serde(default)]
+    pub context: Map<String, Value>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +37,11 @@ fn required_nullable<'de, D: serde::Deserializer<'de>>(
 }
 impl Runtime {
     pub async fn review(&self, agent: &str, name: &str, input: Review) -> Result<Value> {
+        let bearer = if input.context.is_empty() {
+            None
+        } else {
+            self.materialize(agent, name, &input.source).await?
+        };
         let mut tx = self.repo.pool.begin().await?;
         let current = self.current(&mut tx, agent, name).await?;
         current.matches(&input.source)?;
@@ -42,9 +50,8 @@ impl Runtime {
             &mut tx,
             &current,
             &manifest,
-            &input.name,
-            &input.observed_digest,
-            &input.effect,
+            &input,
+            bearer.as_ref().map(ExposeSecret::expose_secret),
         )
         .await?;
         tx.commit().await?;
@@ -65,7 +72,7 @@ impl Runtime {
         .await?;
         tx.commit().await?;
         Ok(
-            json!({"source":current.source,"grant_revision":revision,"tools":input.tools,"prepared_only":true,"callable":false}),
+            json!({"source":current.source,"grant_revision":revision,"tools":input.tools,"prepared_only":false,"callable":!input.tools.is_empty(),"requires_session_list":true}),
         )
     }
 }

@@ -13,6 +13,8 @@ listen:
 
 # Native MCP lifecycle budgets/host policy require restart. No tools are callable.
 # See docs/user/operator/native-mcp.md and docs/development/native-mcp.md.
+# Fixed native context is reviewed per account, not global config:
+# docs/user/operator/native-context.md (diagnostics and synchronous sink limits).
 # mcp:
 #   # Operator observation only; adds verified roots and requires restart.
 #   # See docs/user/operator/native-tool-review.md. Never disables TLS checks.

@@ -1,10 +1,12 @@
-# Prepare or revoke finite native grants
+# Grant or revoke finite native tools
 
 First [observe and review the exact tool contract](native-tool-review.md).
 The following workflow continues that guide; all placeholders must be replaced
-with exact current response values. Prepared grants do not enable tool calls.
+with exact current response values. A grant lets that agent list and call the
+exact reviewed contract in a session that lists tools after the grant; see the
+[agent workflow](../agent-integration/native-mcp.md).
 
-## Prepare or revoke finite grants
+## Grant or revoke finite tools
 
 Read the current state and `grant_revision`:
 
@@ -13,13 +15,17 @@ locksmith --format json agent mcp-grants show sample --agent AGENT_ID > grants-s
 ```
 
 The response has top-level `source`, `observation`, `grant_revision`, `tools`,
-`prepared_only` and `callable`. `tools` contains the currently prepared finite
-`{name, contract_digest}` entries, not every observed tool. Selected response
-fields are illustrated below; other observation fields, including the complete
-manifest, are omitted from this excerpt. Strings and numbers are placeholders:
+`prepared_only`, `dispatch_enabled`, `callable`, `effective_tools`, `unavailable`,
+`requires_session_list` and `diagnostics`. `tools` contains the currently granted
+finite `{name, contract_digest}` entries, not every observed tool.
+`effective_tools` names the granted tools that are callable right now; it is
+empty, and `unavailable` names the reason, when the observation is stale or the
+current state no longer matches. Selected response fields are illustrated below;
+`diagnostics` and other observation fields, including the complete manifest, are
+omitted from this excerpt. Strings and numbers are placeholders:
 
 ```json
-{"source":{"instance":"CURRENT_INSTANCE","revision":1,"account_key":"CURRENT_ACCOUNT_KEY","agent_epoch":1},"observation":{"generation":"CURRENT_GENERATION"},"grant_revision":"CURRENT_GRANT_REVISION","tools":[{"name":"read_record","contract_digest":"REVIEWED_CONTRACT_DIGEST"}],"prepared_only":true,"callable":false}
+{"source":{"instance":"CURRENT_INSTANCE","revision":1,"account_key":"CURRENT_ACCOUNT_KEY","agent_epoch":1},"observation":{"generation":"CURRENT_GENERATION"},"grant_revision":"CURRENT_GRANT_REVISION","tools":[{"name":"read_record","contract_digest":"REVIEWED_CONTRACT_DIGEST"}],"prepared_only":false,"dispatch_enabled":true,"callable":true,"effective_tools":["read_record"],"unavailable":null,"requires_session_list":true}
 ```
 
 Use `.source`, `.observation.generation` and `.grant_revision` from the current
@@ -62,8 +68,12 @@ connection authority. Metadata or disable/re-enable changes require a new
 observation; unchanged contracts can retain prepared grants after refresh.
 
 Observations become stale after 60 seconds and after every daemon restart.
-Re-observe before review/grant writes. No background observation refresh runs.
+Re-observe before review/grant writes or agent calls. No background observation refresh runs.
 409 means a source/generation/grant revision changed: read again and review the
-new state. 429 means all eight preparation slots are busy. Other static errors
+new state. 429 means all eight shared observation/dispatch slots are busy. Other static errors
 identify unsupported input, source, destination, trust or incomplete upstream
-observation. Correct that cause; do not interpret prepared state as readiness.
+observation. Correct that cause; connection selection alone is not tool permission.
+`dispatch_enabled` reports the bounded dispatcher. `effective_tools` and
+`callable` describe the current intersection; `requires_session_list` remains
+true. A session pinned before a grant cannot expand. Reviews by themselves
+still return `prepared_only: true`, because they grant no agent permission.

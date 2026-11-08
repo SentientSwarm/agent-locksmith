@@ -1,14 +1,17 @@
 # Native MCP lifecycle and migration (AGENT-202)
 
-The shipping daemon gains a typed native MCP lifecycle at `/mcp/{connection}`.
+AGENT-202 introduced the typed native MCP lifecycle at `/mcp/{connection}`.
 It authenticates every operation, applies current connection policy/account
 selection, isolates session identity, and uses finite joined session ownership.
-It returns an empty tool list and denies every tool call without contacting an
-upstream. Ordinary HTTP forwarding cannot invoke a native registration.
+That original stage returned an empty tool list and denied every tool call.
+Current manual native connections support reviewed finite listing and committed
+dispatch for explicit None/live sealed-bearer selections, plus fixed context and
+truthful callable schemas. Ordinary HTTP forwarding cannot invoke a native
+registration. Use the current guides linked below for setup and authority.
 
-This public projection keeps the root at2.8.0, with no per-issue version bump. Native
-registration authoring, useful dispatch, reviewed per-tool authority, provider
-consent and schema mediation remain staged work. It does not make3.0.0 ready
+This public projection keeps the root at 2.8.0, with no per-issue version bump.
+Native provider consent, definition activation and broader schema mediation
+remain staged work. This local capability does not make 3.0.0 ready
 or authorize deployment, merging, tagging or publication.
 
 ## Upgrade and recovery
@@ -57,9 +60,11 @@ run is not QA/reviewer acceptance.
 The separate198 outbound response adapter and199 joined-session controls retain
 their own adverse tests. At the original202 stage only session ownership was reached.
 [206A operator preparation](../operator/native-tool-review.md) now reaches bounded
-selected-account observation; useful agent calls remain unreachable.
-AGENT-203/206/207/208 retain authoring, finite dispatch, protected context/schema
-and useful two-client/provider acceptance. Full T09/T12 and G1/G3 remain open;
+selected-account observation; [current agent calls](../agent-integration/native-mcp.md)
+use finite reviewed grants and committed dispatch. The
+[fixed-context guide](../operator/native-context.md) covers protected values,
+callable schemas and safe diagnosis. Full AGENT-203/206/207/208 and provider
+acceptance retain their broader prerequisites. Full T09/T12 and G1/G3 remain open;
 G0/G2/G4, optimized/platform builds and packaged recovery remain separate gates.
 No live provider, model usage, release asset or installed service is tested by
 the local debug lifecycle smoke.

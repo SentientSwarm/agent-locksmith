@@ -55,7 +55,7 @@ impl Runtime {
         connection.cleanup().await;
         result
     }
-    async fn materialize(
+    pub(super) async fn materialize(
         &self,
         agent: &str,
         name: &str,

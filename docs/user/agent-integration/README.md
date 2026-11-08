@@ -4,7 +4,7 @@ Documentation for **agent developers** wiring an agent (hermes, openhands, custo
 
 Current entry points:
 
-- [Native MCP lifecycle](native-mcp.md) — authenticated2025-11-25 sessions with no callable tools.
+- [Native MCP lifecycle](native-mcp.md) — authenticated2025-11-25 sessions with finite reviewed tools.
 - [HTTP services](http-services.md) — construct authorized service calls from discovery.
 
 - `skill-reference.md` — `/skill` endpoint contract (agentskills.io format), unauthenticated vs personalized variants.

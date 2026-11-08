@@ -1,16 +1,13 @@
 # Native MCP lifecycle setup
 
 Locksmith supports authenticated MCP **2025-11-25 stateful Streamable HTTP** at
-`/mcp/{connection}`. This first stage provides initialize, ping, an empty tool
-list, cancellation and session closure. Every tool call is denied. The agent interface performs
-no upstream MCP request and does not resolve an upstream credential. Connection
-access and an account selection do not approve any tool.
-
+`/mcp/{connection}`. Connection access and explicit account selection permit the
+session lifecycle; they do not approve tools. [Review and grant](native-tool-review.md)
+adds finite useful calls for manual None/live sealed-bearer accounts. Offline
+[definitions](integration-definitions.md) remain disabled exact revision pins.
 Use [HTTP onboarding](connector-onboarding.md) for existing HTTP services.
-Offline [definition authoring](integration-definitions.md) creates disabled exact
-revision pins. [Operator tool preparation](native-tool-review.md) now adds bounded observation and
-review for manual None/sealed-bearer accounts. Consent and useful dispatch remain
-later work; no interface attests provider or per-account credential readiness.
+Provider consent and verified external identity are separate; configuration
+status does not attest provider or per-account credential readiness.
 
 ## Before setup
 
@@ -64,9 +61,11 @@ locksmith tool get sample
 
 Replace `AGENT_ID` with the returned public ID. Deliver the one-time agent token
 through your normal private channel. Here `none` deliberately selects no account
-credential; it does not bypass review. Other supported stored account references
-can be selected with the existing account commands, but this lifecycle stage
-does not verify or use them. Do not put provider values in metadata or this file.
+credential; it does not bypass review. Live sealed-bearer references can be
+selected with the existing account commands and used for observation and
+reviewed dispatch; follow [the account and grant workflow](native-tool-review.md).
+Selection alone does not verify provider identity or readiness. Do not put
+provider values in metadata or this file.
 
 The operator PUT/seed shape adds `protocol: mcp_streamable_http` and
 `mcp: {protocol_version: "2025-11-25"}` to a `kind: tool` registration.
@@ -93,13 +92,13 @@ native sessions; credential token rotation alone does not.
 
 Use [the agent interface](../agent-integration/native-mcp.md) with the agent token.
 `GET /tools` should show `type: mcp`, `/mcp/sample`, protocol version and
-`tool_authority: none`; it must not advertise `/api/sample`. `account_selected`
+`tool_authority: reviewed_per_agent`; it must not advertise `/api/sample`. `account_selected`
 and `activation: active` do not prove credential readiness (`not_checked`).
 
-Initialize, ping and an empty list should succeed. `tools/call` must return
-JSON-RPC -32050 with `data.code: tool_not_approved`. This is the intended current
-state and cannot be repaired by widening the connection ACL. `/api/sample/...`
-must deny without forwarding. Future tool approval/dispatch is separately gated.
+Initialize and ping should succeed. A connection with no reviewed tools lists
+empty and refuses calls. Follow [review and grant](native-tool-review.md) for
+positive execution; opening a new session after a grant allows its first list
+to pin the effective tools. `/api/sample/...` still refuses without forwarding.
 
 401 means no current agent identity. 403 means missing connection grant/account
 selection or rejected Origin/Host. 404 means unavailable connection/session;
@@ -109,9 +108,11 @@ specific state and create a fresh session. Never retry an ambiguous tool call.
 429 includes `Retry-After: 1`; close your session before requesting another.
 
 Best-effort `native_lifecycle` and `native_tool_denied` audit events contain
-operation, agent public ID, connection name and `tool_authority: none`. They do
+operation, agent public ID and connection name. They do
 not log arguments, request/session IDs, credentials or upstream auth data and
-are not committed tool-admission receipts. See [upgrade notes](../changes/native-mcp.md)
+are not committed tool-admission receipts. Positive dispatch separately commits
+`mcp_admitted` before submission; best-effort `mcp_outcome` links the outcome.
+A missing outcome is unknown, never proof of no effect. See [upgrade notes](../changes/native-mcp.md)
 and [finite limits](../../development/native-mcp.md).
 
 SDK payload tracing is suppressed even when `RUST_LOG` enables `rmcp`.

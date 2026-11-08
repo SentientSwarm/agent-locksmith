@@ -8,6 +8,9 @@ use axum::{
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone)]
+pub(super) struct Deadline(pub tokio::time::Instant);
+
 /// Outer native-only guard: includes authenticator DB/Argon2 and body waits.
 pub async fn boundary(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     if !req.uri().path().starts_with("/mcp/") {
@@ -32,10 +35,12 @@ async fn guarded(state: Arc<AppState>, mut req: Request, next: Next) -> Response
     let token = CancellationToken::new();
     let guard = token.clone().drop_guard();
     req.extensions_mut().insert(token);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(native.config.request_ms);
+    req.extensions_mut().insert(Deadline(deadline));
     let response = tokio::select! {
         biased;
         _ = native.stopped.cancelled() => return Failure(503,"shutting_down").response(),
-        result = tokio::time::timeout(Duration::from_millis(native.config.request_ms), next.run(req)) => {
+        result = tokio::time::timeout_at(deadline, next.run(req)) => {
             match result { Ok(r) => r, Err(_) => return Failure(408,"request_deadline").response() }
         }
     };
