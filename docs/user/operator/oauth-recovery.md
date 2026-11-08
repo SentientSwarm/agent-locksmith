@@ -7,7 +7,9 @@ refresh use the same sealed custody. A successful exchange publishes the whole
 replacement pair only after its database transaction commits.
 
 For controlled owner-bound consent accounts, use the separate
-[consent guide](oauth-consent.md). The commands below manage legacy custody.
+[consent guide](oauth-consent.md#renew-custody-or-reconnect): manual `oauth refresh`
+requires current If-Match; pending custody needs owner disconnect and fresh consent.
+The commands below manage legacy custody.
 
 ## Diagnose and reconnect deliberately
 

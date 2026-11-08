@@ -11,10 +11,15 @@ use serde_json::{Value, json};
 use sqlx::{Row, sqlite::SqliteRow};
 use std::{collections::HashMap, sync::Arc};
 
+enum Guard<'a> {
+    Consent(&'a SqliteRow),
+    Refresh(&'a super::refresh::Claim),
+}
+
 pub(crate) struct Wire<'a> {
     pub(super) stage: std::sync::Arc<std::sync::Mutex<&'static str>>,
     runtime: &'a Runtime,
-    attempt: &'a SqliteRow,
+    guard: Guard<'a>,
     profile: &'a config::Profile,
     token: &'a str,
     client: Client,
@@ -32,7 +37,7 @@ impl<'a> Wire<'a> {
         let profile = runtime.profile(attempt.get("profile_id"))?;
         Ok(Self {
             runtime,
-            attempt,
+            guard: Guard::Consent(attempt),
             profile,
             token,
             stage,
@@ -41,11 +46,29 @@ impl<'a> Wire<'a> {
             sequence: 0,
         })
     }
+    pub(super) fn refresh(
+        runtime: &'a Runtime,
+        claim: &'a super::refresh::Claim,
+        token: &'a str,
+        stage: std::sync::Arc<std::sync::Mutex<&'static str>>,
+    ) -> Result<Self> {
+        let profile = runtime.profile(&claim.profile_id)?;
+        Ok(Self {
+            runtime,
+            guard: Guard::Refresh(claim),
+            profile,
+            token,
+            stage,
+            client: claim.wire_client.clone(),
+            session: None,
+            sequence: 0,
+        })
+    }
     pub fn enter(&self, stage: &'static str) {
         *self.stage.lock().expect("stage") = stage;
     }
 
-    pub async fn initialize(&mut self) -> Result<()> {
+    pub async fn initialize(&mut self) -> Result<Value> {
         self.enter("initialize");
         let result = self
             .rpc(
@@ -65,7 +88,7 @@ impl<'a> Wire<'a> {
         if !matches!(self.post(message).await?, Reply::Accepted) {
             return Err(Error("unexpected_initialized_response"));
         }
-        Ok(())
+        Ok(result)
     }
 
     pub async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
@@ -102,7 +125,10 @@ impl<'a> Wire<'a> {
     }
 
     async fn post(&self, value: Value) -> Result<Reply> {
-        self.runtime.check(self.attempt).await?;
+        match self.guard {
+            Guard::Consent(a) => self.runtime.check(a).await?,
+            Guard::Refresh(c) => self.runtime.check_refresh(c).await?,
+        }
         let message: ClientJsonRpcMessage =
             serde_json::from_value(value).map_err(|_| Error("mcp_request_invalid"))?;
         self.client

@@ -70,6 +70,25 @@ pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<()
             )
             .await
         }
+        OauthCmd::Refresh {
+            name,
+            label,
+            if_match,
+        } => {
+            component(&name)?;
+            component(&label)?;
+            let op = CliClient::op_token()?;
+            let result: Value = client
+                .json_if_match(
+                    "POST",
+                    &format!("/admin/operator/tools/{name}/oauth/accounts/{label}/refresh"),
+                    Auth::Operator(&op),
+                    &if_match,
+                )
+                .await?;
+            print(&result, format);
+            Ok(())
+        }
         OauthCmd::Bootstrap(args) => bootstrap(client, format, args).await,
         OauthCmd::Status { name, label } => status(client, format, &name, label.as_deref()).await,
         OauthCmd::Revoke { name, label } => revoke(client, format, &name, label.as_deref()).await,

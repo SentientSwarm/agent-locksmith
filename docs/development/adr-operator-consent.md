@@ -29,3 +29,27 @@ The migration preserves sqlite_sequence highwater, including all-deleted tables.
 Older binaries refuse the new schema/config; no transparent downgrade is promised.
 The [operator guide](../user/operator/oauth-consent.md) owns the exact limits,
 commands, disclosure policy and controlled-only compatibility costs.
+
+## Manual controlled refresh
+
+The controlled refresh increment reuses the same table and AGENT-205 RefreshOwner. Migration 0016
+permits refresh_pending for controlled rows without widening legacy kind guards.
+An opaque claim exists only after an observed pending/version COMMIT; pending
+cannot be reconstructed as a runnable claim. No DB transaction spans network I/O.
+Completion matches owner/incarnation/version/profile and the captured current
+registration, decodes complete returned custody and observes COMMIT before success.
+The versioned account revision includes pending/version/current source metadata.
+
+Custody inherited from migration 0015 lacks creation-time registration provenance. Fresh owner
+status may deliberately authorize the current exact profile match after identical
+recreation; stale status/claim cannot follow a later instance or revision. No
+backfill from a possibly evicted attempt is treated as provenance. Missing expiry
+and scope remain unknown; omitted refresh retains only the claimed old secret.
+The existing identity wire accepts a narrow consent-or-refresh guard, with both
+schemas and IDs verified and old/new exact-secret screening. No new account store,
+scheduler, authority or hosted provider policy is introduced.
+
+Checked committed output is retained outside cleanup/timeout. Pending and
+submitted-COMMIT uncertainty reconcile through status and explicit disconnect/new
+consent. Library worker barriers, shipping daemon death and embedded owner return
+are distinct effects; process-kill/WAL is not power-loss durability.

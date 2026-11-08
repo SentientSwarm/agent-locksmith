@@ -50,3 +50,27 @@ async fn controlled_consent_embedded_return_owns_connections() {
 async fn embedded_consent_worker() {
     consent::embedded_worker().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_refresh_actual_cli_rotation_and_reconnect() {
+    consent::refresh::journey().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_refresh_postclaim_refusals_stay_pending() {
+    consent::refresh::refusals().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_refresh_held_consumption_loses_disconnect_or_crash() {
+    consent::refresh::late().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_refresh_embedded_return_and_startup_error_join_owner() {
+    consent::refresh::ownership().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit retained schema-15 CLI/daemon paths"]
+async fn controlled_refresh_actual_prior_migration_refusal_reopen() {
+    consent::refresh::upgrade().await;
+}

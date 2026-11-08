@@ -37,6 +37,16 @@ pub enum OauthCmd {
         #[arg(long)]
         label: String,
     },
+    /// Manually refresh owned controlled custody with its current revision.
+    /// Pending/uncertain custody requires disconnect and fresh consent.
+    Refresh {
+        name: String,
+        #[arg(long)]
+        label: String,
+        /// Revisions are URL-safe base64 and may begin with `-`.
+        #[arg(long, allow_hyphen_values = true)]
+        if_match: String,
+    },
     /// Disconnect controlled custody locally with its current opaque revision.
     Disconnect {
         name: String,

@@ -94,7 +94,7 @@ pub(super) async fn exchange(p: &config::Profile, code: &str, verifier: &str) ->
     }
     decode(p, &bytes)
 }
-fn secret(v: &Value) -> Result<SecretString> {
+pub(super) fn secret(v: &Value) -> Result<SecretString> {
     v.as_str()
         .filter(|s| {
             !s.is_empty() && s.len() <= 8192 && s.bytes().all(|b| (0x21..=0x7e).contains(&b))
@@ -111,6 +111,12 @@ pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
     {
         return Err(Error("token_invalid"));
     }
+    if ["error", "error_description", "error_uri"]
+        .iter()
+        .any(|k| v.get(k).is_some())
+    {
+        return Err(Error("token_error_response"));
+    }
     let access = secret(&v["access_token"])?;
     let refresh = v.get("refresh_token").map(secret).transpose()?;
     let expiry = v
@@ -122,7 +128,9 @@ pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
                 .ok_or(Error("token_invalid"))
         })
         .transpose()?;
-    if v.get("scope").is_some_and(|s| s != "read")
+    if v.get("issuer").is_some_and(|s| s != p.issuer.as_str())
+        || v.get("iss").is_some_and(|s| s != p.issuer.as_str())
+        || v.get("scope").is_some_and(|s| s != "read")
         || v.get("resource").is_some_and(|s| s != p.resource.as_str())
         || v.get("client_id")
             .is_some_and(|s| s != p.client_id.as_str())
@@ -135,4 +143,58 @@ pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
         expiry,
         scope_echoed: v.get("scope").is_some(),
     })
+}
+
+pub(super) async fn refresh(
+    p: &config::Profile,
+    client: &reqwest::Client,
+    old: &Token,
+) -> Result<Token> {
+    let refresh = old.refresh.as_ref().ok_or(Error("refresh_unavailable"))?;
+    let mut response = client
+        .post(&p.token_endpoint)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh.expose_secret()),
+            ("client_id", &p.client_id),
+            ("resource", &p.resource),
+            ("scope", "read"),
+        ])
+        .send()
+        .await
+        .map_err(|_| Error("request_failed"))?;
+    let status = response.status();
+    if response.content_length().is_some_and(|n| n > 65536) {
+        return Err(Error("token_body_limit"));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| Error("token_body_incomplete"))?
+    {
+        if bytes.len() + chunk.len() > 65536 {
+            return Err(Error("token_body_limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if status == reqwest::StatusCode::BAD_REQUEST {
+        let value = parse(&bytes)?;
+        if value.is_object()
+            && value["error"] == "invalid_grant"
+            && ["access_token", "refresh_token", "token_type", "expires_in"]
+                .iter()
+                .all(|k| value.get(k).is_none())
+        {
+            return Err(Error("refresh_invalid_grant"));
+        }
+    }
+    if status != reqwest::StatusCode::OK {
+        return Err(Error("token_http_refused"));
+    }
+    let mut token = decode(p, &bytes)?;
+    if token.refresh.is_none() {
+        token.refresh = old.refresh.clone();
+    }
+    Ok(token)
 }

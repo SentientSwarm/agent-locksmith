@@ -352,10 +352,35 @@ async fn token_optionality_strict_duplicates_and_semantic_secret_screening() {
         ",\"scope\":null",
         ",\"scope\":\"write\"",
         ",\"resource\":\"wrong\"",
+        ",\"resource\":null",
+        ",\"client_id\":\"wrong\"",
+        ",\"client_id\":null",
+        ",\"issuer\":\"wrong\"",
+        ",\"issuer\":null",
+        ",\"iss\":\"wrong\"",
+        ",\"iss\":null",
+        ",\"expires_in\":31536001",
+        ",\"refresh_token\":\"\"",
         ",\"access_token\":\"duplicate\"",
     ] {
         let raw = format!("{{\"access_token\":\"token\",\"token_type\":\"Bearer\"{extra}}}");
         assert!(token::decode(p, raw.as_bytes()).is_err(), "{extra}");
+    }
+    f.rt.pool.close().await;
+}
+#[tokio::test]
+async fn token_success_refuses_error_members_even_with_valid_credentials() {
+    let f = Fixture::new().await;
+    let p = &f.rt.config.profiles[0];
+    let mut response = json!({"access_token":"synthetic-access","token_type":"Bearer"});
+    assert!(token::decode(p, response.to_string().as_bytes()).is_ok());
+    for name in ["error", "error_description", "error_uri"] {
+        response[name] = Value::Null;
+        assert!(
+            token::decode(p, response.to_string().as_bytes()).is_err(),
+            "{name}"
+        );
+        response.as_object_mut().unwrap().remove(name);
     }
     f.rt.pool.close().await;
 }
@@ -544,3 +569,6 @@ async fn failed_callback_start_never_runs_the_exit_hook() {
     assert_eq!(result.err().map(|e| e.0), Some("callback_bind_failed"));
     assert!(!fired.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+#[path = "refresh/tests.rs"]
+mod refresh_cases;

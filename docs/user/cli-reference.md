@@ -235,8 +235,9 @@ deployment. Controlled owner-bound rows are filtered out; legacy status,
 revoke and bootstrap refuse those rows.
 
 For the optional controlled-only consent profile, use `oauth connect`,
-`oauth attempt-status`, `oauth cancel`, `oauth account-status` and
-`oauth disconnect`. The [controlled consent guide](operator/oauth-consent.md)
+`oauth attempt-status`, `oauth cancel`, `oauth account-status`,
+`oauth refresh` and `oauth disconnect`. Refresh requires `--label` and the current
+`--if-match` revision; it is manual and grants no agent access. The [controlled consent guide](operator/oauth-consent.md)
 specifies their flags, owner checks, configuration and local disconnect
 precondition. A `connected_unbound` account does not authorize agent calls.
 
