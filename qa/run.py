@@ -19,11 +19,13 @@ sys.path.insert(0, str(QA))
 
 import pytest
 
+from harness import uat
 from harness.contract import check_source, coverage, fault_gaps, load
 from harness.evidence import Bundle
 from harness.plugin import QaPlugin
 from harness.redact import Canaries, scan_bundle
 from harness.status import Status, gate
+from harness.target import build_info
 
 REPO = QA.parent
 
@@ -44,6 +46,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--mode", choices=("pr", "release"), default="pr")
     parser.add_argument(
+        "--suite",
+        choices=("smoke", "uat"),
+        default="smoke",
+        help="smoke: contract cases; uat: guide journeys under docs/guide",
+    )
+    parser.add_argument(
+        "--publish-figures",
+        action="store_true",
+        help="uat only: after a complete passing run, copy the figures the guide "
+        "references into docs/guide/img",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         required=True,
@@ -52,7 +66,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "-k", dest="keyword", help="pytest -k filter; marks the run not release-ready"
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.publish_figures and (args.suite != "uat" or args.keyword):
+        parser.error("--publish-figures needs --suite uat and a complete run (no -k)")
+    return args
 
 
 def main(argv: list[str]) -> int:
@@ -69,13 +86,18 @@ def main(argv: list[str]) -> int:
             "commit": git("rev-parse", "HEAD"),
             "tree_dirty": bool(git("status", "--porcelain")),
             "target": "t1-local-binary",
+            "suite": args.suite,
             "mode": args.mode,
             "release_ready": args.mode == "release" and not args.keyword,
             "started": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         }
     )
     contract = load(QA / "surface.yaml")
-    errors = check_source(contract, REPO, args.bins / "locksmith")
+    if args.suite == "uat":
+        contract.floors = {}
+        errors = []
+    else:
+        errors = check_source(contract, REPO, args.bins / "locksmith")
 
     plugin = QaPlugin(args.bins, bundle, canaries)
     pytest_args = [
@@ -86,7 +108,7 @@ def main(argv: list[str]) -> int:
         "-p",
         "no:cacheprovider",
         "-q",
-        str(QA / "smoke"),
+        str(QA / args.suite),
     ]
     if args.keyword:
         pytest_args += ["-k", args.keyword]
@@ -96,15 +118,16 @@ def main(argv: list[str]) -> int:
         errors.append(f"pytest exited {int(code)} ({code.name})")
 
     records = sorted(plugin.records.values(), key=lambda r: r.id)
-    if plugin.target is not None:
-        try:
-            bundle.write_manifest({"binaries": plugin.target.build_info()})
-        except (OSError, subprocess.CalledProcessError, ValueError) as err:
-            errors.append(f"cannot read build identity: {err}")
-    cov = coverage(contract, records)
+    try:
+        bundle.write_manifest({"binaries": build_info(args.bins)})
+    except (OSError, subprocess.CalledProcessError, ValueError) as err:
+        errors.append(f"cannot read build identity: {err}")
+    cov = coverage(contract, records) if args.suite == "smoke" else {}
+    if args.suite == "uat":
+        errors += uat.finish(plugin.journeys, args.out, args.keyword)
     passed, reasons = gate(records, contract.floors, args.mode)
     reasons = errors + reasons
-    faults = fault_gaps(contract, records)
+    faults = fault_gaps(contract, records) if args.suite == "smoke" else []
     bundle.write_manifest({"fault_only_unexercised": faults})
     if args.mode == "release":
         reasons += [f"surface {gap}" for gap in faults]
@@ -129,6 +152,12 @@ def main(argv: list[str]) -> int:
     print(f"\nQA {args.mode} gate: {'PASS' if ok else 'FAIL'}  {counts}")
     for reason in reasons:
         print(f"  - {reason}")
+    if args.publish_figures:
+        if ok:
+            uat.publish(args.out)
+            print(f"published figures to {uat.GUIDE / 'img'}")
+        else:
+            print("figures not published: the run did not pass")
     print(f"evidence: {args.out}")
     return 0 if ok else 1
 
