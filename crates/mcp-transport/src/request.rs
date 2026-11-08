@@ -22,6 +22,9 @@ impl Client {
         headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<reqwest::RequestBuilder> {
         let url = endpoint(&uri)?;
+        if self.endpoint.as_ref().is_some_and(|pinned| pinned != &url) {
+            return Err(fail("pinned_endpoint"));
+        }
         let mut request = self
             .http
             .request(method, url)

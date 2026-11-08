@@ -20,6 +20,7 @@ harness = false
 path = "benches/audit_write_bench.rs"
 
 [dependencies]
+libc = "=0.2.183"
 locksmith-mcp-transport = { path = "crates/mcp-transport" }
 rmcp = { version = "=3.7.0", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
 tokio-util = { version = "0.7", features = ["rt"] }

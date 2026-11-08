@@ -2,14 +2,15 @@
 
 Locksmith supports authenticated MCP **2025-11-25 stateful Streamable HTTP** at
 `/mcp/{connection}`. This first stage provides initialize, ping, an empty tool
-list, cancellation and session closure. Every tool call is denied. It performs
+list, cancellation and session closure. Every tool call is denied. The agent interface performs
 no upstream MCP request and does not resolve an upstream credential. Connection
 access and an account selection do not approve any tool.
 
 Use [HTTP onboarding](connector-onboarding.md) for existing HTTP services.
 Offline [definition authoring](integration-definitions.md) creates disabled exact
-revision pins. Consent, finite tool review and dispatch remain later work; neither
-interface attests provider or per-account credential readiness.
+revision pins. [Operator tool preparation](native-tool-review.md) now adds bounded observation and
+review for manual None/sealed-bearer accounts. Consent and useful dispatch remain
+later work; no interface attests provider or per-account credential readiness.
 
 ## Before setup
 
@@ -75,8 +76,8 @@ proxied egress, and non-HTTPS endpoints are rejected before persistence. URL use
 fragments, backslashes and control characters are forbidden. Normal base paths
 are valid. Obvious private/loopback destinations require explicit
 `"allow_private_destination": true` in `mcp.json`; the known local listener
-endpoint is always rejected. Future outbound use still needs connected-address,
-DNS and trust enforcement; approval here does not establish outbound reachability.
+endpoint is always rejected. Operator observation separately enforces connected-address, DNS and trust policy;
+authoring here does not establish outbound reachability.
 
 PUT is a full replacement. Always send the native protocol and config when
 updating a native connection. Changing protocol/config/destination/egress or

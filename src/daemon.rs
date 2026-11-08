@@ -48,6 +48,8 @@ pub enum DaemonError {
 /// Run the daemon to completion. Returns when both listeners shut down
 /// (or the drain window expires).
 pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), DaemonError> {
+    // Outbound TLS also needs a provider when every inbound listener is plain.
+    crate::admin::https::install_crypto_provider_once();
     let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
     oauth::owned(config, coord).await
 }
@@ -336,10 +338,16 @@ async fn run_owned(
             registrations_for_app,
         ),
     };
+    let observation = admin_state
+        .as_ref()
+        .and_then(|s| s.admin.native_authority());
     let agent_shutdown = coord.shutdown_signal();
     let mut agent_task: tokio::task::JoinHandle<Result<(), std::io::Error>> = match auth_mode {
         crate::config::AuthMode::Bearer => {
             let listener = TcpListener::bind(addr).await?;
+            if let Some(rt) = &observation {
+                rt.listeners.bound("agent", listener.local_addr()?);
+            }
             info!("agent listener bound on {addr} (bearer)");
             tokio::spawn(async move {
                 axum::serve(listener, agent_router)
@@ -362,9 +370,13 @@ async fn run_owned(
                 )
             })?;
             let ca_pem = std::fs::read_to_string(&mtls_cfg.ca_bundle_path)?;
+            let listener = TcpListener::bind(addr).await?;
+            if let Some(rt) = &observation {
+                rt.listeners.bound("agent", listener.local_addr()?);
+            }
             tokio::spawn(async move {
-                crate::agent_listener::bind_and_serve_mtls(
-                    addr,
+                crate::agent_listener::serve_mtls(
+                    listener,
                     &server_cert_path,
                     &server_key_path,
                     &ca_pem,
@@ -382,10 +394,15 @@ async fn run_owned(
     // different transport (T4.3 / C-3, SPEC §4.2.5).
     let (mut admin_task, mut admin_https_task) = if let Some(state) = admin_state {
         let path = admin_socket_path.expect("checked above");
+        #[cfg(test)]
+        let body_test_path = path.clone();
         let uds_shutdown = coord.shutdown_signal();
         let uds_state = state.clone();
         let uds = tokio::spawn(async move {
-            crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await
+            let result = crate::admin::uds::bind_and_serve(&path, uds_state, uds_shutdown).await;
+            #[cfg(test)]
+            crate::native_authority::body_probe::hold_listener(path, "uds").await;
+            result
         });
 
         // Build the HTTPS task only when explicitly enabled. The block
@@ -404,14 +421,18 @@ async fn run_owned(
 
                 match auth_mode {
                     crate::config::AuthMode::Bearer => Some(tokio::spawn(async move {
-                        crate::admin::https::bind_and_serve(
+                        let result = crate::admin::https::bind_and_serve(
                             addr,
                             &cert,
                             &key,
                             https_state_base,
                             https_shutdown,
                         )
-                        .await
+                        .await;
+                        #[cfg(test)]
+                        crate::native_authority::body_probe::hold_listener(body_test_path, "https")
+                            .await;
+                        result
                     })),
                     crate::config::AuthMode::Mtls | crate::config::AuthMode::Both => {
                         let mtls_cfg = c.mtls.as_ref().ok_or_else(|| {
@@ -433,7 +454,7 @@ async fn run_owned(
                             validator,
                         });
                         Some(tokio::spawn(async move {
-                            crate::admin::https::bind_and_serve_mtls(
+                            let result = crate::admin::https::bind_and_serve_mtls(
                                 addr,
                                 &cert,
                                 &key,
@@ -442,7 +463,14 @@ async fn run_owned(
                                 https_state,
                                 https_shutdown,
                             )
-                            .await
+                            .await;
+                            #[cfg(test)]
+                            crate::native_authority::body_probe::hold_listener(
+                                body_test_path,
+                                "https",
+                            )
+                            .await;
+                            result
                         }))
                     }
                 }
@@ -860,7 +888,7 @@ async fn build_admin_substrate(
     let admin = AdminService::with_audit_and_creds(
         agents,
         bootstrap,
-        config,
+        config.clone(),
         Some(audit.clone()),
         resolved_creds.clone(),
     )
@@ -894,7 +922,7 @@ async fn build_admin_substrate(
     let (oauth_admin, oauth_runtime) = match crate::oauth::SealingKey::from_env() {
         Ok(key) => {
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
-            let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner);
+            let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner.clone());
             info!("oauth: sealing key loaded; refresh task prepared");
             let refresh_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -973,6 +1001,32 @@ async fn build_admin_substrate(
         );
     }
 
+    let roots =
+        crate::native_authority::runtime::roots(config.load().mcp.upstream_ca_bundle.as_deref())
+            .map_err(|e| DaemonError::AdminConfig(e.to_string()))?;
+    let authority = Arc::new(
+        crate::native_authority::runtime::Runtime::new(
+            registrations.clone(),
+            catalog.clone(),
+            credential_sealing_key.clone(),
+            roots,
+            refresh_owner,
+        )
+        .await
+        .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
+    );
+    authority.listeners.expect("agent");
+    if config
+        .load()
+        .listen
+        .admin_https
+        .as_ref()
+        .is_some_and(|c| c.enabled)
+    {
+        authority.listeners.expect("admin");
+    }
+    let admin = admin.with_native_authority(authority);
+
     Ok(AdminSetup {
         uds_state: UdsState {
             admin: Arc::new(admin),
@@ -1032,4 +1086,13 @@ async fn finish_task<T>(task: &mut tokio::task::JoinHandle<T>) {
         task.abort();
         let _ = task.await;
     }
+}
+
+#[cfg(test)]
+#[path = "daemon/native_body/tests.rs"]
+mod native_body_tests;
+
+#[cfg(test)]
+pub(crate) fn body_test_lock(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+    state_lock::acquire(Some(path))
 }

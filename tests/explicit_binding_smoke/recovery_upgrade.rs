@@ -48,7 +48,7 @@ async fn verify(
     authority: &[serde_json::Value],
     before: (String, String),
 ) {
-    assert_eq!(oauth_upgrade::version(f), "13");
+    assert_eq!(oauth_upgrade::version(f), "14");
     assert_eq!(snapshot(f), before);
     assert_eq!(setup::authority(f, agent), authority);
     assert_eq!(

@@ -58,12 +58,34 @@ pub async fn bind_and_serve_mtls(
     app: Router,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), io::Error> {
+    let listener = TcpListener::bind(addr).await?;
+    serve_mtls(
+        listener,
+        server_cert_path,
+        server_key_path,
+        ca_bundle_pem,
+        auth_mode,
+        app,
+        shutdown,
+    )
+    .await
+}
+
+pub async fn serve_mtls(
+    listener: TcpListener,
+    server_cert_path: &Path,
+    server_key_path: &Path,
+    ca_bundle_pem: &str,
+    auth_mode: AuthMode,
+    app: Router,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), io::Error> {
+    let addr = listener.local_addr()?;
     crate::admin::https::install_crypto_provider_once();
 
     let server_config =
         build_server_config(server_cert_path, server_key_path, ca_bundle_pem, auth_mode)?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let listener = TcpListener::bind(addr).await?;
     info!(addr = %addr, mode = ?auth_mode, "agent listener (mTLS) bound");
 
     tokio::pin!(shutdown);

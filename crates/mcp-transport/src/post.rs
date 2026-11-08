@@ -32,7 +32,7 @@ impl Client {
             .map_err(StreamableHttpError::Client)?;
         if status.is_success() && mime.eq_ignore_ascii_case("text/event-stream") {
             return Ok(Reply::Sse(
-                crate::sse::stream(body, limits, self.metrics.clone()),
+                crate::sse::stream(body, limits, self.metrics.clone(), self.validator),
                 session,
             ));
         }
@@ -74,6 +74,7 @@ impl Client {
         if !mime.eq_ignore_ascii_case("application/json") {
             return Err(fail("content_type"));
         }
+        self.validate_raw(bytes)?;
         let decoded =
             crate::json::decode(bytes, self.limits).map_err(StreamableHttpError::Client)?;
         if status.is_success() || matches!(decoded, ServerJsonRpcMessage::Error(_)) {
@@ -81,6 +82,14 @@ impl Client {
         } else {
             Err(fail("http_status"))
         }
+    }
+    fn validate_raw(&self, bytes: &[u8]) -> Result<()> {
+        if let Some(validate) = self.validator {
+            let raw = crate::strict_json::parse(bytes, self.limits)
+                .map_err(StreamableHttpError::Client)?;
+            validate(&raw).map_err(StreamableHttpError::Client)?;
+        }
+        Ok(())
     }
     pub(crate) fn challenge(&self, response: &Response) -> Result<()> {
         use rmcp::transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError};

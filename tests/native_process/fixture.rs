@@ -1,3 +1,5 @@
+#[path = "assigned_port.rs"]
+mod assigned_port;
 use super::{pki::Pki, process};
 use serde_json::{Value, json};
 use std::{
@@ -68,11 +70,17 @@ impl Fixture {
         .unwrap();
     }
     pub async fn start(&mut self, binary: &str) {
+        self.start_with_key(binary, None).await;
+    }
+    pub async fn start_with_key(&mut self, binary: &str, key: Option<&str>) {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(self.path().join("admin.sock"));
         let log = std::fs::File::create(self.path().join("daemon.log")).unwrap();
         let mut c = process::command(binary);
         c.args(["--config"]).arg(self.path().join("config.yaml"));
+        if let Some(key) = key {
+            c.env("LOCKSMITH_CREDENTIAL_SEALING_KEY", key);
+        }
         c.env("RUST_LOG", "agent_locksmith=info,rmcp=trace");
         c.stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log));
@@ -82,16 +90,12 @@ impl Fixture {
     async fn ready(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            assert!(
-                self.daemon
-                    .as_mut()
-                    .unwrap()
-                    .0
-                    .try_wait()
-                    .unwrap()
-                    .is_none(),
-                "daemon exited during setup"
-            );
+            self.assert_running();
+            if self.port == 0
+                && let Some(port) = assigned_port::read(self.path())
+            {
+                self.port = port;
+            }
             if self.path().join("admin.sock").exists()
                 && self
                     .http
@@ -105,6 +109,18 @@ impl Fixture {
             assert!(Instant::now() < deadline, "TLS daemon readiness deadline");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+    fn assert_running(&mut self) {
+        assert!(
+            self.daemon
+                .as_mut()
+                .unwrap()
+                .0
+                .try_wait()
+                .unwrap()
+                .is_none(),
+            "daemon exited during setup"
+        );
     }
     pub fn stop(&mut self) {
         let mut child = self.daemon.take().unwrap();

@@ -36,8 +36,12 @@ middleware (`kind=infra`) is operator-only.
   See [authoring setup](docs/user/operator/integration-definitions.md).
 - **Native MCP lifecycle (N1)** — authenticated stateful2025-11-25 sessions,
   finite limits and safe migration. Tools remain unapproved: empty list, every
-  call denied, no upstream MCP request. See [operator setup](docs/user/operator/native-mcp.md)
+  call denied, no agent-triggered upstream MCP request. See [operator setup](docs/user/operator/native-mcp.md)
   and [agent interface](docs/user/agent-integration/native-mcp.md).
+- **Native tool preparation (206A)** — operators can observe, inspect, review and
+  replace finite prepared grants using explicit None or sealed bearer accounts.
+  [The CLI/API workflow](docs/user/operator/native-tool-review.md) never enables
+  agent calls; positive dispatch remains a separate stage.
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;

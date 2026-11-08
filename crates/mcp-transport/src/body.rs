@@ -30,7 +30,7 @@ impl Body {
         else {
             return Ok(None);
         };
-        self.metrics.received(chunk.len());
+        self.metrics.received(chunk.len())?;
         self.chunks += 1;
         if chunk.len() > self.limits.chunk_bytes {
             return Err(Error("chunk_bytes"));

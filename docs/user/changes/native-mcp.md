@@ -55,8 +55,9 @@ Independent acceptance is recorded at an immutable candidate; a draft builder
 run is not QA/reviewer acceptance.
 
 The separate198 outbound response adapter and199 joined-session controls retain
-their own adverse tests. Only session ownership is reached from this daemon
-stage: outbound credentials, observation and useful MCP calls are unreachable.
+their own adverse tests. At the original202 stage only session ownership was reached.
+[206A operator preparation](../operator/native-tool-review.md) now reaches bounded
+selected-account observation; useful agent calls remain unreachable.
 AGENT-203/206/207/208 retain authoring, finite dispatch, protected context/schema
 and useful two-client/provider acceptance. Full T09/T12 and G1/G3 remain open;
 G0/G2/G4, optimized/platform builds and packaged recovery remain separate gates.

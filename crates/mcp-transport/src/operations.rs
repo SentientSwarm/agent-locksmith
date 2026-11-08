@@ -136,6 +136,13 @@ impl Client {
         {
             return Err(fail("content_type"));
         }
+        self.event_stream(response, max)
+    }
+    fn event_stream(
+        &self,
+        response: reqwest::Response,
+        max: usize,
+    ) -> Result<BoxStream<'static, std::result::Result<Sse, SseError>>> {
         let mut limits = self.limits;
         limits.event_bytes = limits.event_bytes.min(max);
         if limits.event_bytes == 0 {
@@ -143,7 +150,12 @@ impl Client {
         }
         let body = Body::new(response, limits, self.metrics.clone())
             .map_err(StreamableHttpError::Client)?;
-        Ok(crate::sse::stream(body, limits, self.metrics.clone()))
+        Ok(crate::sse::stream(
+            body,
+            limits,
+            self.metrics.clone(),
+            self.validator,
+        ))
     }
 }
 

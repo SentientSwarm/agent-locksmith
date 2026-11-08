@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Own native preparation request bodies before buffering through daemon shutdown,
+  retaining independent body and operation budgets; useful tool calls remain denied.
+
 ### Internal
 
 - Make native ingress/body deadline tests use explicit pending/body barriers and
@@ -22,6 +25,22 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### Native tool preparation
+
+- Add operator-only observe/inspect/review/finite grant replacement for manual
+  native None and sealed-bearer accounts, with matching strict CLI/API. Prepared
+  entries never enable agent calls: empty lists and denial remain. See the
+  [workflow, limits and upgrade](docs/user/operator/native-tool-review.md).
+- Use the bounded outbound adapter with duplicate-safe raw response checks,
+  approved-address pinning, verified TLS, finite complete observations and
+  generation/source CAS. Migration0014 starts with zero preparation and refuses
+  schema13 binaries. Drift, binding/config/name lifecycle and restart freshness
+  cannot silently restore prepared authority.
+- Stored bearer stdin ingestion explicitly replaces header shape and commits
+  sealed storage plus selection together; deliberate sharing requires a live
+  reference. This is AGENT-206A only, with no version bump/full206/provider or
+  release acceptance. Useful dispatch remains stage B.
 
 ### OAuth refresh recovery
 

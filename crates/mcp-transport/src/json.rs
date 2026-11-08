@@ -66,8 +66,8 @@ impl Scan {
     }
 }
 pub(crate) fn decode(bytes: &[u8], limits: Limits) -> Result<ServerJsonRpcMessage, Error> {
-    preflight(bytes, limits)?;
-    let message = serde_json::from_slice(bytes).map_err(|_| Error("json_syntax"))?;
+    let raw = crate::strict_json::parse(bytes, limits)?;
+    let message = serde_json::from_value(raw).map_err(|_| Error("json_syntax"))?;
     if let ServerJsonRpcMessage::Response(response) = &message
         && let rmcp::model::ServerResult::InitializeResult(result) = &response.result
         && result.protocol_version.as_str() != "2025-11-25"
@@ -75,4 +75,13 @@ pub(crate) fn decode(bytes: &[u8], limits: Limits) -> Result<ServerJsonRpcMessag
         return Err(Error("protocol_version"));
     }
     Ok(message)
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    #[test]
+    fn rejects_nested_duplicate_schema_members_before_sdk_normalization() {
+        let bytes = br#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"one","inputSchema":{"type":"object","properties":{"key":{"type":"string","type":"integer"}}}}]}}"#;
+        assert!(super::decode(bytes, crate::Limits::default()).is_err());
+    }
 }

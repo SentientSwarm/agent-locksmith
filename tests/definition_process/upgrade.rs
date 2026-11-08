@@ -10,7 +10,7 @@ pub async fn exercise() {
     let before = support::authority(&f).await;
     f.stop();
     f.start(process::DAEMON).await;
-    assert_eq!(version(&f).await, 13);
+    assert_eq!(version(&f).await, 14);
     assert_eq!(support::authority(&f).await, before);
     no_automatic_definitions(&f).await;
     support::import(&f, 1);
@@ -22,7 +22,7 @@ pub async fn exercise() {
     assert_eq!(support::authority(&f).await, before);
     f.stop();
     println!(
-        "Actual public1de53fc schema11->13: existing native authority preserved, zero automatic definitions, old binary refuses before listeners, current restart retains disabled pin"
+        "Actual public1de53fc schema11->14: existing native authority preserved, zero automatic definitions, old binary refuses before listeners, current restart retains disabled pin"
     );
 }
 async fn version(f: &Fixture) -> i64 {

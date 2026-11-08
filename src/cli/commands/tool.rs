@@ -13,6 +13,11 @@ use crate::output::Format;
 
 #[derive(Subcommand)]
 pub enum ToolCmd {
+    /// Observe and review native tool contracts; agent calls remain disabled.
+    Mcp {
+        #[command(subcommand)]
+        command: super::native_mcp::ToolCmd,
+    },
     /// Create a disabled, immutable instance of an exact definition; no accounts or grants.
     FromDefinition {
         name: String,
@@ -47,6 +52,7 @@ pub enum ToolCmd {
 
 pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(), CliError> {
     match cmd {
+        ToolCmd::Mcp { command } => super::native_mcp::tool(client, format, command).await,
         ToolCmd::FromDefinition { name, options } => {
             super::definition_instance::run(client, format, &name, options).await
         }
