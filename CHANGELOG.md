@@ -21,6 +21,17 @@
 
 ### Native MCP prerequisite safety
 
+- Reserve MCP session capacity before SDK allocation (AGENT-199). Scoped
+  budgets include initializing and closing sessions; worker/service joins and
+  response cleanup precede release. A pinned SDK ownership patch retains
+  protocol handling and makes stalled-handshake and canceled-close cleanup
+  observable. Absolute lifetime also bounds initialization; dropping its unpolled
+  response retires the session without invalidating consumed final events.
+  See [scope, budgets and limits](docs/development/mcp-sessions.md).
+  Resume/replay are unsupported; already-submitted effects are not rolled back.
+  This separate prerequisite still requires native integration and independent
+  acceptance; it does not expose a new route or clear all G3/release gates.
+
 - Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
   cumulative SSE response bounds precede collector/JSON decoding; event,
   depth/work, timeout and cleanup checks apply with explicit unsupported modes.
