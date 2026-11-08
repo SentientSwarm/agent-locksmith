@@ -70,7 +70,17 @@ async fn controlled_refresh_embedded_return_and_startup_error_join_owner() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires explicit retained schema-15 CLI/daemon paths"]
+#[ignore = "requires explicit retained prior (schema-15 or schema-16) CLI/daemon paths"]
 async fn controlled_refresh_actual_prior_migration_refusal_reopen() {
     consent::refresh::upgrade().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_native_actual_consent_selection_dispatch_and_refresh() {
+    consent::native::journey().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_native_refresh_disconnect_and_expiry_before_admission() {
+    consent::native::races().await;
 }

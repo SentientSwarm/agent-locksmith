@@ -1,11 +1,15 @@
 # Reviewed native dispatch (AGENT-206B)
 
-Manual native None/live StoredBearer accounts now support a bounded useful call.
+Manual native None/live StoredBearer accounts support a bounded useful call.
+[Controlled OAuth](../user/operator/native-oauth.md) reuses this dispatcher with
+owner-stamped, token-version/trust-bound authority and access-only custody.
 [Operator observation and grant](../user/operator/native-tool-review.md) and the
 [ordinary agent interface](../user/agent-integration/native-mcp.md) describe setup.
-This builds on accepted A preparation without a new migration or dependency.
-OAuth, definition activation, provider acceptance, dynamic context, compact
-and full206 remain separate. [Fixed context and phase diagnostics](native-protected-context.md)
+The original None/StoredBearer increment built on A preparation without a new
+migration or dependency. Controlled OAuth adds migration 0017 and the repair costs
+in its guide. Hosted provider acceptance, definition activation, dynamic context
+and full AGENT-206 acceptance remain separate. [Compact MCP](../user/agent-integration/compact-mcp.md)
+uses this same dispatcher. [Fixed context and phase diagnostics](native-protected-context.md)
 extend this path under bounded207. Version stays planned3.0.0; no publication follows.
 
 ## One current dispatcher

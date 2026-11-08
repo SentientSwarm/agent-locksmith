@@ -888,6 +888,16 @@ async fn op_set_agent_credential(
     // An `op` override reference is resolved by `op read` on the next
     // resync — reject a malformed one up front, as registration writes do
     // (CCS-2).
+    if matches!(
+        body.auth_spec,
+        crate::registrations::AuthSpec::ControlledOauth { .. }
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":{"code":"selection_only","message":"use select-oauth"}})),
+        )
+            .into_response();
+    }
     if let Err(msg) = body.auth_spec.validate_op_reference() {
         return (
             StatusCode::BAD_REQUEST,
@@ -1005,6 +1015,12 @@ async fn op_list_agent_credentials(
         Ok(rows) => {
             let arr: Vec<_> = rows
                 .into_iter()
+                .filter(|o| match &o.auth_spec {
+                    crate::registrations::AuthSpec::ControlledOauth { owner_id, .. } => {
+                        owner_id == &op.public_id
+                    }
+                    _ => true,
+                })
                 .map(|o| {
                     json!({
                         "registration": o.registration,

@@ -21,3 +21,6 @@ pub mod wire;
 #[rustfmt::skip]
 #[path="native_dispatch/original_disconnect_wait.rs"]
 mod original;
+
+#[path = "native_oauth/fixture.rs"]
+mod controlled;

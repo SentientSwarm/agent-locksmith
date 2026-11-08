@@ -1,9 +1,12 @@
 # Native MCP lifecycle setup
 
+For owner-selected controlled OAuth, see [native OAuth accounts](native-oauth.md).
+
 Locksmith supports authenticated MCP **2025-11-25 stateful Streamable HTTP** at
 `/mcp/{connection}`. Connection access and explicit account selection permit the
 session lifecycle; they do not approve tools. [Review and grant](native-tool-review.md)
-adds finite useful calls for manual None/live sealed-bearer accounts. Offline
+adds finite useful calls for manual None/live sealed-bearer and deliberately
+selected controlled OAuth accounts. Offline
 [definitions](integration-definitions.md) remain disabled exact revision pins.
 Use [HTTP onboarding](connector-onboarding.md) for existing HTTP services.
 Provider consent and verified external identity are separate; configuration
@@ -99,7 +102,9 @@ Metadata-only changes preserve choices but retire old native sessions after
 activation; native registration revisions prevent immediate lifecycle ABA.
 Disable/re-enable preserves choices but invalidates existing sessions. Any agent
 policy or account selection mutation can conservatively retire that agent's
-native sessions; credential token rotation alone does not.
+native sessions. Sealed-bearer token rotation alone does not. Controlled OAuth
+refresh changes the token version and retires old authority/scopes: reobserve,
+review, regrant and open a fresh session as described in [native OAuth](native-oauth.md).
 
 ## Verify and diagnose
 

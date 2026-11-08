@@ -17,27 +17,46 @@ impl Runtime {
         expected: &Source,
         generation: Option<&str>,
     ) -> Result<Value> {
+        self.observe_for(None, agent, name, expected, generation)
+            .await
+    }
+    pub async fn observe_for(
+        &self,
+        owner: Option<&str>,
+        agent: &str,
+        name: &str,
+        expected: &Source,
+        generation: Option<&str>,
+    ) -> Result<Value> {
         let mut tx = self.repo.pool.begin().await?;
-        let current = self.current(&mut tx, agent, name).await?;
+        let current = self.current_for(&mut tx, owner, agent, name).await?;
         current.matches(expected)?;
         let generation = store::reserve(&mut tx, &current, &self.run, generation).await?;
         tx.commit().await?;
-        let result = self.collect(agent, name, &current).await;
-        self.finish(agent, name, expected, &generation, result)
+        let result = self.collect(owner, agent, name, &current).await;
+        self.finish(owner, agent, name, expected, &generation, result)
             .await?;
-        self.snapshot(agent, name).await
+        self.snapshot_for(owner, agent, name).await
     }
-    async fn collect(&self, agent: &str, name: &str, current: &Current) -> Result<Value> {
+    async fn collect(
+        &self,
+        owner: Option<&str>,
+        agent: &str,
+        name: &str,
+        current: &Current,
+    ) -> Result<Value> {
         let reg = &current.admission.registration;
         let private = reg
             .mcp
             .as_ref()
             .is_some_and(|c| c.allow_private_destination);
         let addresses = destination::resolve(&reg.upstream, private, &self.listeners).await?;
-        let bearer = self.materialize(agent, name, &current.source).await?;
+        let bearer = self
+            .materialize_for(Some(owner), agent, name, &current.source)
+            .await?;
         let client = locksmith_mcp_transport::Client::pinned(
             Default::default(),
-            self.roots.clone(),
+            self.current_roots(current),
             &reg.upstream,
             addresses,
             1024 * 1024,
@@ -61,8 +80,20 @@ impl Runtime {
         name: &str,
         expected: &Source,
     ) -> Result<Option<SecretString>> {
+        self.materialize_for(None, agent, name, expected).await
+    }
+    pub(super) async fn materialize_for(
+        &self,
+        owner: Option<Option<&str>>,
+        agent: &str,
+        name: &str,
+        expected: &Source,
+    ) -> Result<Option<SecretString>> {
         let mut tx = self.repo.pool.begin().await?;
-        let current = self.current(&mut tx, agent, name).await?;
+        let current = match owner {
+            Some(owner) => self.current_for(&mut tx, owner, agent, name).await?,
+            None => self.current(&mut tx, agent, name).await?,
+        };
         current.matches(expected)?;
         let secret = match current.admission.account.as_ref() {
             Some(AuthSpec::None) => None,
@@ -75,13 +106,24 @@ impl Runtime {
                     row.get("nonce"),
                 )?)
             }
+            Some(auth @ AuthSpec::ControlledOauth { .. }) => Some(
+                self.consent
+                    .as_ref()
+                    .ok_or(Error("oauth_custody_unavailable"))?
+                    .native_access(&mut tx, name, auth)
+                    .await
+                    .map_err(super::selection::custody)?,
+            ),
             _ => return Err(Error("native_account_unsupported")),
         };
+        current.fresh()?;
         tx.commit().await?;
+        current.fresh()?;
         Ok(secret)
     }
     async fn finish(
         &self,
+        owner: Option<&str>,
         agent: &str,
         name: &str,
         expected: &Source,
@@ -91,9 +133,10 @@ impl Runtime {
         let mut tx = self.repo.pool.begin().await?;
         match result {
             Ok(manifest) => {
-                let current = self.current(&mut tx, agent, name).await?;
+                let current = self.current_for(&mut tx, owner, agent, name).await?;
                 current.matches(expected)?;
                 store::publish(&mut tx, &current, generation, &manifest).await?;
+                current.fresh()?;
                 tx.commit().await?;
                 Ok(())
             }

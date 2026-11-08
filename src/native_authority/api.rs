@@ -1,7 +1,7 @@
 use super::{Error, Result, body_scope, runtime::Runtime, writes};
-use crate::admin::uds::UdsState;
+use crate::{admin::uds::UdsState, auth_v2::OperatorIdentity};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -25,6 +25,10 @@ pub fn router(state: UdsState) -> Router {
             "/agents/{agent}/mcp-grants/{name}",
             get(grants).put(replace),
         )
+        .route(
+            "/agents/{agent}/oauth-selection/{name}",
+            axum::routing::put(select),
+        )
         .with_state(state)
 }
 fn runtime(state: &UdsState) -> Result<Arc<Runtime>> {
@@ -35,19 +39,25 @@ fn runtime(state: &UdsState) -> Result<Arc<Runtime>> {
 }
 async fn show(
     State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((name, agent)): Path<(String, String)>,
 ) -> Result<Json<Value>> {
     let rt = runtime(&state)?;
-    Ok(Json(rt.scoped(rt.snapshot(&agent, &name)).await?))
+    Ok(Json(
+        rt.scoped(rt.snapshot_for(Some(&op.public_id), &agent, &name))
+            .await?,
+    ))
 }
 async fn grants(
     State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((agent, name)): Path<(String, String)>,
 ) -> Result<Json<Value>> {
-    show(State(state), Path((name, agent))).await
+    show(State(state), Extension(op), Path((name, agent))).await
 }
 async fn observe(
     State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((name, agent)): Path<(String, String)>,
     request: Request,
 ) -> Result<Json<Value>> {
@@ -55,14 +65,21 @@ async fn observe(
     Ok(Json(
         body_scope::run(&rt.owner, async {
             let input: writes::Observe = body(request).await?;
-            rt.scoped(rt.observe(&agent, &name, &input.source, input.generation.as_deref()))
-                .await
+            rt.scoped(rt.observe_for(
+                Some(&op.public_id),
+                &agent,
+                &name,
+                &input.source,
+                input.generation.as_deref(),
+            ))
+            .await
         })
         .await?,
     ))
 }
 async fn review(
     State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((name, agent)): Path<(String, String)>,
     request: Request,
 ) -> Result<Json<Value>> {
@@ -70,13 +87,15 @@ async fn review(
     Ok(Json(
         body_scope::run(&rt.owner, async {
             let input = body(request).await?;
-            rt.scoped(rt.review(&agent, &name, input)).await
+            rt.scoped(rt.review_for(Some(&op.public_id), &agent, &name, input))
+                .await
         })
         .await?,
     ))
 }
 async fn replace(
     State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((agent, name)): Path<(String, String)>,
     request: Request,
 ) -> Result<Json<Value>> {
@@ -84,7 +103,36 @@ async fn replace(
     Ok(Json(
         body_scope::run(&rt.owner, async {
             let input = body(request).await?;
-            rt.scoped(rt.replace(&agent, &name, input)).await
+            rt.scoped(rt.replace_for(Some(&op.public_id), &agent, &name, input))
+                .await
+        })
+        .await?,
+    ))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Selection {
+    label: String,
+}
+async fn select(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((agent, name)): Path<(String, String)>,
+    request: Request,
+) -> Result<Json<Value>> {
+    let expected = request
+        .headers()
+        .get("if-match")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .ok_or(Error("if_match_required"))?
+        .to_string();
+    let rt = runtime(&state)?;
+    Ok(Json(
+        body_scope::run(&rt.owner, async {
+            let input: Selection = body(request).await?;
+            rt.scoped(rt.select_oauth(&op.public_id, &agent, &name, &input.label, &expected))
+                .await
         })
         .await?,
     ))
@@ -122,12 +170,14 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match self.0 {
             "observation_conflict" | "grant_conflict" | "source_conflict" => StatusCode::CONFLICT,
+            "if_match_required" => StatusCode::PRECONDITION_REQUIRED,
             "observation_capacity" => StatusCode::TOO_MANY_REQUESTS,
-            "agent_not_found" => StatusCode::NOT_FOUND,
+            "agent_not_found" | "not_found" => StatusCode::NOT_FOUND,
             "operation_deadline" | "body_deadline" => StatusCode::REQUEST_TIMEOUT,
-            "backend_unavailable" | "shutting_down" | "native_preparation_unavailable" => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            "oauth_custody_unavailable"
+            | "backend_unavailable"
+            | "shutting_down"
+            | "native_preparation_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         };
         (

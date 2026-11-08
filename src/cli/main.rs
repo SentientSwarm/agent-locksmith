@@ -355,4 +355,43 @@ mod tests {
         assert_eq!(id, "-Oabc");
         assert_eq!(reason.as_deref(), Some("gone"));
     }
+    #[test]
+    fn controlled_selection_ids_and_revision_are_opaque() {
+        let parsed = Cli::try_parse_from([
+            "locksmith",
+            "agent",
+            "select-oauth",
+            "-agent",
+            "-registration",
+            "--label",
+            "-label",
+            "--if-match",
+            "-revision",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        let Some(Cmd::Agent {
+            cmd:
+                agent::AgentCmd::SelectOauth {
+                    id,
+                    registration,
+                    label,
+                    if_match,
+                },
+        }) = parsed.cmd
+        else {
+            panic!("selection command")
+        };
+        assert_eq!(
+            (
+                id.as_str(),
+                registration.as_str(),
+                label.as_str(),
+                if_match.as_str()
+            ),
+            ("-agent", "-registration", "-label", "-revision")
+        );
+        assert!(matches!(parsed.format, Format::Json));
+    }
 }

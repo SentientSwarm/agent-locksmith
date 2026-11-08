@@ -25,6 +25,7 @@ pub struct Runtime {
     pub listeners: Listeners,
     pub owner: RefreshOwner,
     pub slots: Semaphore,
+    pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
 }
 impl Runtime {
     pub async fn new(
@@ -44,7 +45,12 @@ impl Runtime {
             listeners: Listeners::default(),
             owner,
             slots: Semaphore::new(8),
+            consent: None,
         })
+    }
+    pub fn with_consent(mut self, consent: Option<Arc<crate::oauth::consent::Runtime>>) -> Self {
+        self.consent = consent;
+        self
     }
     pub async fn current(
         &self,
@@ -52,11 +58,27 @@ impl Runtime {
         agent: &str,
         name: &str,
     ) -> Result<Current> {
-        source::current(&self.repo, &self.catalog.load_full(), c, agent, name).await
+        source::current(
+            &self.repo,
+            &self.catalog.load_full(),
+            self.consent.as_deref(),
+            c,
+            agent,
+            name,
+        )
+        .await
     }
     pub async fn snapshot(&self, agent: &str, name: &str) -> Result<Value> {
+        self.snapshot_for(None, agent, name).await
+    }
+    pub async fn snapshot_for(
+        &self,
+        owner: Option<&str>,
+        agent: &str,
+        name: &str,
+    ) -> Result<Value> {
         let mut tx = self.repo.pool.begin().await?;
-        let current = self.current(&mut tx, agent, name).await?;
+        let current = self.current_for(&mut tx, owner, agent, name).await?;
         let observation = store::observation(&mut tx, &current, &self.run).await?;
         let revision = store::revision(&mut tx, &current).await?;
         let tools = super::grants::entries(&mut tx, &current).await?;
@@ -67,6 +89,7 @@ impl Runtime {
             .unwrap_or_default();
         let availability = effective.as_ref().err().map(|e| e.0);
         let diagnostics = super::readiness::describe(&observation, tools.len(), availability);
+        current.fresh()?;
         tx.commit().await?;
         Ok(
             json!({"source":current.source,"observation":observation,"grant_revision":revision,

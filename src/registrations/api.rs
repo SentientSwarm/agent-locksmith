@@ -462,6 +462,11 @@ pub async fn op_put(
     // Phase J / M2 (CCS-2): an `op` custody reference must use the `op://`
     // scheme. Reject a malformed reference at register-time so it never
     // reaches the resolver (which would otherwise silently degrade it).
+    if matches!(auth, AuthSpec::ControlledOauth { .. }) {
+        return registration_error_response(&RegistrationError::InvalidMetadata(
+            "selection_only".into(),
+        ));
+    }
     if let Err(msg) = auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }

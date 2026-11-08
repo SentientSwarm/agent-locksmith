@@ -2,8 +2,9 @@
 
 Use the existing [connection setup](native-mcp.md) and
 [observe, review and grant workflow](native-tool-review.md). A manual native
-connection can use explicit None or a live sealed-bearer selection. This feature
-does not activate definitions or add OAuth, env, op or header accounts.
+connection can use explicit None, a live sealed-bearer selection or
+[owner-selected controlled OAuth](native-oauth.md). Fixed context adds no account
+authority; definitions and native env/op/header accounts remain unsupported.
 
 ## Review a fixed value
 
@@ -105,13 +106,15 @@ owned; disconnected peers may never receive it. No remote rollback is implied.
 ## Upgrade and limits
 
 Back up consistently before changing binaries, following the
-[native upgrade procedure](../changes/native-mcp.md). Schema14 is unchanged.
-Accepted pre-context B binaries can open the database and use empty contracts,
+[native upgrade procedure](../changes/native-mcp.md). The historical fixed-context
+increment left schema 14 unchanged. Accepted pre-context B binaries could open
+that schema 14 database and use empty contracts,
 but reject context-bearing inventory, including the whole mixed tool set. Their
 old review API refuses the new field; they can still deliberately replace/revoke
 existing grant references. Every restart needs fresh observation. Re-upgrade
 preserves exact stored reviews and revocation; it does not strip context or
-restore grants. Use the current binary for context-bearing workloads.
+restore grants. Current controlled OAuth adds schema 17 and prior whole-daemon
+startup refusal; follow its [upgrade guidance](native-oauth.md#upgrade-and-evidence-limits). Use the current binary for context-bearing workloads.
 
 Planned3.0.0 stays unchanged. This is a bounded local increment; full207/208,
 live provider/customer readiness and release/publication remain separate. See

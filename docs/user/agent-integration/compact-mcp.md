@@ -86,9 +86,10 @@ session. Existing authority, argument, cancellation and result refusals still
 apply. Unknown admission/remote outcomes do not prove rollback or justify retry.
 Session response-drop retirement is distinct from registry publication.
 
-This bounded facade supports the same finite manual None/live StoredBearer tools
-as [standard native MCP](native-mcp.md). It does not activate definitions, OAuth,
-provider compatibility, tasks, resources, prompts or a model token-efficiency claim.
+This bounded facade supports the same finite manual None/live StoredBearer and
+[owner-selected controlled OAuth](../operator/native-oauth.md) tools as
+[standard native MCP](native-mcp.md). It does not establish hosted provider
+compatibility or activate definitions, tasks, resources, prompts or a model token-efficiency claim.
 
 ## Operator opt-in and compatibility
 
@@ -99,9 +100,10 @@ connection grants/bootstrap scopes, selections, observations, reviews and per-to
 grants through the existing migration rules. Deliberately restore those and use
 fresh sessions. Do not treat this as a cheap routing toggle.
 
-A pre-compact Locksmith CLI can read the new JSON through a current daemon.
+The original compact increment had no new schema migration. A pre-compact
+Locksmith CLI could read compact JSON through that increment's daemon.
 Its daemon starts on omitted metadata but fails startup with stored `compact:true`,
 before HTTP listeners become available; this affects the entire daemon.
 Do not downgrade with opted-in rows. The prior-binary test (`tests/native_compact/prior.rs`) checks this against an
-actual pre-compact build. No new schema migration or
-transparent downgrade is claimed.
+actual pre-compact build. Current controlled OAuth also adds schema 17: see its
+[whole-daemon downgrade refusal and recovery](../operator/native-oauth.md#upgrade-and-evidence-limits). No transparent downgrade is claimed.

@@ -12,6 +12,12 @@
 
 ### Changed
 
+- Add deliberate owner-bound [controlled OAuth native selection](docs/user/operator/native-oauth.md),
+  finite preparation and standard/compact dispatch through the existing admission path.
+  Refresh/version or trust changes require renewed preparation and a fresh session;
+  reconnect requires reselection. Access-only materialization preserves optional refresh.
+  Migration 0017 refuses older whole-daemon startup; hosted providers remain unproved.
+
 - Add manual owner-bound controlled refresh and explicit fresh-consent repair.
   Migration 0016 commits pending uncertainty before I/O and exact current custody
   before success, preserving optional expiry/scope and claimed refresh retention.

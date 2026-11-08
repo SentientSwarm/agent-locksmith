@@ -80,6 +80,7 @@ fn apply_custody_spec(target: &mut ProxyTarget, spec: AuthSpec) -> Result<(), Fa
         spec @ (AuthSpec::OauthPkce { .. } | AuthSpec::OauthDeviceCode { .. }) => {
             apply_oauth(target, spec)?;
         }
+        AuthSpec::ControlledOauth { .. } => return Err(Failure::CredentialUnavailable),
         _ => unreachable!("env and no-auth handled before custody"),
     }
     Ok(())

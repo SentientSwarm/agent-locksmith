@@ -1174,7 +1174,8 @@ async fn build_admin_substrate(
             refresh_owner,
         )
         .await
-        .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
+        .map_err(|e| DaemonError::AdminConfig(e.to_string()))?
+        .with_consent(oauth_admin.as_ref().and_then(|a| a.consent.clone())),
     );
     authority.listeners.expect("agent");
     if config

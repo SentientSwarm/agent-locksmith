@@ -1,5 +1,7 @@
 # Controlled operator consent
 
+For owner-selected controlled OAuth, see [native OAuth accounts](native-oauth.md).
+
 The optional `controlled-linear-v1` profile lets an authenticated operator create,
 renew and disconnect sealed, durable custody through the shipping CLI and daemon. It
 supports a **local HTTPS twin only**. `connected_unbound` means that twin returned
@@ -55,8 +57,10 @@ are supplied through your existing operator client):
 {"description":"Controlled identity twin","upstream":"https://127.0.0.1:19443/mcp/readonly","egress":"direct","auth":{"kind":"oauth_pkce","client_id":"fixture-client","redirect_uri":"https://127.0.0.1:19444/oauth/callback","scopes":["read"],"auth_url":"https://127.0.0.1:19443/authorize","token_url":"https://127.0.0.1:19443/token"}}
 ```
 
-The profile must exactly match that registration. Definitions and native MCP
-registrations are unsupported. The registration may remain disabled. Labels,
+The profile must exactly match that registration. Definitions remain unsupported.
+The HTTP registration may remain disabled. Enabled manual native MCP registrations
+also support this controlled profile under [native OAuth setup](native-oauth.md);
+consent alone still creates no agent authority. Labels,
 profile IDs and CLI path components are 1–128 ASCII letters, digits, `_` or `-`.
 
 ## Connect, inspect, disconnect
@@ -222,8 +226,9 @@ strings or keys refuse. Only a verified identity permits atomic account commit.
 Legacy `oauth list` hides controlled rows. Legacy status/revoke/bootstrap refuse
 those rows with `oauth_kind_unsupported`; use the new owner-bound commands.
 Legacy proxy and legacy refresh paths refuse this kind before token use, including
-when an agent previously selected the absent label. Native OAuth and definition
-activation remain unsupported. Identity calls are internal verification traffic,
+when an agent previously selected the absent label. Native use requires the
+separate [owner-bound selection and finite review](native-oauth.md); definition
+activation remains unsupported. Identity calls are internal verification traffic,
 not useful agent dispatch. Existing legacy accounts retain their interfaces.
 
 A failure uses static reasons, not provider text. Transport failures whose details

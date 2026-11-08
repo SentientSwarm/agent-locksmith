@@ -48,3 +48,4 @@ pub(crate) mod diagnostic_event;
 pub mod diagnostics;
 
 mod readiness;
+mod selection;
