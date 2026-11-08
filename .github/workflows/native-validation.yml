@@ -3,12 +3,13 @@ name: Native candidate validation
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call:  # the release workflow publishes exactly these validated bytes
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-validation-${{ github.event.pull_request.number || github.ref }}
+  group: native-validation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:

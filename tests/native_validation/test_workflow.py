@@ -22,10 +22,14 @@ def workflow():
 class WorkflowContract(unittest.TestCase):
     def test_read_only_events_and_no_publication(self):
         value = workflow()
-        self.assertEqual(set(value['on']), {'pull_request', 'workflow_dispatch'})
+        # workflow_call lets the release workflow reuse these exact bytes; this
+        # workflow itself still has read-only permissions and never publishes.
+        self.assertEqual(set(value['on']), {'pull_request', 'workflow_dispatch', 'workflow_call'})
         self.assertEqual(value['permissions'], {'contents': 'read'})
         self.assertNotIn('pull_request_target', value['on'])
         self.assertIn('concurrency', value)
+        # A caller (Release) must not share and cancel this workflow's own PR group.
+        self.assertIn('${{ github.workflow }}', value['concurrency']['group'])
         text = str(value)
         for forbidden in ['action-gh-release', 'contents: write', 'secrets.', 'environment', 'git push']:
             self.assertNotIn(forbidden, text)
