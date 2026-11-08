@@ -12,26 +12,43 @@ pub async fn endpoint(
     Path(name): Path<String>,
     req: Request,
 ) -> Response {
-    match run(state, name, req).await {
+    match run(state, name, req, super::compact::Facade::Standard).await {
         Ok(r) => r,
         Err(f) => f.response(),
     }
 }
-async fn run(state: Arc<AppState>, name: String, req: Request) -> Result<Response, Failure> {
+pub async fn compact_endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    req: Request,
+) -> Response {
+    match run(state, name, req, super::compact::Facade::Compact).await {
+        Ok(r) => r,
+        Err(f) => f.response(),
+    }
+}
+async fn run(
+    state: Arc<AppState>,
+    name: String,
+    req: Request,
+    facade: super::compact::Facade,
+) -> Result<Response, Failure> {
     let identity = super::input::identity(&req)?;
     let token = super::input::cancellation(&req)?;
-    let scope = state.native.admit(&identity, &name).await?;
+    let scope = state.native.admit(&identity, &name, facade).await?;
     let input = match Input::read(req, state.native.config.request_bytes).await {
         Ok(input) => input,
         Err(response) => return Ok(*response),
     };
-    let candidate = Arc::new(Context::new(
+    let mut candidate = Context::new(
         Arc::downgrade(&state.native),
         identity,
         name,
         scope,
         token.clone(),
-    ));
+    );
+    candidate.facade = facade;
+    let candidate = Arc::new(candidate);
     let context = super::scope::select(
         &state.native,
         candidate,

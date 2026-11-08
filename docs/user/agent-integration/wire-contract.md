@@ -25,8 +25,12 @@ is replaced by a client certificate; the cert's CN/SAN/URI maps to an
 agent record.
 
 Native entries use the separately bounded [MCP interface](native-mcp.md),
-require current registered identity and never route through `/api`. Tool approval
-is unavailable in this lifecycle stage. Existing HTTP behavior below is preserved.
+require current registered identity and never route through `/api`. Manual
+None/live StoredBearer connections support explicitly reviewed per-tool grants
+and committed dispatch; connection visibility alone grants no tool authority.
+An opted-in [compact facade](compact-mcp.md) uses the same authority and dispatcher.
+Definition-backed activation and native OAuth remain outside this bounded profile.
+Existing HTTP behavior below is preserved.
 
 ## Endpoints
 

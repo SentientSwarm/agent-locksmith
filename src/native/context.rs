@@ -13,6 +13,8 @@ pub(super) struct Context {
     pub identity: AgentIdentity,
     pub name: String,
     pub scope: Scope,
+    pub facade: super::compact::Facade,
+    pub compact: Mutex<super::compact::Registry>,
     pub cancelled: CancellationToken,
     pub ready: AtomicBool,
     ids: Mutex<HashSet<String>>,
@@ -31,6 +33,8 @@ impl Context {
             identity,
             name,
             scope,
+            facade: super::compact::Facade::Standard,
+            compact: Mutex::default(),
             cancelled,
             ready: AtomicBool::new(false),
             ids: Mutex::default(),
@@ -46,13 +50,17 @@ impl Context {
             biased;
             _ = self.cancelled.cancelled() => Err(Failure(404,"session_closed")),
             _ = runtime.stopped.cancelled() => Err(Failure(503,"shutting_down")),
-            result = runtime.admit(&self.identity, &self.name) => {
+            result = runtime.admit(&self.identity, &self.name, self.facade) => {
                 if result.is_ok_and(|scope| scope == self.scope) { Ok(()) }
                 else { self.cancelled.cancel(); Err(Failure(404,"authority_changed")) }
             }
         }
     }
     pub fn list(&self, snapshot: &Snapshot) -> authority::Result<Vec<serde_json::Value>> {
+        self.check_snapshot(snapshot)?;
+        self.pins.lock().unwrap().list(snapshot)
+    }
+    pub fn check_snapshot(&self, snapshot: &Snapshot) -> authority::Result<()> {
         let source = &snapshot.current.source;
         if self.cancelled.is_cancelled()
             || self.scope.owner != self.identity.public_id
@@ -63,7 +71,7 @@ impl Context {
             self.cancelled.cancel();
             return Err(authority::Error("authority_changed"));
         }
-        self.pins.lock().unwrap().list(snapshot)
+        Ok(())
     }
     pub fn remember(&self, id: &serde_json::Value, max: usize) -> Result<(), Failure> {
         let mut ids = self.ids.lock().unwrap();
@@ -82,3 +90,7 @@ impl Context {
 #[cfg(test)]
 #[path = "context_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compact_tests.rs"]
+mod compact_tests;

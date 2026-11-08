@@ -17,7 +17,11 @@ impl Running {
     ) -> Result<Self, Error> {
         let native = native(f, authority, request_ms);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}/mcp/native", listener.local_addr()?);
+        let url = format!(
+            "http://{}/mcp/native{}",
+            listener.local_addr()?,
+            if crate::COMPACT { "/compact" } else { "" }
+        );
         let app = router(f, &native);
         let stop = CancellationToken::new();
         let stopped = stop.clone();

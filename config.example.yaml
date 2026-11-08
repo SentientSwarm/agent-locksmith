@@ -11,12 +11,12 @@ listen:
 #   mode: "bearer"
 #   token: "${LOCKSMITH_INBOUND_TOKEN}"
 
-# Native MCP lifecycle budgets/host policy require restart. No tools are callable.
+# Native MCP budgets/host policy require restart. Calls need reviewed tool grants.
 # See docs/user/operator/native-mcp.md and docs/development/native-mcp.md.
 # Fixed native context is reviewed per account, not global config:
 # docs/user/operator/native-context.md (diagnostics and synchronous sink limits).
 # mcp:
-#   # Operator observation only; adds verified roots and requires restart.
+#   # Native observation and dispatch trust; adds roots and requires restart.
 #   # See docs/user/operator/native-tool-review.md. Never disables TLS checks.
 #   upstream_ca_bundle: "/etc/locksmith/ca/native-provider.pem"
 #   allowed_hosts: ["localhost", "127.0.0.1", "[::1]"]
@@ -114,3 +114,7 @@ tools:
     timeouts:
       request_seconds: 15
       idle_seconds: 60
+
+# Native connection MCP JSON can opt in with "compact": true before authority setup.
+# This is per-registration metadata (not a global mcp setting); see
+# docs/user/agent-integration/compact-mcp.md for toggle/downgrade costs.

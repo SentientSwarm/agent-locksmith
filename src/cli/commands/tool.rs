@@ -13,7 +13,7 @@ use crate::output::Format;
 
 #[derive(Subcommand)]
 pub enum ToolCmd {
-    /// Observe and review native tool contracts; agent calls remain disabled.
+    /// Observe/review native tools; deliberate per-agent grants enable supported calls.
     Mcp {
         #[command(subcommand)]
         command: super::native_mcp::ToolCmd,

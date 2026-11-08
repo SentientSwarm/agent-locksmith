@@ -10,6 +10,24 @@
   admin surface and reported the error only when stopped. Listener "bound" log
   lines now show the actually bound address, so a configured port 0 is usable.
 
+### Changed
+
+- Add an explicit per-connection compact MCP facade with pinned local search,
+  complete describe receipts and the existing committed native dispatcher.
+  Standard/compact share session and request limits; fixed context and account
+  authority are unchanged. Opt-in invalidates existing connection/tool authority;
+  older strict-parsing daemons cannot start with opted-in rows. This bounded local
+  increment does not establish provider compatibility or model-efficiency gates.
+
+- Preserve HTTP/native discovery protocol and public paths in authenticated
+  `/skill`, with complete-schema native request guidance, fixed-context/pin and
+  current-grant limits, safely rendered display data and protocol-specific repair.
+  Native connections do not inherit HTTP Codex recipes by name. See the
+  [skill reference](docs/user/agent-integration/skill-reference.md). Guidance reads
+  do not materialize credentials or contact upstreams; auth/cache behavior and
+  existing wire/authority contracts are unchanged. This is bounded AGENT-209 work,
+  not full onboarding/provider/release acceptance; planned 3.0.0 is unchanged.
+
 ### Internal
 
 - Start daemon integration tests on port 0 and read the bound address back

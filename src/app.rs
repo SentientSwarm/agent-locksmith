@@ -469,6 +469,10 @@ pub fn build_app_full_with_native(
 fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/mcp/{name}", routing::any(crate::native::endpoint))
+        .route(
+            "/mcp/{name}/compact",
+            routing::any(crate::native::compact_endpoint),
+        )
         // k8s-style health endpoints (INF-3 / Q-18). Unauthenticated by
         // design — orchestrators should not need credentials to probe the
         // process. /health is preserved as an alias to /livez for
@@ -602,20 +606,8 @@ async fn skill_handler(
             // post-Phase-E that always returned empty for catalog
             // deployments because tools live in the registrations table.
             let listing = catalog_listing(&state, Some(id), crate::registrations::Kind::Tool).await;
-            let available: Vec<(String, String)> = listing
-                .into_iter()
-                .filter_map(|v| {
-                    let name = v.get("name")?.as_str()?.to_string();
-                    let description = v
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Some((name, description))
-                })
-                .collect();
             skill_response(
-                crate::skill::render_authenticated(id, &available),
+                crate::skill::render_authenticated(id, &listing),
                 "private, no-cache, no-store",
             )
         }

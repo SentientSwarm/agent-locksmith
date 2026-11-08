@@ -7,6 +7,10 @@ and [reviewed dispatch](native-dispatch.md) now add a bounded manual None/live
 StoredBearer path. Connection grants remain lifecycle prerequisites and never
 imply tool approvals. Raw HTTP admission/discovery continue to filter protocol.
 
+The optional [compact facade](native-compact.md) uses this same Context/pool and
+committed dispatcher with separate described references; no quota split or second
+executor.
+
 Public contracts: [operator setup](../user/operator/native-mcp.md),
 [agent interface](../user/agent-integration/native-mcp.md), and
 [upgrade notes](../user/changes/native-mcp.md).

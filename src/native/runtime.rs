@@ -51,14 +51,20 @@ impl Runtime {
         &self,
         identity: &AgentIdentity,
         name: &str,
+        facade: super::compact::Facade,
     ) -> Result<Scope, Failure> {
-        let result = self.read_scope(identity, name).await;
-        if result.is_err() {
+        let result = self.read_scope(identity, name, facade).await;
+        if result.as_ref().is_err_and(|e| e.1 != "compact_unavailable") {
             self.pool.invalidate(&identity.public_id, name);
         }
         result
     }
-    async fn read_scope(&self, identity: &AgentIdentity, name: &str) -> Result<Scope, Failure> {
+    async fn read_scope(
+        &self,
+        identity: &AgentIdentity,
+        name: &str,
+        facade: super::compact::Facade,
+    ) -> Result<Scope, Failure> {
         if self.stopped.is_cancelled() {
             return Err(Failure(503, "shutting_down"));
         }
@@ -73,6 +79,11 @@ impl Runtime {
         let row = rows.pop().ok_or(Failure(404, "connection_unavailable"))?;
         eligible(&row, &self.catalog.load())?;
         configuration(&row.registration)?;
+        if facade == super::compact::Facade::Compact
+            && !row.registration.mcp.as_ref().is_some_and(|c| c.compact)
+        {
+            return Err(Failure(404, "compact_unavailable"));
+        }
         Ok(Scope {
             owner: identity.public_id.clone(),
             connection: name.into(),

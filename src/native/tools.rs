@@ -55,8 +55,26 @@ pub(super) async fn call(
         .as_ref()
         .ok_or(error("tool_not_approved"))?;
     let audit = h.1.as_ref().ok_or(error("admission_audit_unavailable"))?;
-    let invocation = match invocation(h, request) {
-        Ok(call) => call,
+    let prepared = if h.0.facade == super::compact::Facade::Compact {
+        authority
+            .scoped(control.run(async {
+                let current = snapshot(h, authority, &control).await?;
+                super::compact::prepare(
+                    &h.0,
+                    &current,
+                    &request.name,
+                    Value::Object(request.arguments.unwrap_or_default()),
+                    &control,
+                )
+            }))
+            .await
+            .map_err(|e| error(e.0))
+    } else {
+        invocation(h, request).map(super::compact::Prepared::Invoke)
+    };
+    let invocation = match prepared {
+        Ok(super::compact::Prepared::Local(result)) => return response(result),
+        Ok(super::compact::Prepared::Invoke(call)) => call,
         Err(e) => {
             denied(h, authority, &control, audit, &e).await?;
             return Err(e);
@@ -66,6 +84,9 @@ pub(super) async fn call(
         .dispatch(invocation, control, audit)
         .await
         .map_err(|e| error(e.0))?;
+    response(result)
+}
+fn response(result: Value) -> Result<CallToolResponse, ErrorData> {
     let result: CallToolResult =
         serde_json::from_value(result).map_err(|_| error("tool_outcome_unknown"))?;
     Ok(result.into())
@@ -76,6 +97,18 @@ async fn list_current(
     authority: &authority::runtime::Runtime,
     control: &Control,
 ) -> authority::Result<Vec<Value>> {
+    let current = snapshot(h, authority, control).await?;
+    if h.0.facade == super::compact::Facade::Compact {
+        super::compact::list(&h.0, &current)
+    } else {
+        h.0.list(&current)
+    }
+}
+async fn snapshot(
+    h: &Handler,
+    authority: &authority::runtime::Runtime,
+    control: &Control,
+) -> authority::Result<authority::effective::Snapshot> {
     h.0.current()
         .await
         .map_err(|_| authority::Error("authority_changed"))?;
@@ -85,7 +118,7 @@ async fn list_current(
         .await?;
     tx.commit().await?;
     control.check()?;
-    h.0.list(&current)
+    Ok(current)
 }
 
 fn invocation(h: &Handler, request: CallToolRequestParams) -> Result<Invocation, ErrorData> {
@@ -117,11 +150,7 @@ async fn denied(
         .as_ref()
         .and_then(|d| d["code"].as_str())
         .unwrap_or("");
-    let reason = if code == "tools_list_required" {
-        "tools_list_required"
-    } else {
-        "tool_not_approved"
-    };
+    let reason = authority::diagnostic_event::safe_code(code);
     let mut trace = authority::diagnostics::Trace::new(&h.0.identity.public_id, &h.0.name)
         .map_err(|e| error(e.0))?;
     let _ = authority

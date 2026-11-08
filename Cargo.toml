@@ -91,3 +91,8 @@ s3-disconnect-proof = []
 name = "native_dispatch_ownership_test"
 path = "tests/native_dispatch_ownership_test.rs"
 required-features = ["s3-disconnect-proof"]
+
+[[test]]
+name = "native_compact_ownership_test"
+path = "tests/native_compact_ownership_test.rs"
+required-features = ["s3-disconnect-proof"]

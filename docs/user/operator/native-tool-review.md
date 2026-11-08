@@ -12,6 +12,12 @@ operator credential/admin socket. Only enabled, fully activated **manual**
 disabled; this interface cannot activate or edit them. No provider consent,
 identity verification or external readiness is inferred.
 
+Authenticated [`/skill`](../agent-integration/skill-reference.md) now preserves
+that protocol/path distinction. Its connection table is not a tool grant or
+source-health check. Guidance GETs do not observe or repair an upstream; operators
+use the explicit read/observe/review/grant commands below. Consumers receive only
+their own Locksmith identity and callable public schemas, never custody inputs.
+
 ## Select an account and trust
 
 Use an exact agent public ID. Select None deliberately:

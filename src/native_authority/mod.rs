@@ -44,7 +44,7 @@ mod dispatch_audit;
 
 pub mod protected;
 
-mod diagnostic_event;
+pub(crate) mod diagnostic_event;
 pub mod diagnostics;
 
 mod readiness;
