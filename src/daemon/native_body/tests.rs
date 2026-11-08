@@ -3,6 +3,8 @@ mod fixture;
 use fixture::Fixture;
 use std::{sync::atomic::Ordering::SeqCst, time::Duration};
 
+const DRAIN: Duration = Duration::from_secs(2);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn uds_all_three_write_bodies_drop_before_forced_daemon_return() {
     for (method, path) in routes() {
@@ -28,7 +30,10 @@ fn routes() -> [(&'static str, &'static str); 3] {
 async fn journey(tls: bool, method: &str, path: &str) {
     let mut f = Fixture::new(tls);
     let config = f.config.take().expect("fixture config consumed once");
-    let (coord, mut daemon) = super::run_with_drain_window(config, Duration::from_millis(1)).await;
+    // The held listener never completes, so the drain always times out; the
+    // window only has to outlast the listener reaching its hold. With 1 ms a
+    // slow runner aborted the listener before the hold and `forced` stayed 0.
+    let (coord, mut daemon) = super::run_with_drain_window(config, DRAIN).await;
     let ready = f.ready().await;
     let (mut client, bytes) = f.request(path, method);
     let _ = bytes.send(Ok(bytes::Bytes::from_static(b"{"))).await;
