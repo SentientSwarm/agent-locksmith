@@ -42,9 +42,14 @@ pub async fn prepare(script: &str) -> Result<(Setup, process::Guard), Error> {
     if std::env::var_os("LOCKSMITH_TEST_CONTROLLED_OAUTH").is_some() {
         let p = crate::controlled::profile(s.f._dir.path(), port);
         crate::controlled::configure(&s, &p).await;
+        s.rt = crate::controlled::runtime(&s, p.clone(), crate::controlled::key()).await;
+        if std::env::var_os("LOCKSMITH_TEST_DEFINITION_ACTIVATION").is_some() {
+            crate::promotion::prepare(&mut s, "oauth_provider").await;
+        }
         crate::controlled::insert(&s, &p, &crate::controlled::key(), "x", "owner").await;
-        s.rt = crate::controlled::runtime(&s, p, crate::controlled::key()).await;
         crate::controlled::select(&s).await;
+    } else if let Ok(mode) = std::env::var("LOCKSMITH_TEST_DEFINITION_ACTIVATION") {
+        crate::promotion::prepare(&mut s, if mode == "bearer" { "bearer" } else { "none" }).await;
     }
     approve(&s).await?;
     Ok((s, receiver))

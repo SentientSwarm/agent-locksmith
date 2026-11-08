@@ -57,7 +57,9 @@ are supplied through your existing operator client):
 {"description":"Controlled identity twin","upstream":"https://127.0.0.1:19443/mcp/readonly","egress":"direct","auth":{"kind":"oauth_pkce","client_id":"fixture-client","redirect_uri":"https://127.0.0.1:19444/oauth/callback","scopes":["read"],"auth_url":"https://127.0.0.1:19443/authorize","token_url":"https://127.0.0.1:19443/token"}}
 ```
 
-The profile must exactly match that registration. Definitions remain unsupported.
+The profile must exactly match that registration. A [promoted local customer
+pin](integration-definitions.md) instead requires an oauth_provider/read declaration
+and explicit binding to this configured profile ID/digest.
 The HTTP registration may remain disabled. Enabled manual native MCP registrations
 also support this controlled profile under [native OAuth setup](native-oauth.md);
 consent alone still creates no agent authority. Labels,
@@ -142,8 +144,11 @@ locksmith --format json oauth refresh twin --label reader --if-match REVISION
 The API is POST `/admin/operator/tools/twin/oauth/accounts/reader/refresh`, with
 `If-Match: REVISION` and an **empty body**. Missing revision is 428, stale revision
 is 409, and nonempty bodies refuse with 400. Wrong owner/kind/missing account is 404.
-The CLI does not open a browser or change agent authority. Repeated use of an old
-revision does not send another token request.
+The CLI opens no browser and creates no new agent grant. Pending and token-version
+changes invalidate existing native authority: [native repair](native-oauth.md)
+requires reobserve/review/regrant and fresh sessions; reconnect additionally
+requires reselection. Repeated use of an old revision does not send another token
+request.
 
 Status adds `token_version`, `refresh_pending`, `reconnect_required`,
 `refresh_available` and nullable `refresh_unavailable_reason`. Reasons in order
@@ -227,8 +232,8 @@ Legacy `oauth list` hides controlled rows. Legacy status/revoke/bootstrap refuse
 those rows with `oauth_kind_unsupported`; use the new owner-bound commands.
 Legacy proxy and legacy refresh paths refuse this kind before token use, including
 when an agent previously selected the absent label. Native use requires the
-separate [owner-bound selection and finite review](native-oauth.md); definition
-activation remains unsupported. Identity calls are internal verification traffic,
+separate [owner-bound selection and finite review](native-oauth.md). Local definition
+pins additionally require [dedicated activation](integration-definitions.md). Identity calls are internal verification traffic,
 not useful agent dispatch. Existing legacy accounts retain their interfaces.
 
 A failure uses static reasons, not provider text. Transport failures whose details

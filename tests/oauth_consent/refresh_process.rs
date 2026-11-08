@@ -491,7 +491,7 @@ pub async fn upgrade() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        17
+        18
     );
     let rows = sqlx::query("SELECT * FROM oauth_sessions")
         .fetch_all(&pool)
@@ -534,6 +534,6 @@ pub async fn upgrade() {
     f.stop();
     t.stop();
     println!(
-        "actual schema-{prior_schema} CLI+daemon connected account -> schema-17 unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined"
+        "actual schema-{prior_schema} CLI+daemon connected account -> schema-18 unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined"
     );
 }

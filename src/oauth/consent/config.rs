@@ -58,6 +58,16 @@ impl Config {
     }
 }
 impl Profile {
+    pub(crate) fn auth_spec(&self) -> crate::registrations::AuthSpec {
+        crate::registrations::AuthSpec::OauthPkce {
+            client_id: self.client_id.clone(),
+            redirect_uri: self.redirect_uri.clone(),
+            scopes: vec!["read".into()],
+            auth_url: self.authorization_endpoint.clone(),
+            token_url: self.token_endpoint.clone(),
+            session_label: None,
+        }
+    }
     pub fn digest(&self) -> Result<String> {
         Ok(digest(
             &serde_json::to_vec(self).map_err(|_| Error("invalid_profile"))?,

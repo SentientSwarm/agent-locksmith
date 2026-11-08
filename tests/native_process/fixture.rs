@@ -74,6 +74,9 @@ impl Fixture {
         self.start_with_key(binary, None).await;
     }
     pub async fn start_with_key(&mut self, binary: &str, key: Option<&str>) {
+        self.start_with_keys(binary, key, None).await;
+    }
+    pub async fn start_with_keys(&mut self, binary: &str, key: Option<&str>, oauth: Option<&str>) {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(self.path().join("admin.sock"));
         let log = std::fs::File::create(self.path().join("daemon.log")).unwrap();
@@ -84,6 +87,9 @@ impl Fixture {
         c.args(["--config"]).arg(self.path().join("config.yaml"));
         if let Some(key) = key {
             c.env("LOCKSMITH_CREDENTIAL_SEALING_KEY", key);
+        }
+        if let Some(key) = oauth {
+            c.env("LOCKSMITH_OAUTH_SEALING_KEY", key);
         }
         c.env("RUST_LOG", "agent_locksmith=info,rmcp=trace");
         c.stdout(Stdio::from(log.try_clone().unwrap()))

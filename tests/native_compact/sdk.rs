@@ -51,7 +51,7 @@ async fn both_sdks_standard_compact_x_shared_x_y_none_and_all_protected() {
     f.stop();
     up.stop();
 }
-async fn exercise(f: &Fixture, a: &Value, account: &str, all: bool) {
+pub(super) async fn exercise(f: &Fixture, a: &Value, account: &str, all: bool) {
     let id = a["public_id"].as_str().unwrap();
     let context = if all {
         json!({"workspace":"fixed","key":"record"})

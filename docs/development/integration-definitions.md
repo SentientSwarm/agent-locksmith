@@ -1,8 +1,8 @@
-# Offline definition contract v1
+# Definition authoring and customer activation
 
 The [operator workflow](../user/operator/integration-definitions.md) is the
-consumer entry point. This is the independent authoring portion of AGENT-203,
-not completed live onboarding. Definition data is never executable authority.
+consumer entry point. This covers offline authoring and deliberate local customer activation,
+not accepted hosted-provider onboarding. Definition data is never executable authority.
 
 ## Strict input
 
@@ -52,6 +52,7 @@ body-read deadline. There is no new agent-facing authoring endpoint.
 | PUT `/integration-definitions/{id}/revisions/{revision}` | Definition matching path; first201, identical repeat200, conflict409 |
 | GET same | Exact canonical definition/digest and truthful authoring status; absent404 |
 | POST `/tools/{name}/from-definition` | Instance object below; new201, existing name409, unknown exact revision404, invalid400 |
+| PUT `/tools/{name}/definition-activation` | Current `If-Match`; strict enabled/compact/profile body or disabled-only body;200/400/404/409/428/503 |
 
 ```json
 {
@@ -81,8 +82,8 @@ Instances pin id/revision/digest/profile in typed `mcp.definition`. Missing pins
 are omitted from serialization, preserving existing manual-native fingerprints.
 The pin participates in full registration equality and0011 config invalidation.
 An insertion trigger verifies stored definition/profile/digest and disabled,
-operator-owned native/None shape; NULL/malformed pins fail closed. Updates of
-pinned rows or adding pins by general UPDATE are refused. Deletion retains the
+operator-owned native/None shape; NULL/malformed pins fail closed. Generic updates of pinned rows and adding pins by UPDATE remain refused.
+Migration 0018 permits only the dedicated constrained activation transitions. Deletion retains the
 existing transactional name/authority cleanup. No second authority store exists.
 Creation avoids runtime resolver refresh because a disabled row needs no activation.
 
@@ -91,6 +92,40 @@ custody plus auth attachment in one transaction. A concurrent pinned replacement
 cannot leave an unattached sealed row after refusal; a failed attachment rolls
 back both writes. This is a narrow extension of existing custody, not OAuth205
 refresh durability or rollback of already submitted effects.
+
+## Activation transaction
+
+The [public activation and repair workflow](../user/operator/integration-definitions.md#deliberate-customer-activation)
+specifies bodies and truthful state. GET tool reads the row and registration
+instance/revision together and adds `definition_control`: opaque 64-hex `revision`,
+`phase` disabled/promoted, nullable `selection_kind` none/stored_bearer/controlled_oauth,
+nullable `oauth_profile_id`, and `profile_match` not_applicable/matches/changed/unavailable.
+The revision includes instance identity, preventing name/revision ABA.
+
+A separate ten-second operation budget includes BEGIN IMMEDIATE, exact CAS,
+immutable declaration/digest recheck, saved transition and runtime synchronization.
+The server writes only auth/mcp/disabled/update time. Real transitions reuse
+0011/0014 full authority invalidation. A current exact-state retry performs no
+UPDATE, preserving revision and repaired authority. Submitted COMMIT timeout can
+be uncertain; a committed resync failure reports saved/pending rather than rollback.
+
+Optional typed `mcp.definition_activation` is omitted on manual/disabled rows:
+`{"kind":"none"}`, `{"kind":"stored_bearer"}`, or
+`{"kind":"controlled_oauth","profile_id":"configured","profile_digest":"loaded-digest"}`.
+Only local pins with the exact supported declared mechanism/scopes qualify.
+One transaction-local eligibility helper covers generic/live/stored selections,
+native source/final admission, controlled selection and consent/refresh. Sealed
+value ingestion rolls back custody and selection together on refusal. Controlled
+consumers also retain owner, account incarnation/version/pending/expiry/profile
+and loaded CA-root identity. Materialization decrypts access only, not optional
+refresh. No parallel dispatcher, default account or implicit grant exists.
+
+Migration 0018 replaces the blanket pin update trigger with constrained legal
+transitions and selection constraints; manual metadata injection, pin stripping
+and generic reauthoring remain forbidden. It rebuilds no custody table and
+rewrites no token/highwater. SQL validates stored relationships, while runtime
+configuration/trust and current authority remain application checks. This is not
+a guarantee against a hostile direct database writer.
 
 ## Verification
 
@@ -112,3 +147,16 @@ Full locked root/crate checks and existing HTTP/native/Python/prior/adversarial
 checks remain required at the candidate. QA/reviewer observations are separate
 from builder evidence. Full203, live prerequisites, G0/G1 and broader release
 acceptance remain pending; this stage does not authorize publication.
+
+Current schema 17→18 verification uses the separately named ignored
+`definition_schema17_prior_refusal_reopen` case, with a retained schema-17 CLI
+and daemon in `LOCKSMITH_DEFINITION_PRIOR_CLI`/`LOCKSMITH_DEFINITION_PRIOR_DAEMON`
+and their source revision in `LOCKSMITH_DEFINITION_PRIOR_REVISION`.
+The earlier 11→12 probe above remains historical, not current evidence. Current
+`native_compact_sdk_test` uses setup-only promotion plus the existing Rust and
+Python assertions for None/bearer/controlled accounts on both facades. The
+controlled SDK account is synthetic sealed setup, distinct from actual controlled
+consent process checks. `LOCKSMITH_TEST_DEFINITION_ACTIVATION=1` (or `bearer`)
+adapts original S3 setup; combine with `LOCKSMITH_TEST_CONTROLLED_OAUTH=1` for
+controlled pins. Original disconnect assertions remain unchanged. Exact commands,
+source revisions and independent outcomes belong to delivery receipts.

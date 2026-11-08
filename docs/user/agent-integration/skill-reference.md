@@ -5,6 +5,11 @@ Locksmith identity, then use authenticated JSON discovery for machine operations
 Locksmith installs no tools into a consumer runtime. A listed connection is not
 a callable native tool, a healthy account or verified provider identity.
 
+The [customer handoff journey](../operator/customer-mcp-journey.md) connects
+operator setup to these discovery and repair responsibilities. An ordinary
+agent gets its own identity/listener/trust and semantic task; connection names,
+callable names and arguments come from current discovery and full schemas.
+
 ## Authentication and caching
 
 | Request | Result | Cache |

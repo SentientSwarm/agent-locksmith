@@ -9,9 +9,10 @@ including an empty list. New contracts need a new session. See the
 [agent workflow](../agent-integration/native-mcp.md).
 
 Start with [native connection/agent setup](native-mcp.md) and the existing
-operator credential/admin socket. Only enabled, fully activated **manual**
-`mcp_streamable_http` tool connections are eligible. Definition pins remain
-disabled; this interface cannot activate or edit them. No provider consent,
+operator credential/admin socket. Eligible `mcp_streamable_http` tool connections are enabled and fully activated:
+either manual connections or supported local customer pins promoted through the
+[dedicated activation workflow](integration-definitions.md). This review interface
+cannot itself activate or edit a pin. No provider consent,
 identity verification or external readiness is inferred.
 
 Authenticated [`/skill`](../agent-integration/skill-reference.md) now preserves
@@ -188,3 +189,7 @@ required body `source` and observation `generation`, plus grant-set `revision`
 for replacement. HTTP `If-Match` is not the interface. Echo exact returned
 preconditions; an absent/null field is not a wildcard or alternate selector.
 This staged route shape does not add OAuth or definition activation.
+
+Current customer activation adds schema 18 and a whole-daemon prior refusal; see
+[definition upgrade/recovery](../changes/integration-definitions.md). Earlier
+schema 14/17 statements above describe their original increments.

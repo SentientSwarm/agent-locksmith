@@ -1,39 +1,46 @@
-# Integration definition authoring and upgrade
+# Integration definition activation and upgrade
 
-Operators can import strict immutable definitions and create disabled native
-connections pinned to an exact revision. API and CLI use the same authenticated
-backend. [Start here](../operator/integration-definitions.md). This additive
-feature is included in the existing planned3.0.0; it causes no independent
-version bump, tag, deployment or publication.
+Operators can import immutable definitions, create disabled exact pins and
+explicitly activate supported local customer profiles. API and CLI share the
+same authenticated backend. [Start here](../operator/integration-definitions.md).
+This is part of planned3.0.0, with no independent tag or publication.
 
-Migration0012 runs before listeners, adds definition storage and pin guards,
-and preserves existing manual HTTP/native registrations, account custody,
-selections, grants, revocations and receipts. It imports no definitions and
-creates no account or authority. Existing native MCP config files remain valid;
-new optional `mcp.definition` is server-managed through create-from-definition.
+Migration 0012 originally added immutable definition storage and offline pins.
+Current migration 0018 permits constrained local None/live StoredBearer/controlled
+OAuth promotion and matching explicit selections. It imports nothing, creates
+no account/grant/selection and rewrites no sealed custody or highwater. Existing
+manual HTTP/native paths retain their behavior. `mcp.definition_activation` is
+server-managed; general PUT/enable/credential/seed writers cannot set it.
 
-Stop the daemon and back up the whole SQLite database before upgrade, following
-[native backup/recovery](native-mcp.md). Preserve both old binaries and the
-matching pre-upgrade backup. An accepted schema11 binary refuses schema12 before
-opening listeners. Rollback means stopping the new daemon and restoring that
-complete backup with its matching binaries. Do not delete migration records or
-manually strip pins to make an old executable open upgraded data.
+Back up the complete database and retain matching old binaries before upgrading.
+Follow [sealed-state recovery](../operator/sealed-state-recovery.md), including
+no-OAuth-key quarantine and clearing selections for **all** owners (revoked
+owners included) before a recovered daemon can replay provider refresh.
 
-After restart, inspect `locksmith integration get ID --revision N` and
-`locksmith tool get NAME`. Saved/disabled is expected; readiness does not certify
-any provider or selected credential. General enable, PUT and credential edits
-of these derived rows are intentionally refused pending promotion contracts.
-Use another name or deliberately delete/recreate; old authority is not revived.
-A new definition revision never changes existing instances.
+A schema 17 daemon refuses schema 18 before **all** listeners,
+including unrelated HTTP services. The new strict configuration field is also
+incompatible with older parsers. Rollback requires stopping the successor and
+restoring an untouched whole prior snapshot with matching binaries; reupgrade
+is the other supported route. Never delete migration rows or strip activation
+metadata to force an old executable to open current data. The older 11→12 refusal
+is retained historical evidence, not this migration's runtime proof.
 
-Verification covers strict imports, immutable collisions, exact pins, no partial
-custody writes, actual disposable CLI/daemon operation with zero receiving TCP
-connections, persistence and actual prior-binary refusal. Exact independent
-QA/reviewer acceptance is tracked separately. Full AGENT-203 remains pending
-195/196/200, with194 setup also unaccepted; consent, durable refresh, approved
-tools, useful dispatch, live/client UAT and release gates remain outstanding.
+Inspect `tool get NAME` after startup. Disabled pins remain disabled; promotion
+is deliberate and cannot be inferred from candidate/fixture verification labels.
+Every real activation/deactivation changes configuration authority. Rebuild ACL,
+selection, observation, finite review/grants and sessions afterward. Exact-state
+current-CAS retries only resync runtime. Controlled profile/token/root changes
+retain their separate repair requirements. A new definition revision does not
+rewrite existing pins. Deactivation retains owned sealed accounts and does not
+claim remote revocation.
 
-The public source projection keeps root2.8.0 and preserves current HTTP/native
+Full AGENT-203, provider AGENT-194/195/196/200, integrated AGENT-208 and release
+gates remain open.
+The local customer matrix and independent evidence must be attributed to their
+actual candidate and command; historical manual SDK results are not proof of
+current definition activation.
+
+The public source projection keeps root 2.8.0 and preserves current HTTP/native
 prerequisites. Its new exact-candidate process/consumer/prior-binary checks and
 Linux CI remain receiving work; historical offline acceptance is not a current
 runtime result or full AGENT-203 completion.

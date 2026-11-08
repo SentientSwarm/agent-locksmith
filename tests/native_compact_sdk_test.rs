@@ -17,3 +17,6 @@ mod sdk;
 mod support;
 #[path = "native_process/wire.rs"]
 mod wire;
+
+#[path = "native_compact/promoted.rs"]
+mod promoted;

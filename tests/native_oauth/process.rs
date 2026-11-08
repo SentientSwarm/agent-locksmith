@@ -165,8 +165,7 @@ pub async fn journey() {
     let t = Twin::start(&f);
     let port = configure(&f, &t);
     start(&mut f).await;
-    let auth = registration(&f, &t, port).await;
-    assert_eq!(request(&f,"PUT","/admin/operator/tools/fixture",Some(json!({"upstream":t.url("/mcp/readonly"),"auth":auth,"egress":"direct","protocol":"mcp_streamable_http","mcp":{"protocol_version":"2025-11-25","allow_private_destination":true,"compact":true}}))).await.0,200);
+    native_registration(&f, &t, port).await;
     let created = connect(&f, "native");
     assert_eq!(
         f.http
@@ -306,8 +305,7 @@ pub async fn races() {
         let t = Twin::start(&f);
         let port = configure(&f, &t);
         start(&mut f).await;
-        let auth = registration(&f, &t, port).await;
-        assert_eq!(request(&f,"PUT","/admin/operator/tools/fixture",Some(json!({"upstream":t.url("/mcp/readonly"),"auth":auth,"egress":"direct","protocol":"mcp_streamable_http","mcp":{"protocol_version":"2025-11-25","allow_private_destination":true,"compact":true}}))).await.0,200);
+        native_registration(&f, &t, port).await;
         let created = connect(&f, "native");
         assert_eq!(
             f.http
@@ -387,4 +385,48 @@ pub async fn races() {
             "controlled native held initialization {mode}: zero committed admissions / zero TOOL; joined"
         );
     }
+}
+
+async fn native_registration(f: &Fixture, t: &Twin, port: u16) {
+    if std::env::var_os("LOCKSMITH_TEST_DEFINITION_ACTIVATION").is_none() {
+        let auth = registration(f, t, port).await;
+        assert_eq!(request(f,"PUT","/admin/operator/tools/fixture",Some(json!({"upstream":t.url("/mcp/readonly"),"auth":auth,"egress":"direct","protocol":"mcp_streamable_http","mcp":{"protocol_version":"2025-11-25","allow_private_destination":true,"compact":true}}))).await.0,200);
+        return;
+    }
+    let path = f.path().join("definition.json");
+    std::fs::write(
+        &path,
+        include_str!("../../definitions/customer-controlled.example.json"),
+    )
+    .unwrap();
+    f.op(&["integration", "import", "--file", path.to_str().unwrap()]);
+    f.op(&[
+        "tool",
+        "from-definition",
+        "fixture",
+        "--definition",
+        "local.customer-controlled",
+        "--revision",
+        "1",
+        "--auth-profile",
+        "controlled",
+        "--upstream",
+        &t.url("/mcp/readonly"),
+        "--allow-private-destination",
+    ]);
+    let v = f.op(&["tool", "get", "fixture"]);
+    f.op(&[
+        "tool",
+        "activate-definition",
+        "fixture",
+        "--if-match",
+        v["definition_control"]["revision"].as_str().unwrap(),
+        "--compact",
+        "--oauth-profile",
+        "fixture",
+    ]);
+    assert!(
+        !f.path().join("counts.json").exists(),
+        "activation must cause zero provider arrivals"
+    );
 }

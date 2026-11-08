@@ -46,6 +46,9 @@ pub async fn current(
         .account
         .as_ref()
         .ok_or(Error("explicit_selection_required"))?;
+    crate::definitions::eligibility::selected(connection, &admission.registration, Some(auth))
+        .await
+        .map_err(|_| Error("definition_unavailable"))?;
     let controlled = if matches!(auth, AuthSpec::ControlledOauth { .. }) {
         Some(
             consent
@@ -157,7 +160,6 @@ impl Current {
 fn active(admission: &admission::HttpAdmission, catalog: &Catalog) -> Result<()> {
     if !admission.agent_active
         || admission.grant.is_err()
-        || admission.registration.definition_pinned()
         || admission::activation(&admission.registration, Some(catalog)) != "active"
     {
         return Err(Error("source_unavailable"));

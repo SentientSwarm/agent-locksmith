@@ -9,6 +9,7 @@ fn config() -> McpConfig {
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,
         definition: None,
+        definition_activation: None,
     }
 }
 fn valid(
@@ -77,6 +78,7 @@ fn private_destination_opt_in_retains_self_endpoint_refusal() {
         compact: false,
         allow_private_destination: true,
         definition: None,
+        definition_activation: None,
         ..config()
     };
     assert!(valid(

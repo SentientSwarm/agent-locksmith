@@ -6,12 +6,16 @@ use axum::{
     extract::{Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde_json::{Value, json};
 
 pub fn router() -> Router<AdminRegistrationsState> {
     Router::new()
+        .route(
+            "/tools/{name}/definition-activation",
+            put(super::promotion::activate),
+        )
         .route(
             "/integration-definitions/{id}/revisions/{revision}",
             get(read).put(import),
@@ -76,11 +80,20 @@ pub(super) async fn body(request: Request) -> Result<Vec<u8>, Error> {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        if matches!(self, Self::SavedUnavailable) {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"saved":true,"activation":"pending","error":{"code":"definition_unavailable","message":self.to_string()}}))).into_response();
+        }
         let (status, code) = match self {
+            Self::SavedUnavailable => unreachable!(),
+            Self::Precondition => (
+                StatusCode::PRECONDITION_REQUIRED,
+                "definition_precondition_required",
+            ),
+            Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "definition_unavailable"),
             Self::Invalid => (StatusCode::BAD_REQUEST, "definition_invalid"),
             Self::Conflict => (StatusCode::CONFLICT, "definition_conflict"),
             Self::NotFound => (StatusCode::NOT_FOUND, "definition_not_found"),
-            Self::Backend => (StatusCode::INTERNAL_SERVER_ERROR, "definition_unavailable"),
+            Self::Backend => (StatusCode::SERVICE_UNAVAILABLE, "definition_unavailable"),
         };
         (
             status,

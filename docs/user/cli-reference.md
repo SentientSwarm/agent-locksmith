@@ -40,8 +40,19 @@ Existing command syntax/help and authentication are unchanged.
 `tool from-definition NAME --definition ID --revision N --auth-profile ID
 --upstream URL [--allow-private-destination]` creates a disabled pinned native
 connection. No provider request, account selection, credential or grant occurs.
-General edits/enable remain refused for these derived instances. See
-[complete schema, examples and limits](operator/integration-definitions.md).
+General edits/enable remain refused for these derived instances.
+
+`tool activate-definition NAME --if-match REVISION [--compact]
+[--oauth-profile PROFILE_ID]` deliberately promotes a supported local pin; read
+the opaque `definition_control.revision` from `tool get NAME --format json`.
+Only controlled OAuth declarations use the explicit trusted profile option.
+`tool deactivate-definition NAME --if-match REVISION` disables a pin and clears
+its local authority while retaining sealed accounts. Both commands accept
+`--format json`. A stale revision refuses; use a fresh GET after conflicts or an
+uncertain outcome. An exact current-state retry only reconciles the runtime
+catalog. Activation alone grants nothing: repair ACL, explicit account selection,
+observation, reviews and finite grants, then use fresh sessions. See
+[complete schema, examples and repair limits](operator/integration-definitions.md).
 
 
 ### `bootstrap-operator` — mint operator credential (offline)

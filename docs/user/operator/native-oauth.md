@@ -1,7 +1,8 @@
 # Controlled OAuth accounts for native MCP
 
 This local profile connects a controlled HTTPS twin. It does not establish hosted
-Linear/Slack support or activate definition-derived registrations. Start with
+Linear/Slack support. Supported [local definition pins](integration-definitions.md)
+require separate deliberate activation. Start with
 [controlled consent](oauth-consent.md). Its strict workspace and user checks
 verify the configured twin identities. `connected_unbound` describes sealed
 account custody, not current token usability or agent authority.
@@ -10,7 +11,8 @@ Configure a manual `mcp_streamable_http` tool with direct HTTPS egress, the exac
 controlled profile resource and OAuth PKCE template, and valid `mcp` configuration.
 The profile resource remains `/mcp/readonly`; its configured authorization/token
 endpoints, client generation, S256, redirect, read scope and expected identities
-remain unchanged. Definitions stay disabled. Set `compact: true` before granting
+remain unchanged. Promoted customer pins must declare oauth_provider/read and bind this exact
+configured profile ID/digest. Manual registrations set `compact: true` before granting
 connection access if the compact facade is wanted. Changing protocol, upstream,
 egress or MCP configuration removes selections, connection allowlists/bootstrap
 scope and finite authority; explicitly repair them afterward.
@@ -33,7 +35,7 @@ An agent uses the stored delegation; its own public ID is not the operator owner
 Generic credential listing omits another operator's controlled selections.
 Administrators may still remove access with the existing revoke/unset controls.
 
-Selection requires an active agent, its connection ACL, an enabled manual native
+Selection requires an active agent, its connection ACL, an enabled manual native or valid promoted customer
 registration, an owned account, matching incarnation/profile/identity and a usable
 current token state. It performs no provider request and decrypts no tokens. It
 returns `source`, the selection stamp, `requires_observation: true` and
@@ -110,3 +112,7 @@ the existing limited policy. This does not reconstruct its original registration
 instance or prove hosted provider adoption. None/StoredBearer native selection
 and legacy HTTP account behavior remain separate supported paths. Controlled
 selections are ineligible for legacy HTTP and background refresh.
+
+Current customer activation adds schema 18 and a whole-daemon prior refusal; see
+[definition upgrade/recovery](../changes/integration-definitions.md). Earlier
+schema 14/17 statements above describe their original increments.

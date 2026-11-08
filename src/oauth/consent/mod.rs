@@ -89,7 +89,7 @@ impl Runtime {
             .bind(now()).execute(&rt.pool).await?;
         Ok(rt)
     }
-    fn profile(&self, id: &str) -> Result<&config::Profile> {
+    pub(crate) fn profile(&self, id: &str) -> Result<&config::Profile> {
         self.config
             .profiles
             .iter()
