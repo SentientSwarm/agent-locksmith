@@ -209,6 +209,7 @@ src/
   migrations.rs            embeds migrations/*.sql; open_and_migrate(path) → SqlitePool
   client_pool.rs           reqwest client cache keyed by egress mode + timeouts
   cli/                     locksmith CLI: client.rs (UDS/HTTPS), commands/{agent,audit,bootstrap,bootstrap_operator,export,infra,model,mtls,oauth,registration,self_svc,tool}.rs
+  definitions/             Strict offline definition schema/API; immutable revisions and disabled pins
   registrations/           Phase E: kind enum, AuthSpec, validators, RegistrationRepository, Catalog cache, seed_loader, legacy_bootstrap, admin api
   oauth/                   Phase F + G + G2: SealingKey (AES-GCM), OauthSessionRepository (label-aware + account_id), refresh task + RefreshLockMap, jwt.rs (chatgpt_account_id extraction), admin handlers
   codex_body.rs            Phase G3: pure-functional fixup() for codex /responses request bodies — inject store:false / stream:true / instructions, 1 MiB cap

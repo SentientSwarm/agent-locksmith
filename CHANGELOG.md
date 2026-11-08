@@ -4,6 +4,10 @@
 
 ### Internal
 
+- Make native ingress/body deadline tests use explicit pending/body barriers and
+  controlled Tokio time, with a nondefault five-second request budget for real
+  authenticated recovery on the same runtime. Production deadlines and authority are unchanged.
+
 - Box finished internal OAuth bootstrap error responses for current-stable
   Clippy; handlers return the same responses and retain conditional cleanup.
 
@@ -18,6 +22,20 @@
   current-stable Clippy. Existing explicit labels and non-OAuth sources retain
   their behavior.
 
+
+### Integration definition authoring
+
+- Add strict immutable definition import/get and create-only disabled native
+  instances through matching operator CLI/API. Pins include exact revision,
+  content digest and descriptive auth profile; no provider request, credential,
+  account selection or authority is created. Candidate reference/customer
+  examples use the same validation. See [operator workflow](docs/user/operator/integration-definitions.md).
+- Migration0012 preserves existing state and makes older binaries refuse the
+  upgraded database. Derived rows reject general edits/enable; credential
+  attachment and sealed storage now commit together, including rollback on
+  pinned replacement. See [upgrade and limits](docs/user/changes/integration-definitions.md).
+  This is independent AGENT-203 authoring only: full203 and live195/196/200,
+  setup194, G0/G1 and broader release gates remain pending. No version bump.
 
 ### Native MCP lifecycle
 

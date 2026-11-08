@@ -1,8 +1,11 @@
 #[path = "native/fixture.rs"]
 mod fixture;
+use axum::http::StatusCode;
 use axum::{body::Body, http::Request};
 use fixture::*;
+use futures_util::poll;
 use serde_json::{Value, json};
+use std::{pin::pin, task::Poll, time::Duration};
 use tower::ServiceExt;
 
 fn request(f: &Fixture, body: String) -> Request<Body> {
@@ -18,33 +21,49 @@ fn request(f: &Fixture, body: String) -> Request<Body> {
 }
 #[tokio::test]
 async fn ingress_limit_and_deadline_include_authentication_pool_wait() {
-    let f = Fixture::new("mcp:\n  ingress: 1\n  request_ms: 150\n").await;
+    let f = Fixture::new("mcp:\n  ingress: 1\n  request_ms: 5000\n").await;
     let mut held = Vec::new();
     for _ in 0..5 {
         held.push(f.pool.acquire().await.unwrap());
     }
-    let app = f.app.clone();
-    let req = request(&f, init(0).to_string());
-    let pending = tokio::spawn(async move { app.oneshot(req).await.unwrap() });
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-    assert_eq!(
-        f.app
-            .clone()
-            .oneshot(request(&f, init(1).to_string()))
-            .await
-            .unwrap()
-            .status(),
-        429
-    );
-    assert_eq!(pending.await.unwrap().status(), 408);
+    expire_authentication_wait(&f).await;
     drop(held);
     assert_eq!(f.runtime.snapshot().workers_created, 0);
     let session = f.open().await;
-    drop(
+    assert_eq!(
+        rpc(f.call(&session, 1, "ping").await).await["result"],
+        json!({})
+    );
+    assert_eq!(
         f.request("/mcp/native", "DELETE", Value::Null, Some(&session))
-            .await,
+            .await
+            .status(),
+        202
     );
     released(&f).await;
+}
+async fn expire_authentication_wait(f: &Fixture) {
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    let deadline = start + Duration::from_secs(5);
+    let mut sentinel = pin!(tokio::time::sleep_until(deadline));
+    assert!(poll!(sentinel.as_mut()).is_pending());
+    let mut first = pin!(f.app.clone().oneshot(request(f, init(0).to_string())));
+    assert!(poll!(first.as_mut()).is_pending());
+    let mut competing = pin!(f.app.clone().oneshot(request(f, init(1).to_string())));
+    assert_eq!(
+        poll!(competing.as_mut()).map(|r| r.unwrap().status()),
+        Poll::Ready(StatusCode::TOO_MANY_REQUESTS)
+    );
+    tokio::time::advance(Duration::from_millis(4999)).await;
+    assert!(poll!(first.as_mut()).is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    sentinel.await;
+    let serviced = tokio::time::Instant::now();
+    assert!(serviced >= deadline && serviced <= deadline + Duration::from_millis(1));
+    let expired = poll!(first.as_mut()).map(|r| r.unwrap().status());
+    tokio::time::resume();
+    assert_eq!(expired, Poll::Ready(StatusCode::REQUEST_TIMEOUT));
 }
 #[tokio::test]
 async fn malformed_or_oversized_inputs_allocate_no_session() {

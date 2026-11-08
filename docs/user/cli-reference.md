@@ -22,6 +22,17 @@ The CLI also reads:
 
 ## Subcommands
 
+### `integration` and `tool from-definition` — offline authoring
+
+`integration import --file FILE` saves one strict immutable definition;
+`integration get ID --revision N` reads the exact revision.
+`tool from-definition NAME --definition ID --revision N --auth-profile ID
+--upstream URL [--allow-private-destination]` creates a disabled pinned native
+connection. No provider request, account selection, credential or grant occurs.
+General edits/enable remain refused for these derived instances. See
+[complete schema, examples and limits](operator/integration-definitions.md).
+
+
 ### `bootstrap-operator` — mint operator credential (offline)
 
 ```bash

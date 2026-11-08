@@ -7,8 +7,9 @@ no upstream MCP request and does not resolve an upstream credential. Connection
 access and an account selection do not approve any tool.
 
 Use [HTTP onboarding](connector-onboarding.md) for existing HTTP services.
-Native definition authoring, consent, finite tool review and dispatch are later
-work; this interface does not attest provider or per-account credential readiness.
+Offline [definition authoring](integration-definitions.md) creates disabled exact
+revision pins. Consent, finite tool review and dispatch remain later work; neither
+interface attests provider or per-account credential readiness.
 
 ## Before setup
 

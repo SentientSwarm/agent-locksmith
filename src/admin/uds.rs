@@ -170,6 +170,7 @@ fn build_registrations_admin_router(
             "/infra/{name}/credential",
             put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
         )
+        .merge(crate::definitions::api::router())
         .with_state(st)
 }
 

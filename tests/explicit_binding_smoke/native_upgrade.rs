@@ -9,7 +9,7 @@ pub async fn exercise() {
     let mut f = Fixture::new(&receiver.server.uri());
     let (agents, before) = prepare(&mut f, &receiver, &prior, &old_cli).await;
     f.start().await;
-    assert_eq!(sql(&f, "SELECT max(version) FROM _sqlx_migrations;"), "11");
+    assert_eq!(sql(&f, "SELECT max(version) FROM _sqlx_migrations;"), "12");
     assert_eq!(authority(&f), before);
     assert_eq!(
         sql(
@@ -29,7 +29,7 @@ pub async fn exercise() {
     refused(&f, &prior);
     restarted(f, &receiver, &agents, &before).await;
     println!(
-        "N1 upgrade10->11: HTTP X/X/Y, revoked identities/bootstrap, bindings and actual old receipt unchanged; no native rows; prior refuses before both listeners; restart works"
+        "N1 upgrade10->current: HTTP X/X/Y, revoked identities/bootstrap, bindings and actual old receipt unchanged; no native rows; prior refuses before both listeners; restart works"
     );
 }
 fn sql(f: &Fixture, query: &str) -> String {

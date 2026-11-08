@@ -29,3 +29,5 @@ pub(crate) mod legacy_admission;
 pub mod binding_migration;
 
 pub mod native;
+
+pub mod definitions;

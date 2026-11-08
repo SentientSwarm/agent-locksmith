@@ -30,6 +30,10 @@ middleware (`kind=infra`) is operator-only.
 
 ## Highlights (v2.8.0)
 
+- **Offline integration authoring** — strict immutable definitions and disabled
+  native instances pinned to exact revisions, with matching operator API/CLI.
+  No provider verification, credential, account selection or grant is implied.
+  See [authoring setup](docs/user/operator/integration-definitions.md).
 - **Native MCP lifecycle (N1)** — authenticated stateful2025-11-25 sessions,
   finite limits and safe migration. Tools remain unapproved: empty list, every
   call denied, no upstream MCP request. See [operator setup](docs/user/operator/native-mcp.md)

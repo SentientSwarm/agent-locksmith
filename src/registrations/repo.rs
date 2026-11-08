@@ -41,6 +41,10 @@ pub struct Registration {
 }
 
 impl Registration {
+    pub fn definition_pinned(&self) -> bool {
+        self.mcp.as_ref().is_some_and(|m| m.definition.is_some())
+    }
+
     /// Builder helper for tests + admin handlers — populates timestamps to
     /// "now" and lifecycle flags to operator-default (seed=false, disabled=false).
     pub fn new(
@@ -350,5 +354,11 @@ fn unix_now() -> i64 {
 }
 
 fn map_sqlx_err(e: sqlx::Error) -> RegistrationError {
-    RegistrationError::Backend(format!("sqlx: {e}"))
+    if e.as_database_error()
+        .is_some_and(|e| e.message() == "definition_pending")
+    {
+        RegistrationError::DefinitionPending
+    } else {
+        RegistrationError::Backend(format!("sqlx: {e}"))
+    }
 }
