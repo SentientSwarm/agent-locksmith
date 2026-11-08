@@ -9,10 +9,8 @@ dispatch for explicit None/live sealed-bearer selections, plus fixed context and
 truthful callable schemas. Ordinary HTTP forwarding cannot invoke a native
 registration. Use the current guides linked below for setup and authority.
 
-This public projection keeps the root at 2.8.0, with no per-issue version bump.
-Native provider consent, definition activation and broader schema mediation
-remain staged work. This local capability does not make 3.0.0 ready
-or authorize deployment, merging, tagging or publication.
+These changes ship in 3.0.0. Controlled OAuth accounts for native MCP and
+local definition activation have their own guides.
 
 ## Protocol-aware agent guidance (bounded AGENT-209)
 

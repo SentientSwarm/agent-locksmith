@@ -3,7 +3,7 @@
 Operators can import immutable definitions, create disabled exact pins and
 explicitly activate supported local customer profiles. API and CLI share the
 same authenticated backend. [Start here](../operator/integration-definitions.md).
-This is part of planned3.0.0, with no independent tag or publication.
+This ships in 3.0.0.
 
 Migration 0012 originally added immutable definition storage and offline pins.
 Current migration 0018 permits constrained local None/live StoredBearer/controlled
@@ -34,13 +34,11 @@ retain their separate repair requirements. A new definition revision does not
 rewrite existing pins. Deactivation retains owned sealed accounts and does not
 claim remote revocation.
 
-Full AGENT-203, provider AGENT-194/195/196/200, integrated AGENT-208 and release
-gates remain open.
+Full AGENT-203, provider AGENT-194/195/196/200 and integrated AGENT-208
+acceptance remain open.
 The local customer matrix and independent evidence must be attributed to their
 actual candidate and command; historical manual SDK results are not proof of
 current definition activation.
 
-The public source projection keeps root 2.8.0 and preserves current HTTP/native
-prerequisites. Its new exact-candidate process/consumer/prior-binary checks and
-Linux CI remain receiving work; historical offline acceptance is not a current
-runtime result or full AGENT-203 completion.
+Definitions keep the existing HTTP and native prerequisites.
+Historical offline acceptance is not a runtime result.

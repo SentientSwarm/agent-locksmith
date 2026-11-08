@@ -1,4 +1,4 @@
-# Explicit HTTP grants and activation (unversioned)
+# Explicit HTTP grants and activation (3.0.0)
 
 An operator can configure an ordinary HTTP tool/model, grant a named agent,
 select its account and verify attribution at the receiving service. Start with

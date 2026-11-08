@@ -1,12 +1,7 @@
-# HTTP connector onboarding (unversioned)
+# HTTP connector onboarding (3.0.0)
 
-This is an unpublished source integration projection of locally accepted
-`60aabbf` onto the public D1/D4 base. The intermediate crate remains **2.8.0**;
-no release-preparation ancestry, version bump, tag or publication is included.
-The planned major-release compatibility rationale below remains relevant, but
-historical local acceptance is separate from this projection's receiving checks,
-remote review and CI. Commands below are reproduction instructions, not newly
-executed results for this projected candidate.
+These changes ship in 3.0.0. The major-release compatibility rationale below
+applies. Commands below are reproduction instructions.
 
 An operator configures a reference or customer HTTP service, approves a named
 agent's finite grant and selects its upstream account. The agent constructs
@@ -39,10 +34,10 @@ different facts; an active route or selected reference does not prove health.
 
 ## Compatibility and upgrade
 
-These changes are included in the **planned, unshipped 3.0.0**. Optional discovery
+These changes ship in 3.0.0. Optional discovery
 metadata and its CLI input are additive. Stricter destination and descriptor
 validation reject some previously accepted writes, so this is not an entirely
-backward-compatible refresh. The already planned major release also includes
+backward-compatible refresh. The same major release also includes
 the [explicit-grant/account cutover](explicit-http-grants.md). There is no extra
 per-issue version bump, new schema migration or automatic rewrite for onboarding.
 

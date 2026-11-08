@@ -142,8 +142,8 @@
 - Connect the [local customer MCP journey](docs/user/operator/customer-mcp-journey.md)
   from definition promotion through account selection, finite review/grants,
   ordinary task discovery and deliberate repair. Clarify that controlled refresh
-  invalidates existing native authority without creating grants. Provider and
-  release gates remain open.
+  invalidates existing native authority without creating grants. Live-provider
+  acceptance remains open.
 
 - Add deliberate CAS-controlled activation/deactivation for immutable `local.*`
   customer definitions: explicit None, live StoredBearer or configured controlled
@@ -205,7 +205,7 @@
   [skill reference](docs/user/agent-integration/skill-reference.md). Guidance reads
   do not materialize credentials or contact upstreams; auth/cache behavior and
   existing wire/authority contracts are unchanged. This is bounded AGENT-209 work,
-  not full onboarding/provider/release acceptance; planned 3.0.0 is unchanged.
+  not full onboarding or live-provider acceptance.
 
 ### Internal
 
@@ -266,8 +266,8 @@
   are bounded; synchronous filesystem calls are not a hard50ms guarantee.
 - Keep schema14. Accepted pre-context B refuses whole context-bearing mixed
   inventories; re-upgrade preserves reviews/revocation and needs fresh observation.
-  Planned3.0.0 is unchanged. Bounded207 local acceptance and full207/208/provider
-  and release gates remain separate; [checks and limits](docs/development/native-protected-context.md).
+  Bounded207 local acceptance and full207/208/provider acceptance remain
+  separate; [checks and limits](docs/development/native-protected-context.md).
 
 ### Native reviewed dispatch
 
@@ -280,8 +280,8 @@
   preserve uncertain outcomes without retry. Re-observe after60s or restart.
   Stage B adds no migration; schema14 downgrade retains state but loses positive
   dispatch. See [agent workflow](docs/user/agent-integration/native-mcp.md) and
-  [implementation/verification](docs/development/native-dispatch.md). Full206,
-  provider/compact and release gates remain open; bounded fixed context is above.
+  [implementation/verification](docs/development/native-dispatch.md). Full206 and
+  provider/compact acceptance remain open; bounded fixed context is above.
 
 ### Native tool preparation
 
@@ -296,8 +296,8 @@
   cannot silently restore prepared authority.
 - Stored bearer stdin ingestion explicitly replaces header shape and commits
   sealed storage plus selection together; deliberate sharing requires a live
-  reference. This is AGENT-206A only, with no version bump/full206/provider or
-  release acceptance. Useful dispatch is described in stage B above.
+  reference. This is AGENT-206A only, without full206 or provider
+  acceptance. Useful dispatch is described in stage B above.
 
 ### OAuth refresh recovery
 
@@ -308,8 +308,8 @@
 - Migration0013 preserves existing custody/authority and makes schema12 binaries
   refuse upgraded state. Current bootstrap/inline/background OAuth scopes stop
   before daemon return releases database ownership. See [recovery and upgrade](docs/user/operator/oauth-recovery.md).
-  This is bounded local AGENT-205 only; consent204, provider policy/live T14,
-  full205 and release gates remain open. Planned3.0.0 is unchanged.
+  This is bounded local AGENT-205 only; consent204, provider policy/live T14
+  and full205 acceptance remain open.
 
 ### Integration definition authoring
 
@@ -323,7 +323,7 @@
   attachment and sealed storage now commit together, including rollback on
   pinned replacement. See [upgrade and limits](docs/user/changes/integration-definitions.md).
   This is independent AGENT-203 authoring only: full203 and live195/196/200,
-  setup194, G0/G1 and broader release gates remain pending. No version bump.
+  setup194 and G0/G1 remain pending.
 
 ### Native MCP lifecycle
 
@@ -337,7 +337,7 @@
   Protocol/config changes require connection-grant/account reapproval; one daemon
   owns each database. See [setup](docs/user/operator/native-mcp.md),
   [wire contract](docs/user/agent-integration/native-mcp.md) and
-  [backup, recovery and limits](docs/user/changes/native-mcp.md). No version bump.
+  [backup, recovery and limits](docs/user/changes/native-mcp.md).
 
 ### Native MCP prerequisite safety
 
@@ -350,7 +350,7 @@
   See [scope, budgets and limits](docs/development/mcp-sessions.md).
   Resume/replay are unsupported; already-submitted effects are not rolled back.
   The prerequisite was accepted at e18da87; AGENT-202 now consumes its pool.
-  Useful authority/dispatch and full G3/release gates remain open.
+  Full G3 acceptance remains open.
 
 - Add a bounded rmcp3.7.0 HTTP adapter (AGENT-198): whole JSON/error-body and
   cumulative SSE response bounds precede collector/JSON decoding; event,
@@ -373,7 +373,7 @@
   grants and selections and prevents older binaries from opening upgraded state.
   Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
   Already-admitted work may finish; this does not establish crash-safe rotating
-  refresh, provider proof or release readiness. No version bump.
+  refresh or provider proof.
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an
@@ -449,6 +449,5 @@
   tokens need re-minting; stale plans must not resurrect removed authority.
 - See [HTTP grant and activation changes](docs/user/changes/explicit-http-grants.md)
   for saved-but-failed activation repair, next-admission boundaries and limits.
-  Original local synthetic acceptance is historical; this projected candidate
-  still needs its own receiving checks, remote review and CI. No version/tag or
-  live-provider compatibility is claimed.
+  Original local synthetic acceptance is historical. Live-provider
+  compatibility is not claimed.

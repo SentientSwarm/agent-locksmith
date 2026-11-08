@@ -1,8 +1,8 @@
-# Explicit account bindings — unversioned D1 change notes
+# Explicit account bindings (3.0.0)
 
 This change requires deliberate account selection for every authenticated
-agent/registration pair. It is a compatibility change, not a published release
-or authorization to upgrade an installed deployment.
+agent/registration pair. It is a breaking compatibility change in 3.0.0; read this before upgrading
+an installed deployment.
 
 ## Operator-visible behavior
 

@@ -207,7 +207,7 @@ Reads show references and timestamps. Agent registration and bootstrap output
 are intentional one-time credential deliveries; keep those private. See
 [account troubleshooting](operator/account-binding-troubleshooting.md),
 [explicit selections](concepts/per-agent-credentials.md) and the
-[unversioned D1 change notes](changes/explicit-account-bindings.md).
+[explicit account binding notes](changes/explicit-account-bindings.md).
 
 ## Configure your own HTTP service
 
