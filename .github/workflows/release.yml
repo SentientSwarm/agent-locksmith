@@ -1,96 +1,83 @@
 name: Release
 
+# A v* tag publishes the bytes native validation built and smoke-tested: the
+# CLI and daemon for four targets, SHA256SUMS and validation.json, with notes
+# from CHANGELOG.md. Pull requests that change the release path and manual runs
+# run validation and the asset check, but never the publish job.
 on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/native-validation.yml
+      - scripts/release-notes.py
+      - scripts/native-validate.py
+      - scripts/native_validation/**
+  workflow_dispatch:
 
 permissions:
-  contents: write
-
-env:
-  CARGO_TERM_COLOR: always
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: locksmith-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: locksmith-linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: locksmith-darwin-amd64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: locksmith-darwin-arm64
+  validate:
+    uses: ./.github/workflows/native-validation.yml
 
-    runs-on: ${{ matrix.os }}
-
+  check:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
         with:
-          key: ${{ matrix.target }}
-
-      - name: Install cross-compilation tools (aarch64-linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+          name: ${{ needs.validate.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Check assets and version, write notes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          python3 -B scripts/release-notes.py --assets "$RUNNER_TEMP/release" \
+            --ref "$GITHUB_REF" --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run tests
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --all
-
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/locksmith ${{ matrix.artifact }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-
+  publish:
+    needs: [validate, check]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
         with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create checksums
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Check assets and version, write notes
         run: |
-          cd artifacts
-          sha256sum locksmith-* > SHA256SUMS
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            artifacts/locksmith-linux-amd64
-            artifacts/locksmith-linux-arm64
-            artifacts/locksmith-darwin-amd64
-            artifacts/locksmith-darwin-arm64
-            artifacts/SHA256SUMS
+          python3 -B scripts/release-notes.py --assets "$RUNNER_TEMP/release" \
+            --ref "$GITHUB_REF" --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/notes.md"
+      - name: Require a passing CI run for the tagged commit
+        # CI runs on pushes to main and release/** only, so a successful push
+        # run also shows the commit is on one of those branches.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success" -q .total_count)
+          if [ "$passed" -lt 1 ]; then
+            echo "::error::no successful CI push run for $GITHUB_SHA; tag a tested main or release/** commit"
+            exit 1
+          fi
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/release"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" \
+            locksmith-* locksmithd-* SHA256SUMS validation.json
