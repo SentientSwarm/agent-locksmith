@@ -388,3 +388,14 @@ jobs:
           name: qa-evidence
           path: ${{ runner.temp }}/qa-evidence
           if-no-files-found: error
+      - name: Run UAT (guide journeys)
+        if: always()
+        run: |
+          "$RUNNER_TEMP/qa-python/bin/python" qa/run.py --suite uat --bins target/release --mode pr --out "$RUNNER_TEMP/uat-evidence"
+      - name: Upload UAT evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-evidence
+          path: ${{ runner.temp }}/uat-evidence
+          if-no-files-found: error
