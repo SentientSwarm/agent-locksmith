@@ -23,6 +23,18 @@
   their behavior.
 
 
+### OAuth refresh recovery
+
+- Commit refresh uncertainty before token I/O and publish a rotated pair only
+  after custody commits. Interrupted accounts remain unavailable across restart,
+  even with unexpired old access; status/list expose reconnect-required state.
+  Local revoke plus freshly issued credentials is the explicit recovery path.
+- Migration0013 preserves existing custody/authority and makes schema12 binaries
+  refuse upgraded state. Current bootstrap/inline/background OAuth scopes stop
+  before daemon return releases database ownership. See [recovery and upgrade](docs/user/operator/oauth-recovery.md).
+  This is bounded local AGENT-205 only; consent204, provider policy/live T14,
+  full205 and release gates remain open. Planned3.0.0 is unchanged.
+
 ### Integration definition authoring
 
 - Add strict immutable definition import/get and create-only disabled native

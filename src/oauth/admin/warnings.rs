@@ -13,8 +13,8 @@ pub(super) async fn collision_warnings(
     };
     let other_labels: Vec<String> = rows
         .into_iter()
-        .filter(|(n, l, _, _)| n == name && l != bootstrapped_label)
-        .map(|(_, l, _, _)| l)
+        .filter(|(n, l, _, _, _)| n == name && l != bootstrapped_label)
+        .map(|(_, l, _, _, _)| l)
         .collect();
     if !other_labels.is_empty() {
         out.push(format!(

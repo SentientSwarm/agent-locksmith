@@ -221,9 +221,9 @@ async fn ts213_revoke_is_idempotent() {
         .assert_status(axum::http::StatusCode::NO_CONTENT);
 }
 
-// ─── TS-214: bootstrap exchange failure rolls back the half-bootstrapped row ─
+// ─── TS-214: bootstrap exchange failure retains uncertain custody ─
 #[tokio::test]
-async fn ts214_failed_bootstrap_rolls_back() {
+async fn ts214_failed_bootstrap_preserves_pending_claim() {
     let h = setup().await;
     // Mock returns 401 invalid_grant — refresh token is bogus.
     Mock::given(method("POST"))
@@ -244,7 +244,7 @@ async fn ts214_failed_bootstrap_rolls_back() {
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"]["code"], "oauth_bootstrap_failed");
 
-    // Status afterwards: present:false (rollback worked).
+    // A possibly consumed token must remain unavailable until explicit reconnect.
     let status = h
         .server
         .get("/admin/operator/oauth/codex")
@@ -252,7 +252,10 @@ async fn ts214_failed_bootstrap_rolls_back() {
         .await;
     status.assert_status_ok();
     let body: serde_json::Value = status.json();
-    assert_eq!(body["present"], false);
+    assert_eq!(body["present"], true);
+    assert_eq!(body["refresh_pending"], true);
+    assert_eq!(body["reconnect_required"], true);
+    assert_eq!(h.mock.received_requests().await.unwrap().len(), 1);
 }
 
 // ─── G.4: bootstrap with --label and a default session present → warns ──────

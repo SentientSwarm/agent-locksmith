@@ -20,13 +20,18 @@ use crate::oauth::sealing::SealingKeyError;
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod attempt;
 mod lifecycle;
 mod read;
 mod record;
 mod write;
+pub use attempt::RefreshAttempt;
 pub use record::OauthSession;
 
 /// The default must still be explicitly selected in an account binding.
+/// Secret-free listing: name, label, degraded, expiry, pending.
+pub type SessionMetadata = (String, String, bool, Option<i64>, bool);
+
 pub const DEFAULT_SESSION_LABEL: &str = "default";
 
 /// Errors from the OAuth session repository.

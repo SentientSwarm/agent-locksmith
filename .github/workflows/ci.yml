@@ -106,6 +106,22 @@ jobs:
           printf 'source_commit=1de53fcf5fa2de41bb03ea7d602690d14784eaa7\n' > "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
           sha256sum "$RUNNER_TEMP/schema11-1de53fc/locksmithd" "$RUNNER_TEMP/schema11-1de53fc/locksmith" >> "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
           cat "$RUNNER_TEMP/schema11-1de53fc/PROVENANCE.txt"
+      - name: Check out pinned schema12 source
+        uses: actions/checkout@v4
+        with:
+          ref: 4220e62bc381181cf35d4010e95d73adf88f0ea8
+          path: recovery-prior-source
+          persist-credentials: false
+      - name: Preserve the pinned schema12 daemon and CLI
+        run: |
+          test "$(git -C "$GITHUB_WORKSPACE/recovery-prior-source" rev-parse HEAD)" = "4220e62bc381181cf35d4010e95d73adf88f0ea8"
+          cargo build --locked --manifest-path "$GITHUB_WORKSPACE/recovery-prior-source/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target" --bin locksmithd --bin locksmith
+          mkdir -p "$RUNNER_TEMP/schema12-4220e62"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmithd" "$RUNNER_TEMP/schema12-4220e62/locksmithd"
+          cp "$GITHUB_WORKSPACE/target/debug/locksmith" "$RUNNER_TEMP/schema12-4220e62/locksmith"
+          printf 'source_commit=4220e62bc381181cf35d4010e95d73adf88f0ea8\n' > "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
+          sha256sum "$RUNNER_TEMP/schema12-4220e62/locksmithd" "$RUNNER_TEMP/schema12-4220e62/locksmith" >> "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
+          cat "$RUNNER_TEMP/schema12-4220e62/PROVENANCE.txt"
       - run: cargo test --all
       - name: Verify OAuth upgrade and prior-binary refusal
         run: |
@@ -136,6 +152,9 @@ jobs:
       - name: Verify definition migration and prior-binary refusal
         run: |
           LOCKSMITH_DEFINITION_PRIOR_DAEMON="$RUNNER_TEMP/schema11-1de53fc/locksmithd" cargo test --locked --test definition_process_test actual_schema11_upgrade_preserves_authority_and_prior_refuses_before_listeners -- --ignored --exact --nocapture
+      - name: Verify refresh recovery migration and prior-binary refusal
+        run: |
+          LOCKSMITH_RECOVERY_PRIOR_DAEMON="$RUNNER_TEMP/schema12-4220e62/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_refresh_upgrade_and_prior_refusal -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
       - name: Bounded MCP transport (separate integration prerequisite)

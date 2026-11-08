@@ -11,6 +11,7 @@
 //! configs without admin_socket continue to run with only the TCP agent
 //! listener bound — preserving backward compat.
 
+mod oauth;
 mod state_lock;
 
 use std::net::SocketAddr;
@@ -48,6 +49,14 @@ pub enum DaemonError {
 /// (or the drain window expires).
 pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), DaemonError> {
     let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
+    oauth::owned(config, coord).await
+}
+
+async fn run_owned(
+    config: AppConfig,
+    coord: ShutdownCoordinator,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
+) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
     if admin_enabled {
@@ -134,7 +143,9 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         operational_log_store_for_sweeper,
         op_resolver_for_app,
     ) = if admin_enabled {
-        let setup = build_admin_substrate(shared_config.clone(), resolved_creds.clone()).await?;
+        let setup =
+            build_admin_substrate(shared_config.clone(), resolved_creds.clone(), refresh_owner)
+                .await?;
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
@@ -173,6 +184,13 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
             None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
+
+    let refresh = oauth::Background::prepare(
+        oauth_runtime_for_app.as_ref(),
+        catalog_for_app.as_ref(),
+        agent_creds_for_app.as_ref(),
+        operational_log_for_app.as_ref(),
+    );
 
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
     // up — otherwise there's no audit to sweep. Defaults to
@@ -436,7 +454,11 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
         (None, None)
     };
 
+    let mut refresh_task = refresh.map(|task| task.spawn(&coord));
     let drain = async {
+        if let Some(task) = refresh_task.as_mut() {
+            let _ = task.await;
+        }
         let _ = (&mut native_task).await;
         let agent_res = match (admin_task.as_mut(), admin_https_task.as_mut()) {
             (Some(uds), Some(https)) => {
@@ -501,6 +523,7 @@ pub async fn run(config: AppConfig, coord: ShutdownCoordinator) -> Result<(), Da
                 sweeper_task.as_mut(),
                 ops_log_sweeper_task.as_mut(),
                 credential_sweeper_task.as_mut(),
+                refresh_task.as_mut(),
             ]
             .into_iter()
             .flatten()
@@ -701,6 +724,7 @@ struct AdminSetup {
 async fn build_admin_substrate(
     config: Arc<ArcSwap<AppConfig>>,
     resolved_creds: Arc<ArcSwap<ResolvedCreds>>,
+    refresh_owner: crate::oauth::refresh::RefreshOwner,
 ) -> Result<AdminSetup, DaemonError> {
     let snapshot = config.load();
     let db_path = snapshot
@@ -870,17 +894,8 @@ async fn build_admin_substrate(
     let (oauth_admin, oauth_runtime) = match crate::oauth::SealingKey::from_env() {
         Ok(key) => {
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
-            let locks = crate::oauth::refresh::RefreshLockMap::new();
-            tokio::spawn(crate::oauth::refresh::run(
-                sessions.clone(),
-                catalog.clone(),
-                crate::repo::AgentCredentialRepository::new(pool.clone()),
-                key.clone(),
-                locks.clone(),
-                Some(operational_log.clone()),
-                std::future::pending::<()>(),
-            ));
-            info!("oauth: sealing key loaded; refresh task spawned");
+            let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner);
+            info!("oauth: sealing key loaded; refresh task prepared");
             let refresh_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()

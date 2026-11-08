@@ -1,81 +1,102 @@
-# OAuth custody write contract
+# OAuth custody and refresh recovery
 
-This change updates the existing sealed `oauth_sessions` repository, with no second
-credential cache or new dependency. See [operator recovery and upgrade](../user/operator/oauth-recovery.md)
-for the user-visible ordering and limitations.
+AGENT-197 supplies committed incarnation/version identity and stale-write
+protection. The local AGENT-205 change extends that same sealed repository with
+pre-request uncertainty and owned refresh scopes; no parallel account store is
+introduced. See [operator recovery](../user/operator/oauth-recovery.md).
 
-## Persistence identity
+## Stored identity and migration
 
-Migration [0010](../../migrations/0010_oauth_session_incarnations.sql) uses an
-`INTEGER PRIMARY KEY AUTOINCREMENT` incarnation and a nonnegative integer
-`token_version`. `(name, session_label)` remains unique. A committed incarnation
-is never reused after deletion within that database, including immediate
-same-label/same-timestamp recreation and restart. Rolled-back inserts can reuse
-an allocation, but no snapshot escapes before commit. Database restoration is a
-stopped-state operation; this is not an identity guarantee across backup forks.
-The existing timestamp-based audit display ID is unchanged and is not a CAS key.
+[0010](../../migrations/0010_oauth_session_incarnations.sql) uses an AUTOINCREMENT
+incarnation and nonnegative integer token version. Name/label remains unique.
+A committed incarnation is not reused after deletion within that database;
+rolled-back inserts may reuse an allocation but return no snapshot. The audit
+session display ID is unchanged and is not a CAS key.
 
-Create seals tokens, inserts a fresh incarnation and materializes the inserted
-row inside a transaction; it returns only after commit. Duplicate labels still
-require explicit revoke first. Existing rows migrate at token version zero with
-all sealed bytes and metadata unchanged. No grant or binding migration is needed.
+[0013](../../migrations/0013_oauth_refresh_uncertainty.sql) adds checked boolean
+`refresh_pending`, default0. It preserves existing sealed bytes, nonces, versions,
+expiry, scope, account hint, degradation and authority. There is no startup reset.
+Old binaries reject unknown migrations before DB-backed listeners. Backup forks,
+power loss and cross-host ownership are outside this guarantee.
 
-## Exchanges and failures
+## Claim, exchange, completion
 
-Every exchange carries its original `OauthSession` snapshot. Update predicates
-incarnation, name, label and token version, increments version and uses
-`RETURNING`. The unique incarnation permits at most one result; no result is a
-typed stale conflict. The version cannot overflow or become a SQLite real.
+Local selection and nonempty refresh-token prerequisites are checked first.
+`begin_refresh` matches incarnation/name/label/version, requires pending0 and
+not degraded, then commits pending1 and increments version. It reserves room for
+two increments, refusing exhaustion before network I/O. Decode happens before
+COMMIT. Only a committed claim returns the opaque `RefreshAttempt`; its
+incarnation/version is the attempt identity.
 
-The access token, optional rotated refresh token, expiry, account ID, degraded
-flag and timestamp commit together. An omitted rotated refresh token preserves
-the matched stored refresh ciphertext and nonce. Decode happens inside the same
-transaction; the materialized row returns only after successful commit. There is
-no post-commit name/label-only readback and no use of provider plaintext after a
-failed write, decode or commit. Ordinary already-admitted work may finish after
-that commit; this is not remote rollback.
+Network exchange starts after that transaction finishes. No database transaction
+spans provider I/O. A failed claim sends nothing. Interrupted, malformed, rejected
+or unpersistable exchanges leave pending1; no friendly error write is needed to
+maintain refusal. Pending custody is excluded from background selection and
+proxy use even when its old access token is still unexpired.
 
-Failure degradation is conditional on the same incarnation/version and advances
-the version. Bootstrap cleanup deletes only its own unchanged snapshot. Both
-reject zero-row results. Operational degradation events are emitted only after
-successful persistence. Neither path may affect a replacement or newer pair.
-Explicit operator revoke remains an idempotent current-name/label deletion and
-invalidates pending snapshots immediately.
+`complete_refresh` seals the full accepted pair and matches that exact attempt
+with pending1. Pair, expiry, account hint, pending0, degraded0 and the incremented
+version commit together. Decode occurs in that transaction; credentials return
+only after COMMIT. There is no name/label-only readback. A canceled caller cannot
+assume a submitted SQLite COMMIT was canceled: restart observes either the
+complete pair or prior pending state.
 
-Bootstrap, background refresh and inline refresh retain the shared per-label
-network lock. Revoke deliberately does not wait for that lock. No SQLite write
-transaction is held over network I/O. Source selection/consensus, finite grants,
-sealing, activation and no-fallback admission behavior remain unchanged.
-Repository errors never authorize fallback; public write failures and runtime
-logs do not include provider bodies or token material.
+Ordinary `update_tokens`, conditional degradation and bootstrap cleanup require
+pending0. They cannot clear or delete uncertainty, including using a freshly read
+pending row. Explicit operator revoke remains an unconditional current-name/label
+deletion; fresh bootstrap creates a new incarnation. Late writers cannot mutate
+that replacement. Legacy response/default/scope/identity limitations remain
+explicit in the operator guide; this work does not establish provider policy.
 
-## Verification and boundaries
+## Runtime ownership
 
-`oauth_incarnation_test` preserves the three failing-before assertions and adds
-concurrent-writer, version, conditional cleanup, same-timestamp/restart, exact
-sealed migration and database failure checks. A deferred foreign-key constraint
-makes COMMIT fail after UPDATE RETURNING, so a passing statement cannot be
-mistaken for committed custody. A corrupted refresh ciphertext similarly checks
-that failed materialization rolls the new access token back.
+The existing per-label locks carry one shared `RefreshOwner`. A mutex serializes
+scope registration with closure; a Tokio task tracker owns each admitted future
+until it completes or drops. Closure cancels current scopes and refuses new ones.
+Proxy resolution, bootstrap create/exchange/cleanup, and each background account
+operation run wholly within a scope. Shutdown does not perform delayed cleanup
+outside that scope.
 
-The saved process tests use real CLI/admin/daemon operations, a controlled token
-endpoint and a receiving HTTP service in the separate test process. Four cases
-hold bootstrap/inline refresh responses, revoke, then release success/failure;
-old-account receiver effects must stay zero. Deliberate replacement and restart
-must work while grants and selections remain unchanged. The separately invoked
-prior-binary probe creates real 0009 state, upgrades it, checks preservation and
-verifies SQLx's unknown-migration refusal before listeners. It does not establish
-safe simultaneous old/new writers.
+The daemon holds its canonical database lock around startup, serving, drain and
+OAuth-owner completion. It closes admission on shutdown and on every startup or
+runtime return, then waits for scopes before returning. This covers current
+OAuth futures even when their HTTP connection task is detached. It does not
+claim to join every axum connection task or independently spawned application
+work. Arbitrarily dropping the embedding `daemon::run` future is outside the
+return guarantee.
 
-No interactive consent route is claimed: manual bootstrap is the available
-analogue. Provider token semantics, refresh uncertainty after process loss and
-single-state-directory ownership remain separate consent and durable-refresh/state-ownership work. CAS alone
-does not establish crash-safe rotating refresh, provider eligibility, G2 or
-3.0.0 release readiness. No version bump or publication accompanies this fix.
+Background task spawn is deferred until fallible setup completes. Its retained
+handle is joined on normal drain or aborted/joined on forced drain. Shutdown is
+selected across an entire tick, including held I/O. Joining Rust futures cannot
+roll back already submitted SQL or remote effects; marker/CAS ordering handles
+their surviving outcomes.
 
-## Public integration receiving
+## Verification boundaries
 
-This public projection preserves the locally accepted OAuth custody source at
+`oauth_recovery_test` covers claim uniqueness, overflow, stale completion,
+conditional cleanup, unrelated writes, owner closure and SQL/write/decode/COMMIT
+failures. Deferred foreign-key failures distinguish successful RETURNING from
+successful COMMIT. The retained baseline oracle observes two provider sends
+before the repair and one after cancellation/reopen.
+
+`oauth::refresh::recovery_process` uses child processes with test-only barriers
+inside production custody functions. SIGKILL/reap occurs after committed claim,
+after independently observed one-use consumption, after full replacement
+seal/decode but before COMMIT, and after COMMIT before return. Reopen retains the
+same DB/WAL and receiver; no backup restore or pending reset is used. These are
+library worker processes, separately attributed from actual daemon/CLI tests.
+
+The saved daemon tests exercise CLI bootstrap/status/revoke, one-use consumption,
+kill/restart, unexpired old-access refusal, fresh reconnect, unchanged authority,
+and embedded short-drain return/reacquisition with a late provider response.
+The explicit schema12 prior-binary probe verifies exact custody preservation and
+refusal before listeners. Root tests, strict Clippy, formatting and binaries are
+separate checks. No local result substitutes for consent, provider identity,
+live T14, full205 or release acceptance.
+
+## Historical CAS public integration receiving
+
+The earlier public projection preserved the locally accepted OAuth custody source at
 `10a0d8b` on public D5 `fa2f4d5`, retaining the intermediate crate version 2.8.0.
 Historical local acceptance is not current receiving, CI, provider or release
 proof. CAS does not close the consent or ambiguous-refresh/single-owner gaps.
@@ -100,3 +121,19 @@ The ignored test's local coordinator run and the actual new CI run must each
 report their own exact source/binary provenance and result. Neither execution
 has been performed by the source-projection builder or reviewer. A normal full
 suite alone does not establish this deliberately separate upgrade proof.
+
+## Public refresh-recovery receiving
+
+This source projection retains version2.8.0 and the existing consuming-root SDK
+patch. Its exact-candidate runtime, independent consumer, four predecessor probes
+and fresh Linux CI remain separate receiving work. Historical local acceptance
+at3c5f695 is not a current runtime or live-provider result.
+
+The additional CI probe pins public schema12 source
+`4220e62bc381181cf35d4010e95d73adf88f0ea8`, preserves both matching binaries before
+current compilation, and supplies the daemon via `LOCKSMITH_RECOVERY_PRIOR_DAEMON`
+to `actual_daemon_refresh_upgrade_and_prior_refusal` with `--ignored --exact`.
+The three earlier predecessor probes retain their own exact binaries and env.
+No ordinary full-suite result implies an ignored probe ran. The old schema12
+binary must refuse migration0013 before both listeners, while the new daemon
+preserves custody and authority and can restart normally.

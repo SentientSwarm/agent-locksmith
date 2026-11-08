@@ -77,6 +77,8 @@ fn session_status_json(session: &OauthSession, present: bool) -> Value {
         "present": present,
         "scope": session.scope,
         "degraded": session.degraded,
+        "refresh_pending": session.refresh_pending,
+        "reconnect_required": session.refresh_pending || session.degraded,
         "access_token_expires_at": session.access_token_expires_at,
         "created_at": session.created_at,
         "updated_at": session.updated_at,

@@ -80,6 +80,7 @@ AES-GCM:
 ```sql
 CREATE TABLE oauth_sessions (
     incarnation                INTEGER PRIMARY KEY AUTOINCREMENT,
+    refresh_pending            INTEGER NOT NULL DEFAULT 0 CHECK(refresh_pending IN (0,1)),
     token_version              INTEGER NOT NULL DEFAULT 0 CHECK(typeof(token_version) = 'integer' AND token_version >= 0),
     name                       TEXT NOT NULL,
     session_label              TEXT NOT NULL DEFAULT 'default',  -- Phase G
@@ -180,12 +181,19 @@ D5.
 
 ## Operator workflow: status / revoke
 
+A durable pending refresh refuses proxy use and automatic retries, including
+unexpired old access. Inspect `refresh_pending`/`reconnect_required`; use fresh
+provider credentials after explicit local revoke. See [recovery and 0013 upgrade](../operator/oauth-recovery.md).
+
+
 ```bash
 locksmith oauth status codex --label default
 # name: codex
 # session_label: default
 # present: true
 # degraded: false
+# refresh_pending: false
+# reconnect_required: false
 # scope:
 # created_at: 1778197479
 # updated_at: 1778197479
@@ -261,54 +269,26 @@ to step back.
 
 ## Refresh task
 
-`oauth::refresh::run` is a `tokio` task that scans `oauth_sessions`
-on a tick and refreshes each non-degraded session ahead of expiry.
-The refresh schedule is:
-
-```
-deadline = access_token_expires_at - max(60s, min(300s, lifetime / 4))
-```
-
-Five-minute safety margin handles the typical 1-hour token lifetime
-without thrash; the lifetime/4 fallback handles short-lifetime
-experimental flows (refresh at 11.25 min remaining for a 15-min
-token); the 60s floor prevents pathological refresh-thrash on
-misconfigured tokens. ADR-0005 D3.
-
-A per-`(name, session_label)` `Mutex<()>` (the `RefreshLockMap`)
-prevents the background task from racing with on-demand
-proxy-hot-path refresh.
+The owned background task wakes every 30 seconds and selects non-degraded,
+non-pending sessions whose access expiry is within 300 seconds. It rechecks the
+current row under the same per-label lock used by bootstrap and inline refresh.
+No transaction spans provider I/O. Shutdown cancels current OAuth scopes and
+joins them before the daemon releases database ownership.
 
 ### Refresh failure
 
-If a refresh attempt fails:
+Before sending, a short transaction commits `refresh_pending=1` against the
+current incarnation/version. Only the same attempt's complete, committed token
+pair clears that flag. A rejected response, timeout, failed write or process
+loss leaves uncertainty; a separate degradation write is not needed for refusal.
+The background task and restart do not retry it. Even an unexpired old access
+token is unavailable. Status/list show `refresh_pending` and
+`reconnect_required`; subsequent proxy calls return 503 `oauth_reconnect_required`.
 
-1. The original incarnation/version is conditionally marked `degraded = 1`;
-   a stale failure cannot degrade a replacement or newer token pair.
-2. Audit emits `oauth_refresh_failed` with `details.cause`:
-   `revoked` / `provider_5xx` / `network_error` / `bad_response`.
-3. The background task does **not** retry on its own — operator
-   action is required.
-4. Subsequent agent calls return:
-   ```
-   503 Service Unavailable
-   {
-     "error": {
-       "type": "auth_error",
-       "code": "oauth_refresh_failed",
-       "message": "OAuth session degraded — operator must re-bootstrap"
-     }
-   }
-   ```
-5. Operator revokes the failed local session, then runs `locksmith oauth bootstrap <name> --label <selected-label>
-   --refresh-token-stdin < private-refresh-token.txt` with a fresh token.
-   On success, the fresh incarnation contains the committed pair. Follow
-   [recovery and migration guidance](../operator/oauth-recovery.md), including
-   the remaining crash/ambiguous-rotation limits and required durable-refresh follow-up.
-
-ADR-0005 D6. Auto-retry was rejected because persistent failure
-(revoked token, provider deprecation) is operator-visible work, and
-silent retry-storms can compound provider-side rate limits.
+Inspect status, revoke the local selected session, and bootstrap with freshly
+issued credentials. Revoke does not undo provider effects or revoke its grant.
+See [recovery, upgrade and provider limits](../operator/oauth-recovery.md).
+Full AGENT-205/live-provider acceptance remains separate from local recovery.
 
 ## Per-request hot path
 
@@ -326,11 +306,12 @@ provider), `proxy::proxy_handler` does this:
    - Inconsistent/unavailable selected metadata → safe 503 before token exchange,
      even for a cached token. All bindings sharing a registration/label must agree.
    - Session missing → 503 `oauth_session_missing`.
+   - Session pending → 503 `oauth_reconnect_required`, even if old access is unexpired.
    - Session degraded → 503 `oauth_refresh_failed`.
    - Sealing key unset → 503 `oauth_sealing_key_unset`.
    - Access token expired → inline refresh under the
      `RefreshLockMap` mutex; success returns the fresh token,
-     failure marks degraded and returns 503.
+     failure returns 503 and a committed pending claim remains unavailable.
    - Otherwise return `ProxyAuth::Oauth { access_token,
      oauth_session_id, account_id, ... }`.
 3. **Strip agent-supplied auth headers.** Drop any

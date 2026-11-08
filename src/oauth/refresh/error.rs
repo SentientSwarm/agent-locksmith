@@ -2,6 +2,8 @@
 /// audit `details.cause` value per ADR-0005 D4.
 #[derive(Debug, thiserror::Error)]
 pub enum RefreshError {
+    #[error("OAuth refresh outcome uncertain or unavailable; reconnect with fresh credentials")]
+    ReconnectRequired,
     #[error("registration {0} disappeared from catalog before refresh")]
     RegistrationGone(String),
 
@@ -31,6 +33,7 @@ impl RefreshError {
     /// differently.
     pub fn audit_cause(&self) -> &'static str {
         match self {
+            Self::ReconnectRequired => "reconnect_required",
             RefreshError::RegistrationGone(_) => "registration_gone",
             RefreshError::NotOauth(_) => "not_oauth",
             RefreshError::Network(_) => "network_error",
