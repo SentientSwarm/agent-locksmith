@@ -10,8 +10,8 @@ The keystone component of the [layer8-proxy][layer8] stack.
 [layer8]: https://github.com/SentientSwarm/layer8-proxy
 
 See [Cargo.toml](Cargo.toml) for the crate version and
-[unversioned D1 change notes](docs/user/changes/explicit-account-bindings.md)
-for the explicit-account compatibility change.
+[explicit account binding notes](docs/user/changes/explicit-account-bindings.md)
+for the 3.0.0 explicit-account compatibility change.
 
 ## What it does
 

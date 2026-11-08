@@ -183,8 +183,8 @@ historical observations/reviews/grants but requires fresh observation. The origi
 Stage B added no migration: schema-14 stage A binaries could still open that database,
 but could not execute those calls. Current controlled OAuth adds schema 17; follow
 its [whole-daemon downgrade and repair guidance](native-oauth.md#upgrade-and-evidence-limits). Back up before changing binaries; either restart
-invalidates observation freshness. This is additive planned3.0.0 work with no
-version bump, publication or full206/provider acceptance.
+invalidates observation freshness. This ships in 3.0.0 as additive work, without
+full206/provider acceptance.
 
 ## Staged API mapping
 

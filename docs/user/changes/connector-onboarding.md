@@ -34,10 +34,10 @@ different facts; an active route or selected reference does not prove health.
 
 ## Compatibility and upgrade
 
-These changes are included in the **planned, unshipped 3.0.0**. Optional discovery
+These changes ship in 3.0.0. Optional discovery
 metadata and its CLI input are additive. Stricter destination and descriptor
 validation reject some previously accepted writes, so this is not an entirely
-backward-compatible refresh. The already planned major release also includes
+backward-compatible refresh. The same major release also includes
 the [explicit-grant/account cutover](explicit-http-grants.md). There is no extra
 per-issue version bump, new schema migration or automatic rewrite for onboarding.
 

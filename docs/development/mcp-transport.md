@@ -154,8 +154,7 @@ CI includes the separate crate commands; GitHub Actions execution itself is
 not established by a local run. Independent exact-candidate QA/review evidence
 is required. This repair alone does not turn G1 green: AGENT-202 and linked
 native two-client/provider/schema/migration evidence remain required. G2 still
-needs AGENT-205. Full native/provider acceptance remains separate from this
-public source projection; no release readiness is claimed.
+needs AGENT-205. Full native/provider acceptance remains separate.
 
 The public adapter prerequisite was received separately at2fb3f1d; this N1
 projection preserves its implementation and limits. Exact-candidate native

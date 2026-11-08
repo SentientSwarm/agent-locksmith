@@ -118,8 +118,8 @@ preserves exact stored reviews and revocation; it does not strip context or
 restore grants. Current controlled OAuth adds schema 17 and prior whole-daemon
 startup refusal; follow its [upgrade guidance](native-oauth.md#upgrade-and-evidence-limits). Use the current binary for context-bearing workloads.
 
-Planned3.0.0 stays unchanged. This is a bounded local increment; full207/208,
-live provider/customer readiness and release/publication remain separate. See
+This ships in 3.0.0 as a bounded local increment; full207/208 and live
+provider/customer readiness remain separate. See
 [implementation and verification](../../development/native-protected-context.md)
 for diagnostic timing, synchronous filesystem limits and exact test entry points.
 

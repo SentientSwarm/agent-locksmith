@@ -122,6 +122,5 @@ Independent QA constructs new public-only Python/Rust calls before these recipes
 reviewer runs selected independent checks after QA releases execution.
 
 Development before/after logs and setup mistakes are distinct from exact-final
-and independent evidence. Version stays planned3.0.0, with no automatic tag.
-Full206/207/208, hosted providers/customer UAT, optimized/four-platform/Actions,
-compact/model gates and owner publication remain open.
+and independent evidence. This ships in 3.0.0; full206/207/208, hosted
+providers/customer UAT and compact/model gates remain open.
