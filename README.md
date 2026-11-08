@@ -364,6 +364,8 @@ For the canonical deployment story:
     full `locksmith` CLI surface.
 
 - **Engineering docs (per-component)**:
+  - [Bounded MCP transport prerequisite](docs/development/mcp-transport.md) —
+    separate library checks, configuration, diagnostics and integration limits.
   - [`docs/v2/SPEC.md`](docs/v2/SPEC.md) — engineering spec with task
     references (T1.x, T2.x, …).
   - [`docs/v2/HANDOFF.md`](docs/v2/HANDOFF.md) — cold-start handoff for

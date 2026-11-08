@@ -1,0 +1,25 @@
+[package]
+name = "locksmith-mcp-transport"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Bounded HTTP transport adapter for Locksmith native MCP integration"
+
+[dependencies]
+rmcp = { version = "=3.7.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
+reqwest = { version = "=0.13.2", default-features = false, features = ["json", "stream", "rustls-no-provider"] }
+bytes = "1"
+futures-util = "0.3"
+http = "1"
+sse-stream = "=0.2.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.50.0", features = ["full"] }
+thiserror = "2"
+
+[dev-dependencies]
+axum = "=0.8.8"
+rcgen = "=0.13.2"
+rustls = { version = "=0.23.37", default-features = false, features = ["aws-lc-rs"] }
+tempfile = "=3.27.0"

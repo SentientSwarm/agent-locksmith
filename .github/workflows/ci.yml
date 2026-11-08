@@ -37,3 +37,10 @@ jobs:
           LOCKSMITH_PRIOR_DAEMON="$RUNNER_TEMP/pre-0010-fa2f4d5/locksmithd" cargo test --locked --test explicit_binding_smoke_test actual_daemon_oauth_upgrade_and_prior_binary_refusal -- --ignored --exact --nocapture
       - run: cargo clippy -- -D warnings
       - run: cargo fmt --check
+      - name: Bounded MCP transport (separate integration prerequisite)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cargo test --locked --manifest-path crates/mcp-transport/Cargo.toml
+          cargo clippy --locked --manifest-path crates/mcp-transport/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path crates/mcp-transport/Cargo.toml --check
