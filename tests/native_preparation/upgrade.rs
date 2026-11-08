@@ -17,6 +17,9 @@ async fn authority(f: &Fixture) -> String {
 pub async fn exercise() {
     let prior = std::env::var("LOCKSMITH_PREPARATION_PRIOR_DAEMON").unwrap();
     let mut f = Fixture::new();
+    // The prior binary logs its configured address, so it cannot report an
+    // OS-assigned port.
+    f.use_stable_port();
     f.start_with_key(&prior, Some(upgrade_http::KEY)).await;
     let agent = f.enroll("upgrade", "https://example.com/mcp");
     let (_http_receiver, http_agent) = upgrade_http::setup(&f).await;

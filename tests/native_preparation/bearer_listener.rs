@@ -46,6 +46,7 @@ async fn start(f: &mut Fixture) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         assert!(f.daemon.as_mut().unwrap().0.try_wait().unwrap().is_none());
+        f.adopt_assigned_port();
         if f.path().join("admin.sock").exists()
             && f.http
                 .get(format!("http://127.0.0.1:{}/livez", f.port))

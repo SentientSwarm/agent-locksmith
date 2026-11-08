@@ -3,6 +3,7 @@ mod clients;
 #[path = "native_process/drain.rs"]
 mod drain;
 #[path = "native_process/fixture.rs"]
+#[allow(dead_code)] // Shared with native_preparation_process_test.
 mod fixture;
 #[path = "native_process/mtls.rs"]
 mod mtls;

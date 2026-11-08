@@ -4,8 +4,25 @@
 
 - Own native preparation request bodies before buffering through daemon shutdown,
   retaining independent body and operation budgets; useful tool calls remain denied.
+- Fail daemon startup immediately when the admin socket or admin HTTPS port
+  cannot be bound, and stop the daemon with an error-level log when any listener
+  stops before shutdown. Previously the daemon kept serving agents without its
+  admin surface and reported the error only when stopped. Listener "bound" log
+  lines now show the actually bound address, so a configured port 0 is usable.
 
 ### Internal
+
+- Start daemon integration tests on port 0 and read the bound address back
+  instead of probing a free port and releasing it, which another process could
+  take first under parallel load. The admin HTTPS off-by-default tests now hold
+  the configured port, so a daemon that tried to bind it would fail startup.
+  The explicit-binding smoke keeps a stable port because its upgrade probes run
+  prior binaries.
+
+- Keep symbols in build-time artifacts of release builds
+  (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
+  corrupts proc-macro dylibs, which broke `cargo build --release`; shipped
+  binaries keep the default release stripping.
 
 - Make native ingress/body deadline tests use explicit pending/body barriers and
   controlled Tokio time, with a nondefault five-second request budget for real

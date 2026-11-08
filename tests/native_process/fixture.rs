@@ -12,6 +12,8 @@ pub struct Fixture {
     pub dir: tempfile::TempDir,
     pub pki: Pki,
     pub port: u16,
+    /// The port in config.yaml: 0 unless `use_stable_port` was called.
+    configured_port: u16,
     pub operator: String,
     pub daemon: Option<process::Guard>,
     pub http: reqwest::Client,
@@ -27,11 +29,9 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let pki = Pki::write(dir.path());
         let operator = operator(dir.path());
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        // Port 0 in config; each start reads the OS-assigned port from the
+        // daemon log, so no probed port can be taken first (AGENT-219).
+        let port = 0;
         let http = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(5))
@@ -42,6 +42,7 @@ impl Fixture {
             dir,
             pki,
             port,
+            configured_port: port,
             operator,
             daemon: None,
             http,
@@ -76,6 +77,9 @@ impl Fixture {
         assert!(self.daemon.is_none());
         let _ = std::fs::remove_file(self.path().join("admin.sock"));
         let log = std::fs::File::create(self.path().join("daemon.log")).unwrap();
+        // With port 0 each start binds a fresh OS-assigned port, which
+        // `ready` reads from the log.
+        self.port = self.configured_port;
         let mut c = process::command(binary);
         c.args(["--config"]).arg(self.path().join("config.yaml"));
         if let Some(key) = key {
@@ -91,11 +95,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             self.assert_running();
-            if self.port == 0
-                && let Some(port) = assigned_port::read(self.path())
-            {
-                self.port = port;
-            }
+            self.adopt_assigned_port();
             if self.path().join("admin.sock").exists()
                 && self
                     .http
@@ -109,6 +109,34 @@ impl Fixture {
             assert!(Instant::now() < deadline, "TLS daemon readiness deadline");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+    /// Configure a fixed probed port instead of port 0. Only for prior
+    /// binaries, which log the configured rather than the bound address;
+    /// a probed port can be taken before the daemon binds it (AGENT-219).
+    pub fn use_stable_port(&mut self) {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let path = self.path().join("config.yaml");
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["listen"]["port"] = port.into();
+        std::fs::write(path, config.to_string()).unwrap();
+        self.configured_port = port;
+        self.port = port;
+    }
+    /// Adopt the agent port the daemon reported binding, once it has.
+    pub fn adopt_assigned_port(&mut self) {
+        if self.port == 0
+            && let Some(port) = assigned_port::read(self.path())
+        {
+            self.port = port;
+        }
+    }
+    /// The admin HTTPS port the daemon reported binding, if enabled.
+    pub fn admin_https_port(&self) -> Option<u16> {
+        assigned_port::admin_https(self.path())
     }
     fn assert_running(&mut self) {
         assert!(

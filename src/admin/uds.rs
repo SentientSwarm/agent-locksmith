@@ -28,7 +28,7 @@ use tracing::{info, warn};
 /// on a `UdsState`, the operator middleware enforces bearer-only auth
 /// (M0..M5 default — UDS path always uses this). When `Some`, the
 /// listener is admin HTTPS in mtls/both mode and the middleware extracts
-/// the peer cert injected by `agent_listener::bind_and_serve_mtls`.
+/// the peer cert injected by `agent_listener::serve_mtls`.
 #[derive(Clone)]
 pub struct OperatorMtlsContext {
     pub auth_mode: AuthMode,
@@ -192,7 +192,7 @@ fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
 }
 
 /// Build the admin router. Public for testing — production wiring uses
-/// `bind_and_serve` below.
+/// [`bind`] and [`serve`] below.
 pub fn build_router(state: UdsState) -> Router {
     // Agent self-service routes that DO require an agent token.
     let agent_authed_routes = Router::new()
@@ -283,14 +283,11 @@ pub fn build_router(state: UdsState) -> Router {
         .nest("/admin/operator", operator_routes)
 }
 
-/// Bind a Unix domain socket at `path` with mode `0o660` and serve the
-/// admin router. Removes a stale socket file from a previous unclean
-/// shutdown if found.
-pub async fn bind_and_serve(
-    path: &FsPath,
-    state: UdsState,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-) -> Result<(), std::io::Error> {
+/// Bind a Unix domain socket at `path` with mode `0o660`. Removes a stale
+/// socket file from a previous unclean shutdown if found. The daemon binds
+/// before spawning [`serve`] so a bind failure fails startup immediately
+/// instead of surfacing only at shutdown (AGENT-217).
+pub fn bind(path: &FsPath) -> Result<UnixListener, std::io::Error> {
     if path.exists() {
         // Sanity check: it's a socket, no process is bound (best-effort).
         let meta = std::fs::metadata(path)?;
@@ -305,7 +302,16 @@ pub async fn bind_and_serve(
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
     info!(socket = %path.display(), "admin UDS listener bound");
+    Ok(listener)
+}
 
+/// Serve the admin router on a socket returned by [`bind`] until
+/// `shutdown` resolves.
+pub async fn serve(
+    listener: UnixListener,
+    state: UdsState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), std::io::Error> {
     let app = build_router(state);
     let make_service = app.into_make_service();
     axum::serve(listener, make_service)

@@ -75,7 +75,7 @@ async fn handle_register(
 }
 
 /// Bind a TLS-terminated bootstrap-only listener. Same TLS-load
-/// fail-fast contract as `admin::https::bind_and_serve` (T4.2).
+/// fail-fast contract as `admin::https::serve` (T4.2).
 pub async fn bind_and_serve(
     addr: SocketAddr,
     cert_path: &Path,

@@ -5,9 +5,10 @@ use crate::oauth::refresh::RefreshOwner;
 pub(super) async fn owned(
     config: AppConfig,
     coord: ShutdownCoordinator,
+    bound: Option<tokio::sync::oneshot::Sender<super::BoundAddrs>>,
 ) -> Result<(), DaemonError> {
     let owner = RefreshOwner::default();
-    let run = super::run_owned(config, coord.clone(), owner.clone());
+    let run = super::run_owned(config, coord.clone(), owner.clone(), bound);
     tokio::pin!(run);
     let result = tokio::select! {
         biased;
