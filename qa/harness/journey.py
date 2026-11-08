@@ -131,11 +131,45 @@ class Journey:
         timeout: float = 30,
         shot: bool = True,
     ) -> None:
+        """Start this page's background step and wait until `ready()` holds."""
         step = self.page.step(name)
-        log = self.work / f"{name}.log"
+        self.ran.append(name)
+        text = self._launch(step.code, name, f"step-{name}", ready, timeout)
+        if shot:
+            self._terminal(name, step.code, text)
+
+    def start_from(
+        self,
+        page: Path,
+        step_name: str,
+        proc: str,
+        ready: Callable[[], bool],
+        timeout: float = 30,
+    ) -> None:
+        """Start an earlier page's background step (no figure), named `proc` for stop()/log()."""
+        from .guide import load
+
+        other = load(page)
+        self._launch(
+            other.step(step_name).code,
+            proc,
+            f"prereq-{other.stem}-{step_name}",
+            ready,
+            timeout,
+        )
+
+    def _launch(
+        self,
+        code: str,
+        proc_name: str,
+        label: str,
+        ready: Callable[[], bool],
+        timeout: float,
+    ) -> str:
+        log = self.work / f"{proc_name}.log"
         handle = log.open("w")
         proc = subprocess.Popen(
-            ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", step.code],
+            ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", code],
             cwd=self.cwd,
             env=self.env,
             stdout=handle,
@@ -143,23 +177,18 @@ class Journey:
             start_new_session=True,
         )
         handle.close()
-        self.procs[name] = (proc, log)
-        self.ran.append(name)
+        self.procs[proc_name] = (proc, log)
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                break
+        while time.monotonic() < deadline and proc.poll() is None:
             if _quiet(ready):
                 text = log.read_text(errors="replace")
-                self._record(f"step-{name}", step.code, Result(0, text))
-                if shot:
-                    self._terminal(name, step.code, text)
-                return
+                self._record(label, code, Result(0, text))
+                return text
             time.sleep(0.2)
         text = log.read_text(errors="replace")
-        self._record(f"step-{name}", step.code, Result(proc.returncode or -1, text))
+        self._record(label, code, Result(proc.returncode or -1, text))
         raise StepFailed(
-            f"step {name} not ready (exit {proc.returncode}): {self._tail(text)}"
+            f"{label} not ready (exit {proc.returncode}): {self._tail(text)}"
         )
 
     def substitute(self, note: str) -> None:
@@ -194,7 +223,9 @@ class Journey:
         if self._browser is None:
             self._browser = figure.Browser(trust_dev_ca)
             note = "browser steps driven by headless Chrome (Playwright)"
-            self.substitute(note + (", accepting the development CA" if trust_dev_ca else ""))
+            self.substitute(
+                note + (", accepting the development CA" if trust_dev_ca else "")
+            )
         return self._browser
 
     def browser_shot(self, name: str) -> None:

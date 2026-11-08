@@ -1,0 +1,108 @@
+<svg class="rich-terminal" viewBox="0 0 1238 367.2" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-2652571655-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-2652571655-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-2652571655-r1 { fill: #98a84b;font-weight: bold }
+.terminal-2652571655-r2 { fill: #c5c8c6 }
+.terminal-2652571655-r3 { fill: #98a84b }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-2652571655-clip-terminal">
+      <rect x="0" y="0" width="1219.0" height="316.2" />
+    </clipPath>
+    <clipPath id="terminal-2652571655-line-0">
+    <rect x="0" y="1.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-1">
+    <rect x="0" y="25.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-2">
+    <rect x="0" y="50.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-3">
+    <rect x="0" y="74.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-4">
+    <rect x="0" y="99.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-5">
+    <rect x="0" y="123.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-6">
+    <rect x="0" y="147.9" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-7">
+    <rect x="0" y="172.3" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-8">
+    <rect x="0" y="196.7" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-9">
+    <rect x="0" y="221.1" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-10">
+    <rect x="0" y="245.5" width="1220" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-2652571655-line-11">
+    <rect x="0" y="269.9" width="1220" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1236" height="365.2" rx="8"/><text class="terminal-2652571655-title" fill="#c5c8c6" text-anchor="middle" x="618" y="27">08-operate:&#160;agent-rotate</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-2652571655-clip-terminal)">
+    
+    <g class="terminal-2652571655-matrix">
+    <text class="terminal-2652571655-r1" x="0" y="20" textLength="622.2" clip-path="url(#terminal-2652571655-line-0)">$&#160;export&#160;LOCKSMITH_AGENT_TOKEN=&quot;$BILLING_BOT_TOKEN&quot;</text><text class="terminal-2652571655-r2" x="1220" y="20" textLength="12.2" clip-path="url(#terminal-2652571655-line-0)">
+</text><text class="terminal-2652571655-r1" x="0" y="44.4" textLength="732" clip-path="url(#terminal-2652571655-line-1)">$&#160;locksmith&#160;--format&#160;json&#160;status&#160;|&#160;jq&#160;-c&#160;&#x27;{name,&#160;allowlist}&#x27;</text><text class="terminal-2652571655-r2" x="1220" y="44.4" textLength="12.2" clip-path="url(#terminal-2652571655-line-1)">
+</text><text class="terminal-2652571655-r1" x="0" y="68.8" textLength="390.4" clip-path="url(#terminal-2652571655-line-2)">$&#160;OLD_TOKEN=&quot;$BILLING_BOT_TOKEN&quot;</text><text class="terminal-2652571655-r2" x="1220" y="68.8" textLength="12.2" clip-path="url(#terminal-2652571655-line-2)">
+</text><text class="terminal-2652571655-r1" x="0" y="93.2" textLength="939.4" clip-path="url(#terminal-2652571655-line-3)">$&#160;locksmith&#160;--format&#160;json&#160;rotate&#160;&gt;&#160;&quot;$LOCKSMITH_HOME/billing-bot-rotated.json&quot;</text><text class="terminal-2652571655-r2" x="1220" y="93.2" textLength="12.2" clip-path="url(#terminal-2652571655-line-3)">
+</text><text class="terminal-2652571655-r1" x="0" y="117.6" textLength="1061.4" clip-path="url(#terminal-2652571655-line-4)">$&#160;export&#160;BILLING_BOT_TOKEN=&quot;$(jq&#160;-r&#160;.token&#160;&quot;$LOCKSMITH_HOME/billing-bot-rotated.json&quot;)&quot;</text><text class="terminal-2652571655-r2" x="1220" y="117.6" textLength="12.2" clip-path="url(#terminal-2652571655-line-4)">
+</text><text class="terminal-2652571655-r1" x="0" y="142" textLength="353.8" clip-path="url(#terminal-2652571655-line-5)">$&#160;unset&#160;LOCKSMITH_AGENT_TOKEN</text><text class="terminal-2652571655-r2" x="1220" y="142" textLength="12.2" clip-path="url(#terminal-2652571655-line-5)">
+</text><text class="terminal-2652571655-r1" x="0" y="166.4" textLength="585.6" clip-path="url(#terminal-2652571655-line-6)">$&#160;for&#160;t&#160;in&#160;&quot;$OLD_TOKEN&quot;&#160;&quot;$BILLING_BOT_TOKEN&quot;;&#160;do</text><text class="terminal-2652571655-r2" x="1220" y="166.4" textLength="12.2" clip-path="url(#terminal-2652571655-line-6)">
+</text><text class="terminal-2652571655-r1" x="0" y="190.8" textLength="927.2" clip-path="url(#terminal-2652571655-line-7)">$&#160;&#160;&#160;curl&#160;-s&#160;-o&#160;/dev/null&#160;-w&#160;&#x27;%{http_code}\n&#x27;&#160;-H&#160;&quot;Authorization:&#160;Bearer&#160;$t&quot;&#160;\</text><text class="terminal-2652571655-r2" x="1220" y="190.8" textLength="12.2" clip-path="url(#terminal-2652571655-line-7)">
+</text><text class="terminal-2652571655-r3" x="0" y="215.2" textLength="719.8" clip-path="url(#terminal-2652571655-line-8)">&#160;&#160;&#160;&#160;&#160;&#160;&quot;http://127.0.0.1:$LOCKSMITH_PORT/api/accounts/check&quot;</text><text class="terminal-2652571655-r2" x="1220" y="215.2" textLength="12.2" clip-path="url(#terminal-2652571655-line-8)">
+</text><text class="terminal-2652571655-r1" x="0" y="239.6" textLength="73.2" clip-path="url(#terminal-2652571655-line-9)">$&#160;done</text><text class="terminal-2652571655-r2" x="1220" y="239.6" textLength="12.2" clip-path="url(#terminal-2652571655-line-9)">
+</text><text class="terminal-2652571655-r2" x="0" y="264" textLength="573.4" clip-path="url(#terminal-2652571655-line-10)">{&quot;name&quot;:&quot;billing-bot&quot;,&quot;allowlist&quot;:[&quot;accounts&quot;]}</text><text class="terminal-2652571655-r2" x="1220" y="264" textLength="12.2" clip-path="url(#terminal-2652571655-line-10)">
+</text><text class="terminal-2652571655-r2" x="0" y="288.4" textLength="36.6" clip-path="url(#terminal-2652571655-line-11)">401</text><text class="terminal-2652571655-r2" x="1220" y="288.4" textLength="12.2" clip-path="url(#terminal-2652571655-line-11)">
+</text><text class="terminal-2652571655-r2" x="0" y="312.8" textLength="36.6" clip-path="url(#terminal-2652571655-line-12)">200</text><text class="terminal-2652571655-r2" x="1220" y="312.8" textLength="12.2" clip-path="url(#terminal-2652571655-line-12)">
+</text>
+    </g>
+    </g>
+</svg>

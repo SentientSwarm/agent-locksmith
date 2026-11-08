@@ -17,9 +17,12 @@ those runs, so what you see is what the current release does.
 | 4 | [Enrol agents](04-enrol-agents.md) | enrol with bootstrap tokens, identify agents by client certificate, revoke a certificate |
 | 5 | [Connect an MCP service](05-mcp-service.md) | observe an MCP server, review and grant one tool, use it as the agent |
 | 6 | [Connect an OAuth service](06-oauth-service.md) | declare a provider contract, approve access in the browser, let an agent act as the account |
+| 7 | [Audit and monitor](07-audit-and-monitor.md) | configure the audit, operational and process logs, watch health, read who did what |
+| 8 | [Day-two operations](08-operate.md) | rotate agent and operator tokens, back up and restore, revoke an agent |
 
-More journeys follow the same pattern: audit and monitoring, and day-two
-operations.
+Not yet covered here: upgrading an existing 2.x instance (see the
+[change notes](../user/changes/)) and running Locksmith as a system service
+(see the hardened unit in `dist/systemd/`).
 
 ## Conventions
 
