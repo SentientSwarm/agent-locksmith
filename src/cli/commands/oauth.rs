@@ -22,6 +22,54 @@ pub use args::{BootstrapArgs, OauthCmd};
 
 pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<(), CliError> {
     match cmd {
+        OauthCmd::Connect {
+            name,
+            label,
+            profile,
+            client_generation,
+            redirect_profile,
+            expected_config_revision,
+        } => {
+            component(&name)?;
+            component(&label)?;
+            let op = CliClient::op_token()?;
+            let body = json!({"session_label":label,"auth_profile_id":profile,"client_generation":client_generation,"redirect_profile_id":redirect_profile,"expected_config_revision":expected_config_revision,"requested_scopes":["read"]});
+            let result: Value = client
+                .json(
+                    "POST",
+                    &format!("/admin/operator/tools/{name}/oauth/attempts"),
+                    Auth::Operator(&op),
+                    Some(&body),
+                )
+                .await?;
+            print(&result, format);
+            Ok(())
+        }
+        OauthCmd::AttemptStatus { name, attempt } => {
+            consent_request(client, format, &name, "attempts", &attempt, false, None).await
+        }
+        OauthCmd::Cancel { name, attempt } => {
+            consent_request(client, format, &name, "attempts", &attempt, true, None).await
+        }
+        OauthCmd::AccountStatus { name, label } => {
+            consent_request(client, format, &name, "accounts", &label, false, None).await
+        }
+        OauthCmd::Disconnect {
+            name,
+            label,
+            if_match,
+        } => {
+            consent_request(
+                client,
+                format,
+                &name,
+                "accounts",
+                &label,
+                true,
+                Some(&if_match),
+            )
+            .await
+        }
         OauthCmd::Bootstrap(args) => bootstrap(client, format, args).await,
         OauthCmd::Status { name, label } => status(client, format, &name, label.as_deref()).await,
         OauthCmd::Revoke { name, label } => revoke(client, format, &name, label.as_deref()).await,
@@ -153,4 +201,44 @@ fn bootstrap_token(token: Option<String>, stdin: bool) -> Result<String, CliErro
         return Err(CliError::Usage("refresh token is empty".into()));
     }
     Ok(token)
+}
+
+fn component(value: &str) -> Result<(), CliError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(CliError::Usage("invalid consent path component".into()));
+    }
+    Ok(())
+}
+async fn consent_request(
+    client: &CliClient,
+    format: Format,
+    name: &str,
+    kind: &str,
+    id: &str,
+    delete: bool,
+    expected: Option<&str>,
+) -> Result<(), CliError> {
+    component(name)?;
+    component(id)?;
+    let op = CliClient::op_token()?;
+    let path = format!("/admin/operator/tools/{name}/oauth/{kind}/{id}");
+    let result: Value = if let Some(expected) = expected {
+        client
+            .json_if_match("DELETE", &path, Auth::Operator(&op), expected)
+            .await?
+    } else if delete {
+        client
+            .unit("DELETE", &path, Auth::Operator(&op), None)
+            .await?;
+        json!({"canceled":true})
+    } else {
+        client.json("GET", &path, Auth::Operator(&op), None).await?
+    };
+    print(&result, format);
+    Ok(())
 }

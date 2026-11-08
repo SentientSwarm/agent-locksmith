@@ -112,6 +112,7 @@ async fn run_owned(
     mut config: AppConfig,
     coord: ShutdownCoordinator,
     refresh_owner: crate::oauth::refresh::RefreshOwner,
+    callbacks: crate::oauth::consent::server::Supervisor,
     bound: Option<oneshot::Sender<BoundAddrs>>,
 ) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
@@ -193,6 +194,7 @@ async fn run_owned(
         }
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
+    let mut consent_callbacks = None;
 
     let (
         admin_state,
@@ -212,6 +214,13 @@ async fn run_owned(
         let setup =
             build_admin_substrate(shared_config.clone(), resolved_creds.clone(), refresh_owner)
                 .await?;
+        // The consent callback listener binds and serves with the other
+        // listeners below, after every earlier bind succeeds (AGENT-217).
+        consent_callbacks = setup
+            .uds_state
+            .oauth
+            .as_ref()
+            .and_then(|o| o.consent.clone());
         (
             Some(setup.uds_state),
             Some(setup.audit.clone()),
@@ -437,6 +446,7 @@ async fn run_owned(
             let listener = agent_listener;
             Box::pin(async move {
                 crate::agent_listener::serve_mtls(
+                    "agent listener",
                     listener,
                     &server_cert_path,
                     &server_key_path,
@@ -564,6 +574,17 @@ async fn run_owned(
         rt.listeners.bound("agent", agent_addr);
     }
     let (exits, mut exited) = mpsc::unbounded_channel::<&'static str>();
+    // The callback listener is the last bind: a failure here returns before
+    // any listener task is spawned. Its exit is watched like the others.
+    if let Some(consent) = consent_callbacks {
+        let exits = exits.clone();
+        callbacks
+            .start(consent, move || {
+                let _ = exits.send("OAuth consent callback listener");
+            })
+            .await
+            .map_err(|e| DaemonError::AdminConfig(e.to_string()))?;
+    }
     let mut agent_task = spawn_listener("agent listener", &exits, agent_serve);
     let mut admin_task = admin_serve.map(|serve| spawn_listener("admin listener", &exits, serve));
     let mut admin_https_task =
@@ -1049,7 +1070,21 @@ async fn build_admin_substrate(
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new());
+            let consent = match config.load().oauth_consent.clone() {
+                Some(c) => Some(
+                    crate::oauth::consent::Runtime::new(
+                        pool.clone(),
+                        key.clone(),
+                        c,
+                        refresh_owner.clone(),
+                    )
+                    .await
+                    .map_err(|e| DaemonError::AdminConfig(e.to_string()))?,
+                ),
+                None => None,
+            };
             let admin = crate::oauth::OauthAdminState {
+                consent,
                 registrations: registrations.clone(),
                 sessions: sessions.clone(),
                 sealing_key: key.clone(),
@@ -1065,6 +1100,11 @@ async fn build_admin_substrate(
             (Some(admin), Some(runtime))
         }
         Err(crate::oauth::SealingKeyError::EnvVarUnset { .. }) => {
+            if config.load().oauth_consent.is_some() {
+                return Err(DaemonError::AdminConfig(
+                    "oauth_consent requires OAuth sealing key".into(),
+                ));
+            }
             info!("oauth: LOCKSMITH_OAUTH_SEALING_KEY unset; OAuth admin routes not mounted");
             (None, None)
         }

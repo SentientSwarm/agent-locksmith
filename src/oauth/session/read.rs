@@ -28,7 +28,7 @@ impl OauthSessionRepository {
     ) -> Result<Vec<(String, String)>, OauthSessionError> {
         let rows = sqlx::query(
             "SELECT name, session_label FROM oauth_sessions \
-             WHERE degraded = 0 AND refresh_pending = 0 AND access_token_expires_at IS NOT NULL \
+             WHERE kind = 'legacy' AND degraded = 0 AND refresh_pending = 0 AND access_token_expires_at IS NOT NULL \
                AND access_token_expires_at <= ? \
              ORDER BY access_token_expires_at ASC",
         )
@@ -52,7 +52,7 @@ impl OauthSessionRepository {
     pub async fn list_all(&self) -> Result<Vec<SessionMetadata>, OauthSessionError> {
         let rows = sqlx::query(
             "SELECT name, session_label, degraded, access_token_expires_at, refresh_pending \
-             FROM oauth_sessions ORDER BY name, session_label",
+             FROM oauth_sessions WHERE kind = 'legacy' ORDER BY name, session_label",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -73,6 +73,9 @@ impl OauthSessionRepository {
 }
 
 pub(super) fn decode(key: &SealingKey, row: SqliteRow) -> Result<OauthSession, OauthSessionError> {
+    if row.try_get::<String, _>("kind")? != "legacy" {
+        return Err(OauthSessionError::UnsupportedKind);
+    }
     let refresh_ct: Vec<u8> = row.try_get("refresh_token_ciphertext")?;
     let refresh_nonce: Vec<u8> = row.try_get("refresh_token_nonce")?;
     Ok(OauthSession {

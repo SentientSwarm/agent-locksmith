@@ -142,8 +142,8 @@ pub async fn serve_mtls(
         rt.listeners.bound("admin", addr);
     }
     let app = super::uds::build_router(state);
-    info!(addr = %addr, mode = ?auth_mode, "admin HTTPS (mTLS) listener bound");
     crate::agent_listener::serve_mtls(
+        "admin HTTPS listener",
         listener,
         cert_path,
         key_path,

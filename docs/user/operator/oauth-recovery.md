@@ -6,6 +6,9 @@ including after a restart. Bootstrap, background refresh and inline proxy
 refresh use the same sealed custody. A successful exchange publishes the whole
 replacement pair only after its database transaction commits.
 
+For controlled owner-bound consent accounts, use the separate
+[consent guide](oauth-consent.md). The commands below manage legacy custody.
+
 ## Diagnose and reconnect deliberately
 
 Inspect the explicitly selected registration and label:

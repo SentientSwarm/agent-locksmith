@@ -8,7 +8,14 @@ pub(super) async fn owned(
     bound: Option<tokio::sync::oneshot::Sender<super::BoundAddrs>>,
 ) -> Result<(), DaemonError> {
     let owner = RefreshOwner::default();
-    let run = super::run_owned(config, coord.clone(), owner.clone(), bound);
+    let callbacks = crate::oauth::consent::server::Supervisor::default();
+    let run = super::run_owned(
+        config,
+        coord.clone(),
+        owner.clone(),
+        callbacks.clone(),
+        bound,
+    );
     tokio::pin!(run);
     let result = tokio::select! {
         biased;
@@ -20,6 +27,7 @@ pub(super) async fn owned(
     };
     owner.close();
     coord.trigger();
+    callbacks.stop_join().await;
     owner.wait().await;
     result
 }

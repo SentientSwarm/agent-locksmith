@@ -60,6 +60,7 @@ pub async fn bind_and_serve_mtls(
 ) -> Result<(), io::Error> {
     let listener = TcpListener::bind(addr).await?;
     serve_mtls(
+        "agent listener",
         listener,
         server_cert_path,
         server_key_path,
@@ -71,7 +72,11 @@ pub async fn bind_and_serve_mtls(
     .await
 }
 
+/// Serve mTLS on `listener`. `name` labels its log lines, because the
+/// admin HTTPS listener reuses this loop.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_mtls(
+    name: &'static str,
     listener: TcpListener,
     server_cert_path: &Path,
     server_key_path: &Path,
@@ -86,7 +91,7 @@ pub async fn serve_mtls(
     let server_config =
         build_server_config(server_cert_path, server_key_path, ca_bundle_pem, auth_mode)?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
-    info!(addr = %addr, mode = ?auth_mode, "agent listener (mTLS) bound");
+    info!(addr = %addr, mode = ?auth_mode, "{name} (mTLS) bound");
 
     tokio::pin!(shutdown);
     let stop = tokio_util::sync::CancellationToken::new();
@@ -96,7 +101,7 @@ pub async fn serve_mtls(
         tokio::select! {
             biased;
             _ = &mut shutdown => {
-                info!("agent listener (mTLS): shutdown signal observed; closing accept loop");
+                info!("{name} (mTLS): shutdown signal observed; closing accept loop");
                 break;
             }
             _ = connections.join_next(), if !connections.is_empty() => {},
@@ -104,7 +109,7 @@ pub async fn serve_mtls(
                 let (tcp, _peer) = match accept {
                     Ok(p) => p,
                     Err(e) => {
-                        warn!(error = %e, "agent listener: accept failed");
+                        warn!(error = %e, "{name}: accept failed");
                         continue;
                     }
                 };

@@ -12,6 +12,12 @@
 
 ### Changed
 
+- Add [controlled operator consent](docs/user/operator/oauth-consent.md) with
+  public-ID ownership, sealed `connected_unbound` custody, strict twin identity
+  checks and revision-checked disconnect. Migration 0015 preserves legacy custody;
+  older binaries refuse the new schema/config. Hosted provider acceptance,
+  native OAuth activation and provider refresh remain outside this increment.
+
 - Document and exercise [sealed-state recovery](docs/user/operator/sealed-state-recovery.md):
   SQLite-consistent snapshots, separate stored/OAuth key custody, isolated restore
   and selected-account verification. Missing/wrong keys, revoked-owner quarantine
@@ -48,6 +54,12 @@
   not full onboarding/provider/release acceptance; planned 3.0.0 is unchanged.
 
 ### Internal
+
+- Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
+  after its TLS configuration loads. It previously logged both
+  `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,
+  `agent listener (mTLS) bound` with the admin address. The agent listener's
+  messages are unchanged.
 
 - Start daemon integration tests on port 0 and read the bound address back
   instead of probing a free port and releasing it, which another process could

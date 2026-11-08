@@ -181,6 +181,11 @@ fn build_registrations_admin_router(
 /// (`UdsState.oauth = Some(_)`).
 fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
     use crate::oauth::admin;
+    let consent = state
+        .consent
+        .clone()
+        .map(crate::oauth::consent::api::router)
+        .unwrap_or_default();
     Router::new()
         .route("/oauth", get(admin::op_oauth_list))
         .route(
@@ -189,6 +194,7 @@ fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
         )
         .route("/oauth/{name}/bootstrap", post(admin::op_oauth_bootstrap))
         .with_state(state)
+        .merge(consent)
 }
 
 /// Build the admin router. Public for testing — production wiring uses
@@ -281,6 +287,9 @@ pub fn build_router(state: UdsState) -> Router {
     Router::new()
         .nest("/admin/agent", agent_routes)
         .nest("/admin/operator", operator_routes)
+        .layer(axum::middleware::from_fn(
+            crate::oauth::consent::api::protect_errors,
+        ))
 }
 
 /// Bind a Unix domain socket at `path` with mode `0o660`. Removes a stale

@@ -101,6 +101,10 @@ LOCKSMITH_CONTEXT_PRIOR_DAEMON=/path/to/preserved/d7/locksmithd \
   cargo test --locked --test native_context_process_test upgrade -- --ignored --nocapture
 ```
 
+The upgrade probe holds only while the current schema is 14 (through commit
+`4b777cb`). After migration 0015 the prior binary refuses the upgraded database;
+the consent upgrade probe covers that refusal.
+
 The new separate TLS receiver checks merged values against the immutable review
 and reads the committed admission/digest before each effect. Actual daemon/CLI
 journeys cover X/shared-X/Y/None, projection, override refusal, candidate versus
