@@ -9,6 +9,8 @@ use std::{
 use tokio::sync::mpsc::Receiver;
 
 /// An unfinished HTTP response drop retires the session before more admission.
+/// A request stream is finished once its final response or error has been
+/// delivered: SDK clients stop reading there, before the server sees EOF.
 pub struct SessionStream<T> {
     entry: Arc<Entry<T>>,
     receiver: Option<Receiver<ServerSseMessage>>,
@@ -48,12 +50,26 @@ impl<T> Stream for SessionStream<T> {
             Some(rx) => rx.poll_recv(cx),
             None => Poll::Ready(None),
         };
-        if matches!(result, Poll::Ready(None)) {
-            this.finished = true;
+        match &result {
+            Poll::Ready(None) => this.finished = true,
+            Poll::Ready(Some(event)) if !this.standalone && is_final(event) => {
+                this.finished = true;
+            }
+            _ => {}
         }
         result
     }
 }
+/// The response or error that ends a request stream.
+fn is_final(event: &ServerSseMessage) -> bool {
+    event.message.as_deref().is_some_and(|message| {
+        matches!(
+            message,
+            rmcp::model::JsonRpcMessage::Response(_) | rmcp::model::JsonRpcMessage::Error(_)
+        )
+    })
+}
+
 impl<T> Drop for SessionStream<T> {
     fn drop(&mut self) {
         {

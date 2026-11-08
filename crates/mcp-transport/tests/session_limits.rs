@@ -152,3 +152,50 @@ async fn standalone_get_keeps_its_separate_request_budget() {
     manager.wait_retired(&id).await;
     assert_eq!(pool.snapshot().released, 1);
 }
+
+#[tokio::test]
+async fn response_read_then_dropped_before_eof_keeps_the_session() {
+    // SDK clients stop reading a request's response stream once the final
+    // response arrives, before the server sees EOF. That is a completed
+    // request, not an abandoned one: the session must stay usable.
+    let pool = Pool::new(config()).unwrap();
+    let manager = scoped(&pool, "a", "x", "1");
+    let id = open(&manager, Handler::default()).await;
+    let mut reply = manager.create_stream(&id, ping(1)).await.unwrap();
+    assert!(reply.next().await.is_some(), "the ping response arrives");
+    drop(reply);
+    assert!(manager.has_session(&id).await.unwrap());
+    let mut next = manager.create_stream(&id, ping(2)).await.unwrap();
+    assert!(
+        next.next().await.is_some(),
+        "the session still serves requests"
+    );
+    drop(next);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
+async fn request_dropped_before_its_response_still_retires() {
+    // An abandoned in-flight request leaves the session's state uncertain,
+    // so dropping its stream before any response still retires it: the
+    // session stops admitting work at once.
+    let pool = Pool::new(config()).unwrap();
+    let manager = scoped(&pool, "a", "x", "1");
+    let handler = Handler::default();
+    let entered = handler.entered.clone();
+    let id = open(&manager, handler).await;
+    let stall = manager
+        .create_stream(
+            &id,
+            message(serde_json::json!(
+                {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stall"}}
+            )),
+        )
+        .await
+        .unwrap();
+    until(|| entered.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    assert_eq!(pool.snapshot().closing, 0);
+    drop(stall);
+    assert_eq!(pool.snapshot().closing, 1, "the drop retires the session");
+    assert!(manager.create_stream(&id, ping(2)).await.is_err());
+}
