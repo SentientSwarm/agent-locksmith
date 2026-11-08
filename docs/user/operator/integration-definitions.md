@@ -57,9 +57,11 @@ runs during creation. HTTP and manually authored native connections retain
 Only a `local.*` pin can be promoted. The declared profile fixes the permitted
 selection mechanism: `none` with empty scopes requires explicit None; `bearer`
 with empty scopes requires a live stored bearer reference; `oauth_provider`
-with exactly `["read"]` requires an explicitly configured controlled-linear-v1
-profile. Header profiles, other scope combinations and all bundled `builtin.*`
-profiles remain refused. Candidate/fixture labels never grant eligibility.
+with exactly `["read"]` requires an explicitly configured controlled Linear profile. The exact Slack scopes `search:read.public` and
+`channels:history` require an explicit confidential Slack profile. Each OAuth
+declaration must match that profile's exact resource and scope policy. Header
+profiles, other scope combinations and all bundled `builtin.*` profiles remain
+refused. Candidate/fixture labels never grant eligibility.
 
 The [bearer example](../../../definitions/customer-bearer.example.json) and
 [controlled example](../../../definitions/customer-controlled.example.json)
@@ -68,6 +70,11 @@ controlled variant, first configure [controlled consent](oauth-consent.md),
 create the instance with its exact profile resource, then use `--oauth-profile`
 with that trusted profile's ID. The server obtains the profile digest and PKCE
 template; a definition cannot supply them or change the trusted endpoints.
+The [confidential Slack](slack-oauth.md) guide describes its explicit profiles
+and supported fixture kind; the
+[Slack example](../../../definitions/customer-slack.example.json) declares its
+separate two-scope policy. [Hosted Linear](hosted-linear.md) remains a manual
+connection path; its profile cannot promote a definition pin.
 
 Read `definition_control.revision` from `tool get` and supply it literally:
 
@@ -76,11 +83,11 @@ locksmith tool get customer --format json
 locksmith tool activate-definition customer --if-match REVISION --compact --format json
 ```
 
-For the controlled variant append `--oauth-profile PROFILE_ID`. Omit that option
+For an OAuth variant append `--oauth-profile PROFILE_ID`. Omit that option
 for None/bearer. Omit `--compact` for standard MCP only. HTTP clients use
 `PUT /admin/operator/tools/NAME/definition-activation`, `If-Match: REVISION` and
 `{"enabled":true,"compact":true}` (plus `"oauth_profile_id":"PROFILE_ID"`
-only for controlled OAuth). No secrets belong in these commands.
+only for an explicitly supported OAuth profile). No secrets belong in these commands.
 
 Promotion preserves the exact pin and destination and performs **zero upstream
 requests**, including no retry of unrelated degraded credential-backend references.
@@ -100,7 +107,7 @@ locksmith agent set-credential AGENT customer --no-auth
 The second command is only for a None declaration. For bearer, use the existing
 `--stored-bearer-stdin` ingestion or `--stored-bearer-ref REF` selection; do not
 put a value in argv. Wrong mechanism or unavailable reference refuses without
-changing the selection or creating a sealed row. For controlled OAuth complete
+changing the selection or creating a sealed row. For supported OAuth complete
 owner-bound consent, inspect `oauth account-status`, and use
 [select-oauth](native-oauth.md) with its separate account revision. An old legacy
 OAuth label or registration template cannot substitute for that selection.

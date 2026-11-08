@@ -36,6 +36,7 @@ pub(crate) fn mechanism(p: &AuthProfile, activation: &Activation) -> bool {
         }
         (Mechanism::OauthProvider, Activation::ControlledOauth { .. }) => {
             p.required_scopes == ["read"]
+                || p.required_scopes == ["search:read.public", "channels:history"]
         }
         _ => false,
     }
@@ -78,6 +79,11 @@ pub(crate) async fn selected(
             return Err(Error::Invalid);
         }
         _ => (),
+    }
+    if let AuthSpec::OauthPkce { scopes, .. } = &r.auth
+        && scopes != &declared.required_scopes
+    {
+        return Err(Error::Invalid);
     }
     let Some(auth) = auth else {
         return Ok(());

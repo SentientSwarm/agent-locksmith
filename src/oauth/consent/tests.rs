@@ -581,3 +581,9 @@ async fn failed_callback_start_never_runs_the_exit_hook() {
 
 #[path = "refresh/tests.rs"]
 mod refresh_cases;
+
+#[path = "slack_clients_tests.rs"]
+mod slack_clients;
+
+#[path = "account_scope_tests.rs"]
+mod account_scope;

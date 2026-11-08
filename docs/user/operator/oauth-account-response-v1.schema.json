@@ -17,7 +17,9 @@
           "enum": [
             "controlled_linear_v1",
             "linear_hosted_v1",
-            "linear_hosted_fixture_v1"
+            "linear_hosted_fixture_v1",
+            "slack_confidential_v1",
+            "slack_confidential_fixture_v1"
           ]
         },
         "profile": {
@@ -57,14 +59,22 @@
           "const": true
         },
         "requested_scopes": {
-          "const": [
-            "read"
+          "enum": [
+            [
+              "read"
+            ],
+            [
+              "search:read.public",
+              "channels:history"
+            ],
+            null
           ]
         },
         "granted_scope": {
           "enum": [
             "read",
-            null
+            null,
+            "search:read.public,channels:history"
           ]
         },
         "token_version": {
@@ -211,7 +221,19 @@
                 "unexpected_initialized_response",
                 "user_mismatch",
                 "version_exhausted",
-                "workspace_mismatch"
+                "workspace_mismatch",
+                "client_unavailable",
+                "client_generation_conflict",
+                "client_retired",
+                "deadline",
+                "http",
+                "identity_mismatch",
+                "identity_http_refused",
+                "identity_body_limit",
+                "slack_code_refused",
+                "slack_client_refused",
+                "slack_refresh_refused",
+                "slack_error_response"
               ]
             },
             "message": {
@@ -258,7 +280,8 @@
             "tools_list",
             "workspace",
             "user",
-            "commit"
+            "commit",
+            "identity"
           ]
         },
         "safe_reason": {
@@ -324,7 +347,19 @@
             "unexpected_initialized_response",
             "user_mismatch",
             "version_exhausted",
-            "workspace_mismatch"
+            "workspace_mismatch",
+            "client_unavailable",
+            "client_generation_conflict",
+            "client_retired",
+            "deadline",
+            "http",
+            "identity_mismatch",
+            "identity_http_refused",
+            "identity_body_limit",
+            "slack_code_refused",
+            "slack_client_refused",
+            "slack_refresh_refused",
+            "slack_error_response"
           ]
         },
         "cleanup": {

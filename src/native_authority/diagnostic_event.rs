@@ -48,6 +48,8 @@ const REASONS: &[&str] = &[
     "tool_outcome_unknown",
     "request_cancelled",
     "operation_deadline",
+    "deadline",
+    "http",
     "shutting_down",
     "observation_capacity",
     "tools_list_required",

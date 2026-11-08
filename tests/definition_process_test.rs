@@ -48,3 +48,11 @@ mod upgrade20;
 async fn definition_policy_schema19_prior_refusal_reopen() {
     upgrade20::exercise().await;
 }
+
+#[path = "definition_process/upgrade21.rs"]
+mod upgrade21;
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an actual retained schema-20 daemon in LOCKSMITH_SLACK_PRIOR_DAEMON"]
+async fn slack_schema20_prior_refusal_ciphertext_highwater_reopen() {
+    upgrade21::exercise().await;
+}

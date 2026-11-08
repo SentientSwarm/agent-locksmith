@@ -116,7 +116,9 @@ pub(super) async fn response(reply: Reply, hosted: bool) -> Result<(Value, Optio
                 if count > 128 {
                     return Err(Error("upstream_stream"));
                 }
-                let event = event.map_err(|_| Error("upstream_stream"))?;
+                let event = event.map_err(|e| {
+                    Error(locksmith_mcp_transport::io_code(&e).unwrap_or("upstream_stream"))
+                })?;
                 if let Some(data) = event.data.filter(|d| !d.is_empty()) {
                     let value = strict_json::parse(data.as_bytes(), Default::default())
                         .map_err(|_| Error("upstream_json"))?;

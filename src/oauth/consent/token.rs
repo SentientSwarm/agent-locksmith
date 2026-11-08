@@ -52,7 +52,11 @@ pub(super) fn client(p: &config::Profile) -> Result<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(if p.hosted() { 30 } else { 5 }))
+        .timeout(Duration::from_secs(if p.hosted() || p.slack() {
+            30
+        } else {
+            5
+        }))
         .connect_timeout(Duration::from_secs(3));
     for c in
         reqwest::Certificate::from_pem_bundle(&roots(p)?).map_err(|_| Error("tls_unavailable"))?
@@ -61,38 +65,26 @@ pub(super) fn client(p: &config::Profile) -> Result<reqwest::Client> {
     }
     b.build().map_err(|_| Error("tls_unavailable"))
 }
-pub(super) async fn exchange(p: &config::Profile, code: &str, verifier: &str) -> Result<Token> {
-    let mut response = client(p)?
-        .post(&p.token_endpoint)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", &p.client_id),
-            ("redirect_uri", &p.redirect_uri),
-            ("resource", &p.resource),
-            ("code", code),
-            ("code_verifier", verifier),
-        ])
-        .send()
-        .await
-        .map_err(|_| Error("request_failed"))?;
-    if response.status() != reqwest::StatusCode::OK {
+pub(super) async fn exchange(
+    p: &config::Profile,
+    code: &str,
+    verifier: &str,
+    client_secret: Option<&str>,
+) -> Result<Token> {
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("client_id", &p.client_id),
+        ("redirect_uri", &p.redirect_uri),
+        ("resource", &p.resource),
+        ("code", code),
+        ("code_verifier", verifier),
+    ];
+    confidential(p, client_secret, &mut form)?;
+    let (status, bytes) = super::token_io::post(p, &client(p)?, &form).await?;
+    if status != reqwest::StatusCode::OK {
         return Err(Error("token_http_refused"));
     }
-    if response.content_length().is_some_and(|n| n > 65536) {
-        return Err(Error("token_body_limit"));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| Error("token_body_incomplete"))?
-    {
-        if bytes.len() + chunk.len() > 65536 {
-            return Err(Error("token_body_limit"));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    decode(p, &bytes)
+    super::token_io::checked_decode(p, &bytes, client_secret)
 }
 pub(super) fn secret(v: &Value) -> Result<SecretString> {
     v.as_str()
@@ -104,6 +96,9 @@ pub(super) fn secret(v: &Value) -> Result<SecretString> {
 }
 pub(super) fn decode(p: &config::Profile, bytes: &[u8]) -> Result<Token> {
     let v = parse(bytes)?;
+    if p.slack() {
+        return super::slack_token::decode(p, &v);
+    }
     if !v.is_object()
         || v["token_type"]
             .as_str()
@@ -149,52 +144,30 @@ pub(super) async fn refresh(
     p: &config::Profile,
     client: &reqwest::Client,
     old: &Token,
+    client_secret: Option<&str>,
 ) -> Result<Token> {
     let refresh = old.refresh.as_ref().ok_or(Error("refresh_unavailable"))?;
-    let mut response = client
-        .post(&p.token_endpoint)
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh.expose_secret()),
-            ("client_id", &p.client_id),
-            ("resource", &p.resource),
-            ("scope", "read"),
-        ])
-        .send()
-        .await
-        .map_err(|_| Error("request_failed"))?;
-    let status = response.status();
-    if response.content_length().is_some_and(|n| n > 65536) {
-        return Err(Error("token_body_limit"));
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh.expose_secret()),
+        ("client_id", &p.client_id),
+        ("resource", &p.resource),
+        ("scope", p.scope()),
+    ];
+    confidential(p, client_secret, &mut form)?;
+    let (status, bytes) = super::token_io::post(p, client, &form).await?;
+    super::token_io::refreshed(p, status, &bytes, old, client_secret)
+}
+
+fn confidential<'a>(
+    p: &config::Profile,
+    secret: Option<&'a str>,
+    form: &mut Vec<(&'a str, &'a str)>,
+) -> Result<()> {
+    if p.slack() {
+        form.push(("client_secret", secret.ok_or(Error("client_unavailable"))?));
+    } else if secret.is_some() {
+        return Err(Error("profile_conflict"));
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| Error("token_body_incomplete"))?
-    {
-        if bytes.len() + chunk.len() > 65536 {
-            return Err(Error("token_body_limit"));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    if status == reqwest::StatusCode::BAD_REQUEST {
-        let value = parse(&bytes)?;
-        if value.is_object()
-            && value["error"] == "invalid_grant"
-            && ["access_token", "refresh_token", "token_type", "expires_in"]
-                .iter()
-                .all(|k| value.get(k).is_none())
-        {
-            return Err(Error("refresh_invalid_grant"));
-        }
-    }
-    if status != reqwest::StatusCode::OK {
-        return Err(Error("token_http_refused"));
-    }
-    let mut token = decode(p, &bytes)?;
-    if token.refresh.is_none() {
-        token.refresh = old.refresh.clone();
-    }
-    Ok(token)
+    Ok(())
 }

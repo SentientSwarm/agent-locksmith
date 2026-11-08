@@ -105,3 +105,60 @@ async fn hosted_actual_schema18_refusal_and_current_reopen() {
 async fn hosted_catalog_refuses_partial_missing_duplicate_and_changed_policy() {
     consent::native::hosted_catalog_refusals().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_confidential_actual_promotion_consent_verifier_and_native_journey() {
+    consent::slack::journey().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_token_transport_failure_preserves_http() {
+    consent::slack::failures::token_http().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_identity_token_actual_header_body_deadlines() {
+    consent::slack::failures::deadlines().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_native_actual_header_body_sse_deadlines() {
+    consent::slack::failures::native_deadlines().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_optional_access_only() {
+    consent::slack::lifecycle::optional().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_refresh_nullable_persistence() {
+    consent::slack::lifecycle::refresh_optionality().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_cancel_crash_pending() {
+    consent::slack::lifecycle::cancel_and_crash().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_client_boundaries_no_fallback_or_orphan() {
+    consent::slack::clients::boundaries().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_client_wrong_plaintext_is_received_and_refused() {
+    consent::slack::clients::wrong_client().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_dispatch_actual_header_body_sse_deadlines() {
+    consent::slack::dispatch::deadlines().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_client_retirement_prevents_late_exchange_publication() {
+    consent::slack::retirement::held_exchange().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_client_retirement_prevents_late_refresh_publication() {
+    consent::slack::retirement::held_refresh().await;
+}

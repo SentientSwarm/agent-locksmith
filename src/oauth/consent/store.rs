@@ -9,20 +9,19 @@ const WIPE: &str =
 
 impl Runtime {
     pub async fn start(&self, owner: &str, name: &str, request: &Start) -> Result<Value> {
-        if !identifier(name)
-            || !identifier(&request.session_label)
-            || request.requested_scopes != ["read"]
-        {
+        if !identifier(name) || !identifier(&request.session_label) {
             return Err(Error("invalid_request"));
         }
         let p = self.profile(&request.auth_profile_id)?;
-        if p.client_generation != request.client_generation
+        if request.requested_scopes != p.scopes()
+            || p.client_generation != request.client_generation
             || p.redirect_profile_id != request.redirect_profile_id
         {
             return Err(Error("profile_conflict"));
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sweep(&mut tx).await?;
+        self.resolve_client(&mut tx, owner, p).await?;
         let (instance, revision) = registration(&mut tx, name, Some(p)).await?;
         if revision != request.expected_config_revision {
             return Err(Error("source_conflict"));
@@ -64,7 +63,7 @@ impl Runtime {
             ("response_type", "code"),
             ("client_id", &p.client_id),
             ("redirect_uri", &p.redirect_uri),
-            ("scope", "read"),
+            ("scope", p.scope()),
             ("resource", &p.resource),
             ("state", &state),
             ("code_challenge_method", "S256"),
@@ -118,7 +117,7 @@ impl Runtime {
         }
         sqlx::query(&format!("UPDATE oauth_consent_attempts SET state='canceled',reason='disconnected',updated_at=?,version=version+1,{WIPE} WHERE name=? AND session_label=? AND owner_id=? AND state IN ('pending','exchanging')"))
             .bind(now()).bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1') AND owner_id=?")
+        sqlx::query("DELETE FROM oauth_sessions WHERE name=? AND session_label=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1') AND owner_id=?")
             .bind(name).bind(label).bind(owner).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(
@@ -140,6 +139,7 @@ impl Runtime {
             return Err(Error("callback_refused"));
         }
         current(&mut tx, &row, p, &self.run_id, "pending").await?;
+        self.resolve_client(&mut tx, row.get("owner_id"), p).await?;
         let id: &str = row.get("id");
         let claimed = sqlx::query("UPDATE oauth_consent_attempts SET state='exchanging',state_hash=NULL,version=version+1,stage='claimed',updated_at=? WHERE id=? AND state='pending' RETURNING *")
             .bind(now()).bind(id).fetch_one(&mut *tx).await?;
@@ -187,7 +187,7 @@ impl Runtime {
         }
         current(&mut tx, &live, p, &self.run_id, "exchanging").await?;
         let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM oauth_sessions WHERE kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1')",
+            "SELECT count(*) FROM oauth_sessions WHERE kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1')",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -206,7 +206,7 @@ impl Runtime {
             .bind(a.get::<&str,_>("name")).bind(a.get::<&str,_>("session_label")).bind(p.stored_kind()).bind(a.get::<&str,_>("owner_id"))
             .bind(&p.id).bind(p.digest()?).bind(&p.expected_workspace).bind(&p.expected_user)
             .bind(access).bind(an).bind(refresh.as_ref().map(|x| &x.0)).bind(refresh.as_ref().map(|x| &x.1))
-            .bind(token.expiry).bind(if token.scope_echoed {"read"} else {""}).bind(token.scope_echoed)
+            .bind(token.expiry).bind(if token.scope_echoed {p.scope()} else {""}).bind(token.scope_echoed)
             .bind(now()).bind(now()).fetch_one(&mut *tx).await?;
         // Verify the inserted custody before COMMIT, including nullable refresh.
         let decoded = self.key.unseal(
@@ -329,7 +329,7 @@ pub(super) async fn registration(
                 return Err(Error("profile_conflict"));
             }
         }
-        if (p.hosted() && row.get::<&str, _>("protocol") != "mcp_streamable_http")
+        if ((p.hosted() || p.slack()) && row.get::<&str, _>("protocol") != "mcp_streamable_http")
             || auth != expected
             || !native_registration_or_http(&row)
             || row.get::<&str, _>("kind") != "tool"
@@ -354,6 +354,7 @@ async fn current(
     {
         return Err(Error("attempt_changed"));
     }
+    clients::current(c, a.get("owner_id"), p).await?;
     let (instance, revision) = registration(c, a.get("name"), Some(p)).await?;
     if instance != a.get::<&str, _>("instance_id") || revision != a.get::<i64, _>("config_revision")
     {

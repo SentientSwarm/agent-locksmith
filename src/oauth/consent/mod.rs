@@ -1,13 +1,19 @@
 //! Controlled, owner-bound consent custody. It confers no agent authority.
 mod account;
 pub mod api;
+mod client_api;
+mod clients;
 pub mod config;
 pub(crate) mod native;
 mod operation;
 mod refresh;
 pub mod server;
+mod slack;
+mod slack_identity;
+mod slack_token;
 mod store;
 mod token;
+mod token_io;
 mod wire;
 
 use crate::oauth::{SealingKey, refresh::RefreshOwner};
@@ -40,6 +46,7 @@ impl From<crate::oauth::SealingKeyError> for Error {
 pub struct Runtime {
     pool: SqlitePool,
     key: SealingKey,
+    client_key: Option<crate::secret::CredentialSealingKey>,
     config: config::Config,
     native_roots: std::collections::HashMap<String, native::Roots>,
     run_id: String,
@@ -63,6 +70,15 @@ impl Runtime {
         config: config::Config,
         owner: RefreshOwner,
     ) -> Result<Arc<Self>> {
+        Self::with_client_key(pool, key, config, owner, None).await
+    }
+    pub async fn with_client_key(
+        pool: SqlitePool,
+        key: SealingKey,
+        config: config::Config,
+        owner: RefreshOwner,
+        client_key: Option<crate::secret::CredentialSealingKey>,
+    ) -> Result<Arc<Self>> {
         config.validate()?;
         // Validate roots before accepting a URL or spawning a listener.
         for p in &config.profiles {
@@ -79,6 +95,7 @@ impl Runtime {
         let rt = Arc::new(Self {
             pool,
             key,
+            client_key,
             config,
             native_roots,
             run_id: random()?,
@@ -153,3 +170,6 @@ async fn validate_key(pool: &SqlitePool, key: &SealingKey) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod slack_tests;

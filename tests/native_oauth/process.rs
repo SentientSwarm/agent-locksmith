@@ -59,7 +59,7 @@ async fn prepare(f: &Fixture, agent: &str) {
     let(status,v)=request(f,"PUT",&format!("/admin/operator/agents/{agent}/mcp-grants/fixture"),Some(json!({"source":state["source"],"generation":state["observation"]["generation"],"revision":state["grant_revision"],"tools":[{"name":"read_record","contract_digest":review["contract_digest"]}]}))).await;
     assert_eq!(status, 200, "{v}");
 }
-async fn rpc(
+pub(super) async fn rpc(
     f: &Fixture,
     agent: &Value,
     path: &str,
@@ -92,7 +92,7 @@ async fn rpc(
     };
     (status, value, session)
 }
-async fn open(f: &Fixture, agent: &Value, compact: bool) -> (String, String) {
+pub(super) async fn open(f: &Fixture, agent: &Value, compact: bool) -> (String, String) {
     let path = if compact {
         "/mcp/fixture/compact"
     } else {

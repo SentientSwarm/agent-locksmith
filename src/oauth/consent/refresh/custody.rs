@@ -44,6 +44,7 @@ impl Runtime {
             return Err(Error("version_exhausted"));
         }
         let claim = Claim {
+            client_secret: self.resolve_client(&mut tx, owner, profile).await?,
             owner: owner.into(),
             name: name.into(),
             label: label.into(),
@@ -57,7 +58,7 @@ impl Runtime {
             old,
             deadline,
         };
-        let updated = sqlx::query("UPDATE oauth_sessions SET refresh_pending=1,token_version=token_version+1,updated_at=? WHERE incarnation=? AND token_version=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1') AND owner_id=? AND refresh_pending=0 AND degraded=0 RETURNING *")
+        let updated = sqlx::query("UPDATE oauth_sessions SET refresh_pending=1,token_version=token_version+1,updated_at=? WHERE incarnation=? AND token_version=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1') AND owner_id=? AND refresh_pending=0 AND degraded=0 RETURNING *")
             .bind(now()).bind(claim.generation).bind(version).bind(owner).fetch_optional(&mut *tx).await?.ok_or(Error("source_conflict"))?;
         if updated.get::<i64, _>("token_version") != claim.version
             || !updated.get::<bool, _>("refresh_pending")
@@ -84,8 +85,8 @@ impl Runtime {
         let (access, an) = self.key.seal(token.access.expose_secret().as_bytes())?;
         let refresh = token.refresh.as_ref().ok_or(Error("custody_failed"))?;
         let (refresh, rn) = self.key.seal(refresh.expose_secret().as_bytes())?;
-        let updated = sqlx::query("UPDATE oauth_sessions SET access_token_ciphertext=?,access_token_nonce=?,refresh_token_ciphertext=?,refresh_token_nonce=?,access_token_expires_at=?,scope=?,scope_echoed=?,refresh_pending=0,degraded=0,token_version=token_version+1,updated_at=? WHERE incarnation=? AND token_version=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1') AND owner_id=? AND refresh_pending=1 RETURNING *")
-            .bind(access).bind(an).bind(refresh).bind(rn).bind(token.expiry).bind(if token.scope_echoed {"read"} else {""}).bind(token.scope_echoed).bind(now())
+        let updated = sqlx::query("UPDATE oauth_sessions SET access_token_ciphertext=?,access_token_nonce=?,refresh_token_ciphertext=?,refresh_token_nonce=?,access_token_expires_at=?,scope=?,scope_echoed=?,refresh_pending=0,degraded=0,token_version=token_version+1,updated_at=? WHERE incarnation=? AND token_version=? AND kind IN ('controlled_linear_v1','linear_hosted_v1','linear_hosted_fixture_v1','slack_confidential_v1','slack_confidential_fixture_v1') AND owner_id=? AND refresh_pending=1 RETURNING *")
+            .bind(access).bind(an).bind(refresh).bind(rn).bind(token.expiry).bind(if token.scope_echoed {self.profile(&claim.profile_id)?.scope()} else {""}).bind(token.scope_echoed).bind(now())
             .bind(claim.generation).bind(claim.version).bind(&claim.owner).fetch_optional(&mut *tx).await?.ok_or(Error("source_conflict"))?;
         compare(token, &self.decode_custody(&updated)?)?;
         if updated.get::<i64, _>("token_version") != claim.version + 1

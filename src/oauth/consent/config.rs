@@ -52,6 +52,7 @@ impl Config {
             p.validate()?;
             if !ids.insert(&p.id)
                 || (!p.hosted()
+                    && !p.slack()
                     && p.redirect_uri
                         != format!("https://{}/oauth/callback", self.callback.address))
             {
@@ -73,6 +74,8 @@ impl Profile {
             "controlled-linear-v1" => "controlled_linear_v1",
             "linear-hosted-v1" => "linear_hosted_v1",
             "linear-hosted-fixture-v1" => "linear_hosted_fixture_v1",
+            "slack-confidential-v1" => "slack_confidential_v1",
+            "slack-confidential-fixture-v1" => "slack_confidential_fixture_v1",
             _ => "invalid",
         }
     }
@@ -88,7 +91,7 @@ impl Profile {
         crate::registrations::AuthSpec::OauthPkce {
             client_id: self.client_id.clone(),
             redirect_uri: self.redirect_uri.clone(),
-            scopes: vec!["read".into()],
+            scopes: self.scopes(),
             auth_url: self.authorization_endpoint.clone(),
             token_url: self.token_endpoint.clone(),
             session_label: None,
@@ -100,6 +103,9 @@ impl Profile {
         ))
     }
     fn validate(&self) -> Result<()> {
+        if self.slack() {
+            return super::slack::validate(self);
+        }
         if !identifier(&self.id)
             || !identifier(&self.redirect_profile_id)
             || (!self.hosted() && self.kind != "controlled-linear-v1")
@@ -162,14 +168,14 @@ impl Profile {
         Ok(())
     }
 }
-fn endpoint(raw: &str, path: &str) -> Result<reqwest::Url> {
+pub(super) fn endpoint(raw: &str, path: &str) -> Result<reqwest::Url> {
     let url = https(raw, path)?;
     if !matches!(url.host_str(), Some("127.0.0.1" | "[::1]")) {
         return Err(Error("invalid_profile"));
     }
     Ok(url)
 }
-fn https(raw: &str, path: &str) -> Result<reqwest::Url> {
+pub(super) fn https(raw: &str, path: &str) -> Result<reqwest::Url> {
     let url = reqwest::Url::parse(raw).map_err(|_| Error("invalid_profile"))?;
     if raw.len() > 2048
         || url.scheme() != "https"
@@ -188,7 +194,11 @@ fn https(raw: &str, path: &str) -> Result<reqwest::Url> {
 pub(super) fn managed_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "controlled_linear_v1" | "linear_hosted_v1" | "linear_hosted_fixture_v1"
+        "controlled_linear_v1"
+            | "linear_hosted_v1"
+            | "linear_hosted_fixture_v1"
+            | "slack_confidential_v1"
+            | "slack_confidential_fixture_v1"
     )
 }
 fn uuid(value: &str) -> bool {

@@ -18,10 +18,12 @@ use crate::client::{Auth, CliClient, CliError};
 use crate::output::{Format, print};
 
 mod args;
+mod client;
 pub use args::{BootstrapArgs, OauthCmd};
 
 pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<(), CliError> {
     match cmd {
+        OauthCmd::Client { command } => client::run(client, format, command).await,
         OauthCmd::Connect {
             name,
             label,
@@ -29,11 +31,12 @@ pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<()
             client_generation,
             redirect_profile,
             expected_config_revision,
+            scopes,
         } => {
             component(&name)?;
             component(&label)?;
             let op = CliClient::op_token()?;
-            let body = json!({"session_label":label,"auth_profile_id":profile,"client_generation":client_generation,"redirect_profile_id":redirect_profile,"expected_config_revision":expected_config_revision,"requested_scopes":["read"]});
+            let body = json!({"session_label":label,"auth_profile_id":profile,"client_generation":client_generation,"redirect_profile_id":redirect_profile,"expected_config_revision":expected_config_revision,"requested_scopes":scopes});
             let result: Value = client
                 .json(
                     "POST",
