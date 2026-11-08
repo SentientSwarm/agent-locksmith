@@ -47,9 +47,14 @@ pub(super) fn signature(tool: &Value) -> String {
     format!("({fields})")
 }
 pub(super) fn describe(name: &str, tool: &Approved) -> Value {
-    json!({"name":name,"contract_digest":tool.digest,"input_schema":tool.public["inputSchema"],"output_schema":tool.public.get("outputSchema"),"effect":tool.effect,
+    let mut value = json!({"name":name,"contract_digest":tool.digest,"input_schema":tool.public["inputSchema"],"output_schema":tool.public.get("outputSchema"),"effect":tool.effect,
         "usage":"Construct public arguments from input_schema, then invoke this handle with contract_digest. Operator-fixed inputs are omitted.",
-        "limitations":["Current authority is rechecked before dispatch.","Unknown outcomes must not be automatically replayed."]})
+        "limitations":["Current authority is rechecked before dispatch.","Unknown outcomes must not be automatically replayed."]});
+    if !tool.policy.is_v1() {
+        value["native_contract"] =
+            tool.public["_meta"][crate::native_authority::policy::PUBLIC_MARKER].clone();
+    }
+    value
 }
 pub(super) fn tools() -> Vec<Value> {
     let reference =

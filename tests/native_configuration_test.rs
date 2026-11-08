@@ -5,6 +5,8 @@ use agent_locksmith::{
 use serde_json::json;
 fn config() -> McpConfig {
     McpConfig {
+        contract_policy: Default::default(),
+        selected_tools: None,
         compact: false,
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,
@@ -75,6 +77,8 @@ fn native_metadata_and_private_approval_are_explicit() {
 #[test]
 fn private_destination_opt_in_retains_self_endpoint_refusal() {
     let c = McpConfig {
+        contract_policy: Default::default(),
+        selected_tools: None,
         compact: false,
         allow_private_destination: true,
         definition: None,
@@ -173,4 +177,56 @@ fn compact_opt_in_is_typed_and_false_keeps_existing_bytes() {
     disabled["compact"] = false.into();
     let parsed: McpConfig = serde_json::from_value(disabled).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), original);
+}
+
+#[test]
+fn finite_policy_and_selection_are_typed_explicit_and_bounded() {
+    let base = json!({"protocol_version":"2025-11-25","allow_private_destination":false});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<McpConfig>(base.clone()).unwrap()).unwrap(),
+        base
+    );
+    for policy in [json!(null), json!("unknown"), json!(true)] {
+        let mut b = base.clone();
+        b["contract_policy"] = policy;
+        assert!(serde_json::from_value::<McpConfig>(b).is_err());
+    }
+    let mut v = base.clone();
+    v["contract_policy"] = "finite-v2".into();
+    v["selected_tools"] = json!(["selected"]);
+    let c = serde_json::from_value::<McpConfig>(v.clone()).unwrap();
+    assert!(valid(
+        &c,
+        Kind::Tool,
+        EgressMode::Direct,
+        "https://example.com/mcp",
+        None
+    ));
+    for names in [
+        json!([]),
+        json!(["a", "a"]),
+        json!([""]),
+        json!(["bad\n"]),
+        json!((0..33).map(|i| format!("n{i}")).collect::<Vec<_>>()),
+    ] {
+        let mut b = v.clone();
+        b["selected_tools"] = names;
+        let c = serde_json::from_value::<McpConfig>(b).unwrap();
+        assert!(!valid(
+            &c,
+            Kind::Tool,
+            EgressMode::Direct,
+            "https://example.com/mcp",
+            None
+        ));
+    }
+    v.as_object_mut().unwrap().remove("contract_policy");
+    let c = serde_json::from_value::<McpConfig>(v).unwrap();
+    assert!(!valid(
+        &c,
+        Kind::Tool,
+        EgressMode::Direct,
+        "https://example.com/mcp",
+        None
+    ));
 }

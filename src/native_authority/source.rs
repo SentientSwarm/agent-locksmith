@@ -15,6 +15,8 @@ pub struct Source {
     pub revision: i64,
     pub account_key: String,
     pub agent_epoch: i64,
+    #[serde(default, skip_serializing_if = "super::policy::Policy::is_v1")]
+    pub contract_policy: super::policy::Policy,
 }
 pub struct Current {
     pub source: Source,
@@ -42,6 +44,16 @@ pub async fn current(
         .map_err(|_| Error("source_unavailable"))?;
     let admission = rows.pop().ok_or(Error("source_unavailable"))?;
     active(&admission, catalog)?;
+    let r = &admission.registration;
+    crate::registrations::protocol::validate(
+        r.protocol,
+        r.mcp.as_ref(),
+        r.kind,
+        r.egress,
+        &r.upstream,
+        Some(&r.metadata),
+    )
+    .map_err(|_| Error("source_unavailable"))?;
     let auth = admission
         .account
         .as_ref()
@@ -75,6 +87,21 @@ pub async fn current(
         );
     }
     current.controlled = controlled;
+    if let (Some(a), Some(b)) = (
+        current
+            .admission
+            .registration
+            .mcp
+            .as_ref()
+            .and_then(|m| m.selected_tools.as_deref()),
+        current
+            .controlled
+            .as_ref()
+            .and_then(|a| a.selected_tools.as_deref()),
+    ) && a != b
+    {
+        return Err(Error("catalog_selection_conflict"));
+    }
     current.fresh()?;
     Ok(current)
 }
@@ -88,6 +115,12 @@ fn captured(agent: i64, admission: admission::HttpAdmission, auth: AuthSpec) -> 
         revision: admission.revision,
         account_key,
         agent_epoch: admission.epoch,
+        contract_policy: admission
+            .registration
+            .mcp
+            .as_ref()
+            .map(|m| m.contract_policy)
+            .unwrap_or_default(),
     };
     Current {
         source,
@@ -126,6 +159,24 @@ async fn supported(connection: &mut SqliteConnection, auth: &AuthSpec) -> Result
     }
 }
 impl Current {
+    pub fn selected_tools(&self) -> Option<&[String]> {
+        self.controlled
+            .as_ref()
+            .and_then(|a| a.selected_tools.as_deref())
+            .or_else(|| {
+                self.admission
+                    .registration
+                    .mcp
+                    .as_ref()
+                    .and_then(|m| m.selected_tools.as_deref())
+            })
+    }
+    pub fn hosted(&self) -> bool {
+        self.controlled
+            .as_ref()
+            .is_some_and(|a| a.selected_tools.is_some())
+    }
+
     pub fn fresh(&self) -> Result<()> {
         if self
             .controlled

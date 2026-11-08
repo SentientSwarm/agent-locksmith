@@ -1,4 +1,5 @@
 //! A deliberately finite structural grammar, not a general JSON Schema evaluator.
+use super::policy::Policy;
 use super::{
     Error, Result,
     contract::{bounded_text, object, text},
@@ -7,12 +8,26 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 pub fn root(value: &Value) -> Result<()> {
+    root_with(value, Policy::V1, false)
+}
+pub fn input(value: &Value, policy: Policy) -> Result<()> {
+    root_with(value, policy, true)
+}
+pub fn empty_input(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("object")
+        && value
+            .get("properties")
+            .and_then(Value::as_object)
+            .is_some_and(|p| p.is_empty())
+        && value.get("additionalProperties").is_none()
+}
+fn root_with(value: &Value, policy: Policy, input: bool) -> Result<()> {
     if value.get("type").and_then(Value::as_str) != Some("object") {
         return Err(Error("schema_root_object"));
     }
-    node(value, 0, &mut 0)
+    node(value, 0, &mut 0, policy, input)
 }
-fn node(value: &Value, depth: usize, count: &mut usize) -> Result<()> {
+fn node(value: &Value, depth: usize, count: &mut usize, policy: Policy, input: bool) -> Result<()> {
     *count += 1;
     if depth > 8 || *count > 128 {
         return Err(Error("schema_limit"));
@@ -24,22 +39,32 @@ fn node(value: &Value, depth: usize, count: &mut usize) -> Result<()> {
         .ok_or(Error("schema_type"))?;
     let mut allowed = vec!["type", "$schema", "title", "description", "enum", "const"];
     allowed.extend_from_slice(fields(kind)?);
+    if policy == Policy::V2 && !matches!(kind, "object" | "array") {
+        allowed.push("default");
+    }
     object(value, &allowed)?;
-    common(obj, kind)?;
+    common(obj, kind, policy)?;
     match kind {
-        "object" => properties(obj, depth, count),
+        "object" => properties(obj, depth, count, policy, input && depth == 0),
         "array" => {
             range(obj, "minItems", "maxItems", true)?;
             node(
                 obj.get("items").ok_or(Error("schema_items"))?,
                 depth + 1,
                 count,
+                policy,
+                false,
             )
         }
         "string" => range(obj, "minLength", "maxLength", true),
         "integer" | "number" => range(obj, "minimum", "maximum", false),
         _ => Ok(()),
+    }?;
+    if let Some(default) = obj.get("default") {
+        scalar(default, kind)?;
+        super::values::annotation(value, default)?;
     }
+    Ok(())
 }
 fn fields(kind: &str) -> Result<&'static [&'static str]> {
     match kind {
@@ -51,7 +76,7 @@ fn fields(kind: &str) -> Result<&'static [&'static str]> {
         _ => Err(Error("schema_type")),
     }
 }
-fn common(obj: &Map<String, Value>, kind: &str) -> Result<()> {
+fn common(obj: &Map<String, Value>, kind: &str, policy: Policy) -> Result<()> {
     if obj
         .get("$schema")
         .is_some_and(|v| v != "https://json-schema.org/draft/2020-12/schema")
@@ -63,9 +88,9 @@ fn common(obj: &Map<String, Value>, kind: &str) -> Result<()> {
             bounded_text(v, limit)?;
         }
     }
-    choices(obj, kind)
+    choices(obj, kind, policy)
 }
-fn choices(obj: &Map<String, Value>, kind: &str) -> Result<()> {
+fn choices(obj: &Map<String, Value>, kind: &str, policy: Policy) -> Result<()> {
     if obj.contains_key("enum") && obj.contains_key("const") {
         return Err(Error("schema_choices"));
     }
@@ -74,7 +99,7 @@ fn choices(obj: &Map<String, Value>, kind: &str) -> Result<()> {
     }
     if let Some(v) = obj.get("enum") {
         let a = v.as_array().ok_or(Error("schema_enum"))?;
-        if a.is_empty() || a.len() > 16 {
+        if a.is_empty() || a.len() > if policy == Policy::V2 { 64 } else { 16 } {
             return Err(Error("schema_enum"));
         }
         let mut seen = BTreeSet::new();
@@ -102,8 +127,16 @@ fn scalar(value: &Value, kind: &str) -> Result<()> {
         Err(Error("schema_choice_type"))
     }
 }
-fn properties(obj: &Map<String, Value>, depth: usize, count: &mut usize) -> Result<()> {
-    if obj.get("additionalProperties") != Some(&Value::Bool(false)) {
+fn properties(
+    obj: &Map<String, Value>,
+    depth: usize,
+    count: &mut usize,
+    policy: Policy,
+    input_root: bool,
+) -> Result<()> {
+    if obj.get("additionalProperties") != Some(&Value::Bool(false))
+        && !(policy == Policy::V2 && input_root && empty_input(&Value::Object(obj.clone())))
+    {
         return Err(Error("schema_additional_properties"));
     }
     let props = obj
@@ -112,7 +145,7 @@ fn properties(obj: &Map<String, Value>, depth: usize, count: &mut usize) -> Resu
         .ok_or(Error("schema_properties"))?;
     for (name, schema) in props {
         text(&Value::String(name.clone()), 128)?;
-        node(schema, depth + 1, count)?;
+        node(schema, depth + 1, count, policy, false)?;
     }
     if let Some(required) = obj.get("required") {
         let required = required.as_array().ok_or(Error("schema_required"))?;

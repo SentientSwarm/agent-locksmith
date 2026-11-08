@@ -13,6 +13,10 @@ pub struct Review {
     pub effect: String,
     #[serde(default)]
     pub context: Map<String, Value>,
+    #[serde(default)]
+    pub contract_policy: super::policy::Policy,
+    #[serde(default)]
+    pub input_restriction: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

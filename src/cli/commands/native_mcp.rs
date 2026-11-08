@@ -9,7 +9,7 @@ use std::{io::Read, path::PathBuf};
 
 #[derive(Args)]
 pub struct Selection {
-    /// Manual native connection name.
+    /// Native connection name.
     connection: String,
     /// Exact agent public ID whose explicit account selection to inspect.
     #[arg(long, allow_hyphen_values = true)]

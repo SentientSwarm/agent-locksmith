@@ -40,6 +40,24 @@ class Handler(base.Handler):
         behavior = json.loads((base.directory / "behavior.json").read_text())
         if message["method"] == "initialize" and behavior.get("prepare_hold"):
             base.hold(behavior["prepare_hold"])
+        if message["method"] == "tools/list" and behavior.get("mode") in ("policy-sse-held", "policy-sse-notification"):
+            result = {"jsonrpc": "2.0", "id": message["id"], "result": tools("tools/list")}
+            event = b"data: " + json.dumps(result).encode() + b"\n\n"
+            if behavior["mode"] == "policy-sse-notification":
+                event = b'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n' + event
+                self.reply(200, event, sse=True)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Connection", "close")
+                self.send_header("Mcp-Session-Id", "fixture-session")
+                self.end_headers()
+                self.wfile.write(event)
+                self.wfile.flush()
+                base.write(base.directory / "held-sse-sent.json", True)
+                base.hold("policy-sse")
+                self.close_connection = True
+            return
         if message["method"] != "tools/call":
             import io
 
@@ -48,6 +66,7 @@ class Handler(base.Handler):
             return
         behavior = json.loads((base.directory / "behavior.json").read_text())
         authorization = self.headers.get("Authorization", "")
+        self.observed_arguments = message["params"]["arguments"]
         account = {
             "Bearer fixture-account-x": "X",
             "Bearer fixture-account-y": "Y",
@@ -71,6 +90,8 @@ class Handler(base.Handler):
             path = base.directory / "effects.json"
             effects = json.loads(path.read_text()) if path.exists() else []
             effects.append({"account": account, "committed": len(rows)})
+            if (base.directory / "policy-record-arguments").exists():
+                effects[-1]["arguments"] = self.observed_arguments
             base.write(path, effects)
 
     def result(self, account: str, authorization: str, behavior: dict) -> dict:
@@ -119,6 +140,11 @@ def encoded(handler: Handler, response: dict, mode: str, authorization: str) -> 
 
 
 def change(result: dict, mode: str, request_id: int, authorization: str) -> None:
+    if mode == "policy-pages":
+        pages = json.loads((base.directory / "pages.json").read_text())
+        result.clear()
+        result.update(pages[request_id - 2])
+        return
     if result.get("tools"):
         original_change(result, mode, request_id, authorization)
 

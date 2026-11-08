@@ -402,3 +402,10 @@ Native `tool put --mcp-config-file` accepts optional `compact:true` (default fal
 Configure before grants: changing MCP config clears connection/bootstrap scopes,
 selections, observations, reviews and tool grants. See [compact MCP](agent-integration/compact-mcp.md)
 for the complete agent contract and actual prior-daemon startup cost.
+
+Native MCP configuration may explicitly set `contract_policy:"finite-v2"`.
+Eligible definition promotion accepts `--contract-policy finite-v2` and repeatable
+`--selected-tool NAME` (manual configuration uses `selected_tools`); changing an
+active pin requires deactivation and deliberate repair. The review JSON must
+repeat the policy, and open-empty input requires `input_restriction:"empty-arguments"`.
+See [exact policy, projection and old-reader limits](operator/native-contract-policy.md).

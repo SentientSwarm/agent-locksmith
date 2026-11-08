@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 fn tool(name: &str) -> Approved {
     let public = json!({"name":name,"description":"Read a record","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}});
     Approved {
+        policy: Default::default(),
         digest: format!("{:064x}", name.bytes().map(u64::from).sum::<u64>()),
         effect: "mixed".into(),
         tool: public.clone(),

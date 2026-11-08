@@ -47,6 +47,8 @@ fn registration(
     r.egress = crate::config::EgressMode::Direct;
     r.protocol = Protocol::McpStreamableHttp;
     r.mcp = Some(McpConfig {
+        contract_policy: Default::default(),
+        selected_tools: None,
         compact: false,
         protocol_version: crate::registrations::protocol::VERSION.into(),
         allow_private_destination: input.allow_private_destination,

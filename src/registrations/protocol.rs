@@ -33,6 +33,13 @@ pub struct McpConfig {
     pub definition_activation: Option<crate::definitions::Activation>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compact: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::native_authority::policy::Policy::is_v1"
+    )]
+    pub contract_policy: crate::native_authority::policy::Policy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_tools: Option<Vec<String>>,
 }
 
 pub fn validate(
@@ -52,6 +59,18 @@ pub fn validate(
         };
     }
     let config = config.ok_or(RegistrationError::InvalidMcp)?;
+    if let Some(names) = &config.selected_tools {
+        let mut seen = std::collections::BTreeSet::new();
+        if config.contract_policy.is_v1()
+            || names.is_empty()
+            || names.len() > 32
+            || names.iter().any(|n| {
+                n.is_empty() || n.len() > 128 || n.chars().any(char::is_control) || !seen.insert(n)
+            })
+        {
+            return Err(RegistrationError::InvalidMcp);
+        }
+    }
     let url = reqwest::Url::parse(upstream).map_err(|_| RegistrationError::InvalidMcp)?;
     if kind != Kind::Tool
         || egress != crate::config::EgressMode::Direct

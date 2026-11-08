@@ -3,7 +3,8 @@
 Use the existing [connection setup](native-mcp.md) and
 [observe, review and grant workflow](native-tool-review.md). A manual native
 connection can use explicit None, a live sealed-bearer selection or
-[owner-selected controlled OAuth](native-oauth.md). Fixed context adds no account
+[owner-selected controlled OAuth](native-oauth.md) or
+[hosted Linear](hosted-linear.md). Fixed context adds no account
 authority. [Promoted customer pins](integration-definitions.md) use the same
 path; native env/op/header accounts remain unsupported.
 

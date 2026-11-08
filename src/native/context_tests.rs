@@ -45,6 +45,7 @@ pub(super) fn snapshot() -> Snapshot {
     Snapshot {
         current: Current {
             source: authority::source::Source {
+                contract_policy: Default::default(),
                 instance: "instance".into(),
                 revision: 2,
                 agent_epoch: 3,
@@ -71,6 +72,7 @@ fn first_list_refuses_a_new_snapshot_in_an_old_session() {
                 snapshot.tools.insert(
                     "one".into(),
                     Approved {
+                        policy: Default::default(),
                         digest: "digest".into(),
                         effect: "read".into(),
                         tool: json!({"name":"one"}),

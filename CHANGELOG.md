@@ -12,6 +12,17 @@
 
 ### Changed
 
+- Add explicit [finite-v2 native contracts](docs/user/operator/native-contract-policy.md)
+  for supported customer None/bearer/OAuth sources through existing review/grants.
+  Customer registrations can explicitly select names after the same complete
+  bounded catalog scan, with declared omissions and no early publication.
+  Preserve bounded inert metadata, scalar default annotations and up to 64 input
+  enum values. Open-empty input requires a digest-bound empty-arguments restriction
+  with a separately labeled callable schema. V1 bytes/output rules remain; old
+  readers refuse the new marker. Migration 0020 permits dedicated definition policy
+  activation/reset while preserving immutable pins and active configuration; prior
+  schema-19 daemons refuse the newer database. No provider acceptance or timeout change.
+
 - Add a fixed [hosted Linear OAuth profile](docs/user/operator/hosted-linear.md)
   and an explicit local fixture kind through existing owner custody, refresh,
   native selection and finite grants. Hosted observation scans a bounded complete

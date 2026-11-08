@@ -132,6 +132,8 @@ pub fn native(name: &str) -> Registration {
     );
     r.protocol = Protocol::McpStreamableHttp;
     r.mcp = Some(McpConfig {
+        contract_policy: Default::default(),
+        selected_tools: None,
         compact: false,
         protocol_version: "2025-11-25".into(),
         allow_private_destination: false,

@@ -16,6 +16,7 @@ pub struct Approved {
     pub tool: Value,
     pub public: Value,
     pub context: serde_json::Map<String, Value>,
+    pub policy: super::policy::Policy,
 }
 pub struct Snapshot {
     pub current: Current,
@@ -106,6 +107,9 @@ fn append(s: &mut Snapshot, manifest: &Value, row: sqlx::sqlite::SqliteRow) -> R
         return Err(Error("review_invalid"));
     }
     let checked = protected::load(&reviewed)?;
+    if checked.policy != s.current.source.contract_policy {
+        return Err(Error("contract_policy_conflict"));
+    }
     s.tools.insert(
         name,
         Approved {
@@ -117,6 +121,7 @@ fn append(s: &mut Snapshot, manifest: &Value, row: sqlx::sqlite::SqliteRow) -> R
             tool: checked.full,
             public: checked.public,
             context: checked.context,
+            policy: checked.policy,
         },
     );
     Ok(())

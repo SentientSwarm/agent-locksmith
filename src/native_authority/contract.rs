@@ -1,4 +1,4 @@
-use super::{Error, Result, schema};
+use super::{Error, Result, policy::Policy, schema};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -24,26 +24,34 @@ pub fn bounded_text(value: &Value, max: usize) -> Result<()> {
     }
 }
 pub fn tool(value: &Value) -> Result<()> {
-    let obj = object(
-        value,
-        &[
-            "name",
-            "title",
-            "description",
-            "inputSchema",
-            "outputSchema",
-            "annotations",
-        ],
-    )?;
+    tool_with(value, Policy::V1)
+}
+pub fn tool_with(value: &Value, policy: Policy) -> Result<()> {
+    let mut allowed = vec![
+        "name",
+        "title",
+        "description",
+        "inputSchema",
+        "outputSchema",
+        "annotations",
+    ];
+    if policy == Policy::V2 {
+        allowed.push("_meta");
+    }
+    let obj = object(value, &allowed)?;
+    if let Some(meta) = obj.get("_meta") {
+        metadata(meta)?;
+    }
     text(obj.get("name").ok_or(Error("name_required"))?, 128)?;
     for (key, limit) in [("title", 128), ("description", 2048)] {
         if let Some(v) = obj.get(key) {
             bounded_text(v, limit)?;
         }
     }
-    schema::root(
+    schema::input(
         obj.get("inputSchema")
             .ok_or(Error("input_schema_required"))?,
+        policy,
     )?;
     if let Some(v) = obj.get("outputSchema") {
         schema::root(v)?;
@@ -52,6 +60,36 @@ pub fn tool(value: &Value) -> Result<()> {
         annotations(v)?;
     }
     Ok(())
+}
+fn metadata(value: &Value) -> Result<()> {
+    if !value.is_object()
+        || value.to_string().len() > 4096
+        || value.get(super::policy::PUBLIC_MARKER).is_some()
+    {
+        return Err(Error("metadata_invalid"));
+    }
+    fn walk(v: &Value, depth: usize, count: &mut usize) -> Result<()> {
+        *count += 1;
+        if depth > 8 || *count > 128 {
+            return Err(Error("metadata_limit"));
+        }
+        match v {
+            Value::Object(o) => {
+                for (k, v) in o {
+                    walk(&Value::String(k.clone()), depth + 1, count)?;
+                    walk(v, depth + 1, count)?;
+                }
+            }
+            Value::Array(a) => {
+                for v in a {
+                    walk(v, depth + 1, count)?;
+                }
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+    walk(value, 0, &mut 0)
 }
 fn annotations(value: &Value) -> Result<()> {
     let obj = object(

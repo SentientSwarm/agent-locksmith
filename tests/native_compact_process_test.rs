@@ -161,5 +161,7 @@ fn payload(v: Value) -> Value {
 #[path = "native_compact/boundary.rs"]
 mod boundary;
 
+#[path = "native_compact/policy.rs"]
+mod policy;
 #[path = "native_compact/prior.rs"]
 mod prior;

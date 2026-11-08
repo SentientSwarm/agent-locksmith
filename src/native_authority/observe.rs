@@ -54,18 +54,19 @@ impl Runtime {
         let bearer = self
             .materialize_for(Some(owner), agent, name, &current.source)
             .await?;
-        let selected_tools = current
-            .controlled
-            .as_ref()
-            .and_then(|a| a.selected_tools.as_deref());
+        let selected_tools = current.selected_tools();
         let client = locksmith_mcp_transport::Client::pinned(
             Default::default(),
             self.current_roots(current),
             &reg.upstream,
             addresses,
             1024 * 1024,
-            if selected_tools.is_some() {
+            if current.hosted() {
                 wire::validate_hosted
+            } else if selected_tools.is_some() {
+                wire::validate_selected_v2
+            } else if !current.source.contract_policy.is_v1() {
+                wire::validate_v2
             } else {
                 wire::validate
             },
@@ -77,6 +78,8 @@ impl Runtime {
             bearer: bearer.as_ref().map(ExposeSecret::expose_secret),
             session: None,
             selected_tools,
+            policy: current.source.contract_policy,
+            hosted: current.hosted(),
         };
         let result = connection.observe().await;
         // No background cleanup: a stalled DELETE shares the enclosing deadline.
