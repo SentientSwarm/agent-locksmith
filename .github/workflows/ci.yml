@@ -58,8 +58,8 @@ jobs:
           assert rmcp[0]["source"] is None
           assert pathlib.Path(rmcp[0]["manifest_path"]).resolve() == root / "crates/mcp-transport/vendor/rmcp/Cargo.toml"
           package = [p for p in packages if p["name"] == "agent-locksmith"]
-          assert len(package) == 1 and package[0]["version"] == "2.8.0"
-          print("root rmcp resolves to the qualified local ownership patch; root package remains 2.8.0")
+          assert len(package) == 1 and package[0]["version"] == "3.0.0"
+          print("root rmcp resolves to the qualified local ownership patch; root package remains 3.0.0")
           PY
       - name: Check out pinned pre-0010 source
         uses: actions/checkout@v4

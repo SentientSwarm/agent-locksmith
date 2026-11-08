@@ -15,6 +15,9 @@ pub struct Fixture {
     pub port: u16,
     pub daemon: Option<Guard>,
     pub starts: usize,
+    /// Whether the running daemon is a retained prior binary rather than
+    /// this build, so version checks can tell the two apart.
+    pub prior: bool,
     pub http: reqwest::Client,
     pub tokens: std::cell::RefCell<Vec<String>>,
 }
@@ -59,6 +62,7 @@ impl Fixture {
             port,
             daemon: None,
             starts: 0,
+            prior: false,
             http,
             tokens: std::cell::RefCell::new(Vec::new()),
         };
@@ -78,6 +82,9 @@ impl Fixture {
             .env("SMOKE_Y", super::upstream::Y)
             .env("SMOKE_EMPTY", "");
         c.envs(env.iter().copied());
+        self.prior = env
+            .iter()
+            .any(|(k, v)| *k == "LOCKSMITHD_BIN" && *v != super::process::DAEMON);
         c.stdout(Stdio::from(std::fs::File::create(&log).unwrap()));
         c.stderr(Stdio::from(
             std::fs::OpenOptions::new().append(true).open(log).unwrap(),
