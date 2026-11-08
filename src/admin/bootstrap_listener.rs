@@ -10,11 +10,11 @@
 //! Operators lock down the network reach of this listener via firewall
 //! / Tailscale / localhost-only binding.
 //!
-//! Off-by-default. The daemon only binds when
-//! `listen.bootstrap_only.enabled = true` (see config.rs).
+//! Off-by-default. The daemon binds it only when
+//! `listen.bootstrap_only.enabled = true` (see config.rs), and only with
+//! the admin substrate (`listen.admin_socket`), whose `AdminService`
+//! verifies the bootstrap token.
 
-use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
@@ -23,11 +23,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::post;
 use axum_server::Handle;
+use axum_server::tls_rustls::RustlsConfig;
 use serde_json::json;
 use tracing::{info, warn};
 
 use super::AdminService;
-use super::https::load_tls_config;
 
 /// State for the bootstrap-only router. Just the AdminService — no
 /// auth state, no audit-aware authenticators (the register handler
@@ -74,20 +74,18 @@ async fn handle_register(
     }
 }
 
-/// Bind a TLS-terminated bootstrap-only listener. Same TLS-load
-/// fail-fast contract as `admin::https::serve` (T4.2).
-pub async fn bind_and_serve(
-    addr: SocketAddr,
-    cert_path: &Path,
-    key_path: &Path,
+/// Serve the bootstrap-only router on a listener bound by
+/// `admin::https::bind`. The daemon loads `tls` before spawning, so a bad
+/// cert or key fails startup rather than the running listener (T4.2).
+pub async fn serve(
+    listener: std::net::TcpListener,
+    tls: RustlsConfig,
     state: BootstrapState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
-    let tls = load_tls_config(cert_path, key_path).await?;
-    let listener = std::net::TcpListener::bind(addr)?;
-    listener.set_nonblocking(true)?;
+    let addr = listener.local_addr()?;
     if let Some(rt) = state.admin.native_authority() {
-        rt.listeners.bound("bootstrap", listener.local_addr()?);
+        rt.listeners.bound("bootstrap", addr);
     }
     let app = build_router(state);
 
@@ -99,7 +97,7 @@ pub async fn bind_and_serve(
         shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
     });
 
-    info!(addr = %addr, cert = %cert_path.display(), "bootstrap-only listener bound");
+    info!(addr = %addr, "bootstrap-only listener bound");
     let result = axum_server::from_tcp_rustls(listener, tls)
         .handle(handle)
         .serve(app.into_make_service())

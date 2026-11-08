@@ -139,7 +139,21 @@ listen:
     key_path: "/etc/locksmith/tls/bootstrap.key"
 ```
 
-Network policy locks down reach. Tailscale-only access is a common pattern.
+The listener needs the admin substrate: `listen.admin_socket` must be set,
+because the admin service verifies the bootstrap token. `host` must be an IP
+address. The daemon binds the port and loads the certificate at startup and
+refuses to start if either fails. Mint bootstrap tokens over the admin socket
+or admin HTTPS as usual; agents then register against this listener with only
+the token:
+
+```bash
+curl --cacert ca.crt -X POST https://<host>:9202/admin/agent/register \
+  -H 'content-type: application/json' \
+  -d '{"bootstrap_token": "<lkbt_ token>", "name": "<agent name>"}'
+```
+
+Every other path returns 404. Network policy locks down reach.
+Tailscale-only access is a common pattern.
 
 ---
 
