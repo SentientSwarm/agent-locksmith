@@ -133,11 +133,10 @@ is exercised by these disposable local tests.
 
 ## Public receiving and API staging
 
-The public projection retains root2.8.0 and all existing OAuth uncertainty/owner,
-HTTP/CAS/definition and native deadline behavior. Its new exact-candidate runtime,
-five explicit prior probes and Linux CI remain receiving work; historical local
-Stage A acceptance is not a current runtime or full206 result.
-The new schema13 CI gate pins public3e86ff8a9b1a2c0d08faab83dcd48248baef3b98,
+This ships in 3.0.0 and keeps all existing OAuth uncertainty/owner,
+HTTP/CAS/definition and native deadline behavior. Historical local Stage A
+acceptance is not a current runtime result.
+The schema 13 CI gate pins public `3e86ff8a9b1a2c0d08faab83dcd48248baef3b98`,
 builds/copies both matching binaries before the current target is overwritten,
 and runs the separate ignored upgrade probe with LOCKSMITH_PREPARATION_PRIOR_DAEMON.
 The four earlier probes retain their own distinct binaries and environments.

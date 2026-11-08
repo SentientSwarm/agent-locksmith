@@ -128,8 +128,8 @@ to the renderer. Embedded generic sections are in `src/skill_template.md` and
 `src/skill/*.md`; personalized display is in `src/skill/personal.rs`.
 
 This correction changes guidance only: no new transport, auth mode, credential
-source, definition activation or provider acceptance. Planned 3.0.0 and its
-release readiness gates remain unchanged. Existing
+source, definition activation or provider acceptance. It ships in 3.0.0.
+Existing
 HTTP consumers keep their wire contract; native consumers can now choose the
 correct path without an HTTP-only personalized recipe.
 

@@ -4,8 +4,8 @@ AGENT-198 introduced [locksmith-mcp-transport](../../crates/mcp-transport/README
 a reusable adapter for rmcp's public `StreamableHttpClient` hook. The daemon now
 consumes it for operator observation and [reviewed dispatch](native-dispatch.md).
 AGENT-202 supplies native daemon integration; [AGENT-199 sessions](mcp-sessions.md)
-own session allocation/recovery. Existing HTTP/OAuth behavior and the root
-2.8.0 version remain unchanged. The original isolated library needed no migration;
+own session allocation/recovery. Existing HTTP/OAuth behavior is unchanged;
+the transport ships in 3.0.0. The original isolated library needed no migration;
 current native setup and upgrade steps are in the [operator guide](../user/operator/native-mcp.md).
 
 The design starts from accepted HTTP/OAuth `10a0d8b` and the S1 counterexample

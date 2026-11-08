@@ -124,10 +124,9 @@ suite alone does not establish this deliberately separate upgrade proof.
 
 ## Public refresh-recovery receiving
 
-This source projection retains version2.8.0 and the existing consuming-root SDK
-patch. Its exact-candidate runtime, independent consumer, four predecessor probes
-and fresh Linux CI remain separate receiving work. Historical local acceptance
-at3c5f695 is not a current runtime or live-provider result.
+Refresh recovery ships in 3.0.0 with the existing consuming-root SDK patch.
+Historical local acceptance at `3c5f695` is not a current runtime or
+live-provider result.
 
 The additional CI probe pins public schema12 source
 `4220e62bc381181cf35d4010e95d73adf88f0ea8`, preserves both matching binaries before

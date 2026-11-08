@@ -1,12 +1,7 @@
-# HTTP connector onboarding (unversioned)
+# HTTP connector onboarding (3.0.0)
 
-This is an unpublished source integration projection of locally accepted
-`60aabbf` onto the public D1/D4 base. The intermediate crate remains **2.8.0**;
-no release-preparation ancestry, version bump, tag or publication is included.
-The planned major-release compatibility rationale below remains relevant, but
-historical local acceptance is separate from this projection's receiving checks,
-remote review and CI. Commands below are reproduction instructions, not newly
-executed results for this projected candidate.
+These changes ship in 3.0.0. The major-release compatibility rationale below
+applies. Commands below are reproduction instructions.
 
 An operator configures a reference or customer HTTP service, approves a named
 agent's finite grant and selects its upstream account. The agent constructs

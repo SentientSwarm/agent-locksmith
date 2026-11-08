@@ -40,7 +40,5 @@ The local customer matrix and independent evidence must be attributed to their
 actual candidate and command; historical manual SDK results are not proof of
 current definition activation.
 
-The public source projection keeps root 2.8.0 and preserves current HTTP/native
-prerequisites. Its new exact-candidate process/consumer/prior-binary checks and
-Linux CI remain receiving work; historical offline acceptance is not a current
-runtime result or full AGENT-203 completion.
+Definitions ship in 3.0.0 and keep the existing HTTP and native prerequisites.
+Historical offline acceptance is not a runtime result.
