@@ -13,10 +13,11 @@ those runs, so what you see is what the current release does.
 |---|---|---|
 | 1 | [Install and first run](01-install.md) | install the binaries, mint an operator credential, start the daemon and check it |
 | 2 | [Connect an HTTP service](02-http-service.md) | register a service, register an agent, select its account, call through Locksmith, deny and repair |
+| 3 | [Keep credentials in Locksmith](03-credential-custody.md) | seal credentials under a key, select 1Password references, see fail-closed behaviour |
+| 4 | [Enrol agents](04-enrol-agents.md) | enrol with bootstrap tokens, identify agents by client certificate, revoke a certificate |
 
-More journeys follow the same pattern: credential custody, agent enrolment
-and mTLS, OAuth services, native MCP tools, audit and monitoring, and
-day-two operations.
+More journeys follow the same pattern: native MCP tools, OAuth services,
+audit and monitoring, and day-two operations.
 
 ## Conventions
 
@@ -26,6 +27,8 @@ day-two operations.
   `~/locksmith`; choose your own.
 - Values such as tokens are kept in environment variables and never printed.
   In the figures they appear as `<redacted:…>`.
+- Ports in the figures are whichever free ports the test run chose, not the
+  defaults on the page.
 
 ## How the guide is tested
 

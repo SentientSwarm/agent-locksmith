@@ -80,6 +80,7 @@ class Journey:
         self.ran: list[str] = []
         self.procs: dict[str, tuple[subprocess.Popen, Path]] = {}
         self.failed = False
+        self.substitutions: list[str] = []
         self._browser: figure.Browser | None = None
         canaries.add(str(self.work), "workdir")
         # Values printed in the published guide (synthetic demo accounts) are not secrets.
@@ -161,6 +162,10 @@ class Journey:
             f"step {name} not ready (exit {proc.returncode}): {self._tail(text)}"
         )
 
+    def substitute(self, note: str) -> None:
+        """Record something this run stands in for, such as a stub CLI; the report lists it."""
+        self.substitutions.append(note)
+
     def stop(self, name: str, sig: int = signal.SIGTERM, timeout: float = 15) -> int:
         proc, _ = self.procs.pop(name)
         if proc.poll() is None:
@@ -219,11 +224,12 @@ class Journey:
                 check=False,
                 cwd=self.cwd,
                 env=self.env,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # interleaved, as a terminal shows them
                 text=True,
                 timeout=timeout,
             )
-            result = Result(proc.returncode, proc.stdout + proc.stderr)
+            result = Result(proc.returncode, proc.stdout)
         except subprocess.TimeoutExpired as err:
             out = (
                 (err.stdout or b"").decode(errors="replace")

@@ -35,13 +35,14 @@ def finish(
                     errors.append(f"{path.name}: figure {fig} not produced by this run")
         text = path.read_text().replace("](img/", "](../shots/")
         (out / "guide" / path.name).write_text(text)
-    _write_manifest_note(out, documentation_only)
+    subs = {f"{j.page.path.name}: {note}" for j in journeys for note in j.substitutions}
+    _write_manifest_note(out, documentation_only, sorted(subs))
     if publish and not errors:
         _publish(out)
     return errors
 
 
-def _write_manifest_note(out: Path, documentation_only: dict[str, list[int]]) -> None:
+def _write_manifest_note(out: Path, documentation_only: dict[str, list[int]], subs: list[str]) -> None:
     lines = ["# Shell blocks not executed by this run", ""]
     lines += [
         "Unmarked blocks are documentation only (for example a build or install command the run replaces with --bins).",
@@ -51,6 +52,8 @@ def _write_manifest_note(out: Path, documentation_only: dict[str, list[int]]) ->
         lines.append(
             f"- {name}: {', '.join(f'line {n}' for n in at) if at else 'none'}"
         )
+    lines += ["", "## Substitutions", "", "What this run stood in for:", ""]
+    lines += [f"- {s}" for s in subs] or ["- none"]
     (out / "guide" / "NOT-EXECUTED.md").write_text("\n".join(lines) + "\n")
 
 
