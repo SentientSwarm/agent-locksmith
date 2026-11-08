@@ -19,6 +19,7 @@ sys.path.insert(0, str(QA))
 
 import pytest
 
+from harness import uat
 from harness.contract import check_source, coverage, fault_gaps, load
 from harness.evidence import Bundle
 from harness.plugin import QaPlugin
@@ -43,6 +44,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="directory holding locksmith and locksmithd",
     )
     parser.add_argument("--mode", choices=("pr", "release"), default="pr")
+    parser.add_argument(
+        "--suite",
+        choices=("smoke", "uat"),
+        default="smoke",
+        help="smoke: contract cases; uat: guide journeys under docs/guide",
+    )
+    parser.add_argument(
+        "--publish-figures",
+        action="store_true",
+        help="uat only: copy the figures the guide references into docs/guide/img",
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -69,13 +81,18 @@ def main(argv: list[str]) -> int:
             "commit": git("rev-parse", "HEAD"),
             "tree_dirty": bool(git("status", "--porcelain")),
             "target": "t1-local-binary",
+            "suite": args.suite,
             "mode": args.mode,
             "release_ready": args.mode == "release" and not args.keyword,
             "started": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         }
     )
     contract = load(QA / "surface.yaml")
-    errors = check_source(contract, REPO, args.bins / "locksmith")
+    if args.suite == "uat":
+        contract.floors = {}
+        errors = []
+    else:
+        errors = check_source(contract, REPO, args.bins / "locksmith")
 
     plugin = QaPlugin(args.bins, bundle, canaries)
     pytest_args = [
@@ -86,7 +103,7 @@ def main(argv: list[str]) -> int:
         "-p",
         "no:cacheprovider",
         "-q",
-        str(QA / "smoke"),
+        str(QA / args.suite),
     ]
     if args.keyword:
         pytest_args += ["-k", args.keyword]
@@ -101,10 +118,12 @@ def main(argv: list[str]) -> int:
             bundle.write_manifest({"binaries": plugin.target.build_info()})
         except (OSError, subprocess.CalledProcessError, ValueError) as err:
             errors.append(f"cannot read build identity: {err}")
-    cov = coverage(contract, records)
+    cov = coverage(contract, records) if args.suite == "smoke" else {}
+    if args.suite == "uat":
+        errors += uat.finish(plugin.journeys, args.out, args.keyword, args.publish_figures)
     passed, reasons = gate(records, contract.floors, args.mode)
     reasons = errors + reasons
-    faults = fault_gaps(contract, records)
+    faults = fault_gaps(contract, records) if args.suite == "smoke" else []
     bundle.write_manifest({"fault_only_unexercised": faults})
     if args.mode == "release":
         reasons += [f"surface {gap}" for gap in faults]

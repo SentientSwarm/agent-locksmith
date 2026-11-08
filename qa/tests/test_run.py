@@ -22,6 +22,7 @@ def test_daemon_that_cannot_start_fails_fast_and_names_the_cause(tmp_path):
                     'echo \'{"level":"ERROR","fields":{"message":"daemon exited with error","error":"qa-forced"}}\'\nexit 1\n')
     fake.chmod(0o755)
     out = tmp_path / "evidence"
+    before = set(Path("/tmp").glob("lsqa-*"))
     started = time.monotonic()
     proc = subprocess.run([sys.executable, str(QA / "run.py"), "--bins", str(bins), "--out", str(out)],
                           capture_output=True, text=True, timeout=120, check=False)
@@ -31,7 +32,8 @@ def test_daemon_that_cannot_start_fails_fast_and_names_the_cause(tmp_path):
     assert results["gate"]["passed"] is False
     assert all(c["status"] == "FAIL" for c in results["cases"])
     assert any("qa-forced" in c["detail"] for c in results["cases"])
-    assert not list(Path("/tmp").glob("lsqa-*")), "work directory left behind"
+    # Compare with before: an interrupted earlier run can leave its own directory.
+    assert set(Path("/tmp").glob("lsqa-*")) <= before, "work directory left behind"
 
 
 def test_existing_evidence_directory_is_refused(tmp_path):

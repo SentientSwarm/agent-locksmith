@@ -92,3 +92,30 @@ provider payloads or private host details into evidence.
 A contract entry may be listed under `known_gaps` with a reason, a ticket and
 an expiry at most 30 days out; while unexpired it reports `NOT_APPLICABLE`.
 Only the owner approves a known gap or waiver, by approving the PR that adds it.
+
+## UAT
+
+The user guide under `docs/guide/` is also the UAT script. A shell block
+after `<!-- uat:step NAME -->` runs verbatim; `<!-- uat:step NAME bg -->`
+starts a long-running process. Each `qa/uat/test_NN_*.py` module drives one
+page in order and asserts checkpoints `UAT-<persona>-<journey>-CP<n>`
+(personas: OPR operator, AGT agent developer, OWN account owner, AUD
+auditor). Once a checkpoint fails, the rest of that journey reports
+NOT_EXERCISED.
+
+```sh
+.qa-venv/bin/python qa/run.py --suite uat --bins target/release --out /path/to/new/dir
+```
+
+Each journey runs with a fresh `HOME` under `/tmp`, the binaries under test
+first on `PATH`, and its ports pinned free through env names the page reads
+with `${NAME:-default}`. Every executed step yields a transcript and a
+terminal figure (SVG, drawn from redacted text). Consent journeys add
+browser screenshots taken with installed Chrome through Playwright.
+
+The run fails when a page references a figure the run did not produce, or
+when a marked step never ran. The bundle's `guide/` holds the pages rendered
+with that run's figures, plus `NOT-EXECUTED.md`, which lists the unmarked
+shell blocks. `--publish-figures` refreshes `docs/guide/img/` from a passing
+run. Values that appear literally in the guide, such as the synthetic demo
+accounts, are not treated as secrets.

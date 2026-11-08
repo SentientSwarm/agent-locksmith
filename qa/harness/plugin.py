@@ -11,9 +11,11 @@ from pathlib import Path
 import pytest
 
 from .evidence import Bundle
+from .guide import load as load_page
+from .journey import Journey
 from .redact import Canaries
 from .status import CaseRecord, Status
-from .target import LocalTarget
+from .target import LocalTarget, free_port
 
 KINDS = {"positive", "refusal", "corner"}
 
@@ -28,7 +30,8 @@ class QaPlugin:
         self.target: LocalTarget | None = None
         self.errors: list[str] = []
         self.current = "setup"
-        self.targets: list[LocalTarget] = []
+        self.targets: list = []  # LocalTarget or Journey; both carry current_case
+        self.journeys: list[Journey] = []
 
     def pytest_configure(self, config) -> None:
         config.qa_plugin = self
@@ -40,6 +43,14 @@ class QaPlugin:
         if self.target is None:
             self.target = target
         return target
+
+    def make_journey(self, page: Path, ports: tuple[str, ...]) -> Journey:
+        """A journey over one guide page, with each named port pinned free."""
+        journey = Journey(load_page(page), self.bins, self.bundle, self.canaries, {p: str(free_port()) for p in ports})
+        journey.current_case = self.current
+        self.targets.append(journey)
+        self.journeys.append(journey)
+        return journey
 
     def pytest_collection_modifyitems(self, items) -> None:
         for item in items:
