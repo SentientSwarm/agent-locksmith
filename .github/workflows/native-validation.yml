@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:  # the release workflow publishes exactly these validated bytes
+    outputs:
+      artifact:
+        description: Name of the complete validated candidate artifact
+        value: ${{ jobs.aggregate.outputs.artifact }}
 
 permissions:
   contents: read
@@ -66,6 +70,9 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      # Kept from the producing attempt when only a later job is re-run.
+      artifact: native-complete-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:

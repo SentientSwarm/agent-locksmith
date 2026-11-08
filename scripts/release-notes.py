@@ -34,7 +34,7 @@ def check_ref(ref: str, cargo_version: str) -> None:
         )
 
 
-def check_assets(assets: Path, cargo_version: str) -> None:
+def check_assets(assets: Path, cargo_version: str, revision: str) -> None:
     present = {p.name for p in assets.iterdir()}
     if present != EXPECTED:
         raise ValueError(
@@ -49,13 +49,13 @@ def check_assets(assets: Path, cargo_version: str) -> None:
     for name, digest in sums.items():
         if hashlib.sha256((assets / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f"{name} does not match SHA256SUMS")
-    validated = json.loads((assets / "validation.json").read_text())["source"][
-        "version"
-    ]
-    if validated != cargo_version:
+    source = json.loads((assets / "validation.json").read_text())["source"]
+    if source["version"] != cargo_version:
         raise ValueError(
-            f"validated version {validated} is not Cargo version {cargo_version}"
+            f"validated version {source['version']} is not Cargo version {cargo_version}"
         )
+    if source["revision"] != revision:
+        raise ValueError(f"validated revision {source['revision']} is not this run's {revision}")
 
 
 def changelog_section(text: str, cargo_version: str) -> str:
@@ -83,12 +83,13 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--ref", required=True, help="GITHUB_REF of the run")
+    parser.add_argument("--revision", required=True, help="GITHUB_SHA of the run")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         cargo_version = version(ROOT)
         check_ref(args.ref, cargo_version)
-        check_assets(args.assets, cargo_version)
+        check_assets(args.assets, cargo_version, args.revision)
         args.out.write_text(
             notes(changelog_section((ROOT / "CHANGELOG.md").read_text(), cargo_version))
         )

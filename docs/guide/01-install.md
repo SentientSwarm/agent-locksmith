@@ -10,9 +10,23 @@ This takes about five minutes.
 
 ## Install the binaries
 
-Download the release for your platform from the project's GitHub releases
-and put both programs on your `PATH`, or build them from source with Rust
-1.94.0:
+Download both programs for your platform from the latest GitHub release,
+check them against `SHA256SUMS`, and put them on your `PATH`:
+
+```sh
+platform=linux-amd64   # or linux-arm64, darwin-amd64, darwin-arm64
+url=https://github.com/SentientSwarm/agent-locksmith/releases/latest/download
+mkdir -p ~/bin && cd ~/bin
+curl -fsSLO "$url/locksmith-$platform" -fsSLO "$url/locksmithd-$platform" -fsSLO "$url/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing
+mv "locksmith-$platform" locksmith && mv "locksmithd-$platform" locksmithd
+chmod +x locksmith locksmithd
+export PATH="$HOME/bin:$PATH"
+```
+
+On macOS, files downloaded with a browser carry a quarantine flag; clear it with
+`xattr -d com.apple.quarantine locksmith locksmithd`. Or build from source with
+Rust 1.94.0:
 
 ```sh
 cargo +1.94.0 build --locked --release --bins

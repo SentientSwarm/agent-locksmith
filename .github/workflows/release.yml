@@ -3,7 +3,7 @@ name: Release
 # A v* tag publishes the bytes native validation built and smoke-tested: the
 # CLI and daemon for four targets, SHA256SUMS and validation.json, with notes
 # from CHANGELOG.md. Pull requests that change the release path and manual runs
-# do everything except publish.
+# run validation and the asset check, but never the publish job.
 on:
   push:
     tags:
@@ -24,27 +24,56 @@ jobs:
   validate:
     uses: ./.github/workflows/native-validation.yml
 
-  release:
+  check:
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: native-complete-${{ github.run_attempt }}
+          name: ${{ needs.validate.outputs.artifact }}
           path: ${{ runner.temp }}/release
       - name: Check assets and version, write notes
         run: |
           python3 -B scripts/release-notes.py --assets "$RUNNER_TEMP/release" \
-            --ref "$GITHUB_REF" --out "$RUNNER_TEMP/notes.md"
+            --ref "$GITHUB_REF" --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [validate, check]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Check assets and version, write notes
+        run: |
+          python3 -B scripts/release-notes.py --assets "$RUNNER_TEMP/release" \
+            --ref "$GITHUB_REF" --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/notes.md"
+      - name: Require a passing CI run for the tagged commit
+        # CI runs on pushes to main and release/** only, so a successful push
+        # run also shows the commit is on one of those branches.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success" -q .total_count)
+          if [ "$passed" -lt 1 ]; then
+            echo "::error::no successful CI push run for $GITHUB_SHA; tag a tested main or release/** commit"
+            exit 1
+          fi
       - name: Publish the release
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
