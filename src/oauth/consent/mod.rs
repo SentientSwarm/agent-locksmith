@@ -1,15 +1,20 @@
 //! Controlled, owner-bound consent custody. It confers no agent authority.
 mod account;
 pub mod api;
+mod callback_operation;
+mod callback_parameters;
+mod callback_route;
 mod client_api;
 mod clients;
 pub mod config;
+mod config_values;
 pub(crate) mod native;
 mod operation;
 mod refresh;
 pub mod server;
 mod slack;
 mod slack_identity;
+mod slack_metadata;
 mod slack_token;
 mod store;
 mod token;

@@ -10,6 +10,11 @@ mod pki;
 #[path = "explicit_binding_smoke/process.rs"]
 mod process;
 
+#[path = "oauth_consent/callback_tests.rs"]
+mod callback_tests;
+#[path = "oauth_consent/metadata_tests.rs"]
+mod metadata_tests;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controlled_consent_actual_cli_and_receiving_identity() {
     consent::journey().await;
@@ -161,4 +166,18 @@ async fn slack_client_retirement_prevents_late_exchange_publication() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn slack_client_retirement_prevents_late_refresh_publication() {
     consent::slack::retirement::held_refresh().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_advertised_resource_actual_promoted_transport() {
+    consent::slack::resource::journey().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_resource_endpoint_promotion_refuses_without_mutation() {
+    consent::slack::resource_denials::endpoints().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slack_resource_echo_refuses_publication_and_refresh_replay() {
+    consent::slack::resource_denials::echo().await;
 }

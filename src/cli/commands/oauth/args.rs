@@ -17,6 +17,7 @@ pub enum OauthCmd {
         profile: String,
         #[arg(long)]
         client_generation: u64,
+        /// Configured redirect profile. Slack without response iss requires /oauth/callback/slack.
         #[arg(long)]
         redirect_profile: String,
         #[arg(long)]

@@ -35,42 +35,9 @@ pub(super) fn outcome(v: &Value) -> Result<()> {
     Ok(())
 }
 
-fn scopes(v: &Value) -> bool {
-    let Some(s) = v.as_str() else {
-        return false;
-    };
-    let fields = s.split(',').collect::<Vec<_>>();
-    fields.len() == 2 && super::slack::SCOPES.iter().all(|s| fields.contains(s))
-}
-
-fn metadata(p: &Profile, v: &Value) -> Result<()> {
-    for (key, expected) in [
-        ("issuer", &p.issuer),
-        ("iss", &p.issuer),
-        ("resource", &p.resource),
-        ("client_id", &p.client_id),
-    ] {
-        if v.get(key).is_some_and(|v| v != expected.as_str()) {
-            return Err(Error("token_metadata_mismatch"));
-        }
-    }
-    if v["team"]["id"] != p.expected_workspace
-        || v["authed_user"]["id"] != p.expected_user
-        || !scopes(&v["authed_user"]["scope"])
-        || v.get("scope").is_some_and(|s| !scopes(s))
-        || v.get("team_id")
-            .is_some_and(|s| s != p.expected_workspace.as_str())
-        || v.get("user_id")
-            .is_some_and(|s| s != p.expected_user.as_str())
-    {
-        return Err(Error("token_metadata_mismatch"));
-    }
-    Ok(())
-}
-
 pub(super) fn decode(p: &Profile, v: &Value) -> Result<Token> {
     outcome(v)?;
-    metadata(p, v)?;
+    super::slack_metadata::check(p, v)?;
     if v["token_type"] != "user" || v.get("bot_user_id").is_some() {
         return Err(Error("token_invalid"));
     }
@@ -81,14 +48,7 @@ pub(super) fn decode(p: &Profile, v: &Value) -> Result<Token> {
         .map(secret)
         .transpose()?;
     let expiry = expiry(v)?;
-    for key in ["access_token", "refresh_token", "expires_in", "token_type"] {
-        if v["authed_user"]
-            .get(key)
-            .is_some_and(|nested| Some(nested) != v.get(key))
-        {
-            return Err(Error("token_metadata_mismatch"));
-        }
-    }
+    super::slack_metadata::echoes(v)?;
     Ok(Token {
         access,
         refresh,

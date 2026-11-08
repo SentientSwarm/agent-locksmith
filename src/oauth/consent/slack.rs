@@ -1,7 +1,7 @@
 //! Fixed confidential profile; fixture endpoints never substitute into the real kind.
 use super::{
     Error, Result,
-    config::{Profile, endpoint, https},
+    config::{Profile, endpoint},
     identifier,
 };
 
@@ -13,6 +13,16 @@ impl Profile {
             self.kind.as_str(),
             "slack-confidential-v1" | "slack-confidential-fixture-v1"
         )
+    }
+    /// Transport is fixed by the validated profile kind, never inferred from a token.
+    pub(crate) fn mcp_endpoint(&self) -> String {
+        match self.kind.as_str() {
+            "slack-confidential-v1" => "https://mcp.slack.com/mcp".into(),
+            "slack-confidential-fixture-v1" if self.resource == self.issuer => {
+                format!("{}/mcp", self.issuer)
+            }
+            _ => self.resource.clone(),
+        }
     }
     pub(crate) fn scopes(&self) -> Vec<String> {
         if self.slack() {
@@ -59,14 +69,14 @@ pub(super) fn validate(p: &Profile) -> Result<()> {
     {
         return Err(Error("invalid_profile"));
     }
-    https(&p.redirect_uri, "/oauth/callback")?;
+    p.callback_uri()?;
     endpoints(p)
 }
 
 fn endpoints(p: &Profile) -> Result<()> {
     if p.kind == "slack-confidential-v1" {
         if p.issuer != "https://mcp.slack.com"
-            || p.resource != "https://mcp.slack.com/mcp"
+            || p.resource != "https://mcp.slack.com"
             || p.authorization_endpoint != "https://slack.com/oauth/v2_user/authorize"
             || p.token_endpoint != "https://slack.com/api/oauth.v2.user.access"
         {
@@ -78,8 +88,11 @@ fn endpoints(p: &Profile) -> Result<()> {
     if p.issuer != origin.ascii_serialization() {
         return Err(Error("invalid_profile"));
     }
+    // Keep the historical fixture audience as an explicit compatibility case.
+    if p.resource != p.issuer && endpoint(&p.resource, "/mcp")?.origin() != origin {
+        return Err(Error("invalid_profile"));
+    }
     for (url, path) in [
-        (&p.resource, "/mcp"),
         (&p.authorization_endpoint, "/oauth/v2_user/authorize"),
         (&p.token_endpoint, "/api/oauth.v2.user.access"),
     ] {

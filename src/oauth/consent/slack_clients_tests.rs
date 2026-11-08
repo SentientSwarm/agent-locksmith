@@ -179,3 +179,9 @@ async fn check_retired(c: &mut sqlx::SqliteConnection) {
     .unwrap();
     assert_eq!(retired, 1);
 }
+
+#[path = "slack_resource_binding_tests.rs"]
+mod resource;
+
+#[path = "callback_binding_tests.rs"]
+mod callback_binding;

@@ -12,6 +12,26 @@
 
 ### Changed
 
+- Report [closed Slack token metadata reasons](docs/user/operator/slack-token-diagnostics.md)
+  through the existing attempt/refresh status path. Missing, null, wrong-type and
+  conflicting metadata remain refused without provider values or token hashes.
+  Acceptance, identity/scope checks and custody are unchanged; reason enums are
+  additive, with no migration. Historical broad failures remain undiagnosed.
+
+- Permit an absent Slack response issuer only at the dedicated, issuer-distinct
+  `/oauth/callback/slack` redirect, with actual Host/path checked against sealed
+  attempt state before claim. Supplied issuer checks and legacy/Linear mandatory
+  issuer behavior remain. [Callback upgrade](docs/user/operator/slack-callback.md)
+  requires a new client generation and explicit reactivation; no migration or
+  automatic custody rebind. Offline TLS controls do not establish live acceptance.
+
+- Separate the fixed Slack OAuth resource `https://mcp.slack.com` from MCP
+  transport `https://mcp.slack.com/mcp` across activation, custody checks and
+  native sessions. The old real-kind `/mcp` resource now refuses explicitly;
+  [deliberate binding repair](docs/user/operator/slack-oauth.md#renewal-retirement-and-upgrade)
+  is required. Existing Linear and local fixture behavior remains. Offline
+  receiving evidence does not establish live Slack confidential-S256 acceptance.
+
 - Add an explicit [confidential Slack user profile](docs/user/operator/slack-oauth.md)
   through owner-bound sealed client/token custody and customer definition activation.
   S256/client authentication, exact identities/scopes, finite tool authority and
