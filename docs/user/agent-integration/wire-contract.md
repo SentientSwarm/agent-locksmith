@@ -197,8 +197,17 @@ are rewritten to the same path under the route on Locksmith. The new base is
 `<scheme>://<Host header>/api/<route>`, where the scheme is `https` on the
 TLS listener and `http` otherwise. GitHub pagination therefore works as
 usual: follow `rel="next"` and the next page goes through Locksmith with the
-same credential. URLs to other hosts are left as they are. If the request has
-no `Host` header, or it is not a plain host and port, nothing is rewritten.
+same credential. Only the link target itself is rewritten (the whole
+`Location` value, or each `<...>` in `Link`), and only when it starts with
+the configured upstream exactly, including case and port, and continues with
+a path. URLs to other hosts, URLs inside another URL's query, and links to
+the bare upstream base are left as they are. If the request has no `Host`
+header, or it is not a plain host and port, nothing is rewritten.
+
+Behind a TLS-terminating front end, the plain-HTTP listener sees `http`, so
+rewritten links use `http://<public host>`. Make the front end redirect or
+refuse plain HTTP, or agents following such a link would send their bearer
+unencrypted.
 
 Redirects are followed by Locksmith, for example GitHub's tarball and log
 downloads. The agent receives the final response.

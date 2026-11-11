@@ -28,27 +28,45 @@ pub(super) fn agent_base(headers: &HeaderMap, tls: bool, route: &str) -> Option<
     })
 }
 
-/// Rewrite every URL under `upstream` in `value` to `agent_base`. A match
-/// must end at a path, query or fragment boundary, so `https://api.x.com`
-/// never matches `https://api.x.com.evil`. Returns `None` when unchanged.
-pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str) -> Option<String> {
+/// Rewrite one URI target that starts with `upstream` and continues
+/// with a path. A bare base (no path, or only `/`) is left alone because
+/// `/api/<route>` itself is not routable. `https://api.x.com` never
+/// matches `https://api.x.com.evil`.
+fn rewrite_target(target: &str, base: &str, agent_base: &str) -> Option<String> {
+    let rest = target.strip_prefix(base)?;
+    let path = rest.strip_prefix('/')?;
+    (!path.is_empty() && !path.starts_with(['?', '#'])).then(|| format!("{agent_base}{rest}"))
+}
+
+/// Rewrite the URI targets of a header value: the whole value for
+/// `Location`, each `<...>` target for `Link`. URLs embedded elsewhere,
+/// such as in another URL's query, are never touched. Returns `None`
+/// when unchanged.
+pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str, link: bool) -> Option<String> {
     let base = upstream.trim_end_matches('/');
     if base.is_empty() {
         return None;
     }
+    if !link {
+        return rewrite_target(value, base, agent_base);
+    }
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
     let mut changed = false;
-    while let Some(at) = rest.find(base) {
-        let after = &rest[at + base.len()..];
-        let boundary = after
-            .chars()
-            .next()
-            .is_none_or(|c| matches!(c, '/' | '?' | '#' | '>' | '"' | ',' | ';' | ' '));
-        out.push_str(&rest[..at]);
-        out.push_str(if boundary { agent_base } else { base });
-        changed |= boundary;
-        rest = after;
+    while let Some(open) = rest.find('<') {
+        let Some(close) = rest[open..].find('>').map(|c| open + c) else {
+            break;
+        };
+        let target = &rest[open + 1..close];
+        out.push_str(&rest[..=open]);
+        match rewrite_target(target, base, agent_base) {
+            Some(new) => {
+                out.push_str(&new);
+                changed = true;
+            }
+            None => out.push_str(target),
+        }
+        rest = &rest[close..];
     }
     out.push_str(rest);
     changed.then_some(out)
@@ -66,7 +84,7 @@ pub(super) fn rewrite_headers(headers: &mut HeaderMap, upstream: &str, agent_bas
             let new = value
                 .to_str()
                 .ok()
-                .and_then(|v| rewrite(v, upstream, agent_base))
+                .and_then(|v| rewrite(v, upstream, agent_base, name == "link"))
                 .and_then(|v| HeaderValue::from_str(&v).ok());
             headers.append(name, new.unwrap_or(value));
         }
@@ -84,7 +102,7 @@ mod tests {
     fn rewrites_github_pagination_links() {
         let link = r#"<https://api.github.com/organizations/1/repos?per_page=2&page=2>; rel="next", <https://api.github.com/organizations/1/repos?per_page=2&page=9>; rel="last""#;
         assert_eq!(
-            rewrite(link, UP, AGENT).unwrap(),
+            rewrite(link, UP, AGENT, true).unwrap(),
             r#"<http://10.0.0.1:9200/api/github/organizations/1/repos?per_page=2&page=2>; rel="next", <http://10.0.0.1:9200/api/github/organizations/1/repos?per_page=2&page=9>; rel="last""#
         );
     }
@@ -94,20 +112,44 @@ mod tests {
         let up = "https://h.example/runtime/v1/";
         let agent = "https://ls/api/m";
         assert_eq!(
-            rewrite("https://h.example/runtime/v1/models?after=x", up, agent).unwrap(),
+            rewrite(
+                "https://h.example/runtime/v1/models?after=x",
+                up,
+                agent,
+                false
+            )
+            .unwrap(),
             "https://ls/api/m/models?after=x"
-        );
-        assert_eq!(
-            rewrite("https://h.example/runtime/v1", up, agent).unwrap(),
-            "https://ls/api/m"
         );
         for other in [
             "https://h.example/runtime/v10/x",
             "https://h.example.evil/runtime/v1/x",
             "https://elsewhere.example/x",
         ] {
-            assert_eq!(rewrite(other, up, agent), None, "{other}");
+            assert_eq!(rewrite(other, up, agent, false), None, "{other}");
         }
+    }
+
+    #[test]
+    fn leaves_bare_bases_and_embedded_urls_alone() {
+        for bare in [
+            "https://api.github.com",
+            "https://api.github.com/",
+            "https://api.github.com?page=2",
+            "https://api.github.com/?page=2",
+        ] {
+            assert_eq!(rewrite(bare, UP, AGENT, false), None, "{bare}");
+        }
+        let embedded = "https://github.com/login?return_to=https://api.github.com/x";
+        assert_eq!(rewrite(embedded, UP, AGENT, false), None);
+        let link = r#"<https://other.example/c?next=https://api.github.com/r>; rel="next""#;
+        assert_eq!(rewrite(link, UP, AGENT, true), None);
+        let both = r#"<https://api.github.com/repos?cb=https://api.github.com/hook>; rel="next""#;
+        assert_eq!(
+            rewrite(both, UP, AGENT, true).unwrap(),
+            r#"<http://10.0.0.1:9200/api/github/repos?cb=https://api.github.com/hook>; rel="next""#,
+            "only the target's own origin changes"
+        );
     }
 
     #[test]
