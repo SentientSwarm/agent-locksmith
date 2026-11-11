@@ -127,6 +127,8 @@ async fn guarded(state: &OauthAdminState, f: impl Future<Output = Response>) -> 
 }
 
 async fn start(state: &OauthAdminState, name: String, label: String, replace: bool) -> Response {
+    // Taken first, so a revoke during the provider call fences this attempt.
+    let epoch = state.device_logins.epoch(&name, &label);
     let (issuer, client_id) = match dialect(state, &name).await {
         Ok(d) => d,
         Err(r) => return *r,
@@ -142,7 +144,6 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         Err(r) => return *r,
     };
     let interval = parse_interval(uc.interval.as_ref());
-    let name_for_epoch = name.clone();
     let Some(id) = state.device_logins.insert(Attempt {
         name,
         label: label.clone(),
@@ -154,7 +155,7 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         started: Instant::now(),
         interval,
         polling: false,
-        epoch: state.device_logins.epoch(&name_for_epoch, &label),
+        epoch,
     }) else {
         return too_many();
     };
