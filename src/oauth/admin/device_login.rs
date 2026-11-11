@@ -484,7 +484,8 @@ async fn poll_once(a: &AttemptView) -> Poll {
         .send()
         .await;
     let Ok(resp) = sent else {
-        tracing::warn!(
+        // Debug, not warn: an outage would repeat this every interval.
+        tracing::debug!(
             registration = %a.name,
             session_label = %a.label,
             "device login poll could not reach the provider; still pending"

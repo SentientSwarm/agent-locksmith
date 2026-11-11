@@ -410,6 +410,9 @@ routes:
   - device_login_unsupported
   - session_exists
   - too_many_device_logins
+  fault_refusals:
+  - oauth_kind_unsupported
+  fault_reason: needs a consent-managed account already under the label
 - id: admin.GET./admin/operator/oauth/{name}/device-login/{attempt}
   listener: admin
   method: GET
