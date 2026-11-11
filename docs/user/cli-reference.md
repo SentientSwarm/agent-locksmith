@@ -265,9 +265,9 @@ device authorization and the code exchange itself, then stores the session
 the same way `bootstrap` does. A session that needs reconnecting (degraded
 or refresh pending) is replaced in place, so agent bindings to that label
 keep working. A healthy session is replaced only with `--replace`. If the
-sign-in succeeds but the first refresh fails, the label reads
-`reconnect_required` (the replaced session is gone); run the command again,
-which replaces it without `--replace`. Like `bootstrap`, completion warns
+sign-in succeeds but the first refresh fails, the replaced session is gone
+and the label reads `reconnect_required` or absent; run the command again,
+which needs no `--replace` either way. Like `bootstrap`, completion warns
 when other labels exist under the registration, because one ChatGPT account
 signed in under two labels can invalidate the other. Only OpenAI's device
 dialect is supported; other registrations get `device_login_unsupported`.

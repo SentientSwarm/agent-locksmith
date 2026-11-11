@@ -321,7 +321,13 @@ async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Res
     // this attempt can have written the label (bootstrap and refresh hold
     // its lock), so removing the label's row removes exactly what we made.
     if logins.epoch(&a.name, &a.label) != a.epoch {
-        let _ = state.sessions.delete(&a.name, &a.label).await;
+        if state.sessions.delete(&a.name, &a.label).await.is_err() {
+            tracing::warn!(
+                registration = %a.name,
+                session_label = %a.label,
+                "device login could not remove its session after a revoke; revoke again"
+            );
+        }
         return revoked();
     }
     let updated = match refreshed {

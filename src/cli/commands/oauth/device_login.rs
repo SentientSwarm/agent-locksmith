@@ -56,6 +56,12 @@ pub async fn run(
             )
             .await?;
         if polled["status"] == "complete" {
+            for warning in polled["warnings"].as_array().into_iter().flatten() {
+                eprintln!(
+                    "warning: {}",
+                    warning.as_str().unwrap_or(&warning.to_string())
+                );
+            }
             print(&polled["session"], format);
             return Ok(());
         }

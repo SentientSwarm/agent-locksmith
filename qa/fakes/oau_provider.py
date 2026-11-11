@@ -8,6 +8,9 @@ One threaded server plays every provider role the OAU cases need:
 - ``GET /authorize``: issues a one-time code and redirects to the
   ``redirect_uri`` with ``state`` and ``code`` (or ``error``), like a browser
   consent page that the operator approved (or denied).
+- ``POST /api/accounts/deviceauth/usercode`` and ``.../token``: OpenAI's
+  device-authorization dialect (the Codex CLI's), approving after a set
+  number of polls; ``POST /oauth/token`` is the same token endpoint.
 - ``GET /whoami``: ``workspace-user-v1`` identity for the current access token.
 - ``POST /mcp`` / ``DELETE /mcp``: minimal MCP 2025-11-25 server for native calls.
 - ``ANY /api/...``: plain HTTP resource that reports which access-token
@@ -37,6 +40,8 @@ WORKSPACE = "workspace-qa-oau"
 USER = "user-qa-oau"
 MCP_TOOLS = ("read_record", "inspect_catalog")
 LEGACY_NAME = "provider"
+DEVICE_NAME = "chatgpt"
+DEVICE_CLIENT = "qa-device-client"
 
 
 def legacy_registration(fake: FakeProvider) -> dict:
@@ -53,6 +58,23 @@ def legacy_registration(fake: FakeProvider) -> dict:
             "scopes": ["read"],
             "auth_url": f"{origin}/authorize",
             "token_url": f"{origin}/token",
+        },
+    }
+
+
+def device_registration(fake: FakeProvider) -> dict:
+    """Operator PUT body for an `oauth_device_code` model in OpenAI's dialect."""
+    origin = fake.origin
+    return {
+        "description": "QA ChatGPT-plan device login",
+        "upstream": f"{origin}/api",
+        "egress": "direct",
+        "auth": {
+            "kind": "oauth_device_code",
+            "client_id": DEVICE_CLIENT,
+            "scopes": ["openid", "offline_access"],
+            "device_url": f"{origin}/api/accounts/deviceauth/usercode",
+            "token_url": f"{origin}/oauth/token",
         },
     }
 
@@ -90,6 +112,10 @@ class FakeProvider:
         self.access_tokens: dict[str, int] = {}
         self.access_expiry: dict[str, float] = {}
         self.codes: dict[str, dict] = {}
+        # Device authorization: id -> polls so far; approve on poll N.
+        self.devices: dict[str, int] = {}
+        self.device_approve_after = 2
+        self.device_fails = False
         self.generation = 0
         self.server: ThreadingHTTPServer | None = None
         self.port = 0
@@ -205,8 +231,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path == "/token":
+        if path in ("/token", "/oauth/token"):
             return self._token(self._body())
+        if path == "/api/accounts/deviceauth/usercode":
+            return self._device_code(self._body())
+        if path == "/api/accounts/deviceauth/token":
+            return self._device_poll(self._body())
         if path == "/mcp":
             return self._mcp(self._body())
         return self._resource()
@@ -306,6 +336,46 @@ class _Handler(BaseHTTPRequestHandler):
             return self._reply(400, {"error": "invalid_grant"})
         body = fake._issue_pair()
         body["scope"] = fake.scope
+        return self._reply(200, body)
+
+    def _device_code(self, raw: bytes) -> None:
+        fake = self.fake
+        self._count("device-code")
+        if json.loads(raw or b"{}").get("client_id") != DEVICE_CLIENT:
+            return self._reply(400, {"error": "invalid_client"})
+        device = fake._secret("device")
+        with fake.lock:
+            fake.devices[device] = 0
+        user_code = f"QA{secrets.randbelow(10**6):06d}"
+        body = {"device_auth_id": device, "user_code": user_code, "interval": "1"}
+        return self._reply(200, body)
+
+    def _device_poll(self, raw: bytes) -> None:
+        fake = self.fake
+        self._count("device-poll")
+        device = json.loads(raw or b"{}").get("device_auth_id", "")
+        with fake.lock:
+            if device not in fake.devices:
+                return self._reply(404, {"error": "unknown"})
+            fake.devices[device] += 1
+            polls = fake.devices[device]
+        if fake.device_fails:
+            return self._reply(400, {"error": "access_denied"})
+        if polls < fake.device_approve_after:
+            return self._reply(403, {"error": "authorization_pending"})
+        verifier = fake._secret("verifier")
+        code = fake._secret("code")
+        with fake.lock:
+            fake.devices.pop(device, None)
+            fake.codes[code] = {
+                "redirect_uri": f"{fake.origin}/deviceauth/callback",
+                "code_challenge": _s256(verifier),
+            }
+        body = {
+            "authorization_code": code,
+            "code_challenge": _s256(verifier),
+            "code_verifier": verifier,
+        }
         return self._reply(200, body)
 
     def _whoami(self) -> None:
