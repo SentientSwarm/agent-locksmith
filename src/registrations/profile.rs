@@ -66,6 +66,39 @@ mod tests {
     use super::*;
     use crate::registrations::RegistrationError;
 
+    /// Moved from proxy.rs: the pre-0024 `is_chatgpt_codex_upstream` cases.
+    fn codex(upstream: &str) -> bool {
+        RouteProfile::infer(upstream).is_codex()
+    }
+
+    #[test]
+    fn matches_canonical_codex_upstream() {
+        assert!(codex("https://chatgpt.com/backend-api/codex"));
+        assert!(codex("https://chatgpt.com/backend-api/codex/responses"));
+        assert!(codex("HTTPS://CHATGPT.COM/backend-api/codex")); // case-insensitive
+    }
+
+    #[test]
+    fn matches_staging_and_test_hosts() {
+        assert!(codex("https://chatgpt-staging.com/backend-api/codex"));
+        // Test wiremock mirroring the path shape — used by integration
+        // tests so they don't need real DNS for chatgpt.com.
+        assert!(codex("http://127.0.0.1:43287/backend-api/codex"));
+    }
+
+    #[test]
+    fn rejects_non_codex_upstreams() {
+        assert!(!codex("https://api.openai.com"));
+        assert!(!codex("https://api.anthropic.com"));
+        // Bare backend-api without /codex is the *other* codex
+        // surface (chat plugins / etc.) — distinct from the Responses
+        // endpoint that needs the account_id header.
+        assert!(!codex("https://chatgpt.com/backend-api"));
+        assert!(!codex("https://chatgpt.com/backend-api/dev"));
+        assert!(!codex("http://localhost:9200"));
+        assert!(!codex(""));
+    }
+
     #[test]
     fn infer_matches_todays_codex_rule() {
         use RouteProfile::*;

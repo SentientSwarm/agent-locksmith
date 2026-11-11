@@ -24,6 +24,11 @@ use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[path = "support/registered_legacy.rs"]
+mod registered;
 
 struct H {
     _dir: TempDir,
@@ -247,4 +252,109 @@ async fn profile_change_keeps_grants_and_bindings() {
         .await
         .json();
     assert!(creds.to_string().contains("\"cx\""), "{creds}");
+}
+
+async fn responses_upstream(at: &str) -> MockServer {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("{at}/responses")))
+        .respond_with(ResponseTemplate::new(200).set_body_string("data: {}\n\n"))
+        .mount(&mock)
+        .await;
+    mock
+}
+
+fn codex_like_body() -> Value {
+    json!({"model": "m", "input": [], "store": true, "stream": false, "max_output_tokens": 9})
+}
+
+async fn last_request(mock: &MockServer) -> wiremock::Request {
+    mock.received_requests()
+        .await
+        .unwrap()
+        .pop()
+        .expect("upstream saw a request")
+}
+
+impl H {
+    async fn post_responses(&self, name: &str) -> axum_test::TestResponse {
+        self.agent
+            .post(&format!("/api/{name}/responses"))
+            .add_header("authorization", &self.agent_bearer)
+            .add_header("openai-beta", "agent-chosen")
+            .json(&codex_like_body())
+            .await
+    }
+}
+
+#[tokio::test]
+async fn explicit_codex_profile_applies_fixups_on_a_non_codex_upstream() {
+    let mock = responses_upstream("/router").await;
+    let h = setup().await;
+    h.put_route(
+        "brk",
+        http_route(
+            &format!("{}/router", mock.uri()),
+            Some("openai-codex-responses"),
+        ),
+    )
+    .await
+    .assert_status_ok();
+    h.grant(&["brk"]).await;
+    h.post_responses("brk").await.assert_status_ok();
+    let req = last_request(&mock).await;
+    let sent: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(sent["store"], false);
+    assert_eq!(sent["stream"], true);
+    assert!(sent["instructions"].is_string());
+    assert!(sent.get("max_output_tokens").is_none());
+    assert_eq!(
+        req.headers.get("openai-beta").unwrap(),
+        "responses=experimental"
+    );
+    assert_eq!(req.headers.get("originator").unwrap(), "agent-1");
+}
+
+#[tokio::test]
+async fn explicit_generic_profile_disables_fixups_on_codex_upstream() {
+    let mock = responses_upstream("/backend-api/codex").await;
+    let h = setup().await;
+    h.put_route(
+        "cxg",
+        http_route(
+            &format!("{}/backend-api/codex", mock.uri()),
+            Some("generic"),
+        ),
+    )
+    .await
+    .assert_status_ok();
+    h.grant(&["cxg"]).await;
+    h.post_responses("cxg").await.assert_status_ok();
+    let req = last_request(&mock).await;
+    let sent: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(sent, codex_like_body());
+    assert_eq!(req.headers.get("openai-beta").unwrap(), "agent-chosen");
+    assert!(req.headers.get("originator").is_none());
+}
+
+#[tokio::test]
+async fn legacy_config_tool_on_codex_upstream_still_gets_fixups() {
+    let mock = responses_upstream("/backend-api/codex").await;
+    let yaml = format!(
+        "listen:\n  host: \"127.0.0.1\"\n  port: 9200\ntools:\n  - name: \"cx\"\n    \
+         description: \"codex\"\n    upstream: \"{}/backend-api/codex\"\n    \
+         auth:\n      header: \"Authorization\"\n      value: \"Bearer t\"\n    \
+         timeout_seconds: 30\n",
+        mock.uri()
+    );
+    let mut lh = registered::setup(parse_config_str(&yaml).unwrap()).await;
+    lh.server.add_header("authorization", &lh.bearer);
+    lh.server
+        .post("/api/cx/responses")
+        .json(&codex_like_body())
+        .await
+        .assert_status_ok();
+    let sent: Value = serde_json::from_slice(&last_request(&mock).await.body).unwrap();
+    assert_eq!(sent["store"], false);
+    assert!(sent.get("max_output_tokens").is_none());
 }

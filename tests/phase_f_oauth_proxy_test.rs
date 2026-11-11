@@ -369,7 +369,7 @@ fn jwt_with_chatgpt_account_id(account_id: &str) -> String {
 }
 
 /// Build a Harness with an upstream URL that mirrors the codex shape
-/// (`<mock>/backend-api/codex`) so `is_chatgpt_codex_upstream` fires
+/// (`<mock>/backend-api/codex`) so the inferred openai-codex-responses profile applies
 /// against the wiremock host. Default Harness uses `mock.uri()` as a
 /// bare host which doesn't match the codex pattern.
 async fn setup_codex_shaped() -> Harness {
