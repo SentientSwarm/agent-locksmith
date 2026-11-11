@@ -120,7 +120,7 @@ fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<Response> {
     ))
 }
 
-pub(super) async fn exchange(
+async fn exchange(
     state: &OauthAdminState,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {

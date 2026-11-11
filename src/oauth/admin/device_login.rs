@@ -317,18 +317,43 @@ async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Res
         &session,
     )
     .await;
-    let Ok(updated) = refreshed else {
-        let _ = state.sessions.delete_if_current(&session).await;
-        return *upstream_failed("first refresh", None);
-    };
+    // A revoke may have landed at any point since the last check. Only
+    // this attempt can have written the label (bootstrap and refresh hold
+    // its lock), so removing the label's row removes exactly what we made.
     if logins.epoch(&a.name, &a.label) != a.epoch {
-        let _ = state.sessions.delete_if_current(&updated).await;
+        let _ = state.sessions.delete(&a.name, &a.label).await;
         return revoked();
     }
-    let body = json!({
+    let updated = match refreshed {
+        Ok(updated) => updated,
+        Err(e) => {
+            // As with bootstrap: a row that never started refreshing is
+            // removed; one the refresh claimed stays as reconnect_required,
+            // because the provider may already have rotated its token.
+            let _ = state.sessions.delete_if_current(&session).await;
+            let why = refresh_failure(&e);
+            tracing::warn!(
+                registration = %a.name,
+                session_label = %a.label,
+                cause = why,
+                "device login first refresh failed"
+            );
+            return error_envelope(
+                StatusCode::BAD_GATEWAY,
+                "auth_error",
+                "device_login_failed",
+                &format!("first refresh failed: {why}; run device-login again"),
+            );
+        }
+    };
+    let warnings = super::warnings::collision_warnings(state, &a.name, &a.label).await;
+    let mut body = json!({
         "status": "complete",
         "session": session_status_json(&updated, true),
     });
+    if !warnings.is_empty() {
+        body["warnings"] = json!(warnings);
+    }
     (StatusCode::OK, Json(body)).into_response()
 }
 
@@ -352,6 +377,21 @@ async fn same_authority(
             "authority_changed",
             "the registration's OAuth issuer or client changed during the login; start again",
         ))),
+    }
+}
+
+/// A fixed description per cause: response-parse and persistence errors
+/// can quote provider or database text, so none is passed through.
+fn refresh_failure(e: &crate::oauth::refresh::RefreshError) -> String {
+    use crate::oauth::refresh::RefreshError as E;
+    match e {
+        E::Revoked { status } => format!("provider rejected the refresh ({status})"),
+        E::ProviderError { status } => format!("provider error ({status})"),
+        E::Network(_) => "token endpoint unreachable".into(),
+        E::BadResponse(_) => "malformed token response".into(),
+        E::Persist(_) => "could not store the tokens".into(),
+        E::ReconnectRequired => "session was claimed by another refresh".into(),
+        E::RegistrationGone(_) | E::NotOauth(_) => "registration changed".into(),
     }
 }
 

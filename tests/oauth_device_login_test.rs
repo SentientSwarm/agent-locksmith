@@ -421,6 +421,125 @@ async fn revoke_ends_a_pending_login() {
 }
 
 #[tokio::test]
+async fn a_revoke_during_a_failing_first_refresh_leaves_nothing_behind() {
+    let h = setup().await;
+    mock_user_code(&h).await;
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "authorization_code": "auth-code",
+            "code_challenge": "challenge",
+            "code_verifier": "verifier",
+        })))
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "access-login",
+            "refresh_token": "refresh-login",
+        })))
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(500).set_delay(std::time::Duration::from_millis(600)))
+        .mount(&h.mock)
+        .await;
+    let s: serde_json::Value = start(&h, "", serde_json::json!({})).await.json();
+    let attempt = s["attempt"].as_str().unwrap().to_string();
+    let completing = poll(&h, &attempt);
+    let revoking = async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        h.server
+            .delete("/admin/operator/oauth/codex")
+            .add_header("authorization", auth(&h))
+            .await
+    };
+    let (done, revoke) = tokio::join!(completing, revoking);
+    revoke.assert_status(axum::http::StatusCode::NO_CONTENT);
+    done.assert_status(axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        done.json::<serde_json::Value>()["error"]["code"],
+        "revoked_during_login"
+    );
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_failed_first_refresh_reports_why_and_can_be_retried() {
+    let h = setup().await;
+    mock_user_code(&h).await;
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/deviceauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "authorization_code": "auth-code",
+            "code_challenge": "challenge",
+            "code_verifier": "verifier",
+        })))
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "refresh_token": "refresh-login",
+        })))
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("refresh-leak"))
+        .mount(&h.mock)
+        .await;
+    let s: serde_json::Value = start(&h, "", serde_json::json!({})).await.json();
+    let failed = poll(&h, s["attempt"].as_str().unwrap()).await;
+    failed.assert_status(axum::http::StatusCode::BAD_GATEWAY);
+    assert_no_secrets(&failed.text());
+    let e: serde_json::Value = failed.json();
+    assert_eq!(e["error"]["code"], "device_login_failed");
+    assert!(
+        !e["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unreachable"),
+        "{e}"
+    );
+    // Whatever the claim left behind needs reconnecting, so a rerun needs no --replace.
+    if let Some(left) = h.sessions.get(&h.key, "codex", "default").await.unwrap() {
+        assert!(left.degraded || left.refresh_pending);
+        start(&h, "", serde_json::json!({}))
+            .await
+            .assert_status(axum::http::StatusCode::ACCEPTED);
+    }
+}
+
+#[tokio::test]
+async fn completion_warns_when_another_label_exists() {
+    let h = setup().await;
+    h.sessions
+        .create(&h.key, "codex", "other-account", "x", None, None, "")
+        .await
+        .unwrap();
+    let attempt = pending_attempt(&h).await;
+    let d: serde_json::Value = poll(&h, &attempt).await.json();
+    assert_eq!(d["status"], "complete", "{d}");
+    assert!(
+        d["warnings"].as_array().is_some_and(|w| !w.is_empty()),
+        "{d}"
+    );
+}
+
+#[tokio::test]
 async fn other_dialects_and_unknown_attempts_are_refused() {
     let h = setup().await;
     let other = h
