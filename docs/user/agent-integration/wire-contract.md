@@ -186,6 +186,23 @@ provider metadata; bootstrap alone does not authorize use. The agent never sees
 the injected credential. Identityless legacy calls cannot use credentialed
 registration defaults; only explicitly authless registrations are supported.
 
+#### Response headers
+
+Locksmith returns the upstream's response headers, minus hop-by-hop ones.
+A header the upstream sends more than once, such as `Set-Cookie` or `Link`,
+arrives as every value it sent.
+
+URLs in `Link` and `Location` that point under the route's upstream base
+are rewritten to the same path under the route on Locksmith. The new base is
+`<scheme>://<Host header>/api/<route>`, where the scheme is `https` on the
+TLS listener and `http` otherwise. GitHub pagination therefore works as
+usual: follow `rel="next"` and the next page goes through Locksmith with the
+same credential. URLs to other hosts are left as they are. If the request has
+no `Host` header, or it is not a plain host and port, nothing is rewritten.
+
+Redirects are followed by Locksmith, for example GitHub's tarball and log
+downloads. The agent receives the final response.
+
 #### Streaming
 
 Locksmith streams the upstream response body chunk-by-chunk. SSE

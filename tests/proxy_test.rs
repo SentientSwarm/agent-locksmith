@@ -194,3 +194,61 @@ tools:
         .await;
     resp.assert_status_ok();
 }
+
+#[tokio::test]
+async fn test_proxy_points_upstream_links_back_at_locksmith() {
+    // GitHub-style pagination: absolute `Link` URLs to the upstream must come
+    // back as the agent-facing route URL, or the next page bypasses
+    // Locksmith. Repeated headers must all survive.
+    let mock = MockServer::start().await;
+    let next = format!("<{}/orgs/o/repos?page=2>; rel=\"next\"", mock.uri());
+    Mock::given(method("GET"))
+        .and(path("/orgs/o/repos"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("link", next.as_str())
+                .append_header("location", format!("{}/repos/o/r", mock.uri()).as_str())
+                .append_header("set-cookie", "a=1")
+                .append_header("set-cookie", "b=2")
+                .set_body_string("[]"),
+        )
+        .mount(&mock)
+        .await;
+
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "github"
+    description: "GitHub"
+    upstream: "{}"
+    auth:
+      header: "Authorization"
+      value: "Bearer x"
+    timeout_seconds: 30
+"#,
+        mock.uri()
+    );
+    let config = parse_config_str(&yaml).unwrap();
+    let mut h = registered::setup(config).await;
+    h.server.add_header("authorization", &h.bearer);
+
+    let resp: TestResponse = h
+        .server
+        .get("/api/github/orgs/o/repos")
+        .add_header("host", "locksmith.test:9200")
+        .await;
+    resp.assert_status_ok();
+    assert_eq!(
+        resp.headers()["link"],
+        "<http://locksmith.test:9200/api/github/orgs/o/repos?page=2>; rel=\"next\""
+    );
+    assert_eq!(
+        resp.headers()["location"],
+        "http://locksmith.test:9200/api/github/repos/o/r"
+    );
+    let cookies: Vec<_> = resp.headers().get_all("set-cookie").iter().collect();
+    assert_eq!(cookies.len(), 2, "every repeated header reaches the agent");
+}

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Point upstream URLs in `Link` and `Location` response headers back at
+  Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
+  so following `rel="next"` bypassed Locksmith and failed without a
+  credential. URLs under a route's upstream base now become
+  `<scheme>://<Host>/api/<route>/...`. Other URLs are left unchanged.
+- Forward every value of a repeated response header. Only the last
+  `Set-Cookie` or `Link` value reached the agent before.
+
 ## 3.0.0
 
 - Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is
