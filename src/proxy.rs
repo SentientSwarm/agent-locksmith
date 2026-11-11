@@ -111,6 +111,8 @@ struct ProxyTarget {
     body_limit_bytes: u64,
     timeouts: ToolTimeouts,
     egress: EgressMode,
+    /// #135 — the route's own trust anchors, if any.
+    upstream_ca_pem: Option<String>,
     auth: ProxyAuth,
     /// Phase G — audit attribution for the credential applied:
     /// `"registration_default"` (no override active) or
@@ -327,6 +329,7 @@ impl ProxyTarget {
             body_limit_bytes: r.body_limit_bytes,
             timeouts: r.timeouts,
             egress: r.egress,
+            upstream_ca_pem: r.upstream_ca_pem.clone(),
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
@@ -354,6 +357,7 @@ impl ProxyTarget {
             body_limit_bytes: t.body_limit_bytes,
             timeouts: t.timeouts,
             egress: t.egress,
+            upstream_ca_pem: None,
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
@@ -664,10 +668,13 @@ fn build_upstream_request(
     // `AgentIdentity`; falls back to a static `"locksmith-proxy"` then.
     agent_name: Option<&str>,
 ) -> reqwest::RequestBuilder {
-    let client =
-        state
-            .client_pool
-            .get_or_build_for(&target.name, target.timeouts, target.egress, config);
+    let client = state.client_pool.get_or_build_for(
+        &target.name,
+        target.timeouts,
+        target.egress,
+        target.upstream_ca_pem.as_deref(),
+        config,
+    );
     let mut upstream_req = client.request(method, upstream_url);
 
     // Forward headers, stripping auth-related ones so the agent can't

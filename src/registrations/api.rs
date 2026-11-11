@@ -118,6 +118,11 @@ pub struct PutBody {
     pub body_limit_bytes: Option<u64>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    /// #135 — PEM trust anchors for this route only. Replaces public roots
+    /// and the global `tls.upstream_ca_bundle`. Absent clears it (PUT is a
+    /// full replace).
+    #[serde(default)]
+    pub upstream_ca_pem: Option<String>,
 }
 
 /// Phase J (ADR-0008) — body for `PUT /admin/operator/<kind>/<name>/credential`.
@@ -149,10 +154,21 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
         "timeouts": r.timeouts,
         "body_limit_bytes": r.body_limit_bytes,
         "metadata": r.metadata,
+        "upstream_ca": upstream_ca_summary(r.upstream_ca_pem.as_deref()),
         "seed": r.seed,
         "disabled": r.disabled,
         "created_at": r.created_at,
         "updated_at": r.updated_at,
+    })
+}
+
+/// #135 — operators see the fingerprint and size, not the PEM itself.
+fn upstream_ca_summary(pem: Option<&str>) -> Value {
+    pem.map_or(Value::Null, |pem| {
+        json!({
+            "sha256": super::upstream_ca::sha256_hex(pem),
+            "certificates": super::upstream_ca::der_certificates(pem).map_or(0, |c| c.len()),
+        })
     })
 }
 
@@ -175,6 +191,11 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
         RegistrationError::InvalidUpstream => {
             (StatusCode::BAD_REQUEST, "bad_request", "invalid_upstream")
         }
+        RegistrationError::InvalidUpstreamCa => (
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "invalid_upstream_ca",
+        ),
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
         RegistrationError::ReservedName => {
@@ -448,6 +469,13 @@ pub async fn op_put(
     ) {
         return registration_error_response(&e);
     }
+    if let Err(e) = super::upstream_ca::validate(
+        body.upstream_ca_pem.as_deref(),
+        &body.upstream,
+        body.protocol,
+    ) {
+        return registration_error_response(&e);
+    }
     if let Some(metadata) = &body.metadata
         && let Err(e) = super::http_service::from_metadata(metadata)
     {
@@ -535,6 +563,7 @@ pub async fn op_put(
         metadata: body
             .metadata
             .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+        upstream_ca_pem: body.upstream_ca_pem,
         seed: false, // PUT always flips to operator-owned
         disabled,
         created_at,
