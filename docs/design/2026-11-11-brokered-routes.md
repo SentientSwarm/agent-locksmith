@@ -110,15 +110,24 @@ A route declares a **profile** that replaces URL-substring heuristics:
 |---|---|
 | `generic` (default) | Today's generic proxy. |
 | `openai-codex-responses` | Codex body fix-ups (G3/G5), required headers (G4), and account-id injection (G2) when the backend is `upstream` with a Locksmith OAuth session. Request timeout 600 s, body limit from the route. |
-| `anthropic-messages` | Long-stream timeouts. `anthropic-version` and `anthropic-beta` pass through untouched; only auth headers are replaced. |
 
 Header injection that needs an account (G2) is skipped on `broker` backends,
 because the broker sets account headers itself. Body fix-ups stay
 profile-controlled on both kinds, since agents send the same bodies either
 way. A broker that already applies them makes the fix-ups idempotent no-ops.
 
-During migration, existing routes whose upstream matches the old heuristic get
-`openai-codex-responses` automatically, so behaviour does not change.
+The profile is stored as a nullable column. NULL means "inferred": the
+effective profile comes from the old heuristic on the upstream, so existing
+routes keep their behaviour without a data migration. An explicit value
+overrides the inference in either direction, and the admin API reports the
+effective profile with `profile_source: explicit|inferred`.
+
+A profile is not part of the destination. Changing it does not fire the 0009
+authority trigger, and grants and bindings survive.
+
+`anthropic-messages` is deferred until a behaviour needs it. Today Anthropic
+traffic needs nothing beyond the generic proxy: version and beta headers
+already pass through, and only auth headers are replaced.
 
 ### 4. Broker contract
 
