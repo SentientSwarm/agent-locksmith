@@ -196,6 +196,9 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
             "bad_request",
             "invalid_upstream_ca",
         ),
+        RegistrationError::InvalidProfile => {
+            (StatusCode::BAD_REQUEST, "bad_request", "invalid_profile")
+        }
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
         RegistrationError::ReservedName => {
@@ -564,6 +567,7 @@ pub async fn op_put(
             .metadata
             .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
         upstream_ca_pem: body.upstream_ca_pem,
+        profile: None,
         seed: false, // PUT always flips to operator-owned
         disabled,
         created_at,

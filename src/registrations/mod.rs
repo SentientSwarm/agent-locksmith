@@ -24,6 +24,7 @@ mod definitions;
 pub mod http_service;
 pub mod kind;
 pub mod legacy_bootstrap;
+pub mod profile;
 pub mod protocol;
 pub mod repo;
 pub mod seed_loader;
@@ -33,6 +34,7 @@ pub mod validators;
 pub use auth_spec::AuthSpec;
 pub use catalog::Catalog;
 pub use kind::Kind;
+pub use profile::RouteProfile;
 pub use protocol::{McpConfig, Protocol};
 pub use repo::{Registration, RegistrationRepository};
 pub use validators::{MAX_NAME_LEN, RESERVED_NAMES, validate_name, validate_upstream};
@@ -64,6 +66,11 @@ pub enum RegistrationError {
         "invalid upstream_ca_pem: use 1-16 PEM certificates on an HTTPS upstream of an HTTP route"
     )]
     InvalidUpstreamCa,
+
+    /// Route profile not one of the known wire values (brokered routes
+    /// phase 1). Wire: 400 bad_request / `invalid_profile`.
+    #[error("invalid profile: use generic or openai-codex-responses")]
+    InvalidProfile,
 
     /// Cross-kind name reuse — `name` is already registered under a
     /// different kind. Wire: 409 conflict / `name_in_use`.

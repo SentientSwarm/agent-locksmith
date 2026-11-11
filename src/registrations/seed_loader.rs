@@ -315,6 +315,7 @@ fn entry_to_registration(
         timeouts: entry.timeouts.unwrap_or_default(),
         body_limit_bytes: entry.body_limit_bytes.unwrap_or(10 * 1024 * 1024),
         upstream_ca_pem: None,
+        profile: None,
         metadata: entry
             .metadata
             .unwrap_or_else(|| Json::Object(serde_json::Map::new())),
