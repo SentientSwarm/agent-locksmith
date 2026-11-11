@@ -1118,6 +1118,8 @@ behaviours:
   summary: Size cap, content-type allowlist and redaction (hash only in audit)
 - id: beh.codex.fixups
   summary: Codex account header, /responses body fixup and required headers
+- id: beh.route.profile
+  summary: Route profile selects Codex wire behaviour; NULL infers from upstream
 - id: beh.proxy.header-strip
   summary: Agent Authorization, x-api-key and target auth header are stripped
 - id: beh.secret.backends
