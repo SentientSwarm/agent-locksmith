@@ -90,6 +90,12 @@ pub struct PutOpts {
     /// Optional description. Empty by default.
     #[arg(long)]
     pub description: Option<String>,
+
+    /// PEM file of trust anchors for this route only (HTTPS upstreams).
+    /// Replaces public roots for the route; an intermediate alone works.
+    /// Omitting it on a later `put` clears it. `-` reads stdin.
+    #[arg(long = "upstream-ca-file")]
+    pub upstream_ca_file: Option<std::path::PathBuf>,
 }
 
 fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
@@ -100,6 +106,16 @@ fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
         return Err(format!("metadata key empty in: {s}"));
     }
     Ok((k.to_string(), v.to_string()))
+}
+
+fn read_upstream_ca_file(path: &std::path::Path) -> Result<String, CliError> {
+    let unreadable = || CliError::Usage("unable to read upstream CA file".into());
+    if path.as_os_str() == "-" {
+        let mut pem = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut pem).map_err(|_| unreadable())?;
+        return Ok(pem);
+    }
+    std::fs::read_to_string(path).map_err(|_| unreadable())
 }
 
 fn read_metadata_file(path: &std::path::Path) -> Result<Value, CliError> {
@@ -233,6 +249,12 @@ pub async fn do_put(
     if let Some(path) = opts.metadata_file {
         body.insert("metadata".into(), read_metadata_file(&path)?);
     }
+    if let Some(path) = opts.upstream_ca_file {
+        body.insert(
+            "upstream_ca_pem".into(),
+            json!(read_upstream_ca_file(&path)?),
+        );
+    }
 
     let path = format!("/admin/operator/{}/{}", kind.url_segment(), name);
     let body_value = Value::Object(body);
@@ -274,6 +296,22 @@ pub async fn do_enable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_ca_file_reads_pem_or_reports_usage() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("ca.pem");
+        std::fs::write(&path, "-----BEGIN CERTIFICATE-----\n").unwrap();
+        assert!(
+            read_upstream_ca_file(&path)
+                .unwrap()
+                .starts_with("-----BEGIN")
+        );
+        assert!(matches!(
+            read_upstream_ca_file(&dir.path().join("missing.pem")),
+            Err(CliError::Usage(_))
+        ));
+    }
 
     // ─── TS-143 / TS-144: --auth parser ────────────────────────────────────
 

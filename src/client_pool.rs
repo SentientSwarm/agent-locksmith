@@ -27,14 +27,22 @@ struct ToolFingerprint {
     idle_seconds: u64,
     egress: EgressMode,
     egress_proxy_url: Option<String>,
+    /// #135 — SHA-256 of the route's own CA PEM; `None` uses the default
+    /// trust (public roots plus the global bundle).
+    upstream_ca_sha256: Option<String>,
 }
 
 impl ToolFingerprint {
     fn of(tool: &ToolConfig, config: &AppConfig) -> Self {
-        Self::of_parts(tool.timeouts, tool.egress, config)
+        Self::of_parts(tool.timeouts, tool.egress, None, config)
     }
 
-    fn of_parts(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConfig) -> Self {
+    fn of_parts(
+        timeouts: ToolTimeouts,
+        egress: EgressMode,
+        upstream_ca_pem: Option<&str>,
+        config: &AppConfig,
+    ) -> Self {
         Self {
             request_seconds: timeouts.request_seconds,
             idle_seconds: timeouts.idle_seconds,
@@ -48,6 +56,7 @@ impl ToolFingerprint {
             } else {
                 None
             },
+            upstream_ca_sha256: upstream_ca_pem.map(crate::registrations::upstream_ca::sha256_hex),
         }
     }
 }
@@ -109,9 +118,10 @@ impl ClientPool {
         name: &str,
         timeouts: ToolTimeouts,
         egress: EgressMode,
+        upstream_ca_pem: Option<&str>,
         config: &AppConfig,
     ) -> Arc<Client> {
-        let fingerprint = ToolFingerprint::of_parts(timeouts, egress, config);
+        let fingerprint = ToolFingerprint::of_parts(timeouts, egress, upstream_ca_pem, config);
 
         {
             let entries = self
@@ -134,7 +144,7 @@ impl ClientPool {
         {
             return Arc::clone(client);
         }
-        let client = Arc::new(build_client_for(timeouts, egress, config));
+        let client = Arc::new(build_client_for(timeouts, egress, upstream_ca_pem, config));
         entries.insert(name.to_string(), (Arc::clone(&client), fingerprint));
         client
     }
@@ -160,13 +170,31 @@ impl ClientPool {
 }
 
 fn build_client(tool: &ToolConfig, config: &AppConfig) -> Client {
-    build_client_for(tool.timeouts, tool.egress, config)
+    build_client_for(tool.timeouts, tool.egress, None, config)
 }
 
-fn build_client_for(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConfig) -> Client {
+fn build_client_for(
+    timeouts: ToolTimeouts,
+    egress: EgressMode,
+    upstream_ca_pem: Option<&str>,
+    config: &AppConfig,
+) -> Client {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(timeouts.request_seconds))
         .read_timeout(Duration::from_secs(timeouts.idle_seconds));
+
+    if let Some(pem) = upstream_ca_pem {
+        // #135 — the route's own anchors replace every other root. Fail
+        // closed: an unusable stored value leaves no anchors, so TLS fails.
+        builder = route_only_trust(builder, pem);
+        if matches!(egress, EgressMode::Proxied)
+            && let Some(proxy_url) = &config.egress_proxy
+            && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
+        {
+            builder = builder.proxy(proxy);
+        }
+        return builder.build().unwrap_or_else(|_| no_trust_client());
+    }
 
     // Extra upstream-CA trust (e.g. an internal CA in front of an HTTPS
     // upstream). reqwest's rustls+webpki roots ignore the system store,
@@ -185,6 +213,35 @@ fn build_client_for(timeouts: ToolTimeouts, egress: EgressMode, config: &AppConf
     }
 
     builder.build().unwrap_or_else(|_| Client::new())
+}
+
+/// #135 — trust only `pem`'s certificates. Each becomes a trust anchor, so
+/// an intermediate alone suffices (partial chain).
+fn route_only_trust(builder: reqwest::ClientBuilder, pem: &str) -> reqwest::ClientBuilder {
+    let mut builder = builder.tls_built_in_root_certs(false);
+    let certs = crate::registrations::upstream_ca::der_certificates(pem).map(|ders| {
+        ders.iter()
+            .map(|der| reqwest::Certificate::from_der(der))
+            .collect::<Result<Vec<_>, _>>()
+    });
+    match certs {
+        Some(Ok(certs)) => {
+            for cert in certs {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+        _ => tracing::warn!("route upstream CA unusable; route has no trust anchors"),
+    }
+    builder
+}
+
+/// Last resort when a route-CA client cannot be built: no roots, so every
+/// TLS handshake fails rather than falling back to public trust.
+fn no_trust_client() -> Client {
+    Client::builder()
+        .tls_built_in_root_certs(false)
+        .build()
+        .expect("a client without roots always builds")
 }
 
 /// Add each PEM certificate in `ca_path` to the client's root store.
