@@ -364,24 +364,41 @@ async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Res
 }
 
 /// The registration, in the store and in the serving catalog, must still
-/// resolve to this attempt's issuer and client.
+/// resolve to this attempt's issuer and client, and so must the agent
+/// bindings that select this label: refresh uses the bindings' agreed
+/// metadata when there are any, so tokens issued here must suit it. The
+/// returned spec is the one the first refresh uses.
 async fn same_authority(
     state: &OauthAdminState,
     a: &AttemptView,
 ) -> Result<AuthSpec, Box<Response>> {
     let want = (a.issuer.clone(), a.client_id.clone());
     let stored = dialect(state, &a.name).await.ok();
-    let catalog = state.catalog.load();
-    let serving = catalog.lookup_active(&a.name).map(|r| r.auth.clone());
-    match serving {
-        Some(auth) if stored.as_ref() == Some(&want) && openai_issuer(&auth) == Some(want) => {
-            Ok(auth)
+    let serving = state
+        .catalog
+        .load()
+        .lookup_active(&a.name)
+        .map(|r| r.auth.clone());
+    let template = serving.filter(|auth| {
+        stored.as_ref() == Some(&want) && openai_issuer(auth).as_ref() == Some(&want)
+    });
+    let bindings = crate::repo::AgentCredentialRepository::new(state.sessions.pool().clone());
+    let selected = crate::oauth::refresh::selected_source(&bindings, &a.name, &a.label).await;
+    let token_url = format!("{}/oauth/token", a.issuer);
+    match (template, selected) {
+        (Some(auth), Ok(None)) => Ok(auth),
+        (Some(_), Ok(Some(bound)))
+            if crate::oauth::refresh::selected_parameters(&bound)
+                == Some((token_url.as_str(), a.client_id.as_str())) =>
+        {
+            Ok(bound)
         }
         _ => Err(Box::new(error_envelope(
             StatusCode::CONFLICT,
             "conflict",
             "authority_changed",
-            "the registration's OAuth issuer or client changed during the login; start again",
+            "the registration or this label's agent bindings no longer name the \
+             issuer and client this login used; start again",
         ))),
     }
 }

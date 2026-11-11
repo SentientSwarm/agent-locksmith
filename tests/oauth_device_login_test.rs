@@ -31,6 +31,7 @@ struct Harness {
     key: SealingKey,
     registrations: Arc<RegistrationRepository>,
     catalog: Arc<ArcSwap<Catalog>>,
+    pool: sqlx::SqlitePool,
 }
 
 async fn setup() -> Harness {
@@ -59,6 +60,7 @@ async fn setup() -> Harness {
     let bootstrap = BootstrapTokenRepository::new(pool.clone());
     let registrations = Arc::new(RegistrationRepository::new(pool.clone()));
     let sessions = OauthSessionRepository::new(pool.clone());
+    let pool_for_harness = pool.clone();
     let sealing_key = SealingKey::generate().unwrap();
 
     let cfg = parse_config_str("listen:\n  host: 127.0.0.1\n  port: 9200\n").unwrap();
@@ -141,6 +143,7 @@ async fn setup() -> Harness {
         key: sealing_key,
         registrations,
         catalog: catalog_arc,
+        pool: pool_for_harness,
     }
 }
 
@@ -391,6 +394,43 @@ async fn a_changed_issuer_never_receives_the_new_tokens() {
     );
     assert!(!code_exchanged(&h.mock.received_requests().await.unwrap()));
     assert!(elsewhere.received_requests().await.unwrap().is_empty());
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_binding_that_pins_another_client_blocks_completion() {
+    let h = setup().await;
+    let attempt = pending_attempt(&h).await;
+    let agents = agent_locksmith::repo::AgentRepository::new(h.pool.clone());
+    agents
+        .create("bound", None, None, None, None, None)
+        .await
+        .unwrap();
+    let id = agents.get_by_name("bound").await.unwrap().unwrap().id;
+    let pinned = AuthSpec::OauthDeviceCode {
+        client_id: "pinned-client".to_string(),
+        scopes: vec![],
+        device_url: format!("{}/api/accounts/deviceauth/usercode", h.mock.uri()),
+        token_url: format!("{}/oauth/token", h.mock.uri()),
+        session_label: Some("default".to_string()),
+    };
+    agent_locksmith::repo::AgentCredentialRepository::new(h.pool.clone())
+        .set(id, "codex", &pinned)
+        .await
+        .unwrap();
+    let refused = poll(&h, &attempt).await;
+    refused.assert_status(axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        refused.json::<serde_json::Value>()["error"]["code"],
+        "authority_changed"
+    );
+    assert!(!code_exchanged(&h.mock.received_requests().await.unwrap()));
     assert!(
         h.sessions
             .get(&h.key, "codex", "default")
