@@ -51,6 +51,8 @@ pub struct OauthAdminState {
     pub sealing_key: SealingKey,
     pub catalog: Arc<arc_swap::ArcSwap<Catalog>>,
     pub locks: RefreshLockMap,
+    /// #138: pending operator device logins (in memory only).
+    pub device_logins: DeviceLogins,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,9 +65,11 @@ pub struct BootstrapBody {
 }
 
 mod bootstrap;
+mod device_login;
 mod status;
 mod warnings;
 pub use bootstrap::op_oauth_bootstrap;
+pub use device_login::{DeviceLogins, op_oauth_device_login_poll, op_oauth_device_login_start};
 pub use status::{op_oauth_list, op_oauth_revoke, op_oauth_status};
 
 /// Serialize an `OauthSession` for the operator status surface. Never

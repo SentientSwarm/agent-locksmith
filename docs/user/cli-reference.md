@@ -247,6 +247,7 @@ controlled consent accounts.
 ```bash
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token <token>
 locksmith oauth bootstrap <name> [--label <label>] --refresh-token-stdin
+locksmith oauth device-login <name> [--label <label>] [--replace]   # ChatGPT plan (codex)
 locksmith oauth status   <name> [--label <label>]
 locksmith oauth revoke   <name> [--label <label>]
 locksmith oauth list                                # legacy sessions only
@@ -256,6 +257,29 @@ locksmith oauth list                                # legacy sessions only
 own OAuth flow) and registers it with locksmith. Daemon does an
 inline first-refresh to verify, then seals refresh + access tokens
 in `oauth_sessions` (AES-GCM with `LOCKSMITH_OAUTH_SEALING_KEY`).
+
+`device-login` signs a ChatGPT-plan (codex) session in without a refresh
+token ever reaching the operator's shell. It prints a URL and a one-time
+code, and waits while you sign in on any browser; the daemon runs OpenAI's
+device authorization and the code exchange itself, then stores the session
+the same way `bootstrap` does. A session that needs reconnecting (degraded
+or refresh pending) is replaced in place, so agent bindings to that label
+keep working. A healthy session is replaced only with `--replace`. If the
+sign-in succeeds but the first refresh fails, the replaced session is gone
+and the label reads `reconnect_required` or absent; run the command again,
+which needs no `--replace` either way. Like `bootstrap`, completion warns
+when other labels exist under the registration, because one ChatGPT account
+signed in under two labels can invalidate the other. Only OpenAI's device
+dialect is supported; other registrations get `device_login_unsupported`.
+The admin API is `POST /admin/operator/oauth/<name>/device-login?label=`
+(body `{"replace": bool}`, returns `attempt`, `verification_url`,
+`user_code`, `interval`) and `GET .../device-login/<attempt>`, which polls
+once and returns `pending` or `complete` with the session status. Attempts
+are held in memory, expire after 15 minutes and do not survive a restart. At most
+16 are pending at once (429 `too_many_device_logins`). Revoking the label
+ends its pending logins, and a login fails with 409 `authority_changed`
+before any code is exchanged when its registration, or any agent binding that
+selects the label, no longer names the issuer and client it used, so tokens only ever go to the issuer that issued them.
 
 **Phase G — `--label`**: distinguishes multiple sessions under one
 registration, defaulting to `"default"`. Use distinct labels (e.g.,

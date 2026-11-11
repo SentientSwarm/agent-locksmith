@@ -118,6 +118,17 @@ provider's own CLI/flow and hands it to locksmith.
 
 ### codex (OpenAI ChatGPT subscription)
 
+The simplest path is a device login run from the operator CLI. No refresh
+token passes through your shell, and it is also how to reconnect a session
+whose status shows `reconnect_required`:
+
+```bash
+locksmith oauth device-login codex --label default
+# Open https://auth.openai.com/codex/device and enter the code shown.
+```
+
+The manual handoff below still works:
+
 ```bash
 # 1. Install OpenAI's codex CLI on a machine with a browser.
 npm install -g @openai/codex

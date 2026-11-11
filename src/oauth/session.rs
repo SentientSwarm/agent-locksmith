@@ -69,6 +69,11 @@ pub struct OauthSessionRepository {
 }
 
 impl OauthSessionRepository {
+    /// The pool behind custody, for reads that must see the same database.
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }

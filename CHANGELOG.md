@@ -14,6 +14,11 @@
   clears its grants and account bindings, as an upstream change does.
   Migration 0023 adds the column; a 3.0.0 binary cannot open a database
   after it, so roll back by restoring a backup.
+- `locksmith oauth device-login <name> [--label] [--replace]` and its admin
+  API sign a ChatGPT-plan (codex) session in, or reconnect a degraded one,
+  through OpenAI's device authorization. The daemon runs the code exchange,
+  so no token reaches the operator's shell. A session needing reconnection is
+  replaced in place and agent bindings to its label keep working (#138).
 
 ### Fixed
 

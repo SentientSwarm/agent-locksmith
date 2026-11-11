@@ -397,6 +397,38 @@ routes:
   - oauth_bootstrap_failed
   - session_exists
   - oauth_kind_unsupported
+- id: admin.POST./admin/operator/oauth/{name}/device-login
+  listener: admin
+  method: POST
+  path: /admin/operator/oauth/{name}/device-login
+  source:
+    file: src/admin/uds.rs
+    route: /oauth/{name}/device-login
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - device_login_unsupported
+  - session_exists
+  - too_many_device_logins
+  fault_refusals:
+  - oauth_kind_unsupported
+  fault_reason: needs a consent-managed account already under the label
+- id: admin.GET./admin/operator/oauth/{name}/device-login/{attempt}
+  listener: admin
+  method: GET
+  path: /admin/operator/oauth/{name}/device-login/{attempt}
+  source:
+    file: src/admin/uds.rs
+    route: /oauth/{name}/device-login/{attempt}
+  refusals:
+  - invalid_credential
+  - unknown_attempt
+  - device_login_failed
+  - authority_changed
+  fault_refusals:
+  - device_login_expired
+  - revoked_during_login
+  fault_reason: needs a 15-minute wait, or a revoke racing the final publish
 - id: admin.ANY./admin/agent/register
   listener: admin
   method: ANY
@@ -1015,6 +1047,8 @@ cli:
   command: oauth client status
 - id: cli.oauth.connect
   command: oauth connect
+- id: cli.oauth.device-login
+  command: oauth device-login
 - id: cli.oauth.disconnect
   command: oauth disconnect
 - id: cli.oauth.list

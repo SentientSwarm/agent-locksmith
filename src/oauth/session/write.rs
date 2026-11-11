@@ -23,6 +23,35 @@ impl Tokens {
 }
 
 impl OauthSessionRepository {
+    /// Insert a new legacy incarnation only while `still_wanted` holds at
+    /// commit time (see [`Self::commit_row_if`]). Device login uses it so a
+    /// concurrent revoke can never be outlived by the row it publishes.
+    pub async fn create_if(
+        &self,
+        key: &SealingKey,
+        name: &str,
+        session_label: &str,
+        refresh_token: &str,
+        still_wanted: impl Fn() -> bool,
+    ) -> Result<OauthSession, OauthSessionError> {
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM oauth_sessions WHERE name=? AND session_label=?")
+                .bind(name)
+                .bind(session_label)
+                .fetch_optional(&self.pool)
+                .await?;
+        if kind.as_deref().is_some_and(|k| k != "legacy") {
+            return Err(OauthSessionError::UnsupportedKind);
+        }
+        let tokens = Tokens::seal(key, None, Some(refresh_token))?;
+        self.commit_row_if(
+            key,
+            create_query(name, session_label, "", None, &tokens),
+            still_wanted,
+        )
+        .await
+    }
+
     /// Insert a new incarnation. Return only its materialized, committed row.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
@@ -93,12 +122,29 @@ impl OauthSessionRepository {
         key: &SealingKey,
         query: Query<'_>,
     ) -> Result<OauthSession, OauthSessionError> {
+        self.commit_row_if(key, query, || true).await
+    }
+
+    /// As [`Self::commit_row`], but `still_wanted` is consulted after the
+    /// write holds the database's write lock and before COMMIT; `false`
+    /// rolls back with `Stale`. A writer that changes the condition and
+    /// then writes (as revoke does) is therefore ordered after this commit.
+    async fn commit_row_if(
+        &self,
+        key: &SealingKey,
+        query: Query<'_>,
+        still_wanted: impl Fn() -> bool,
+    ) -> Result<OauthSession, OauthSessionError> {
         let mut tx = self.pool.begin().await?;
         // Unique incarnation permits at most one row; RETURNING proves one matched.
         let row = query
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(OauthSessionError::Stale)?;
+        if !still_wanted() {
+            tx.rollback().await?;
+            return Err(OauthSessionError::Stale);
+        }
         // Decode before COMMIT; return only afterward. No label-only readback.
         let committed = read::decode(key, row)?;
         #[cfg(test)]

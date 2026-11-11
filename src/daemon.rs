@@ -1190,6 +1190,7 @@ async fn build_admin_substrate(
                 sealing_key: key.clone(),
                 catalog: catalog.clone(),
                 locks: locks.clone(),
+                device_logins: Default::default(),
             };
             let runtime = crate::app::OauthRuntime {
                 sessions,
