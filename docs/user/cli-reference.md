@@ -183,8 +183,36 @@ validation and compatibility details.
 | `--mcp-config-file <path>` | Strict native JSON config (`protocol_version`, optional `allow_private_destination`), required for native. See [native setup](operator/native-mcp.md). |
 | `--metadata-file <path>` | Complete JSON metadata value, replacing existing metadata without merging. Mutually exclusive with `--metadata`. Supports nested `http_service` descriptions. |
 | `--description '...'` | Free-form description. |
+| `--upstream-ca-file <path>` | PEM trust anchors for this route only (`-` reads stdin). See "Per-route upstream CA" below. |
 
 `enable` un-disables a previously-deleted seed row.
+
+### Per-route upstream CA
+
+An HTTPS upstream behind a private CA can carry its own trust anchors:
+
+```bash
+locksmith model put private-llm --upstream https://10.0.0.5/v1 \
+  --auth bearer=PRIVATE_LLM_KEY --upstream-ca-file ca.pem
+```
+
+- The route trusts **only** these certificates. Public roots and the
+  global `tls.upstream_ca_bundle` are not used for it, and other routes do
+  not trust them.
+- Any certificate in the file is a trust anchor, so an intermediate alone
+  works when the root is unavailable (partial chain). Supply the issuing CA,
+  not the server's own certificate.
+- The file must hold 1–16 PEM certificates (64 KiB at most) and nothing
+  else. The upstream must be `https://` and the route `--protocol http`.
+  Anything else returns 400 `invalid_upstream_ca` / CLI exit 1.
+- Reads show `upstream_ca: {sha256, certificates}`, never the PEM.
+- `put` replaces the whole registration, so repeat the flag on every
+  `put`; omitting it removes the CA.
+- Changing or removing the CA clears every grant and account binding for
+  the route, as an upstream change does. Re-grant and re-bind afterwards.
+- Verification is never disabled. A stored CA that cannot be loaded leaves
+  the route with no trust anchors, so requests fail (502) instead of
+  falling back to public roots.
 
 The optional public `metadata.http_service` member is validated before saving;
 malformed descriptions return HTTP 400 `invalid_http_service` / CLI exit 1.

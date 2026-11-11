@@ -99,6 +99,9 @@ middleware (`kind=infra`) is operator-only.
   adds a private/internal CA to the client root store so locksmith can
   verify HTTPS upstreams behind an internal CA (e.g. a Kamiwaza MCP
   endpoint). Adds roots only; verification is never disabled.
+- **Per-route upstream CA** — a registration can carry its own PEM trust
+  anchors (`--upstream-ca-file`). That route trusts only them, an
+  intermediate alone is enough, and no other route is affected.
 - **Query-string forwarding (v2.7.1)** — the proxy now re-attaches the
   inbound query string to the upstream URL. Query-driven GETs (e.g.
   ComfyUI `/view?filename=...`, paginated/filtered REST APIs) previously

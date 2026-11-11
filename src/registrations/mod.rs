@@ -27,6 +27,7 @@ pub mod legacy_bootstrap;
 pub mod protocol;
 pub mod repo;
 pub mod seed_loader;
+pub mod upstream_ca;
 pub mod validators;
 
 pub use auth_spec::AuthSpec;
@@ -55,6 +56,14 @@ pub enum RegistrationError {
         "invalid upstream: use an absolute HTTP(S) base URL without userinfo, query or fragment"
     )]
     InvalidUpstream,
+
+    /// Per-route CA (#135) unusable: not 1..=16 X.509 PEM certificates
+    /// (64 KiB max), or set on a non-HTTPS or native MCP route.
+    /// Wire: 400 bad_request / `invalid_upstream_ca`.
+    #[error(
+        "invalid upstream_ca_pem: use 1-16 PEM certificates on an HTTPS upstream of an HTTP route"
+    )]
+    InvalidUpstreamCa,
 
     /// Cross-kind name reuse — `name` is already registered under a
     /// different kind. Wire: 409 conflict / `name_in_use`.
