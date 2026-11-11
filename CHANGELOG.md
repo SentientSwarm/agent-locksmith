@@ -15,6 +15,17 @@
   Migration 0023 adds the column; a 3.0.0 binary cannot open a database
   after it, so roll back by restoring a backup.
 
+### Fixed
+
+- Point upstream URLs in `Link` and `Location` response headers back at
+  Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
+  so following `rel="next"` bypassed Locksmith and failed without a
+  credential. Link targets under a route's upstream base now become
+  `<scheme>://<Host>/api/<route>/...`. Other URLs, URLs embedded in another
+  URL's query and links to the bare upstream base are left unchanged.
+- Forward every value of a repeated response header. Only the last
+  `Set-Cookie` or `Link` value reached the agent before.
+
 ## 3.0.0
 
 - Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is

@@ -14,6 +14,7 @@ use std::time::Instant;
 mod admission;
 mod oauth;
 mod selection;
+mod upstream_urls;
 use oauth::resolve_oauth_token;
 
 use crate::app::AppState;
@@ -526,6 +527,13 @@ pub async fn proxy_handler(
         _ => format!("{}/{}", target.upstream.trim_end_matches('/'), path),
     };
     let method = req.method().clone();
+    let agent_base = upstream_urls::agent_base(
+        req.headers(),
+        req.extensions()
+            .get::<crate::agent_listener::PeerCertDer>()
+            .is_some(),
+        &ctx.tool_name,
+    );
     let headers = req.headers().clone();
     let body_bytes = match read_request_body(req, target.body_limit_bytes).await {
         Ok(b) => b,
@@ -575,7 +583,15 @@ pub async fn proxy_handler(
 
     match upstream_req.send().await {
         Ok(resp) => {
-            handle_upstream_response(state.clone(), &ctx, &target, upstream_host, resp).await
+            handle_upstream_response(
+                state.clone(),
+                &ctx,
+                &target,
+                upstream_host,
+                resp,
+                agent_base.as_deref(),
+            )
+            .await
         }
         Err(e) => record_upstream_error(&state.audit, &ctx, &target, upstream_host, e).await,
     }
@@ -881,6 +897,7 @@ async fn handle_upstream_response(
     target: &ProxyTarget,
     upstream_host: Option<String>,
     resp: reqwest::Response,
+    agent_base: Option<&str>,
 ) -> Response {
     let upstream_status = resp.status().as_u16();
     let status = StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -892,7 +909,10 @@ async fn handle_upstream_response(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let response_headers = forward_response_headers(resp.headers());
+    let mut response_headers = forward_response_headers(resp.headers());
+    if let Some(base) = agent_base {
+        upstream_urls::rewrite_headers(&mut response_headers, &target.upstream, base);
+    }
 
     // M7 / T7.2-T7.4: per-tool response controls.
     let rc = state.response_controls.get(&ctx.tool_name).cloned();
@@ -978,8 +998,10 @@ fn forward_response_headers(upstream: &HeaderMap) -> HeaderMap {
         ) {
             continue;
         }
+        // Append, not insert: repeated headers (`Set-Cookie`, `Link`)
+        // must all reach the agent.
         if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
-            out.insert(name.clone(), v);
+            out.append(name.clone(), v);
         }
     }
     out
