@@ -356,9 +356,18 @@ pub(crate) fn row_to_registration_ref(
         timeouts,
         body_limit_bytes: body_limit_bytes_i64.max(0) as u64,
         metadata,
-        upstream_ca_pem: row
-            .try_get("upstream_ca_pem")
-            .map_err(|e| RegistrationError::Backend(format!("read upstream_ca_pem: {e}")))?,
+        upstream_ca_pem: match row.try_get("upstream_ca_pem") {
+            Ok(pem) => pem,
+            // A database before migration 0023 has no column and no CA. On
+            // a migrated database a reader that omits the column disagrees
+            // with the catalog, so admission fails closed (503).
+            Err(sqlx::Error::ColumnNotFound(_)) => None,
+            Err(e) => {
+                return Err(RegistrationError::Backend(format!(
+                    "read upstream_ca_pem: {e}"
+                )));
+            }
+        },
         seed: seed_i64 != 0,
         disabled: disabled_i64 != 0,
         created_at: row.get(11),
@@ -387,5 +396,28 @@ fn map_sqlx_err(e: sqlx::Error) -> RegistrationError {
         RegistrationError::DefinitionPending
     } else {
         RegistrationError::Backend(format!("sqlx: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rows read from a database before migration 0023 (no column) have no
+    /// CA rather than failing; prior-schema upgrade probes rely on this.
+    #[tokio::test]
+    async fn row_without_upstream_ca_column_reads_as_none() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let row = sqlx::query(
+            "SELECT 'n' AS name, 'tool' AS kind, '' AS description, \
+             'https://x' AS upstream, '{\"kind\":\"none\"}' AS auth_json, \
+             'direct' AS egress, '{\"request_seconds\":30,\"idle_seconds\":60}' AS timeouts_json, \
+             1 AS body_limit_bytes, '{}' AS metadata_json, 0 AS seed, 0 AS disabled, \
+             1 AS created_at, 1 AS updated_at, 'http' AS protocol, NULL AS mcp_json",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row_to_registration(row).unwrap().upstream_ca_pem, None);
     }
 }
