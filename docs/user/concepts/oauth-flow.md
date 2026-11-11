@@ -337,9 +337,10 @@ provider), `proxy::proxy_handler` does this:
 4. **Inject upstream credentials.** `Authorization: Bearer
    <access_token>`.
 5. **(Phase G2) Inject `ChatGPT-Account-ID` for codex.** When the
-   upstream URL contains `/backend-api/codex` (case-insensitive),
-   or the route's profile is `openai-codex-responses` (see
-   `--profile` in the CLI reference), add `ChatGPT-Account-ID: <account_id>` from the session row.
+   route's effective profile is `openai-codex-responses` (set with
+   `--profile`, or inferred from an upstream URL containing
+   `/backend-api/codex`, case-insensitive), add
+   `ChatGPT-Account-ID: <account_id>` from the session row.
    Skipped silently for sessions without an account_id (non-codex
    OAuth providers don't use this header).
 6. **Route via egress.** Direct or through Pipelock per the
@@ -385,9 +386,9 @@ Locksmith does this transparently:
    when minting; we trust data we sealed ourselves) and returns
    the `chatgpt_account_id` claim. The value is stored in
    `oauth_sessions.account_id`.
-2. **On the proxy hot path** — when the upstream URL matches
-   `/backend-api/codex` (case-insensitive substring), or the route's
-   profile is `openai-codex-responses` (see `--profile`), and the
+2. **On the proxy hot path** — when the route's effective profile is
+   `openai-codex-responses` (set with `--profile`, or inferred from an
+   upstream URL containing `/backend-api/codex`) and the
    session has a non-null `account_id`, locksmith adds the header
    before sending the request.
 
@@ -599,8 +600,9 @@ the body it sends.
 
 Two more codex-specific headers — `OpenAI-Beta` and `originator` —
 are required by chatgpt.com on every `/backend-api/codex/*`
-request (or any request on a route whose profile is
-`openai-codex-responses`; see `--profile`). Locksmith injects both transparently (Phase G4).
+request. Locksmith injects both transparently (Phase G4) on every
+request to a route whose effective profile is
+`openai-codex-responses` (see `--profile`).
 
 | Header | Value | Behavior |
 |---|---|---|

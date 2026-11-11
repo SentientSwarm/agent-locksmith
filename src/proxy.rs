@@ -831,11 +831,11 @@ fn build_upstream_request(
             // openclaw extract this from the JWT themselves when they
             // own the access token; under locksmith they only see
             // their per-agent bearer, so locksmith must inject. The
-            // upstream-URL pattern is the trigger — `account_id` is
+            // route's effective profile is the trigger — `account_id` is
             // populated only for JWTs that carry the OpenAI claim, so
             // a non-codex provider with a JWT-shaped access token
-            // (rare) won't get the header injected unless it also
-            // routes to a chatgpt.com upstream.
+            // (rare) won't get the header injected unless its route
+            // profile is openai-codex-responses.
             if let Some(acct) = account_id
                 && target.profile.is_codex()
             {
@@ -847,8 +847,8 @@ fn build_upstream_request(
     // Phase G4 — codex required headers, applied to every codex
     // request regardless of auth shape (paranoia: only `oauth_*`
     // configurations make sense for codex today, but the predicate
-    // is upstream-URL-based so a hypothetical future static-key codex
-    // route still gets the headers).
+    // is the route's effective profile so a static-key codex route,
+    // such as one pointed at a broker, still gets the headers).
     //
     // - `OpenAI-Beta: responses=experimental` is mandatory; codex
     //   rejects requests without it. We strip the agent's value
