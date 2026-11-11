@@ -33,6 +33,8 @@ pub struct Registration {
     pub timeouts: ToolTimeouts,
     pub body_limit_bytes: u64,
     pub metadata: Json,
+    /// #135 — PEM trust anchors for this route only (validated on write).
+    pub upstream_ca_pem: Option<String>,
     // Lifecycle:
     pub seed: bool,
     pub disabled: bool,
@@ -67,6 +69,7 @@ impl Registration {
             timeouts: ToolTimeouts::default(),
             body_limit_bytes: 10 * 1024 * 1024,
             metadata: Json::Object(serde_json::Map::new()),
+            upstream_ca_pem: None,
             seed: false,
             disabled: false,
             created_at: now,
@@ -107,8 +110,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -125,6 +128,7 @@ impl RegistrationRepository {
         .bind(r.updated_at)
         .bind(r.protocol.as_str())
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
+        .bind(r.upstream_ca_pem.as_deref())
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -135,7 +139,7 @@ impl RegistrationRepository {
     pub async fn get(&self, name: &str) -> Result<Option<Registration>, RegistrationError> {
         let row = sqlx::query(
             "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json \
+                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
              FROM registrations WHERE name = ?",
         )
         .bind(name)
@@ -153,7 +157,7 @@ impl RegistrationRepository {
         let rows = if let Some(k) = kind {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
                  FROM registrations WHERE kind = ? ORDER BY name",
             )
             .bind(k.as_str())
@@ -162,7 +166,7 @@ impl RegistrationRepository {
         } else {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
                  FROM registrations ORDER BY name",
             )
             .fetch_all(&self.pool)
@@ -201,8 +205,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(name) DO UPDATE SET \
                 description = excluded.description, \
                 upstream = excluded.upstream, \
@@ -213,7 +217,8 @@ impl RegistrationRepository {
                 metadata_json = excluded.metadata_json, \
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
-                updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json",
+                updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
+                upstream_ca_pem = excluded.upstream_ca_pem",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -230,6 +235,7 @@ impl RegistrationRepository {
         .bind(r.updated_at)
         .bind(r.protocol.as_str())
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
+        .bind(r.upstream_ca_pem.as_deref())
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -350,6 +356,9 @@ pub(crate) fn row_to_registration_ref(
         timeouts,
         body_limit_bytes: body_limit_bytes_i64.max(0) as u64,
         metadata,
+        upstream_ca_pem: row
+            .try_get("upstream_ca_pem")
+            .map_err(|e| RegistrationError::Backend(format!("read upstream_ca_pem: {e}")))?,
         seed: seed_i64 != 0,
         disabled: disabled_i64 != 0,
         created_at: row.get(11),

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Per-route upstream CA (#135). `model|tool put --upstream-ca-file` (admin
+  field `upstream_ca_pem`) gives one HTTPS route its own trust anchors. The
+  route trusts only those certificates: public roots and the global
+  `tls.upstream_ca_bundle` are not used for it, and other routes never trust
+  them. Any certificate can be the anchor, so a private intermediate alone
+  works. Unusable bundles, plain-HTTP upstreams and native MCP routes are
+  refused with 400 `invalid_upstream_ca`. Changing or removing a route's CA
+  clears its grants and account bindings, as an upstream change does.
+  Migration 0023 adds the column; a 3.0.0 binary cannot open a database
+  after it, so roll back by restoring a backup.
+
 ## 3.0.0
 
 - Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is
