@@ -29,6 +29,8 @@ struct Harness {
     mock: MockServer,
     sessions: OauthSessionRepository,
     key: SealingKey,
+    registrations: Arc<RegistrationRepository>,
+    catalog: Arc<ArcSwap<Catalog>>,
 }
 
 async fn setup() -> Harness {
@@ -113,10 +115,10 @@ async fn setup() -> Harness {
         resolved_creds: None,
         oauth: Some(OauthAdminState {
             consent: None,
-            registrations,
+            registrations: registrations.clone(),
             sessions: sessions.clone(),
             sealing_key: sealing_key.clone(),
-            catalog: catalog_arc,
+            catalog: catalog_arc.clone(),
             locks: RefreshLockMap::new(),
             device_logins: Default::default(),
         }),
@@ -137,6 +139,8 @@ async fn setup() -> Harness {
         mock,
         sessions,
         key: sealing_key,
+        registrations,
+        catalog: catalog_arc,
     }
 }
 
@@ -187,7 +191,6 @@ async fn mock_approval(h: &Harness) {
             "access_token": "access-login",
             "refresh_token": "refresh-login",
         })))
-        .expect(1)
         .mount(&h.mock)
         .await;
     Mock::given(method("POST"))
@@ -284,11 +287,28 @@ async fn healthy_session_needs_replace_but_degraded_one_does_not() {
         refused.json::<serde_json::Value>()["error"]["code"],
         "session_exists"
     );
-    start(&h, "", serde_json::json!({"replace": true}))
+    mock_approval(&h).await;
+    let s: serde_json::Value = start(&h, "", serde_json::json!({"replace": true}))
         .await
-        .assert_status(axum::http::StatusCode::ACCEPTED);
+        .json();
+    let attempt = s["attempt"].as_str().unwrap();
+    poll(&h, attempt).await.assert_status_ok();
+    let d: serde_json::Value = poll(&h, attempt).await.json();
+    assert_eq!(d["status"], "complete", "{d}");
+    let replaced = h
+        .sessions
+        .get(&h.key, "codex", "default")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        replaced.incarnation, healthy.incarnation,
+        "replace signs in again"
+    );
 
-    h.sessions.mark_degraded(&healthy).await.unwrap();
+    h.sessions.mark_degraded(&replaced).await.unwrap();
+    h.mock.reset().await;
+    mock_user_code(&h).await;
     mock_approval(&h).await;
     let s: serde_json::Value = start(&h, "", serde_json::json!({})).await.json();
     let attempt = s["attempt"].as_str().unwrap();
@@ -304,6 +324,99 @@ async fn healthy_session_needs_replace_but_degraded_one_does_not() {
     assert!(
         !session.degraded,
         "the degraded session was replaced in place"
+    );
+}
+
+#[tokio::test]
+async fn a_session_that_became_healthy_is_kept_without_exchanging_the_code() {
+    let h = setup().await;
+    mock_user_code(&h).await;
+    mock_approval(&h).await;
+    let s: serde_json::Value = start(&h, "", serde_json::json!({})).await.json();
+    let attempt = s["attempt"].as_str().unwrap();
+    poll(&h, attempt).await.assert_status_ok();
+    // Someone bootstraps the label while the operator is signing in.
+    h.sessions
+        .create(&h.key, "codex", "default", "other", None, None, "")
+        .await
+        .unwrap();
+    let late = poll(&h, attempt).await;
+    late.assert_status(axum::http::StatusCode::CONFLICT);
+    assert!(
+        !code_exchanged(&h.mock.received_requests().await.unwrap()),
+        "no grant is minted for a kept session"
+    );
+}
+
+/// Start a login and see its first poll pend.
+async fn pending_attempt(h: &Harness) -> String {
+    mock_user_code(h).await;
+    mock_approval(h).await;
+    let s: serde_json::Value = start(h, "", serde_json::json!({})).await.json();
+    let attempt = s["attempt"].as_str().unwrap().to_string();
+    poll(h, &attempt).await.assert_status_ok();
+    attempt
+}
+
+fn code_exchanged(requests: &[wiremock::Request]) -> bool {
+    requests.iter().any(|r| {
+        r.url.path() == "/oauth/token"
+            && String::from_utf8_lossy(&r.body).contains("authorization_code")
+    })
+}
+
+#[tokio::test]
+async fn a_changed_issuer_never_receives_the_new_tokens() {
+    let h = setup().await;
+    let attempt = pending_attempt(&h).await;
+    let elsewhere = MockServer::start().await;
+    let mut r = h.registrations.get("codex").await.unwrap().unwrap();
+    r.auth = AuthSpec::OauthDeviceCode {
+        client_id: "test-client".to_string(),
+        scopes: vec![],
+        device_url: format!("{}/api/accounts/deviceauth/usercode", elsewhere.uri()),
+        token_url: format!("{}/oauth/token", elsewhere.uri()),
+        session_label: None,
+    };
+    h.registrations.upsert(&r).await.unwrap();
+    h.catalog.store(Arc::new(
+        Catalog::from_repo(h.registrations.as_ref()).await.unwrap(),
+    ));
+
+    let changed = poll(&h, &attempt).await;
+    changed.assert_status(axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        changed.json::<serde_json::Value>()["error"]["code"],
+        "authority_changed"
+    );
+    assert!(!code_exchanged(&h.mock.received_requests().await.unwrap()));
+    assert!(elsewhere.received_requests().await.unwrap().is_empty());
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn revoke_ends_a_pending_login() {
+    let h = setup().await;
+    let attempt = pending_attempt(&h).await;
+    h.server
+        .delete("/admin/operator/oauth/codex")
+        .add_header("authorization", auth(&h))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    poll(&h, &attempt).await.assert_status_not_found();
+    assert!(!code_exchanged(&h.mock.received_requests().await.unwrap()));
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

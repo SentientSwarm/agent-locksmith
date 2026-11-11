@@ -26,9 +26,14 @@ const MAX_ATTEMPTS: usize = 16;
 const DEFAULT_INTERVAL: u64 = 5;
 const USER_CODE_PATH: &str = "/api/accounts/deviceauth/usercode";
 
-/// In-memory pending attempts, keyed by an unguessable id.
+/// In-memory pending attempts, keyed by an unguessable id, plus a
+/// revocation epoch per (registration, label): a revoke bumps it, and an
+/// attempt started under an older epoch can never publish a session.
 #[derive(Clone, Default)]
-pub struct DeviceLogins(Arc<StdMutex<HashMap<String, Attempt>>>);
+pub struct DeviceLogins {
+    attempts: Arc<StdMutex<HashMap<String, Attempt>>>,
+    epochs: Arc<StdMutex<HashMap<(String, String), u64>>>,
+}
 
 struct Attempt {
     name: String,
@@ -41,6 +46,7 @@ struct Attempt {
     started: Instant,
     interval: u64,
     polling: bool,
+    epoch: u64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -129,19 +135,15 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         return *r;
     }
     if state.device_logins.full() {
-        return error_envelope(
-            StatusCode::TOO_MANY_REQUESTS,
-            "conflict",
-            "too_many_device_logins",
-            "too many device logins are pending; finish or let one expire",
-        );
+        return too_many();
     }
     let uc = match request_user_code(&issuer, &client_id).await {
         Ok(uc) => uc,
         Err(r) => return *r,
     };
     let interval = parse_interval(uc.interval.as_ref());
-    let id = state.device_logins.insert(Attempt {
+    let name_for_epoch = name.clone();
+    let Some(id) = state.device_logins.insert(Attempt {
         name,
         label: label.clone(),
         replace,
@@ -152,7 +154,10 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         started: Instant::now(),
         interval,
         polling: false,
-    });
+        epoch: state.device_logins.epoch(&name_for_epoch, &label),
+    }) else {
+        return too_many();
+    };
     let body = json!({
         "attempt": id,
         "session_label": label,
@@ -162,6 +167,15 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         "interval": interval,
     });
     (StatusCode::ACCEPTED, Json(body)).into_response()
+}
+
+fn too_many() -> Response {
+    error_envelope(
+        StatusCode::TOO_MANY_REQUESTS,
+        "conflict",
+        "too_many_device_logins",
+        "too many device logins are pending; finish or let one expire",
+    )
 }
 
 async fn dialect(state: &OauthAdminState, name: &str) -> Result<(String, String), Box<Response>> {
@@ -223,11 +237,10 @@ async fn poll(state: &OauthAdminState, name: &str, id: &str) -> Response {
     let Snapshot::Ready(attempt) = snapshot else {
         return pending(&snapshot);
     };
+    // Clears the in-flight mark even when this request is cancelled.
+    let _polling = PollGuard(&state.device_logins, id);
     match poll_once(&attempt).await {
-        Poll::Pending => {
-            state.device_logins.end_poll(id);
-            pending(&Snapshot::Ready(attempt))
-        }
+        Poll::Pending => pending(&Snapshot::Ready(attempt)),
         Poll::Failed(r) => {
             state.device_logins.remove(id);
             *r
@@ -259,35 +272,95 @@ fn pending(s: &Snapshot) -> Response {
         .into_response()
 }
 
+/// Completion runs under the label's lock. Before the code is
+/// exchanged it re-checks the label, the revocation epoch and that the
+/// registration still names this attempt's issuer and client; the first
+/// refresh then uses that verified registration snapshot, so tokens only
+/// ever go to the issuer that minted them. A revoke that lands at any
+/// point removes what this attempt published.
 async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Response {
+    let lock = state.locks.get(&a.name, &a.label).await;
+    let _guard = lock.lock().await;
+    let logins = &state.device_logins;
+    if logins.epoch(&a.name, &a.label) != a.epoch {
+        return revoked();
+    }
+    let auth = match same_authority(state, a).await {
+        Ok(auth) => auth,
+        Err(r) => return *r,
+    };
+    let existing = match check_existing(state, &a.name, &a.label, a.replace).await {
+        Ok(e) => e,
+        Err(r) => return *r,
+    };
     let refresh = match exchange_code(a, code).await {
         Ok(t) => t,
         Err(r) => return *r,
     };
-    let lock = state.locks.get(&a.name, &a.label).await;
-    let _guard = lock.lock().await;
-    match check_existing(state, &a.name, &a.label, a.replace).await {
-        Ok(false) => {}
-        Ok(true) => {
-            if state.sessions.delete(&a.name, &a.label).await.is_err() {
-                return internal("OAuth custody operation failed");
-            }
-        }
-        Err(r) => return *r,
+    if logins.epoch(&a.name, &a.label) != a.epoch {
+        return revoked();
+    }
+    if existing && state.sessions.delete(&a.name, &a.label).await.is_err() {
+        return internal("OAuth custody operation failed");
     }
     let session = match super::bootstrap::create(state, &a.name, &a.label, &refresh).await {
         Ok(s) => s,
         Err(r) => return *r,
     };
-    let updated = match super::bootstrap::exchange(state, &session).await {
-        Ok(s) => s,
-        Err(r) => return *r,
+    let client = http();
+    let refreshed = crate::oauth::refresh::refresh_selected_session(
+        &state.sessions,
+        &auth,
+        &state.sealing_key,
+        &client,
+        &session,
+    )
+    .await;
+    let Ok(updated) = refreshed else {
+        let _ = state.sessions.delete_if_current(&session).await;
+        return *upstream_failed("first refresh", None);
     };
+    if logins.epoch(&a.name, &a.label) != a.epoch {
+        let _ = state.sessions.delete_if_current(&updated).await;
+        return revoked();
+    }
     let body = json!({
         "status": "complete",
         "session": session_status_json(&updated, true),
     });
     (StatusCode::OK, Json(body)).into_response()
+}
+
+/// The registration, in the store and in the serving catalog, must still
+/// resolve to this attempt's issuer and client.
+async fn same_authority(
+    state: &OauthAdminState,
+    a: &AttemptView,
+) -> Result<AuthSpec, Box<Response>> {
+    let want = (a.issuer.clone(), a.client_id.clone());
+    let stored = dialect(state, &a.name).await.ok();
+    let catalog = state.catalog.load();
+    let serving = catalog.lookup_active(&a.name).map(|r| r.auth.clone());
+    match serving {
+        Some(auth) if stored.as_ref() == Some(&want) && openai_issuer(&auth) == Some(want) => {
+            Ok(auth)
+        }
+        _ => Err(Box::new(error_envelope(
+            StatusCode::CONFLICT,
+            "conflict",
+            "authority_changed",
+            "the registration's OAuth issuer or client changed during the login; start again",
+        ))),
+    }
+}
+
+fn revoked() -> Response {
+    error_envelope(
+        StatusCode::CONFLICT,
+        "conflict",
+        "revoked_during_login",
+        "the session was revoked during the login; start again",
+    )
 }
 
 fn internal(message: &str) -> Response {
@@ -347,6 +420,11 @@ async fn poll_once(a: &AttemptView) -> Poll {
         .send()
         .await;
     let Ok(resp) = sent else {
+        tracing::warn!(
+            registration = %a.name,
+            session_label = %a.label,
+            "device login poll could not reach the provider; still pending"
+        );
         return Poll::Pending;
     };
     let status = resp.status();
@@ -408,6 +486,7 @@ struct AttemptView {
     device_auth_id: String,
     user_code: String,
     interval: u64,
+    epoch: u64,
 }
 
 enum Snapshot {
@@ -417,9 +496,40 @@ enum Snapshot {
     Expired,
 }
 
+/// Ends a poll's in-flight mark on every exit path, including cancellation.
+struct PollGuard<'a>(&'a DeviceLogins, &'a str);
+
+impl Drop for PollGuard<'_> {
+    fn drop(&mut self) {
+        self.0.end_poll(self.1);
+    }
+}
+
 impl DeviceLogins {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Attempt>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+        self.attempts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn epoch(&self, name: &str, label: &str) -> u64 {
+        let epochs = self.epochs.lock().unwrap_or_else(|e| e.into_inner());
+        epochs
+            .get(&(name.to_string(), label.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Called by revoke before it deletes: ends pending attempts for the
+    /// label and fences any completion already in flight.
+    pub(super) fn revoke(&self, name: &str, label: &str) {
+        let key = (name.to_string(), label.to_string());
+        *self
+            .epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(key)
+            .or_insert(0) += 1;
+        self.map()
+            .retain(|_, a| !(a.name == name && a.label == label));
     }
 
     fn full(&self) -> bool {
@@ -428,13 +538,20 @@ impl DeviceLogins {
         map.len() >= MAX_ATTEMPTS
     }
 
-    fn insert(&self, attempt: Attempt) -> String {
+    /// `None` when the cap is reached; checked again under the lock
+    /// because starts race across the provider call.
+    fn insert(&self, attempt: Attempt) -> Option<String> {
         let mut bytes = [0u8; 18];
         // An id that cannot be random must not be guessable either.
         getrandom::fill(&mut bytes).expect("OS randomness unavailable");
         let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        self.map().insert(id.clone(), attempt);
-        id
+        let mut map = self.map();
+        map.retain(|_, a| a.started.elapsed() < MAX_WAIT);
+        if map.len() >= MAX_ATTEMPTS {
+            return None;
+        }
+        map.insert(id.clone(), attempt);
+        Some(id)
     }
 
     fn begin_poll(&self, name: &str, id: &str) -> Option<Snapshot> {
@@ -457,6 +574,7 @@ impl DeviceLogins {
             device_auth_id: a.device_auth_id.clone(),
             user_code: a.user_code.clone(),
             interval: a.interval,
+            epoch: a.epoch,
         }))
     }
 
@@ -521,6 +639,85 @@ mod tests {
             None,
             "the device URL must share the token URL's issuer"
         );
+    }
+
+    fn attempt(started: Instant) -> Attempt {
+        Attempt {
+            name: "codex".into(),
+            label: "default".into(),
+            replace: false,
+            issuer: "https://auth.openai.com".into(),
+            client_id: "app_x".into(),
+            device_auth_id: "d".into(),
+            user_code: "u".into(),
+            started,
+            interval: 5,
+            polling: false,
+            epoch: 0,
+        }
+    }
+
+    #[test]
+    fn concurrent_polls_wait_and_a_dropped_poll_releases_the_attempt() {
+        let logins = DeviceLogins::default();
+        let id = logins.insert(attempt(Instant::now())).unwrap();
+        assert!(logins.begin_poll("other", &id).is_none(), "name must match");
+        let Some(Snapshot::Ready(_)) = logins.begin_poll("codex", &id) else {
+            panic!("first poll proceeds");
+        };
+        {
+            let _guard = PollGuard(&logins, &id);
+            assert!(matches!(
+                logins.begin_poll("codex", &id),
+                Some(Snapshot::Busy(5))
+            ));
+        }
+        assert!(matches!(
+            logins.begin_poll("codex", &id),
+            Some(Snapshot::Ready(_))
+        ));
+    }
+
+    #[test]
+    fn expired_attempts_report_gone_and_free_their_slot() {
+        let logins = DeviceLogins::default();
+        let Some(old) = Instant::now().checked_sub(MAX_WAIT) else {
+            return; // clock too close to boot to backdate
+        };
+        let id = logins.insert(attempt(old)).unwrap();
+        assert!(matches!(
+            logins.begin_poll("codex", &id),
+            Some(Snapshot::Expired)
+        ));
+        assert!(logins.begin_poll("codex", &id).is_none());
+        for _ in 0..MAX_ATTEMPTS {
+            assert!(logins.insert(attempt(old)).is_some());
+        }
+        for _ in 0..MAX_ATTEMPTS {
+            assert!(
+                logins.insert(attempt(Instant::now())).is_some(),
+                "expired ones pruned"
+            );
+        }
+        assert!(
+            logins.insert(attempt(Instant::now())).is_none(),
+            "cap holds"
+        );
+    }
+
+    #[test]
+    fn revoke_ends_attempts_for_its_label_and_fences_the_rest() {
+        let logins = DeviceLogins::default();
+        let id = logins.insert(attempt(Instant::now())).unwrap();
+        let mut other = attempt(Instant::now());
+        other.label = "acct2".into();
+        let kept = logins.insert(other).unwrap();
+        assert_eq!(logins.epoch("codex", "default"), 0);
+        logins.revoke("codex", "default");
+        assert_eq!(logins.epoch("codex", "default"), 1);
+        assert_eq!(logins.epoch("codex", "acct2"), 0);
+        assert!(logins.begin_poll("codex", &id).is_none());
+        assert!(logins.begin_poll("codex", &kept).is_some());
     }
 
     #[test]

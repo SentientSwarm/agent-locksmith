@@ -272,7 +272,11 @@ The admin API is `POST /admin/operator/oauth/<name>/device-login?label=`
 (body `{"replace": bool}`, returns `attempt`, `verification_url`,
 `user_code`, `interval`) and `GET .../device-login/<attempt>`, which polls
 once and returns `pending` or `complete` with the session status. Attempts
-are held in memory, expire after 15 minutes and do not survive a restart.
+are held in memory, expire after 15 minutes and do not survive a restart. At most
+16 are pending at once (429 `too_many_device_logins`). Revoking the label
+ends its pending logins, and a login whose registration changed issuer or
+client while it waited fails with 409 `authority_changed` before any code is
+exchanged, so tokens only ever go to the issuer that issued them.
 
 **Phase G — `--label`**: distinguishes multiple sessions under one
 registration, defaulting to `"default"`. Use distinct labels (e.g.,

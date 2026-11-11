@@ -72,6 +72,8 @@ pub async fn op_oauth_revoke(
     Query(label_q): Query<LabelQuery>,
 ) -> Response {
     let session_label = label_q.label_or_default();
+    // Fence device logins first, so none can publish after this revoke.
+    state.device_logins.revoke(&name, session_label);
     match state.sessions.delete(&name, session_label).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(crate::oauth::OauthSessionError::UnsupportedKind) => unsupported(),
