@@ -8,6 +8,7 @@
 //! - `status <name>` — show whether a session is bootstrapped, when
 //!   the access token expires, and whether refresh has degraded.
 //! - `revoke <name>` — clear locally-stored tokens.
+//! - `device-login <name>` — sign a ChatGPT-plan session in (#138).
 //!
 //! All three talk to admin UDS (or admin HTTPS via `--admin-url`).
 //! Operator-credentialed.
@@ -19,6 +20,7 @@ use crate::output::{Format, print};
 
 mod args;
 mod client;
+mod device_login;
 pub use args::{BootstrapArgs, OauthCmd};
 
 pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<(), CliError> {
@@ -93,6 +95,14 @@ pub async fn run(client: &CliClient, format: Format, cmd: OauthCmd) -> Result<()
             Ok(())
         }
         OauthCmd::Bootstrap(args) => bootstrap(client, format, args).await,
+        OauthCmd::DeviceLogin {
+            name,
+            label,
+            replace,
+        } => {
+            component(&name)?;
+            device_login::run(client, format, &name, label.as_deref(), replace).await
+        }
         OauthCmd::Status { name, label } => status(client, format, &name, label.as_deref()).await,
         OauthCmd::Revoke { name, label } => revoke(client, format, &name, label.as_deref()).await,
         OauthCmd::List => list(client, format).await,

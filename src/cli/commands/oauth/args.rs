@@ -73,6 +73,20 @@ pub enum OauthCmd {
     /// flow inside this command. Pending custody requires local revoke and
     /// freshly obtained credentials; never replay an uncertain refresh token.
     Bootstrap(BootstrapArgs),
+    /// Sign a ChatGPT-plan (Codex) session in through the provider's
+    /// device login. Prints a URL and one-time code, then waits while you
+    /// sign in on any browser; the daemon keeps the tokens. Replaces a
+    /// session that needs reconnecting in place, so agent bindings to the
+    /// label keep working. A healthy session needs `--replace`.
+    DeviceLogin {
+        name: String,
+        /// Session label (defaults to "default").
+        #[arg(long)]
+        label: Option<String>,
+        /// Replace a healthy session as well.
+        #[arg(long)]
+        replace: bool,
+    },
     /// Show status, refresh_pending and reconnect_required for `<name>`.
     Status {
         name: String,

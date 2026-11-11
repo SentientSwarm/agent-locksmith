@@ -194,6 +194,14 @@ fn build_oauth_admin_router(state: crate::oauth::OauthAdminState) -> Router {
             get(admin::op_oauth_status).delete(admin::op_oauth_revoke),
         )
         .route("/oauth/{name}/bootstrap", post(admin::op_oauth_bootstrap))
+        .route(
+            "/oauth/{name}/device-login",
+            post(admin::op_oauth_device_login_start),
+        )
+        .route(
+            "/oauth/{name}/device-login/{attempt}",
+            get(admin::op_oauth_device_login_poll),
+        )
         .with_state(state)
         .merge(consent)
 }

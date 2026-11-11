@@ -87,7 +87,7 @@ fn validate_shape(auth: &AuthSpec) -> Result<(), Box<Response>> {
     Ok(())
 }
 
-async fn create(
+pub(super) async fn create(
     state: &OauthAdminState,
     name: &str,
     label: &str,
@@ -120,7 +120,7 @@ fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<Response> {
     ))
 }
 
-async fn exchange(
+pub(super) async fn exchange(
     state: &OauthAdminState,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `locksmith oauth device-login <name> [--label] [--replace]` and its admin
+  API sign a ChatGPT-plan (codex) session in, or reconnect a degraded one,
+  through OpenAI's device authorization. The daemon runs the code exchange,
+  so no token reaches the operator's shell. A session needing reconnection is
+  replaced in place and agent bindings to its label keep working (#138).
+
 ## 3.0.0
 
 - Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is

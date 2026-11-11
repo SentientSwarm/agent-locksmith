@@ -104,6 +104,7 @@ async fn setup() -> Harness {
             sealing_key,
             catalog: catalog_arc,
             locks: RefreshLockMap::new(),
+            device_logins: Default::default(),
         }),
         agent_creds: None,
         credential_sealing_key: None,
