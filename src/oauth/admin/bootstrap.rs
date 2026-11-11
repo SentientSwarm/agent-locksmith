@@ -87,7 +87,7 @@ fn validate_shape(auth: &AuthSpec) -> Result<(), Box<Response>> {
     Ok(())
 }
 
-pub(super) async fn create(
+async fn create(
     state: &OauthAdminState,
     name: &str,
     label: &str,
@@ -100,7 +100,7 @@ pub(super) async fn create(
         .map_err(create_error)
 }
 
-fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<Response> {
+pub(super) fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<Response> {
     if matches!(e, crate::oauth::OauthSessionError::UnsupportedKind) {
         return Box::new(super::status::unsupported());
     }

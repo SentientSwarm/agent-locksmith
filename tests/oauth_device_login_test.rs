@@ -441,6 +441,32 @@ async fn a_binding_that_pins_another_client_blocks_completion() {
 }
 
 #[tokio::test]
+async fn publication_rolls_back_when_its_condition_fails_at_commit() {
+    let h = setup().await;
+    let refused = h
+        .sessions
+        .create_if(&h.key, "codex", "default", "refresh-x", || false)
+        .await;
+    assert!(matches!(
+        refused,
+        Err(agent_locksmith::oauth::OauthSessionError::Stale)
+    ));
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let kept = h
+        .sessions
+        .create_if(&h.key, "codex", "default", "refresh-x", || true)
+        .await
+        .unwrap();
+    assert_eq!(kept.session_label, "default");
+}
+
+#[tokio::test]
 async fn revoke_ends_a_pending_login() {
     let h = setup().await;
     let attempt = pending_attempt(&h).await;

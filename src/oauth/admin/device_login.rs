@@ -73,7 +73,7 @@ struct CodeResp {
 
 #[derive(Deserialize)]
 struct TokenResp {
-    refresh_token: String,
+    refresh_token: secrecy::SecretString,
 }
 
 /// The issuer for OpenAI's device-auth dialect, derived from the
@@ -274,11 +274,13 @@ fn pending(s: &Snapshot) -> Response {
 }
 
 /// Completion runs under the label's lock. Before the code is
-/// exchanged it re-checks the label, the revocation epoch and that the
-/// registration still names this attempt's issuer and client; the first
-/// refresh then uses that verified registration snapshot, so tokens only
-/// ever go to the issuer that minted them. A revoke that lands at any
-/// point removes what this attempt published.
+/// exchanged it re-checks the label, the revocation epoch, and that the
+/// registration and any agent bindings selecting the label still name this
+/// attempt's issuer and client; the first refresh then uses that verified
+/// metadata (the bindings' when there are any), so tokens only ever go to
+/// the issuer that minted them. Publication is fenced against revoke inside
+/// its own transaction, so a revoke at any point removes what this attempt
+/// published.
 async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Response {
     let lock = state.locks.get(&a.name, &a.label).await;
     let _guard = lock.lock().await;
@@ -304,9 +306,28 @@ async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Res
     if existing && state.sessions.delete(&a.name, &a.label).await.is_err() {
         return internal("OAuth custody operation failed");
     }
-    let session = match super::bootstrap::create(state, &a.name, &a.label, &refresh).await {
+    // The epoch is re-read inside the publishing transaction, after it holds
+    // the write lock: a revoke either shows here (rollback) or deletes only
+    // after this commit, so no revoked label can keep what we publish, even
+    // if this request is then cancelled by shutdown.
+    let published = state
+        .sessions
+        .create_if(
+            &state.sealing_key,
+            &a.name,
+            &a.label,
+            secrecy::ExposeSecret::expose_secret(&refresh),
+            || logins.epoch(&a.name, &a.label) == a.epoch,
+        )
+        .await;
+    let session = match published {
         Ok(s) => s,
-        Err(r) => return *r,
+        Err(crate::oauth::OauthSessionError::Stale)
+            if logins.epoch(&a.name, &a.label) != a.epoch =>
+        {
+            return revoked();
+        }
+        Err(e) => return *super::bootstrap::create_error(e),
     };
     let client = http();
     let refreshed = crate::oauth::refresh::refresh_selected_session(
@@ -505,7 +526,10 @@ async fn poll_once(a: &AttemptView) -> Poll {
     }
 }
 
-async fn exchange_code(a: &AttemptView, code: CodeResp) -> Result<String, Box<Response>> {
+async fn exchange_code(
+    a: &AttemptView,
+    code: CodeResp,
+) -> Result<secrecy::SecretString, Box<Response>> {
     let redirect_uri = format!("{}/deviceauth/callback", a.issuer);
     let form = [
         ("grant_type", "authorization_code"),
