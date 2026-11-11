@@ -19,7 +19,7 @@ pub(super) fn agent_base(headers: &HeaderMap, tls: bool, route: &str) -> Option<
     let plain = !host.is_empty()
         && host
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b));
+            .all(|b| b.is_ascii_alphanumeric() || b".-_:[]".contains(&b));
     plain.then(|| {
         format!(
             "{}://{host}/api/{route}",
@@ -51,24 +51,45 @@ pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str, link: bool)
         return rewrite_target(value, base, agent_base);
     }
     let mut out = String::with_capacity(value.len());
-    let mut rest = value;
     let mut changed = false;
-    while let Some(open) = rest.find('<') {
-        let Some(close) = rest[open..].find('>').map(|c| open + c) else {
-            break;
-        };
-        let target = &rest[open + 1..close];
-        out.push_str(&rest[..=open]);
-        match rewrite_target(target, base, agent_base) {
-            Some(new) => {
-                out.push_str(&new);
-                changed = true;
+    let mut chars = value.char_indices();
+    let mut quoted = false;
+    while let Some((i, c)) = chars.next() {
+        match c {
+            // RFC 8288 parameters may be quoted strings with `\` escapes;
+            // a `<` inside one is text, not a target.
+            '"' => quoted = !quoted,
+            '\\' if quoted => {
+                out.push(c);
+                if let Some((_, escaped)) = chars.next() {
+                    out.push(escaped);
+                }
+                continue;
             }
-            None => out.push_str(target),
+            '<' if !quoted => {
+                let Some(len) = value[i + 1..].find('>') else {
+                    out.push_str(&value[i..]);
+                    break;
+                };
+                let target = &value[i + 1..i + 1 + len];
+                out.push('<');
+                match rewrite_target(target, base, agent_base) {
+                    Some(new) => {
+                        out.push_str(&new);
+                        changed = true;
+                    }
+                    None => out.push_str(target),
+                }
+                out.push('>');
+                for _ in 0..=target.chars().count() {
+                    chars.next();
+                }
+                continue;
+            }
+            _ => {}
         }
-        rest = &rest[close..];
+        out.push(c);
     }
-    out.push_str(rest);
     changed.then_some(out)
 }
 
@@ -153,6 +174,15 @@ mod tests {
     }
 
     #[test]
+    fn quoted_parameters_are_text_not_targets() {
+        let link = r#"<https://other.example/help>; title="values < 10 \" <https://api.github.com/q>", <https://api.github.com/repos?page=2>; rel="next""#;
+        assert_eq!(
+            rewrite(link, UP, AGENT, true).unwrap(),
+            r#"<https://other.example/help>; title="values < 10 \" <https://api.github.com/q>", <http://10.0.0.1:9200/api/github/repos?page=2>; rel="next""#
+        );
+    }
+
+    #[test]
     fn agent_base_needs_a_plain_host() {
         let mut h = HeaderMap::new();
         assert_eq!(agent_base(&h, false, "github"), None);
@@ -164,6 +194,11 @@ mod tests {
         assert_eq!(
             agent_base(&h, true, "github").unwrap(),
             "https://192.168.50.13:9200/api/github"
+        );
+        h.insert("host", HeaderValue::from_static("agent_locksmith:9200"));
+        assert_eq!(
+            agent_base(&h, false, "github").unwrap(),
+            "http://agent_locksmith:9200/api/github"
         );
         h.insert("host", HeaderValue::from_static("evil/x?y"));
         assert_eq!(agent_base(&h, false, "github"), None);
