@@ -92,6 +92,27 @@ Migration: every registration becomes a route with one `upstream` backend of
 the same name. Existing bindings move to that backend and existing grants stay
 on the route. No behaviour changes until an operator adds a second backend.
 
+**Phase 2 as built.** The `registrations` row keeps holding the *active*
+backend's destination and auth template, so admission (D4), the proxy and
+the catalog are unchanged. `registration_backends` stores declared backends
+and `backend_bindings` stashes bindings of inactive backends. Before its
+first switch a route has one implicit backend, `primary`; a switch records
+the current destination under the active backend's name. The switch runs in
+one transaction and writes the new destination under a `route_switch_guard`
+row that the 0009/0023 authority triggers honour only for that exact target,
+so grants survive and every other destination edit still revokes them.
+Decisions:
+
+- Editing the active destination through `tool|model put` keeps 0009/0023
+  semantics: grants and bindings are revoked. Editing an inactive backend's
+  destination discards only its stashed bindings.
+- `If-Match` is `registration_instances.revision`.
+- OAuth backends are refused (`backend_auth_unsupported`): `oauth_sessions`
+  is keyed by route and label, not backend. Revisit with phase 4.
+- Backends have no disabled flag; delete one to retire it.
+- Native MCP connections, `infra` and definition-pinned rows are not
+  switchable.
+
 ### 2. Backend kinds
 
 | Kind | Meaning |
