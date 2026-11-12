@@ -172,7 +172,14 @@ fn build_registrations_admin_router(
             put(api::op_put_infra_credential).delete(api::op_delete_infra_credential),
         )
         .merge(crate::definitions::api::router())
-        .with_state(st)
+        .with_state(st.clone())
+        // Brokered routes phase 2 — route backends and switch.
+        .merge(crate::registrations::backends_api::router(
+            crate::registrations::backends_api::BackendsState {
+                regs: st,
+                admin: state.admin.clone(),
+            },
+        ))
 }
 
 /// Phase F.4 — OAuth admin sub-router. Mounts under operator nest.

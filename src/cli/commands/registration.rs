@@ -115,7 +115,7 @@ fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
     Ok((k.to_string(), v.to_string()))
 }
 
-fn read_upstream_ca_file(path: &std::path::Path) -> Result<String, CliError> {
+pub(crate) fn read_upstream_ca_file(path: &std::path::Path) -> Result<String, CliError> {
     let unreadable = || CliError::Usage("unable to read upstream CA file".into());
     if path.as_os_str() == "-" {
         let mut pem = String::new();

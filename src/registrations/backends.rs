@@ -154,6 +154,16 @@ impl BackendRepository {
         Ok(r.rows_affected() > 0)
     }
 
+    /// The route's current `registration_instances.revision` (the
+    /// `If-Match` token for a switch).
+    pub async fn revision(&self, route: &str) -> Result<i64, BackendError> {
+        sqlx::query_scalar("SELECT revision FROM registration_instances WHERE name = ?")
+            .bind(route)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(BackendError::NotFound)
+    }
+
     /// The route's active backend name (`primary` before any switch).
     pub async fn active_backend(&self, route: &str) -> Result<String, BackendError> {
         let v: Option<Option<String>> =
