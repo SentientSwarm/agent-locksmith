@@ -184,8 +184,30 @@ validation and compatibility details.
 | `--metadata-file <path>` | Complete JSON metadata value, replacing existing metadata without merging. Mutually exclusive with `--metadata`. Supports nested `http_service` descriptions. |
 | `--description '...'` | Free-form description. |
 | `--upstream-ca-file <path>` | PEM trust anchors for this route only (`-` reads stdin). See "Per-route upstream CA" below. |
+| `--profile <generic\|openai-codex-responses>` | Request profile: which provider wire behaviour the route gets. See "Route profiles" below. |
 
 `enable` un-disables a previously-deleted seed row.
+
+### Route profiles
+
+A route's profile selects provider-specific wire behaviour. With
+`openai-codex-responses`, Locksmith applies the Codex Responses behaviours:
+the `ChatGPT-Account-ID` header from the selected OAuth session, the
+`/responses` body fix-ups and the required `OpenAI-Beta` and `originator`
+headers. With `generic`, it applies none of them.
+
+Without `--profile`, the profile is inferred from the upstream: Codex for a
+`/backend-api/codex` upstream, generic otherwise. `get` shows the effective
+`profile` and whether it was `explicit` or `inferred` (`profile_source`).
+Omitting `--profile` on a later `put` returns the route to inference.
+Changing a profile does not change the destination, so grants and account
+selections are kept.
+
+```bash
+# Codex behaviour for a route whose upstream is an account broker
+locksmith model put codex-pool --upstream http://127.0.0.1:43210 \
+  --auth bearer=CODEX_POOL_KEY --egress direct --profile openai-codex-responses
+```
 
 ### Per-route upstream CA
 

@@ -96,6 +96,13 @@ pub struct PutOpts {
     /// Omitting it on a later `put` clears it. `-` reads stdin.
     #[arg(long = "upstream-ca-file")]
     pub upstream_ca_file: Option<std::path::PathBuf>,
+
+    /// Request profile: provider wire behaviour for this route. Omit to
+    /// infer from the upstream (Codex behaviour for a /backend-api/codex
+    /// upstream, generic otherwise); omitting it on a later `put` returns
+    /// the route to inference.
+    #[arg(long, value_parser = ["generic", "openai-codex-responses"])]
+    pub profile: Option<String>,
 }
 
 fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
@@ -249,6 +256,9 @@ pub async fn do_put(
     if let Some(path) = opts.metadata_file {
         body.insert("metadata".into(), read_metadata_file(&path)?);
     }
+    if let Some(profile) = opts.profile {
+        body.insert("profile".into(), json!(profile));
+    }
     if let Some(path) = opts.upstream_ca_file {
         body.insert(
             "upstream_ca_pem".into(),
@@ -296,6 +306,27 @@ pub async fn do_enable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(clap::Parser)]
+    struct PutCli {
+        #[command(flatten)]
+        opts: PutOpts,
+    }
+
+    #[test]
+    fn profile_flag_accepts_known_values_and_rejects_others() {
+        use clap::Parser;
+        let base = ["put", "--upstream", "http://x", "--auth", "none"];
+        let got =
+            PutCli::try_parse_from(base.iter().chain(&["--profile", "openai-codex-responses"]))
+                .unwrap();
+        assert_eq!(got.opts.profile.as_deref(), Some("openai-codex-responses"));
+        assert_eq!(PutCli::try_parse_from(base).unwrap().opts.profile, None);
+        assert!(
+            PutCli::try_parse_from(base.iter().chain(&["--profile", "anthropic-messages"]))
+                .is_err()
+        );
+    }
 
     #[test]
     fn upstream_ca_file_reads_pem_or_reports_usage() {

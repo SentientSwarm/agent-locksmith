@@ -337,8 +337,10 @@ provider), `proxy::proxy_handler` does this:
 4. **Inject upstream credentials.** `Authorization: Bearer
    <access_token>`.
 5. **(Phase G2) Inject `ChatGPT-Account-ID` for codex.** When the
-   upstream URL contains `/backend-api/codex` (case-insensitive),
-   add `ChatGPT-Account-ID: <account_id>` from the session row.
+   route's effective profile is `openai-codex-responses` (set with
+   `--profile`, or inferred from an upstream URL containing
+   `/backend-api/codex`, case-insensitive), add
+   `ChatGPT-Account-ID: <account_id>` from the session row.
    Skipped silently for sessions without an account_id (non-codex
    OAuth providers don't use this header).
 6. **Route via egress.** Direct or through Pipelock per the
@@ -384,8 +386,9 @@ Locksmith does this transparently:
    when minting; we trust data we sealed ourselves) and returns
    the `chatgpt_account_id` claim. The value is stored in
    `oauth_sessions.account_id`.
-2. **On the proxy hot path** — when the upstream URL matches
-   `/backend-api/codex` (case-insensitive substring) and the
+2. **On the proxy hot path** — when the route's effective profile is
+   `openai-codex-responses` (set with `--profile`, or inferred from an
+   upstream URL containing `/backend-api/codex`) and the
    session has a non-null `account_id`, locksmith adds the header
    before sending the request.
 
@@ -394,6 +397,9 @@ whose access tokens aren't JWTs, or whose JWT payload doesn't
 include the OpenAI-specific namespace). The header is never added
 to non-codex requests, so other OAuth providers are unaffected.
 
+A route without an explicit profile infers it with this rule; an
+explicit `--profile` overrides it either way (for example a broker URL
+set to `openai-codex-responses`, or a codex URL set to `generic`).
 The matcher is intentionally substring rather than hostname-equal
 so test fixtures can use `<mock-server>/backend-api/codex` and
 exercise the same code path that production uses against
@@ -495,8 +501,9 @@ specific behavior so agents can stay generic.
 
 When the request matches **both** predicates:
 
-1. The upstream is codex (`is_chatgpt_codex_upstream` — same
-   case-insensitive `/backend-api/codex` substring match as G2).
+1. The route's effective profile is `openai-codex-responses`: set
+   with `--profile`, or inferred from the same case-insensitive
+   `/backend-api/codex` substring match as G2.
 2. The request path ends with `/responses` (case-insensitive
    suffix). Other codex endpoints — sessions, model info — pass
    through untouched.
@@ -593,7 +600,9 @@ the body it sends.
 
 Two more codex-specific headers — `OpenAI-Beta` and `originator` —
 are required by chatgpt.com on every `/backend-api/codex/*`
-request. Locksmith injects both transparently (Phase G4).
+request. Locksmith injects both transparently (Phase G4) on every
+request to a route whose effective profile is
+`openai-codex-responses` (see `--profile`).
 
 | Header | Value | Behavior |
 |---|---|---|

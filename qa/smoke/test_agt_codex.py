@@ -59,11 +59,26 @@ def cx(target_factory):
         "--egress",
         "direct",
     )
+    # Upstream path does not match the Codex inference rule; the explicit
+    # profile alone turns the Codex behaviours on (brokered routes phase 1).
+    put_tool(
+        t,
+        "agt-codexp",
+        f"{up.url}/plain",
+        "bearer=AGT_CRED_TOKEN",
+        "--egress",
+        "direct",
+        "--profile",
+        "openai-codex-responses",
+    )
     agent = enrol(
         t,
         "qa-agt-codex",
-        ["agt-codexb"],
-        {"agt-codexb": ["--auth", "bearer=AGT_CRED_TOKEN"]},
+        ["agt-codexb", "agt-codexp"],
+        {
+            "agt-codexb": ["--auth", "bearer=AGT_CRED_TOKEN"],
+            "agt-codexp": ["--auth", "bearer=AGT_CRED_TOKEN"],
+        },
     )
     yield {"t": t, "up": up, "tokens": tokens, "agent": agent, "jwt": jwt}
     up.close()
@@ -116,6 +131,33 @@ def test_codex_responses_body_and_headers_fixed_up(cx):
     fixup = audit(t, "agt-codexb", "proxy_request")[0]["details"]["codex_body_fixup"]
     assert set(fixup["fields_overridden"]) == {"store", "stream"}
     assert "instructions" in fixup["fields_added"]
+
+
+@case(
+    "SMK-AGT-065",
+    area="AGT",
+    kind="positive",
+    covers=[API, FIX, "beh.route.profile"],
+)
+def test_explicit_codex_profile_applies_fixups_off_codex_path(cx):
+    """cli-reference.md "Route profiles": `--profile openai-codex-responses` applies the Codex
+    body fixups (G3/G5) and required headers (G4) on an upstream whose path does not contain
+    /backend-api/codex, as a broker URL would not."""
+    t, up, agent = cx["t"], cx["up"], cx["agent"]
+    body = {"model": "qa-model", "input": [], "store": True, "max_output_tokens": 9}
+    resp = t.http(
+        "POST", "/api/agt-codexp/responses", token=agent["token"], body=body
+    )
+    assert resp.status == 200
+    rec = up.last("/plain/responses")
+    sent = rec.json()
+    assert sent["store"] is False
+    assert sent["stream"] is True
+    assert sent["instructions"] == DEFAULT_INSTRUCTIONS
+    assert "max_output_tokens" not in sent
+    assert rec.headers.get("openai-beta") == ["responses=experimental"]
+    assert rec.header("originator") == agent["name"]
+    assert rec.headers.get("authorization") == [f"Bearer {CRED}"]
 
 
 @case("SMK-AGT-031", area="AGT", kind="corner", covers=[API, FIX])

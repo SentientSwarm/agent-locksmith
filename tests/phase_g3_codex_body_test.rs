@@ -93,7 +93,7 @@ async fn setup() -> Harness {
     let mock = MockServer::start().await;
     let token_url = format!("{}/token", mock.uri());
 
-    // codex-shaped registration (matches is_chatgpt_codex_upstream).
+    // codex-shaped registration (infers the openai-codex-responses profile).
     let codex_reg = Registration::new(
         "codex".to_string(),
         Kind::Model,
@@ -110,7 +110,7 @@ async fn setup() -> Harness {
     registrations.create(&codex_reg).await.unwrap();
 
     // Non-codex OAuth registration. Same auth shape, different path —
-    // used to verify body fixup is gated by is_chatgpt_codex_upstream.
+    // used to verify body fixup is gated by the route profile.
     let noncodex_reg = Registration::new(
         "noncodex".to_string(),
         Kind::Model,

@@ -15,7 +15,7 @@ pub async fn exercise() {
     f.stop();
     let before = sealed(&f);
     f.start_with_env(setup::ENV).await;
-    assert_eq!(version(&f), "23");
+    assert_eq!(version(&f), "24");
     assert_eq!(
         sealed(&f),
         before,

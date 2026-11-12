@@ -35,6 +35,9 @@ pub struct Registration {
     pub metadata: Json,
     /// #135 — PEM trust anchors for this route only (validated on write).
     pub upstream_ca_pem: Option<String>,
+    /// Brokered routes phase 1 — explicit request profile; `None` infers
+    /// from the upstream (see [`Self::effective_profile`]).
+    pub profile: Option<super::RouteProfile>,
     // Lifecycle:
     pub seed: bool,
     pub disabled: bool,
@@ -45,6 +48,11 @@ pub struct Registration {
 impl Registration {
     pub fn definition_pinned(&self) -> bool {
         self.mcp.as_ref().is_some_and(|m| m.definition.is_some())
+    }
+
+    /// The profile this route behaves with: explicit, else inferred.
+    pub fn effective_profile(&self) -> super::RouteProfile {
+        super::RouteProfile::effective(self.profile, &self.upstream)
     }
 
     /// Builder helper for tests + admin handlers — populates timestamps to
@@ -70,6 +78,7 @@ impl Registration {
             body_limit_bytes: 10 * 1024 * 1024,
             metadata: Json::Object(serde_json::Map::new()),
             upstream_ca_pem: None,
+            profile: None,
             seed: false,
             disabled: false,
             created_at: now,
@@ -110,8 +119,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -129,6 +138,7 @@ impl RegistrationRepository {
         .bind(r.protocol.as_str())
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
         .bind(r.upstream_ca_pem.as_deref())
+        .bind(r.profile.map(super::RouteProfile::as_str))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -139,7 +149,7 @@ impl RegistrationRepository {
     pub async fn get(&self, name: &str) -> Result<Option<Registration>, RegistrationError> {
         let row = sqlx::query(
             "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
+                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
              FROM registrations WHERE name = ?",
         )
         .bind(name)
@@ -157,7 +167,7 @@ impl RegistrationRepository {
         let rows = if let Some(k) = kind {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
                  FROM registrations WHERE kind = ? ORDER BY name",
             )
             .bind(k.as_str())
@@ -166,7 +176,7 @@ impl RegistrationRepository {
         } else {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
                  FROM registrations ORDER BY name",
             )
             .fetch_all(&self.pool)
@@ -205,8 +215,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(name) DO UPDATE SET \
                 description = excluded.description, \
                 upstream = excluded.upstream, \
@@ -218,7 +228,7 @@ impl RegistrationRepository {
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
                 updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
-                upstream_ca_pem = excluded.upstream_ca_pem",
+                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -236,6 +246,7 @@ impl RegistrationRepository {
         .bind(r.protocol.as_str())
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
         .bind(r.upstream_ca_pem.as_deref())
+        .bind(r.profile.map(super::RouteProfile::as_str))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -368,6 +379,12 @@ pub(crate) fn row_to_registration_ref(
                 )));
             }
         },
+        profile: match row.try_get::<Option<String>, _>("profile") {
+            Ok(p) => p.map(|p| p.parse()).transpose()?,
+            // A database before migration 0024 has no column: infer.
+            Err(sqlx::Error::ColumnNotFound(_)) => None,
+            Err(e) => return Err(RegistrationError::Backend(format!("read profile: {e}"))),
+        },
         seed: seed_i64 != 0,
         disabled: disabled_i64 != 0,
         created_at: row.get(11),
@@ -419,5 +436,50 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(row_to_registration(row).unwrap().upstream_ca_pem, None);
+    }
+
+    /// Rows read from a database before migration 0024 (no column) have no
+    /// stored profile, so the profile is inferred from the upstream.
+    #[tokio::test]
+    async fn row_without_profile_column_reads_as_inferred() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let row = sqlx::query(
+            "SELECT 'n' AS name, 'model' AS kind, '' AS description, \
+             'https://chatgpt.com/backend-api/codex' AS upstream, '{\"kind\":\"none\"}' AS auth_json, \
+             'direct' AS egress, '{\"request_seconds\":30,\"idle_seconds\":60}' AS timeouts_json, \
+             1 AS body_limit_bytes, '{}' AS metadata_json, 0 AS seed, 0 AS disabled, \
+             1 AS created_at, 1 AS updated_at, 'http' AS protocol, NULL AS mcp_json",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let r = row_to_registration(row).unwrap();
+        assert_eq!(r.profile, None);
+        assert_eq!(
+            r.effective_profile(),
+            super::super::RouteProfile::OpenaiCodexResponses
+        );
+    }
+
+    /// An explicit profile survives a write and read, and beats inference.
+    #[tokio::test]
+    async fn explicit_profile_round_trips() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pool = crate::migrations::open_and_migrate(&dir.path().join("l.db"))
+            .await
+            .unwrap();
+        let repo = RegistrationRepository::new(pool);
+        let mut r = Registration::new(
+            "cx".into(),
+            Kind::Model,
+            String::new(),
+            "https://chatgpt.com/backend-api/codex".into(),
+            AuthSpec::None,
+        );
+        r.profile = Some(super::super::RouteProfile::Generic);
+        repo.create(&r).await.unwrap();
+        let got = repo.get("cx").await.unwrap().unwrap();
+        assert_eq!(got.profile, Some(super::super::RouteProfile::Generic));
+        assert_eq!(got.effective_profile(), super::super::RouteProfile::Generic);
     }
 }

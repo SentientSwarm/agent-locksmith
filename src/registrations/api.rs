@@ -123,6 +123,12 @@ pub struct PutBody {
     /// full replace).
     #[serde(default)]
     pub upstream_ca_pem: Option<String>,
+    /// Brokered routes phase 1 — request profile (`generic` or
+    /// `openai-codex-responses`). Absent stores NULL, which infers the
+    /// profile from the upstream. Parsed in `op_put` so an unknown value
+    /// is a 400 `invalid_profile`, not an extractor 422.
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 /// Phase J (ADR-0008) — body for `PUT /admin/operator/<kind>/<name>/credential`.
@@ -155,6 +161,8 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
         "body_limit_bytes": r.body_limit_bytes,
         "metadata": r.metadata,
         "upstream_ca": upstream_ca_summary(r.upstream_ca_pem.as_deref()),
+        "profile": r.effective_profile().as_str(),
+        "profile_source": if r.profile.is_some() { "explicit" } else { "inferred" },
         "seed": r.seed,
         "disabled": r.disabled,
         "created_at": r.created_at,
@@ -196,6 +204,9 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
             "bad_request",
             "invalid_upstream_ca",
         ),
+        RegistrationError::InvalidProfile => {
+            (StatusCode::BAD_REQUEST, "bad_request", "invalid_profile")
+        }
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
         RegistrationError::ReservedName => {
@@ -459,6 +470,10 @@ pub async fn op_put(
     if let Err(e) = validate_name(&name) {
         return registration_error_response(&e);
     }
+    let profile = match body.profile.as_deref().map(str::parse).transpose() {
+        Ok(p) => p,
+        Err(e) => return registration_error_response(&e),
+    };
     if let Err(e) = super::protocol::validate(
         body.protocol,
         body.mcp.as_ref(),
@@ -564,6 +579,7 @@ pub async fn op_put(
             .metadata
             .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
         upstream_ca_pem: body.upstream_ca_pem,
+        profile,
         seed: false, // PUT always flips to operator-owned
         disabled,
         created_at,

@@ -14,7 +14,7 @@ impl RegistrationRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(backend)?;
-        let row = sqlx::query("SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem FROM registrations WHERE name = ?")
+        let row = sqlx::query("SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile FROM registrations WHERE name = ?")
             .bind(&expected.name).fetch_optional(&mut *tx).await.map_err(backend)?;
         let current = row
             .map(super::repo::row_to_registration)

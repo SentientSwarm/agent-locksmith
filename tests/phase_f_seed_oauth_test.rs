@@ -99,6 +99,7 @@ async fn ts232_seed_loader_adds_oauth_additively_on_version_bump() {
         body_limit_bytes: 10485760,
         metadata: serde_json::json!({}),
         upstream_ca_pem: None,
+        profile: None,
         seed: true,
         disabled: false,
         created_at: now,
@@ -181,7 +182,7 @@ async fn ts233_seed_codex_upstream_triggers_codex_fixups() {
             .to_ascii_lowercase()
             .contains("/backend-api/codex"),
         "seed codex upstream must contain /backend-api/codex so \
-         is_chatgpt_codex_upstream() matches; got {}",
+         the inferred openai-codex-responses profile applies; got {}",
         codex.upstream
     );
 }

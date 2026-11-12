@@ -4,6 +4,10 @@
 
 ### Added
 
+- Route request profiles (`--profile generic|openai-codex-responses`).
+  Codex wire behaviours follow the profile; routes without one keep
+  today's inference from the upstream. A profile change keeps grants and
+  bindings, because it does not change the destination.
 - Per-route upstream CA (#135). `model|tool put --upstream-ca-file` (admin
   field `upstream_ca_pem`) gives one HTTPS route its own trust anchors. The
   route trusts only those certificates: public roots and the global

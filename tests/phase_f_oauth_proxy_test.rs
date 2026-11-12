@@ -369,10 +369,18 @@ fn jwt_with_chatgpt_account_id(account_id: &str) -> String {
 }
 
 /// Build a Harness with an upstream URL that mirrors the codex shape
-/// (`<mock>/backend-api/codex`) so `is_chatgpt_codex_upstream` fires
+/// (`<mock>/backend-api/codex`) so the inferred openai-codex-responses profile applies
 /// against the wiremock host. Default Harness uses `mock.uri()` as a
 /// bare host which doesn't match the codex pattern.
 async fn setup_codex_shaped() -> Harness {
+    setup_codex_shaped_with(None).await
+}
+
+/// Codex-shaped harness with an explicit route profile (brokered routes
+/// phase 1). `None` keeps the profile inferred from the upstream.
+async fn setup_codex_shaped_with(
+    profile: Option<agent_locksmith::registrations::RouteProfile>,
+) -> Harness {
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("locksmith.db"))
         .await
@@ -387,7 +395,7 @@ async fn setup_codex_shaped() -> Harness {
     let token_url = format!("{}/token", mock.uri());
 
     // Register with codex-shaped upstream so the matcher fires.
-    let r = Registration::new(
+    let mut r = Registration::new(
         "codex".to_string(),
         Kind::Model,
         "OAuth test (codex-shaped)".to_string(),
@@ -400,6 +408,7 @@ async fn setup_codex_shaped() -> Harness {
             session_label: None,
         },
     );
+    r.profile = profile;
     registrations.create(&r).await.unwrap();
 
     let catalog = Catalog::from_repo(registrations.as_ref()).await.unwrap();
@@ -574,6 +583,49 @@ async fn g2_proxy_skips_account_id_header_when_upstream_is_not_codex() {
         .add_header("authorization", &h.bearer_header)
         .await;
     resp.assert_status_ok();
+}
+
+#[tokio::test]
+async fn g2_proxy_skips_account_id_header_when_profile_is_generic_on_codex_upstream() {
+    // Brokered routes phase 1: an explicit `generic` profile beats the
+    // `/backend-api/codex` inference, so a session with a valid account_id
+    // still sends no ChatGPT-Account-ID header.
+    let h =
+        setup_codex_shaped_with(Some(agent_locksmith::registrations::RouteProfile::Generic)).await;
+    let access_token = jwt_with_chatgpt_account_id("acct_should_not_inject");
+    h.sessions
+        .create(
+            &h.sealing_key,
+            "codex",
+            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+            "rt",
+            Some(&access_token),
+            Some(unix_now() + 3600),
+            "",
+        )
+        .await
+        .unwrap();
+
+    use wiremock::matchers::header_exists;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .and(header_exists("chatgpt-account-id"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not reach"))
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok-no-header"))
+        .mount(&h.mock)
+        .await;
+
+    let resp = h
+        .server
+        .post("/api/codex/responses")
+        .add_header("authorization", &h.bearer_header)
+        .await;
+    resp.assert_status_ok();
+    assert_eq!(resp.text(), "ok-no-header");
 }
 
 #[path = "source_isolation/oauth.rs"]
