@@ -69,7 +69,7 @@ fn error(status: StatusCode, kind: &str, code: &str) -> Response {
 
 fn backend_error(e: &BackendError) -> Response {
     match e {
-        BackendError::NotFound => error(StatusCode::NOT_FOUND, "not_found", "not_found"),
+        BackendError::NotFound => error(StatusCode::NOT_FOUND, "not_found", "unknown_name"),
         BackendError::ActiveBackend => error(StatusCode::CONFLICT, "conflict", "active_backend"),
         BackendError::RouteNotSwitchable => {
             error(StatusCode::CONFLICT, "conflict", "route_not_switchable")

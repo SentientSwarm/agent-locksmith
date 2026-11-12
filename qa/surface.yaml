@@ -17,6 +17,7 @@ floors:
   NAT: 44
   OAU: 31
   DMN: 44
+  RTE: 8
 routes:
 - id: bootstrap.POST./admin/agent/register
   listener: bootstrap
@@ -960,6 +961,72 @@ routes:
     route: /token
   refusals: []
   not_product: fake provider token endpoint compiled for recovery tests only
+- id: admin.GET./admin/operator/routes/{route}/backends
+  listener: admin
+  method: GET
+  path: /admin/operator/routes/{route}/backends
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/backends
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+- id: admin.DELETE./admin/operator/routes/{route}/backends/{backend}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/routes/{route}/backends/{backend}
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/backends/{backend}
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+  - active_backend
+- id: admin.GET./admin/operator/routes/{route}/backends/{backend}
+  listener: admin
+  method: GET
+  path: /admin/operator/routes/{route}/backends/{backend}
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/backends/{backend}
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+- id: admin.PUT./admin/operator/routes/{route}/backends/{backend}
+  listener: admin
+  method: PUT
+  path: /admin/operator/routes/{route}/backends/{backend}
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/backends/{backend}
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+  - active_backend
+  - backend_auth_unsupported
+  - invalid_upstream
+  - invalid_name
+  - invalid_upstream_ca
+  - invalid_metadata
+- id: admin.POST./admin/operator/routes/{route}/switch
+  listener: admin
+  method: POST
+  path: /admin/operator/routes/{route}/switch
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/switch
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+  - if_match_required
+  - revision_conflict
+  - active_backend
+  - backend_auth_unsupported
 cli:
 - id: cli.agent.credentials.list
   command: agent credentials list
@@ -1085,6 +1152,16 @@ cli:
   command: tool mcp show
 - id: cli.tool.put
   command: tool put
+- id: cli.route.backend.delete
+  command: route backend delete
+- id: cli.route.backend.get
+  command: route backend get
+- id: cli.route.backend.list
+  command: route backend list
+- id: cli.route.backend.put
+  command: route backend put
+- id: cli.route.switch
+  command: route switch
 behaviours:
 - id: beh.config.validation
   summary: 'Config load: ${VAR} expansion, deprecations, deny_unknown_fields; invalid config exits 1'
@@ -1118,6 +1195,8 @@ behaviours:
   summary: Size cap, content-type allowlist and redaction (hash only in audit)
 - id: beh.codex.fixups
   summary: Codex account header, /responses body fixup and required headers
+- id: beh.route.backends
+  summary: Switching a route's backend keeps grants and moves bindings with the backend
 - id: beh.route.profile
   summary: Route profile selects Codex wire behaviour; NULL infers from upstream
 - id: beh.proxy.header-strip

@@ -209,6 +209,43 @@ locksmith model put codex-pool --upstream http://127.0.0.1:43210 \
   --auth bearer=CODEX_POOL_KEY --egress direct --profile openai-codex-responses
 ```
 
+### Route backends
+
+A tool or model route can declare several **backends** (destinations) and
+switch between them. Grants stay on the route; account bindings belong to a
+backend. Use this to move a route onto an account broker without re-granting
+every agent.
+
+```bash
+locksmith route backend put codex broker --upstream http://127.0.0.1:43210 \
+  --auth bearer=CODEX_POOL_KEY --egress direct
+locksmith route backend list codex          # active backend and revision
+locksmith route switch codex --backend broker --if-match <revision>
+```
+
+- Before its first switch a route has one implicit backend, `primary`: its
+  current destination. A switch records the current destination under the
+  active backend's name, so `route switch codex --backend primary` goes back.
+- Agents keep their grant. Their bindings are stashed with the old backend
+  and restored when it becomes active again. An agent with no binding on the
+  new backend is refused (403 `tool_not_allowed`, audit
+  `account_binding_missing`) until you select an account for it.
+- `--if-match` is the route revision from `route backend list`. A missing
+  revision is 428 `if_match_required`; a stale one is 409
+  `revision_conflict` and changes nothing.
+- Each switch writes a `route_backend_switched` security audit event and
+  reports `profile_before` / `profile_after`. A route without an explicit
+  `--profile` infers it from the new upstream, so set the profile explicitly
+  on routes that move to a broker.
+- The active backend is edited with `tool|model put` as before: changing
+  its upstream, egress or CA still revokes grants and bindings. Changing an
+  inactive backend's destination discards only the bindings stashed for it.
+- Not switchable (409 `route_not_switchable`): native MCP connections,
+  `infra` and definition-pinned routes. OAuth backends are refused (409
+  `backend_auth_unsupported`) because OAuth sessions are keyed by route.
+  The active backend cannot be replaced, deleted or re-selected (409
+  `active_backend`).
+
 ### Per-route upstream CA
 
 An HTTPS upstream behind a private CA can carry its own trust anchors:
