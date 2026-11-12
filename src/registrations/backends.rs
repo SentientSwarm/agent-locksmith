@@ -168,6 +168,190 @@ impl BackendRepository {
     }
 }
 
+/// Result of [`BackendRepository::switch`]. Carries no credential material.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SwitchOutcome {
+    pub route: String,
+    pub from: String,
+    pub to: String,
+    pub bindings_stashed: u32,
+    pub bindings_restored: u32,
+    pub revision: i64,
+}
+
+fn switchable_auth(a: &AuthSpec) -> bool {
+    !matches!(
+        a,
+        AuthSpec::OauthPkce { .. }
+            | AuthSpec::OauthDeviceCode { .. }
+            | AuthSpec::ControlledOauth { .. }
+    )
+}
+
+impl BackendRepository {
+    /// Make `target` the route's active backend in one transaction.
+    ///
+    /// The current destination is recorded as a backend, the route's
+    /// bindings are stashed under it, the target's destination is written
+    /// onto the route under a `route_switch_guard` row (so the 0009/0023
+    /// authority triggers keep grants), and the target's stashed bindings
+    /// are restored. Stored-credential bindings whose sealed value is gone
+    /// are not restored. Grants are never touched.
+    pub async fn switch(
+        &self,
+        route: &str,
+        target: &str,
+        expected_revision: i64,
+    ) -> Result<SwitchOutcome, BackendError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query(
+            "SELECT r.kind, r.protocol, r.mcp_json, r.upstream, r.egress, r.upstream_ca_pem, \
+                    r.auth_json, r.active_backend, i.revision \
+               FROM registrations r JOIN registration_instances i ON i.name = r.name \
+              WHERE r.name = ?",
+        )
+        .bind(route)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BackendError::NotFound)?;
+        if row.get::<i64, _>("revision") != expected_revision {
+            return Err(BackendError::RevisionConflict);
+        }
+        let kind: String = row.get("kind");
+        let protocol: String = row.get("protocol");
+        let mcp: Option<String> = row.get("mcp_json");
+        if !matches!(kind.as_str(), "tool" | "model") || protocol != "http" || mcp.is_some() {
+            return Err(BackendError::RouteNotSwitchable);
+        }
+        let auth_json: String = row.get("auth_json");
+        let current_auth: AuthSpec = serde_json::from_str(&auth_json)?;
+        let from = row
+            .get::<Option<String>, _>("active_backend")
+            .unwrap_or_else(|| PRIMARY.to_string());
+        if from == target {
+            return Err(BackendError::ActiveBackend);
+        }
+        let t = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM registration_backends WHERE route = ? AND name = ?"
+        ))
+        .bind(route)
+        .bind(target)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BackendError::NotFound)?;
+        let t = row_to_backend(&t)?;
+        if !switchable_auth(&current_auth) || !switchable_auth(&t.auth) {
+            return Err(BackendError::AuthUnsupported);
+        }
+        let now = unix_now();
+
+        // 1. Record the current destination as backend `from`.
+        sqlx::query(&format!(
+            "INSERT INTO registration_backends ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(route, name) DO UPDATE SET upstream = excluded.upstream, \
+             egress = excluded.egress, upstream_ca_pem = excluded.upstream_ca_pem, \
+             auth_json = excluded.auth_json, updated_at = excluded.updated_at"
+        ))
+        .bind(route)
+        .bind(&from)
+        .bind(row.get::<String, _>("upstream"))
+        .bind(row.get::<String, _>("egress"))
+        .bind(row.get::<Option<String>, _>("upstream_ca_pem"))
+        .bind(&auth_json)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        // 2. Stash the route's bindings under `from`.
+        let stashed = sqlx::query(
+            "INSERT OR REPLACE INTO backend_bindings \
+             (agent_id, route, backend, auth_spec, created_at, updated_at) \
+             SELECT agent_id, registration, ?, auth_spec, created_at, ? \
+               FROM agent_credential_overrides WHERE registration = ?",
+        )
+        .bind(&from)
+        .bind(now)
+        .bind(route)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        sqlx::query("DELETE FROM agent_credential_overrides WHERE registration = ?")
+            .bind(route)
+            .execute(&mut *tx)
+            .await?;
+
+        // 3. Write the target destination under the guard.
+        sqlx::query(
+            "INSERT INTO route_switch_guard (route, upstream, egress, upstream_ca_pem) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(route)
+        .bind(&t.upstream)
+        .bind(egress_str(t.egress))
+        .bind(&t.upstream_ca_pem)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE registrations SET upstream = ?, egress = ?, upstream_ca_pem = ?, \
+             auth_json = ?, active_backend = ?, seed = 0, updated_at = ? WHERE name = ?",
+        )
+        .bind(&t.upstream)
+        .bind(egress_str(t.egress))
+        .bind(&t.upstream_ca_pem)
+        .bind(serde_json::to_string(&t.auth)?)
+        .bind(target)
+        .bind(now)
+        .bind(route)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM route_switch_guard WHERE route = ?")
+            .bind(route)
+            .execute(&mut *tx)
+            .await?;
+
+        // 4. Restore the target's stashed bindings whose sealed value
+        //    (if any) is still live; drop the rest of its stash.
+        let restored = sqlx::query(
+            "INSERT INTO agent_credential_overrides \
+             (agent_id, registration, auth_spec, created_at, updated_at) \
+             SELECT b.agent_id, b.route, b.auth_spec, b.created_at, ? \
+               FROM backend_bindings b \
+              WHERE b.route = ? AND b.backend = ? \
+                AND (json_extract(b.auth_spec, '$.secret_ref') IS NULL \
+                     OR EXISTS (SELECT 1 FROM credential_secrets c \
+                                 WHERE c.secret_ref = json_extract(b.auth_spec, '$.secret_ref') \
+                                   AND c.tombstoned_at IS NULL))",
+        )
+        .bind(now)
+        .bind(route)
+        .bind(target)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        sqlx::query("DELETE FROM backend_bindings WHERE route = ? AND backend = ?")
+            .bind(route)
+            .bind(target)
+            .execute(&mut *tx)
+            .await?;
+
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM registration_instances WHERE name = ?")
+                .bind(route)
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        Ok(SwitchOutcome {
+            route: route.to_string(),
+            from,
+            to: target.to_string(),
+            bindings_stashed: stashed as u32,
+            bindings_restored: restored as u32,
+            revision,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
