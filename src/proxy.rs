@@ -128,6 +128,12 @@ struct ProxyTarget {
     /// pointing at a non-default label. `None` for non-OAuth requests.
     oauth_session_label: Option<String>,
     oauth_selection: Option<AuthSpec>,
+    /// Brokered routes phase 3 — the route's broker spec when its
+    /// destination is an account broker.
+    broker: Option<crate::registrations::broker::BrokerSpec>,
+    /// The caller's public id, set by admission on broker routes for the
+    /// identity header.
+    broker_agent: Option<String>,
 }
 
 /// What the proxy needs to know about auth at injection time. Each
@@ -341,6 +347,8 @@ impl ProxyTarget {
             auth_source: "registration_default",
             oauth_session_label: None,
             oauth_selection: None,
+            broker: r.broker.clone(),
+            broker_agent: None,
         }
     }
 
@@ -370,6 +378,8 @@ impl ProxyTarget {
             auth_source: "registration_default",
             oauth_session_label: None,
             oauth_selection: None,
+            broker: None,
+            broker_agent: None,
         }
     }
 }
@@ -698,6 +708,14 @@ fn build_upstream_request(
     // `instructions` made the body larger than the original
     // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
+    // Brokered routes phase 3 — the broker trusts the identity header only
+    // because the request carries the broker key, so an agent's own copy
+    // (any case) never passes through.
+    let identity_header = target
+        .broker
+        .as_ref()
+        .and_then(|b| b.identity_header.as_deref())
+        .map(str::to_ascii_lowercase);
     let codex_upstream = target.profile.is_codex();
     // Phase G4 — for codex requests, snapshot whether the agent supplied
     // their own `originator` header before stripping; controls whether
@@ -717,10 +735,20 @@ fn build_upstream_request(
             // Strip the agent's value (if any) here; we re-inject below.
             || (codex_upstream && lower == "openai-beta")
             || extra_strip.as_deref() == Some(&lower)
+            || identity_header.as_deref() == Some(&lower)
         {
             continue;
         }
         upstream_req = upstream_req.header(name, value);
+    }
+    if let (Some(header), Some(agent)) = (
+        target
+            .broker
+            .as_ref()
+            .and_then(|b| b.identity_header.as_deref()),
+        target.broker_agent.as_deref(),
+    ) {
+        upstream_req = upstream_req.header(header, agent);
     }
 
     // Inject configured credentials. Reads from the resolved-creds
@@ -1224,6 +1252,11 @@ fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
         "auth_mode": target.auth.audit_mode(),
         "auth_source": target.auth_source,
     });
+    if target.broker.is_some() {
+        v["auth_mode"] = json!("broker");
+        v["broker_key_mode"] = json!(target.auth.audit_mode());
+        v["backend_kind"] = json!("broker");
+    }
     if let Some(sid) = target.auth.oauth_session_id() {
         v["oauth_session_id"] = json!(sid);
     }

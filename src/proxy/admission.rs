@@ -64,12 +64,41 @@ pub(super) async fn target(
         ));
     };
     let mut target = ProxyTarget::from_registration(&row.registration);
+    if row.registration.broker.is_some() {
+        return broker(state, ctx, target, &row.registration, account, identity).await;
+    }
     if let Err(failure) = selection::apply_spec(&mut target, account) {
         return Err(Box::new(
             selection::record_failure(&state.audit, ctx, failure).await,
         ));
     }
     target.auth_source = "agent_override";
+    Ok(target)
+}
+
+/// Brokered routes phase 3: the agent's explicit `broker` selection admits
+/// it, and the route's own key (never a per-agent credential) is sent. A
+/// key that is unset or not a broker key kind fails closed.
+async fn broker(
+    state: &AppState,
+    ctx: &RequestCtx,
+    mut target: ProxyTarget,
+    registration: &crate::registrations::Registration,
+    account: AuthSpec,
+    identity: &AgentIdentity,
+) -> Result<ProxyTarget, Box<Response>> {
+    let key = &registration.auth;
+    let usable = account == AuthSpec::Broker
+        && crate::registrations::broker::is_broker_key(key)
+        && selection::apply_spec(&mut target, key.clone()).is_ok();
+    if !usable {
+        return Err(Box::new(
+            selection::record_failure(&state.audit, ctx, selection::Failure::CredentialUnavailable)
+                .await,
+        ));
+    }
+    target.auth_source = "broker";
+    target.broker_agent = Some(identity.public_id.clone());
     Ok(target)
 }
 
