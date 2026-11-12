@@ -105,7 +105,7 @@ pub fn resolve_registration_creds_sync_env_only(
                 continue;
             }
             let env_var = match &r.auth {
-                AuthSpec::None => continue,
+                AuthSpec::None | AuthSpec::Broker => continue,
                 AuthSpec::Header { env_var, .. } => env_var,
                 AuthSpec::Bearer { env_var } => env_var,
                 // stored_* (Phase J, ADR-0008) resolve via the sealed

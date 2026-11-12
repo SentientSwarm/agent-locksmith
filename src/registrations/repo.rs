@@ -38,6 +38,9 @@ pub struct Registration {
     /// Brokered routes phase 1 — explicit request profile; `None` infers
     /// from the upstream (see [`Self::effective_profile`]).
     pub profile: Option<super::RouteProfile>,
+    /// Brokered routes phase 3 — `Some` when the active destination is an
+    /// account broker (see [`super::broker`]).
+    pub broker: Option<super::broker::BrokerSpec>,
     // Lifecycle:
     pub seed: bool,
     pub disabled: bool,
@@ -79,6 +82,7 @@ impl Registration {
             metadata: Json::Object(serde_json::Map::new()),
             upstream_ca_pem: None,
             profile: None,
+            broker: None,
             seed: false,
             disabled: false,
             created_at: now,
@@ -119,8 +123,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -139,6 +143,7 @@ impl RegistrationRepository {
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
         .bind(r.upstream_ca_pem.as_deref())
         .bind(r.profile.map(super::RouteProfile::as_str))
+        .bind(broker_json(r)?)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -149,7 +154,7 @@ impl RegistrationRepository {
     pub async fn get(&self, name: &str) -> Result<Option<Registration>, RegistrationError> {
         let row = sqlx::query(
             "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
+                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
              FROM registrations WHERE name = ?",
         )
         .bind(name)
@@ -167,7 +172,7 @@ impl RegistrationRepository {
         let rows = if let Some(k) = kind {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
                  FROM registrations WHERE kind = ? ORDER BY name",
             )
             .bind(k.as_str())
@@ -176,7 +181,7 @@ impl RegistrationRepository {
         } else {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
                  FROM registrations ORDER BY name",
             )
             .fetch_all(&self.pool)
@@ -215,8 +220,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(name) DO UPDATE SET \
                 description = excluded.description, \
                 upstream = excluded.upstream, \
@@ -228,7 +233,7 @@ impl RegistrationRepository {
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
                 updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
-                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile",
+                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -247,6 +252,7 @@ impl RegistrationRepository {
         .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
         .bind(r.upstream_ca_pem.as_deref())
         .bind(r.profile.map(super::RouteProfile::as_str))
+        .bind(broker_json(r)?)
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -385,11 +391,28 @@ pub(crate) fn row_to_registration_ref(
             Err(sqlx::Error::ColumnNotFound(_)) => None,
             Err(e) => return Err(RegistrationError::Backend(format!("read profile: {e}"))),
         },
+        broker: match row.try_get::<Option<String>, _>("broker_json") {
+            Ok(b) => b
+                .map(|b| serde_json::from_str(&b))
+                .transpose()
+                .map_err(|e| RegistrationError::Backend(format!("read broker_json: {e}")))?,
+            // A database before migration 0026 has no column: no broker.
+            Err(sqlx::Error::ColumnNotFound(_)) => None,
+            Err(e) => return Err(RegistrationError::Backend(format!("read broker_json: {e}"))),
+        },
         seed: seed_i64 != 0,
         disabled: disabled_i64 != 0,
         created_at: row.get(11),
         updated_at: row.get(12),
     })
+}
+
+fn broker_json(r: &Registration) -> Result<Option<String>, RegistrationError> {
+    r.broker
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| RegistrationError::Backend(format!("serialize broker: {e}")))
 }
 
 fn egress_as_str(e: EgressMode) -> &'static str {

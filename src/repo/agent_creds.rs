@@ -87,6 +87,11 @@ impl AgentCredentialRepository {
             .ok_or(RepoError::InvalidGrantTarget)?;
         let r = crate::registrations::repo::row_to_registration(row)
             .map_err(|_| RepoError::InvalidGrantTarget)?;
+        // Brokered routes phase 3: a broker route takes only the `broker`
+        // selection, and `broker` is valid only on a broker route.
+        if r.broker.is_some() != matches!(auth_spec, AuthSpec::Broker) {
+            return Err(RepoError::InvalidGrantTarget);
+        }
         crate::definitions::eligibility::selected(connection, &r, Some(auth_spec))
             .await
             .map_err(|_| RepoError::InvalidGrantTarget)?;

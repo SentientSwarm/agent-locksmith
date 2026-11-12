@@ -272,7 +272,9 @@ impl ProxyTarget {
         // registrations are built via [`from_registration_oauth`]
         // after the proxy_handler resolves the access token.
         let auth = match &r.auth {
-            AuthSpec::None => ProxyAuth::None,
+            // `broker` is a selection kind only; templates refuse it on
+            // write, so a route's own auth is never `broker`.
+            AuthSpec::None | AuthSpec::Broker => ProxyAuth::None,
             AuthSpec::Header { header, .. } => ProxyAuth::Header {
                 header: header.clone(),
                 audit_mode: "header",

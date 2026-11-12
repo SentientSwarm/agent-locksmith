@@ -140,11 +140,11 @@ pub async fn prior_upgrade() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        25
+        26
     );
     pool.close().await;
     f.stop();
     println!(
-        "actual prior schema-18 positive -> current schema 25 -> prior refusal/no listener -> current reopen; all joined"
+        "actual prior schema-18 positive -> current schema 26 -> prior refusal/no listener -> current reopen; all joined"
     );
 }

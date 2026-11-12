@@ -100,6 +100,7 @@ async fn ts232_seed_loader_adds_oauth_additively_on_version_bump() {
         metadata: serde_json::json!({}),
         upstream_ca_pem: None,
         profile: None,
+        broker: None,
         seed: true,
         disabled: false,
         created_at: now,

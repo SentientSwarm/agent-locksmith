@@ -27,7 +27,7 @@ pub async fn exercise() {
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.cleanup();
     println!(
-        "actual schema 12 -> 25 preserves sealed custody/incarnation/version/grants; prior refuses before listeners; restart passes"
+        "actual schema 12 -> 26 preserves sealed custody/incarnation/version/grants; prior refuses before listeners; restart passes"
     );
 }
 fn snapshot(f: &Fixture) -> (String, String) {
@@ -48,7 +48,7 @@ async fn verify(
     authority: &[serde_json::Value],
     before: (String, String),
 ) {
-    assert_eq!(oauth_upgrade::version(f), "25");
+    assert_eq!(oauth_upgrade::version(f), "26");
     assert_eq!(snapshot(f), before);
     assert_eq!(setup::authority(f, agent), authority);
     assert_eq!(
