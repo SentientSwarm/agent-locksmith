@@ -24,7 +24,9 @@ rejected.
 A connection is identified by its registration name. Disabling/re-enabling keeps
 its grants and selections but denies while disabled. Hard deletion removes both
 in the same database write; recreating the name requires deliberate reapproval.
-Changing upstream or egress also removes grants and bindings transactionally.
+Changing upstream or egress also removes grants and bindings transactionally. Switching a route between declared backends
+(`locksmith route switch`) is the exception: grants stay and bindings move
+with the backend. See the CLI reference, "Route backends".
 Description, timeout and credential-template edits retain identity. Reapprove the
 finite allowlist and account after a destination replacement. Old bootstrap
 scopes are also cleaned so enrollment cannot recover removed authority.

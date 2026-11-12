@@ -53,7 +53,7 @@ async fn sealed(f: &Fixture) -> String {
 async fn verify(f: &Fixture, agent: &Value, before: &str) {
     assert_eq!(
         query(f, "SELECT CAST(max(version) AS TEXT) FROM _sqlx_migrations").await,
-        "24"
+        "25"
     );
     assert_eq!(authority(f).await, before);
     let snapshot = flow::show(f, agent["public_id"].as_str().unwrap());

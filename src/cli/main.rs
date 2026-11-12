@@ -93,6 +93,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: tool::ToolCmd,
     },
+    /// Route backends and switching (operator). Brokered routes phase 2.
+    Route {
+        #[command(subcommand)]
+        cmd: commands::route::RouteCmd,
+    },
     /// Model management (operator). Phase E.4 (v2.0.0).
     Model {
         #[command(subcommand)]
@@ -207,6 +212,7 @@ async fn main() -> ExitCode {
         Cmd::Integration { cmd } => commands::integration::run(&client, cli.format, cmd).await,
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
+        Cmd::Route { cmd } => commands::route::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,
         Cmd::Oauth { cmd } => oauth::run(&client, cli.format, cmd).await,
         Cmd::Audit { cmd } => audit::run(&client, cli.format, cmd).await,

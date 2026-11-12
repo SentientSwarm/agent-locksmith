@@ -178,9 +178,11 @@ impl CredentialSecretsRepository {
 }
 
 /// SQL predicate: the row's `secret_ref` is referenced by no registration
-/// and no per-agent override. `registrations.auth_json` and
-/// `agent_credential_overrides.auth_spec` are the only persisted AuthSpec
-/// columns. The `IS NOT NULL` filters are load-bearing: a NULL in a
+/// and no per-agent override. `registrations.auth_json`,
+/// `agent_credential_overrides.auth_spec` and their route-backend
+/// counterparts (`registration_backends.auth_json`,
+/// `backend_bindings.auth_spec`, migration 0025) are the persisted
+/// AuthSpec columns. The `IS NOT NULL` filters are load-bearing: a NULL in a
 /// `NOT IN` subquery makes the predicate NULL for every row, which would
 /// silently disable collection.
 const UNREFERENCED: &str = "secret_ref NOT IN ( \
@@ -189,7 +191,13 @@ const UNREFERENCED: &str = "secret_ref NOT IN ( \
     UNION \
     SELECT json_extract(auth_spec, '$.secret_ref') FROM agent_credential_overrides \
      WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL \
-    UNION SELECT secret_ref FROM oauth_consent_clients WHERE retired_at IS NULL)";
+    UNION SELECT secret_ref FROM oauth_consent_clients WHERE retired_at IS NULL \
+    UNION \
+    SELECT json_extract(auth_json, '$.secret_ref') FROM registration_backends \
+     WHERE json_extract(auth_json, '$.secret_ref') IS NOT NULL \
+    UNION \
+    SELECT json_extract(auth_spec, '$.secret_ref') FROM backend_bindings \
+     WHERE json_extract(auth_spec, '$.secret_ref') IS NOT NULL)";
 
 /// Mint an opaque `cs_`-prefixed secret ref from 16 random bytes.
 fn new_secret_ref() -> Result<String, RepoError> {

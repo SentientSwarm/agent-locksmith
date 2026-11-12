@@ -13,7 +13,7 @@ pub async fn exercise() {
         custody(&f, keep_row).await;
         let before = snapshot(&f).await;
         f.start(process::DAEMON).await;
-        assert_eq!(version(&f).await, 24);
+        assert_eq!(version(&f).await, 25);
         assert_eq!(snapshot(&f).await, before);
         f.stop();
         refuses_prior(&f, &prior);

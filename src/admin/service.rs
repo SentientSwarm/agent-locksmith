@@ -304,7 +304,7 @@ impl AdminService {
     /// "agent" (self-service / bootstrap-register, where the
     /// bootstrap_token is the credential, not a long-lived agent token).
     /// Callers that already set auth_method are left alone.
-    async fn audit(&self, mut event: AuditEvent) {
+    pub(crate) async fn audit(&self, mut event: AuditEvent) {
         let Some(repo) = &self.audit else {
             return;
         };
