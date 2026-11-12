@@ -382,3 +382,74 @@ async fn proxy_uses_new_backend_immediately_after_switch() {
     assert_eq!(b.received_requests().await.unwrap().len(), 1);
     assert!(a.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn switch_audit_records_destination_and_backend_edits_are_audited() {
+    let h = setup().await;
+    h.put_route("r", route_body("https://a.example"))
+        .await
+        .assert_status_ok();
+    h.op_req(axum::http::Method::PUT, "/routes/r/backends/b")
+        .json(&backend_body("https://b.example"))
+        .await
+        .assert_status_ok();
+    h.switch("b").await.assert_status_ok();
+    let details: String =
+        sqlx::query_scalar("SELECT details FROM audit WHERE event = 'route_backend_switched'")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    let d: Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(d["upstream_before"], "https://a.example");
+    assert_eq!(d["upstream_after"], "https://b.example");
+    assert_eq!(d["egress_after"], "direct");
+    assert!(d["upstream_ca_sha256_after"].is_null());
+    h.op_req(axum::http::Method::DELETE, "/routes/r/backends/primary")
+        .await
+        .assert_status_no_content();
+    let events: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT event, event_class, details FROM audit \
+         WHERE event IN ('route_backend_put', 'route_backend_deleted') ORDER BY id",
+    )
+    .fetch_all(&h.pool)
+    .await
+    .unwrap();
+    let names: Vec<_> = events.iter().map(|e| e.0.as_str()).collect();
+    assert_eq!(names, ["route_backend_put", "route_backend_deleted"]);
+    assert!(events.iter().all(|e| e.1 == "security"));
+    let put: Value = serde_json::from_str(&events[0].2).unwrap();
+    assert_eq!(
+        (put["backend"].as_str(), put["upstream"].as_str()),
+        (Some("b"), Some("https://b.example"))
+    );
+}
+
+#[tokio::test]
+async fn backend_change_invalidates_a_switch_revision() {
+    let h = setup().await;
+    h.put_route("r", route_body("https://a.example"))
+        .await
+        .assert_status_ok();
+    h.op_req(axum::http::Method::PUT, "/routes/r/backends/b")
+        .json(&backend_body("https://b.example"))
+        .await
+        .assert_status_ok();
+    let seen = h.revision().await;
+    // Another operator re-points b after the first one read the revision.
+    h.op_req(axum::http::Method::PUT, "/routes/r/backends/b")
+        .json(&backend_body("https://moved.example"))
+        .await
+        .assert_status_ok();
+    let r = h
+        .op_req(axum::http::Method::POST, "/routes/r/switch")
+        .add_header("if-match", &seen.to_string())
+        .json(&json!({ "backend": "b" }))
+        .await;
+    assert_eq!(r.status_code(), 409);
+    assert_eq!(r.json::<Value>()["error"]["code"], "revision_conflict");
+    assert_eq!(
+        h.revision().await,
+        seen + 1,
+        "a backend edit bumps the route revision"
+    );
+}

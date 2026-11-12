@@ -230,11 +230,15 @@ locksmith route switch codex --backend broker --if-match <revision>
   and restored when it becomes active again. An agent with no binding on the
   new backend is refused (403 `tool_not_allowed`, audit
   `account_binding_missing`) until you select an account for it.
-- `--if-match` is the route revision from `route backend list`. A missing
-  revision is 428 `if_match_required`; a stale one is 409
-  `revision_conflict` and changes nothing.
-- Each switch writes a `route_backend_switched` security audit event and
-  reports `profile_before` / `profile_after`. A route without an explicit
+- `--if-match` is the route revision from `route backend list`. Editing or
+  deleting any backend also moves the revision, so a switch cannot land on
+  a destination changed after you read it. A missing revision is 428
+  `if_match_required`; a stale one is 409 `revision_conflict` and changes
+  nothing.
+- Each switch writes a `route_backend_switched` security audit event with
+  the upstream, egress and CA fingerprint before and after, and reports
+  `profile_before` / `profile_after`. Backend edits write
+  `route_backend_put` and `route_backend_deleted`. A route without an explicit
   `--profile` infers it from the new upstream, so set the profile explicitly
   on routes that move to a broker.
 - The active backend is edited with `tool|model put` as before: changing

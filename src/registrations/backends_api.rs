@@ -104,6 +104,14 @@ fn oauth(a: &AuthSpec) -> bool {
     )
 }
 
+/// The auth mechanism name only (the serde tag), never its parameters.
+fn auth_kind(a: &AuthSpec) -> Value {
+    serde_json::to_value(a)
+        .ok()
+        .and_then(|v| v.get("kind").cloned())
+        .unwrap_or(Value::Null)
+}
+
 fn view(b: &RouteBackend) -> Value {
     json!({
         "name": b.name,
@@ -116,6 +124,31 @@ fn view(b: &RouteBackend) -> Value {
         "created_at": b.created_at,
         "updated_at": b.updated_at,
     })
+}
+
+fn ca_sha256(pem: Option<&str>) -> Option<String> {
+    pem.map(super::upstream_ca::sha256_hex)
+}
+
+async fn audit(
+    st: &BackendsState,
+    op: &OperatorIdentity,
+    route: &str,
+    event: &str,
+    details: Value,
+) {
+    st.admin
+        .audit(AuditEvent {
+            ts_ms: super::backends::unix_now() * 1000,
+            event_class: EventClass::Security,
+            event: event.into(),
+            operator_name: Some(op.name.clone()),
+            tool: Some(route.into()),
+            decision: Decision::Allowed,
+            details: Some(details),
+            ..AuditEvent::default()
+        })
+        .await;
 }
 
 /// The switchable route, or the response that refuses it.
@@ -169,6 +202,7 @@ async fn get_one(
 
 async fn put(
     State(st): State<BackendsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((route, backend)): Path<(String, String)>,
     Json(body): Json<BackendBody>,
 ) -> Response {
@@ -218,7 +252,18 @@ async fn put(
         return backend_error(&e);
     }
     match repo.get(&b.route, &b.name).await {
-        Ok(Some(saved)) => Json(view(&saved)).into_response(),
+        Ok(Some(saved)) => {
+            let details = json!({
+                "route": saved.route,
+                "backend": saved.name,
+                "upstream": saved.upstream,
+                "egress": super::backends::egress_str(saved.egress),
+                "upstream_ca_sha256": ca_sha256(saved.upstream_ca_pem.as_deref()),
+                "auth_kind": auth_kind(&saved.auth),
+            });
+            audit(&st, &op, &saved.route, "route_backend_put", details).await;
+            Json(view(&saved)).into_response()
+        }
         Ok(None) => backend_error(&BackendError::NotFound),
         Err(e) => backend_error(&e),
     }
@@ -226,6 +271,7 @@ async fn put(
 
 async fn delete(
     State(st): State<BackendsState>,
+    Extension(op): Extension<OperatorIdentity>,
     Path((route, backend)): Path<(String, String)>,
 ) -> Response {
     if let Err(r) = route_of(&st, &route).await {
@@ -238,7 +284,11 @@ async fn delete(
         Err(e) => return backend_error(&e),
     }
     match repo.delete(&route, &backend).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            let details = json!({ "route": route, "backend": backend });
+            audit(&st, &op, &route, "route_backend_deleted", details).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => backend_error(&BackendError::NotFound),
         Err(e) => backend_error(&e),
     }
@@ -266,7 +316,7 @@ async fn switch(
         return backend_error(&BackendError::RevisionConflict);
     };
     let before = match route_of(&st, &route).await {
-        Ok(r) => r.effective_profile(),
+        Ok(r) => r,
         Err(r) => return r,
     };
     let repo = BackendRepository::new(st.regs.repo.pool.clone());
@@ -275,8 +325,8 @@ async fn switch(
         Err(e) => return backend_error(&e),
     };
     let after = match st.regs.repo.get(&route).await {
-        Ok(Some(r)) => r.effective_profile(),
-        _ => before,
+        Ok(Some(r)) => r,
+        _ => before.clone(),
     };
     // Persisted; admission fails closed (503) until the catalog matches.
     let activation = if st.regs.refresh_runtime().await.is_ok() {
@@ -291,21 +341,16 @@ async fn switch(
         "bindings_stashed": out.bindings_stashed,
         "bindings_restored": out.bindings_restored,
         "revision": out.revision,
-        "profile_before": before.as_str(),
-        "profile_after": after.as_str(),
+        "profile_before": before.effective_profile().as_str(),
+        "profile_after": after.effective_profile().as_str(),
+        "upstream_before": before.upstream,
+        "upstream_after": after.upstream,
+        "egress_before": super::backends::egress_str(before.egress),
+        "egress_after": super::backends::egress_str(after.egress),
+        "upstream_ca_sha256_before": ca_sha256(before.upstream_ca_pem.as_deref()),
+        "upstream_ca_sha256_after": ca_sha256(after.upstream_ca_pem.as_deref()),
     });
-    st.admin
-        .audit(AuditEvent {
-            ts_ms: super::backends::unix_now() * 1000,
-            event_class: EventClass::Security,
-            event: "route_backend_switched".into(),
-            operator_name: Some(op.name.clone()),
-            tool: Some(route.clone()),
-            decision: Decision::Allowed,
-            details: Some(details.clone()),
-            ..AuditEvent::default()
-        })
-        .await;
+    audit(&st, &op, &route, "route_backend_switched", details.clone()).await;
     let mut resp = details;
     resp["activation"] = activation.into();
     Json(resp).into_response()

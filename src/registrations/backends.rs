@@ -93,6 +93,20 @@ pub struct BackendRepository {
     pool: SqlitePool,
 }
 
+/// A backend edit changes what a switch would activate, so it moves the
+/// route's `If-Match` revision: a switch prepared against the old
+/// definition gets `revision_conflict` instead of an unreviewed host.
+async fn bump_revision(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    route: &str,
+) -> Result<(), BackendError> {
+    sqlx::query("UPDATE registration_instances SET revision = revision + 1 WHERE name = ?")
+        .bind(route)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 impl BackendRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -102,6 +116,7 @@ impl BackendRepository {
     /// its stashed bindings (trigger `backend_destination_changed_stash`).
     pub async fn put(&self, b: &RouteBackend) -> Result<(), BackendError> {
         let now = unix_now();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query(&format!(
             "INSERT INTO registration_backends ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(route, name) DO UPDATE SET upstream = excluded.upstream, \
@@ -116,8 +131,10 @@ impl BackendRepository {
         .bind(serde_json::to_string(&b.auth)?)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        bump_revision(&mut tx, &b.route).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -146,12 +163,18 @@ impl BackendRepository {
     }
 
     pub async fn delete(&self, route: &str, name: &str) -> Result<bool, BackendError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let r = sqlx::query("DELETE FROM registration_backends WHERE route = ? AND name = ?")
             .bind(route)
             .bind(name)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(r.rows_affected() > 0)
+        if r.rows_affected() == 0 {
+            return Ok(false);
+        }
+        bump_revision(&mut tx, route).await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// The route's current `registration_instances.revision` (the

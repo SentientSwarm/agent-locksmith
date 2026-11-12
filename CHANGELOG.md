@@ -8,9 +8,11 @@
   `locksmith route switch`). A tool or model route can declare several
   destinations and switch its active one without re-granting agents:
   grants stay on the route and bindings move with the backend. Switches
-  need the route revision (`If-Match`), are audited as
-  `route_backend_switched`, and refuse OAuth backends, native connections
-  and pinned routes. Migration 0025.
+  need the route revision (`If-Match`), which backend edits also move.
+  They are audited as `route_backend_switched` with the destination
+  before and after; backend edits as `route_backend_put` and
+  `route_backend_deleted`. OAuth backends, native connections and pinned
+  routes are refused. Migration 0025.
 - Route request profiles (`--profile generic|openai-codex-responses`).
   Codex wire behaviours follow the profile; routes without one keep
   today's inference from the upstream. A profile change keeps grants and
