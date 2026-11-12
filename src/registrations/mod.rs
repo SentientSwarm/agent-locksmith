@@ -18,6 +18,7 @@
 pub mod admission;
 pub mod api;
 pub mod auth_spec;
+pub mod backends;
 pub mod catalog;
 mod credential;
 mod definitions;
