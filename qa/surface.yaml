@@ -18,6 +18,7 @@ floors:
   OAU: 31
   DMN: 44
   RTE: 8
+  BRK: 6
 routes:
 - id: bootstrap.POST./admin/agent/register
   listener: bootstrap
@@ -321,6 +322,8 @@ routes:
   - invalid_metadata
   - wrong_kind
   - invalid_mcp
+  - invalid_broker
+  - broker_kind_change
   - invalid_http_service
 - id: admin.DELETE./admin/operator/models/{name}/credential
   listener: admin
@@ -343,6 +346,7 @@ routes:
   refusals:
   - invalid_credential
   - unknown_name
+  - invalid_broker
   - wrong_kind
 - id: admin.POST./admin/operator/models/{name}/enable
   listener: admin
@@ -524,6 +528,8 @@ routes:
   - wrong_kind
   - invalid_mcp
   - invalid_http_service
+  - invalid_broker
+  - broker_kind_change
   - definition_pending
 - id: admin.DELETE./admin/operator/tools/{name}/credential
   listener: admin
@@ -548,6 +554,7 @@ routes:
   - invalid_credential
   - unknown_name
   - wrong_kind
+  - invalid_broker
   - definition_pending
 - id: admin.POST./admin/operator/tools/{name}/enable
   listener: admin
@@ -584,10 +591,12 @@ routes:
   - upstream_error
   - timeout
   - oauth_reconnect_required
+  - backend_unavailable
   audit_causes:
   - account_binding_missing
   - selected_credential_unavailable
   - account_binding_unavailable
+  - backend_unavailable
   fault_refusals:
   - connection_not_active
   fault_reason: needs saved and running registration to diverge (activation refresh failure)
@@ -1011,7 +1020,21 @@ routes:
   - invalid_upstream
   - invalid_name
   - invalid_upstream_ca
+  - invalid_broker
   - invalid_metadata
+- id: admin.PUT./admin/operator/routes/{route}/backends/{backend}/credential
+  listener: admin
+  method: PUT
+  path: /admin/operator/routes/{route}/backends/{backend}/credential
+  source:
+    file: src/registrations/backends_api.rs
+    route: /routes/{route}/backends/{backend}/credential
+  refusals:
+  - invalid_credential
+  - unknown_name
+  - route_not_switchable
+  - active_backend
+  - invalid_broker
 - id: admin.POST./admin/operator/routes/{route}/switch
   listener: admin
   method: POST
@@ -1092,6 +1115,8 @@ cli:
   command: model list
 - id: cli.model.put
   command: model put
+- id: cli.model.set-key
+  command: model set-key
 - id: cli.mtls.crl-status
   command: mtls crl-status
 - id: cli.mtls.list-blocklist
@@ -1152,6 +1177,8 @@ cli:
   command: tool mcp show
 - id: cli.tool.put
   command: tool put
+- id: cli.tool.set-key
+  command: tool set-key
 - id: cli.route.backend.delete
   command: route backend delete
 - id: cli.route.backend.get
@@ -1160,6 +1187,8 @@ cli:
   command: route backend list
 - id: cli.route.backend.put
   command: route backend put
+- id: cli.route.backend.set-credential
+  command: route backend set-credential
 - id: cli.route.switch
   command: route switch
 behaviours:
@@ -1195,6 +1224,16 @@ behaviours:
   summary: Size cap, content-type allowlist and redaction (hash only in audit)
 - id: beh.codex.fixups
   summary: Codex account header, /responses body fixup and required headers
+- id: beh.broker.key
+  summary: A broker route sends its own sealed or 1Password key, never an agent credential; agents select it with --broker
+- id: beh.broker.identity
+  summary: A broker receives the caller's public id in the identity header; an agent's own copy is replaced
+- id: beh.broker.attribution
+  summary: A broker's account-label response header is recorded in audit (hashed when sensitive)
+- id: beh.broker.health
+  summary: A broker failing its health probe answers 503 backend_unavailable without dispatch; /readyz reports counts only
+- id: beh.broker.backend
+  summary: A route can switch onto a broker backend; upstream bindings never reach it and return on switch back
 - id: beh.route.backends
   summary: Switching a route's backend keeps grants and moves bindings with the backend
 - id: beh.route.profile
