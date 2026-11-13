@@ -223,6 +223,9 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
         RegistrationError::BrokerKindChange => {
             (StatusCode::CONFLICT, "conflict", "broker_kind_change")
         }
+        RegistrationError::BrokerKeyChanged => {
+            (StatusCode::CONFLICT, "conflict", "broker_key_changed")
+        }
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
         RegistrationError::ReservedName => {
@@ -555,12 +558,26 @@ pub async fn op_put(
     // - kind=infra accepts any shape including field-absent (becomes
     //   `AuthSpec::None`).
     // - a broker tool/model may omit it: see below.
+    let mut keep_key = false;
     let auth = match (kind, body.auth) {
         // A broker edit without `auth` keeps the route's broker key, so a
-        // spec change never discards it; a new broker starts keyless.
+        // spec change never discards it; a new broker starts keyless. The
+        // key stays only with the destination it was sealed for (#159 M4),
+        // and the write re-checks both (M2).
         (Kind::Tool | Kind::Model, None) if body.broker.is_some() => {
             match state.repo.get(&name).await {
-                Ok(Some(r)) if r.broker.is_some() => r.auth,
+                Ok(Some(r)) if r.broker.is_some() => {
+                    if r.upstream != body.upstream
+                        || r.egress != body.egress.unwrap_or_default()
+                        || r.upstream_ca_pem != body.upstream_ca_pem
+                    {
+                        return registration_error_response(&RegistrationError::InvalidBroker(
+                            "moving a broker to a new destination needs explicit auth".into(),
+                        ));
+                    }
+                    keep_key = true;
+                    r.auth
+                }
                 Ok(_) => AuthSpec::None,
                 Err(e) => return registration_error_response(&e),
             }
@@ -648,7 +665,12 @@ pub async fn op_put(
     };
 
     let is_update = created_at != now;
-    if let Err(e) = state.repo.upsert(&r).await {
+    let written = if keep_key {
+        state.repo.upsert_keeping_key(&r).await
+    } else {
+        state.repo.upsert(&r).await
+    };
+    if let Err(e) = written {
         return registration_error_response(&e);
     }
     if state.refresh_runtime().await.is_err() {
@@ -777,11 +799,9 @@ pub async fn op_put_credential(
         });
     }
     if let Some(h) = &body.header
-        && axum::http::HeaderName::from_bytes(h.as_bytes()).is_err()
+        && let Err(e) = super::broker::validate_credential_header(h)
     {
-        return registration_error_response(&RegistrationError::InvalidMetadata(
-            "invalid header name".into(),
-        ));
+        return registration_error_response(&e);
     }
     if let Some(spec) = &existing.broker {
         let shape = super::credential::stored_auth(

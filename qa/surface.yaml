@@ -18,7 +18,7 @@ floors:
   OAU: 31
   DMN: 44
   RTE: 8
-  BRK: 6
+  BRK: 7
 routes:
 - id: bootstrap.POST./admin/agent/register
   listener: bootstrap
@@ -334,6 +334,9 @@ routes:
   - invalid_broker
   - broker_kind_change
   - invalid_http_service
+  fault_refusals:
+  - broker_key_changed
+  fault_reason: needs a key rotation or re-point racing a keep-key broker put
 - id: admin.DELETE./admin/operator/models/{name}/credential
   listener: admin
   method: DELETE
@@ -356,6 +359,7 @@ routes:
   - invalid_credential
   - unknown_name
   - invalid_broker
+  - invalid_metadata
   - wrong_kind
 - id: admin.POST./admin/operator/models/{name}/enable
   listener: admin
@@ -540,6 +544,9 @@ routes:
   - invalid_broker
   - broker_kind_change
   - definition_pending
+  fault_refusals:
+  - broker_key_changed
+  fault_reason: needs a key rotation or re-point racing a keep-key broker put
 - id: admin.DELETE./admin/operator/tools/{name}/credential
   listener: admin
   method: DELETE
@@ -564,6 +571,7 @@ routes:
   - unknown_name
   - wrong_kind
   - invalid_broker
+  - invalid_metadata
   - definition_pending
 - id: admin.POST./admin/operator/tools/{name}/enable
   listener: admin
@@ -1044,6 +1052,7 @@ routes:
   - route_not_switchable
   - active_backend
   - invalid_broker
+  - invalid_metadata
 - id: admin.POST./admin/operator/routes/{route}/switch
   listener: admin
   method: POST

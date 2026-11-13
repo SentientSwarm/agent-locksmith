@@ -21,6 +21,7 @@ pub mod backend;
 pub mod credential_sealing;
 pub mod env;
 pub mod file_sealed;
+pub mod materialize;
 pub mod op_resolver;
 pub mod vault;
 

@@ -404,3 +404,50 @@ def test_switch_to_a_broker_backend_and_back(brk):
     finally:
         a.close()
         b.close()
+
+
+@case(
+    "SMK-BRK-007",
+    area="BRK",
+    kind="refusal",
+    covers=[TOOL_PUT, TOOL_KEY, MODEL_KEY, BACKEND_KEY],
+    codes=["invalid_broker", "invalid_metadata"],
+)
+def test_reserved_header_names_are_refused(brk):
+    """Hop-by-hop and Locksmith-managed header names are refused as a broker
+    identity header and as any credential header (#159)."""
+    t, up = brk["t"], brk["up"]
+    put_tool(t, "brk-reserved", up.url, "none", "--egress", "direct")
+    put = t.cli(
+        "model", "put", "brk-mreserved", "--upstream", up.url, "--auth", "none",
+        "--egress", "direct",
+    )
+    assert put.code == 0, put.err
+    r = uds(
+        t,
+        "PUT",
+        "/admin/operator/routes/brk-reserved/backends/b",
+        {"upstream": up.url, "auth": {"kind": "none"}},
+    )
+    assert r.status == 200, r.text
+    for name in ("Content-Length", "Transfer-Encoding", "Connection", "OpenAI-Beta"):
+        r = uds(
+            t,
+            "PUT",
+            "/admin/operator/tools/brk-ident",
+            {
+                "upstream": up.url,
+                "auth": {"kind": "none"},
+                "egress": "direct",
+                "broker": {"identity_header": name},
+            },
+        )
+        assert r.status == 400 and r.code == "invalid_broker", (name, r.text)
+        for path in (
+            "/admin/operator/tools/brk-reserved/credential",
+            "/admin/operator/models/brk-mreserved/credential",
+            "/admin/operator/routes/brk-reserved/backends/b/credential",
+        ):
+            r = uds(t, "PUT", path, {"value": KEY2, "header": name})
+            assert r.status == 400 and r.code == "invalid_metadata", (path, name, r.text)
+            assert KEY2 not in r.text

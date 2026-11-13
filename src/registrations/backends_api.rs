@@ -333,11 +333,9 @@ async fn put_credential(
         return r;
     }
     if let Some(h) = &body.header
-        && axum::http::HeaderName::from_bytes(h.as_bytes()).is_err()
+        && let Err(e) = super::broker::validate_credential_header(h)
     {
-        return registration_error_response(&RegistrationError::InvalidMetadata(
-            "invalid header name".into(),
-        ));
+        return registration_error_response(&e);
     }
     let repo = BackendRepository::new(st.regs.repo.pool.clone());
     let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {

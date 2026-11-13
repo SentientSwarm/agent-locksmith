@@ -65,6 +65,20 @@
   `get` show the active backend from the route itself. A non-numeric
   `If-Match` on `route switch` is 400 `if_match_invalid`, not 409
   `revision_conflict`.
+- Broker hardening (#159). Hop-by-hop, framing and Locksmith-managed
+  header names are refused as a broker identity header (400
+  `invalid_broker`) and as any credential header (400 `invalid_metadata`).
+  An agent's `X-Locksmith-Agent` never reaches a broker, even when the
+  identity header is renamed or omitted. A broker key that cannot be
+  materialized is no longer reported as the broker being down: the probe
+  is skipped, `broker_key_unresolved` is logged, and requests fail with
+  503 `credential_unresolved`. Health probes no longer follow redirects.
+  The proxy and the prober share one key resolver. A repeated attribution
+  header is flagged `broker_account_invalid`. A broker `put` without
+  `auth` keeps the key only for the same destination (400
+  `invalid_broker` otherwise) and never undoes a concurrent rotation (409
+  `broker_key_changed`). Selection and key failures are reported before
+  a down broker.
 - Point upstream URLs in `Link` and `Location` response headers back at
   Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
   so following `rel="next"` bypassed Locksmith and failed without a

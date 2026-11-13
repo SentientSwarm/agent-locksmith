@@ -47,6 +47,45 @@ pub struct HealthProbe {
     pub interval_seconds: u64,
 }
 
+/// Header names HTTP or Locksmith owns: hop-by-hop and framing headers,
+/// and those the proxy sets itself. Neither an identity header nor a
+/// credential header may use one (#159).
+const RESERVED_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-authorization",
+    "openai-beta",
+    "originator",
+    "chatgpt-account-id",
+];
+
+fn reserved(lower: &str) -> bool {
+    RESERVED_HEADERS.contains(&lower)
+}
+
+/// Validate the header a credential is sent in. Wire: 400
+/// `invalid_metadata`.
+pub fn validate_credential_header(raw: &str) -> Result<(), RegistrationError> {
+    let lower = axum::http::HeaderName::from_bytes(raw.as_bytes())
+        .map(|h| h.as_str().to_string())
+        .map_err(|_| RegistrationError::InvalidMetadata("invalid header name".into()))?;
+    // The default identity name is refused on broker routes by
+    // [`validate`] (`invalid_broker`); elsewhere it is an ordinary name.
+    if reserved(&lower) {
+        return Err(RegistrationError::InvalidMetadata(
+            "reserved header name".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn default_identity_header() -> Option<String> {
     Some(DEFAULT_IDENTITY_HEADER.into())
 }
@@ -94,9 +133,11 @@ pub fn validate(spec: &BrokerSpec, auth: &AuthSpec) -> Result<(), RegistrationEr
     let key_header = auth.header_name().map(str::to_ascii_lowercase);
     if let Some(h) = &spec.identity_header {
         let lower = header_name(h)?;
-        if matches!(lower.as_str(), "authorization" | "host") || Some(&lower) == key_header.as_ref()
+        if reserved(&lower)
+            || matches!(lower.as_str(), "authorization" | "x-api-key")
+            || Some(&lower) == key_header.as_ref()
         {
-            return bad("identity_header must not be authorization, host or the key header");
+            return bad("identity_header must not be a reserved, credential or key header");
         }
     }
     if let Some(a) = &spec.attribution {

@@ -276,8 +276,11 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   `stored_header` (sealed with `set-key`, which reads stdin; `--header H`
   sends it in `H` instead of `Authorization: Bearer`), or `op_bearer` /
   `op_header`. A broker `put` without `--auth` keeps the route's key, so
-  editing the spec never discards it; a new broker starts with none.
-  `--auth none` clears the key. Without a key every request fails closed
+  editing the spec never discards it; a new broker starts with none. The
+  key stays only with its destination: a `put` that changes the upstream,
+  egress or CA without `--auth` is refused (400 `invalid_broker`), and one
+  that races a key change or re-point is refused (409 `broker_key_changed`;
+  re-read and retry). `--auth none` clears the key. Without a key every request fails closed
   (503 `credential_unresolved`). Env and OAuth keys are refused (400
   `invalid_broker`).
 - **Selection.** Agents select a broker route with `--broker` (stored as
@@ -287,20 +290,42 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   `account_binding_missing`).
 - **Identity.** The broker receives the caller's public id in
   `X-Locksmith-Agent` (`--identity-header H` renames it,
-  `--no-identity-header` omits it). Any copy the agent sends is stripped.
-  The header cannot be `Authorization`, `Host` or the key header.
+  `--no-identity-header` omits it). Any copy the agent sends of the
+  configured header or of `X-Locksmith-Agent` is stripped, including when
+  the identity is renamed or omitted. The header cannot be a credential
+  header (`Authorization`, `X-Api-Key`), the key header, or a reserved
+  name (below).
+- **Reserved header names.** Hop-by-hop and framing headers (`Host`,
+  `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`,
+  `Proxy-Connection`, `TE`, `Trailer`, `Upgrade`, `Proxy-Authorization`)
+  and the headers Locksmith sets (`OpenAI-Beta`, `originator`,
+  `ChatGPT-Account-ID`) are refused as an identity header (400
+  `invalid_broker`) and as the credential header of `tool|model set-key
+  --header`, `route backend set-credential --header` and the per-agent
+  `PUT /admin/operator/agents/{agent}/credentials/{reg}/credential` (400).
+  `--header` works the same on any route, broker or not: `tool|model
+  set-key --header H` seals the key as `stored_header`, sent as `H: <key>`;
+  without it the key is sent as `Authorization: Bearer <key>`.
 - **Attribution.** `--attribution-header H` copies the broker's response
   header `H` into audit as `details.broker_account` when it is 1-64
   printable ASCII characters without spaces; otherwise audit records
-  `broker_account_invalid: true`. `--attribution-sensitive` records
+  `broker_account_invalid: true`, as it also does when the broker repeats
+  the header (a repeated header names no single account).
+  `--attribution-sensitive` records
   `sha256:<hex>` instead. The header still reaches the agent.
 - **Health.** `--health-path /p` probes `GET <upstream>/p` with the broker
   key every `--health-interval` seconds (5-3600, default 30), expecting
-  `--health-status` (default 200) within 5 s. After a failed probe the
-  route answers 503 `backend_unavailable` without dispatch, until a probe
-  passes. A route not yet probed is admitted. Transitions are logged as
-  `broker_down` (warn) and `broker_up` (info) under the `broker` component
-  of the operational log (`GET /admin/operator/logs`). `tool|model get` shows the last probe as
+  `--health-status` (default 200) within 5 s. The probe never follows a
+  redirect: a 3xx is the result, so `--health-status 302` can match. After
+  a failed probe the route answers 503 `backend_unavailable` without
+  dispatch, until a probe passes. A route not yet probed is admitted.
+  Transitions are logged as `broker_down` (warn) and `broker_up` (info).
+  A key that cannot be materialized is not a failed probe: the route is
+  not probed, its health stays unknown, `broker_key_unresolved` (warn) is
+  logged once, and requests fail on the key (503 `credential_unresolved`).
+  These events use the `broker` component of the operational log
+  (`GET /admin/operator/logs`). A selection or key failure is reported
+  before a down broker. `tool|model get` shows the last probe as
   `health` (`status`, `http_status`, `checked_at`; `null` before the first).
   `/readyz` reports `brokers: {up, down, unknown}` counts only, and a down
   broker never fails readiness.

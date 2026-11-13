@@ -88,13 +88,6 @@ async fn broker(
     identity: &AgentIdentity,
 ) -> Result<ProxyTarget, Box<Response>> {
     use crate::registrations::broker_health::HealthStatus;
-    if state
-        .broker_health
-        .current(registration)
-        .is_some_and(|h| h.status == HealthStatus::Down)
-    {
-        return Err(Box::new(backend_unavailable(state, ctx).await));
-    }
     let key = &registration.auth;
     let usable = account == AuthSpec::Broker
         && crate::registrations::broker::is_broker_key(key)
@@ -104,6 +97,15 @@ async fn broker(
             selection::record_failure(&state.audit, ctx, selection::Failure::CredentialUnavailable)
                 .await,
         ));
+    }
+    // After the selection and key checks (#159 M5), so a mis-bound agent or
+    // keyless route reports that, not the broker's health.
+    if state
+        .broker_health
+        .current(registration)
+        .is_some_and(|h| h.status == HealthStatus::Down)
+    {
+        return Err(Box::new(backend_unavailable(state, ctx).await));
     }
     target.auth_source = "broker";
     target.broker_agent = Some(identity.public_id.clone());
