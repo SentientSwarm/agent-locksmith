@@ -956,6 +956,13 @@ async fn op_set_agent_credential(
         )
             .into_response();
     }
+    if let Err(e) = crate::registrations::broker::validate_auth_header(&body.auth_spec) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "code": "invalid_metadata", "message": e.to_string() } })),
+        )
+            .into_response();
+    }
     if let Err(msg) = body.auth_spec.validate_op_reference() {
         return (
             StatusCode::BAD_REQUEST,

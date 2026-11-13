@@ -87,6 +87,12 @@ pub enum RegistrationError {
     #[error("broker kind change: use a new route or a backend switch")]
     BrokerKindChange,
 
+    /// #159 M2 — a broker PUT that omitted `auth` to keep the route's key,
+    /// but the key or destination changed after it was read. Wire: 409
+    /// conflict / `broker_key_changed`; re-read and retry.
+    #[error("the broker's key or destination changed; re-read and retry")]
+    BrokerKeyChanged,
+
     /// Cross-kind name reuse — `name` is already registered under a
     /// different kind. Wire: 409 conflict / `name_in_use`.
     #[error("name in use (existing kind: {existing_kind})")]

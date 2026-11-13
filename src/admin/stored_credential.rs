@@ -52,6 +52,10 @@ fn failure(code: &str, status: StatusCode) -> Response {
 }
 fn invalid(body: &Input) -> bool {
     body.bearer && body.header.is_some()
+        || body
+            .header
+            .as_deref()
+            .is_some_and(|h| crate::registrations::broker::validate_credential_header(h).is_err())
         || body.value.expose_secret().len() > 8192
         || (body.bearer
             && (body.value.expose_secret().is_empty()

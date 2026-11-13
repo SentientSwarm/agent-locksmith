@@ -503,13 +503,13 @@ pub async fn proxy_handler(
         _ => None,
     };
     if let Some(reference) = op_ref {
-        match state.op_resolver.as_ref().and_then(|r| r.get(&reference)) {
-            Some(value) if !value.expose_secret().is_empty() => {
+        match crate::secret::materialize::op(state.op_resolver.as_deref(), &reference) {
+            Ok(value) => {
                 if let ProxyAuth::Op { resolved_value, .. } = &mut target.auth {
                     *resolved_value = Some(value);
                 }
             }
-            _ => {
+            Err(_) => {
                 record_stored_unavailable(&state.audit, &ctx, "op_reference_unresolved").await;
                 if let Some(emitter) = state.operational_log.as_ref() {
                     emitter.emit(
@@ -740,6 +740,10 @@ fn build_upstream_request(
             || (codex_upstream && lower == "openai-beta")
             || extra_strip.as_deref() == Some(&lower)
             || identity_header.as_deref() == Some(&lower)
+            // #159 — the default name too, on every broker route, so a
+            // disabled or renamed identity never forwards the agent's copy.
+            || (target.broker.is_some()
+                && lower.eq_ignore_ascii_case(crate::registrations::broker::DEFAULT_IDENTITY_HEADER))
         {
             continue;
         }
@@ -1287,10 +1291,17 @@ fn capture_broker_account(ctx: &RequestCtx, target: &ProxyTarget, headers: &Head
     let Some(a) = target.broker.as_ref().and_then(|b| b.attribution.as_ref()) else {
         return;
     };
-    let Some(raw) = headers.get(a.header.as_str()) else {
+    let mut values = headers.get_all(a.header.as_str()).iter();
+    let Some(raw) = values.next() else {
         return;
     };
-    let value = match crate::registrations::broker::attribution_value(raw.as_bytes(), a.sensitive) {
+    // A repeated header names no single account (#159), so it is flagged
+    // rather than recorded as its first value.
+    let label = match values.next() {
+        Some(_) => None,
+        None => crate::registrations::broker::attribution_value(raw.as_bytes(), a.sensitive),
+    };
+    let value = match label {
         Some(label) => json!({ "broker_account": label }),
         None => json!({ "broker_account_invalid": true }),
     };
@@ -1522,65 +1533,26 @@ async fn resolve_stored_credential(
     state: &AppState,
     secret_ref: &str,
 ) -> Result<secrecy::SecretString, StoredUnavailable> {
-    let (Some(key), Some(secrets)) = (
+    use crate::secret::materialize::{KeyFailure, stored};
+    stored(
         state.credential_sealing_key.as_ref(),
         state.credential_secrets.as_ref(),
-    ) else {
-        return Err(StoredUnavailable {
-            response: stored_unavailable_envelope(
-                "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)",
-            ),
-            audit_cause: "credential_store_unconfigured",
-        });
-    };
-
-    let sealed = match secrets.get(secret_ref).await {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return Err(StoredUnavailable {
-                response: stored_unavailable_envelope(
-                    "stored credential not found (missing or rotated out)",
-                ),
-                audit_cause: "credential_unresolved",
-            });
-        }
-        Err(e) => {
-            tracing::warn!(secret_ref = %secret_ref, error = %e, "stored credential read failed");
-            return Err(StoredUnavailable {
-                response: stored_unavailable_envelope("stored credential store unavailable"),
-                audit_cause: "store_read_failed",
-            });
-        }
-    };
-
-    match key.unseal(&sealed.sealed_value, &sealed.nonce) {
-        Ok(plain) => {
-            // Stored values are UTF-8 (the set path seals a JSON string).
-            // The unsealed buffer is zeroized on drop; the value lives on
-            // only in the zeroizing SecretString. A non-UTF-8 value fails
-            // loud instead of being lossily rewritten.
-            let plain = secrecy::zeroize::Zeroizing::new(plain);
-            match std::str::from_utf8(&plain) {
-                Ok(s) if !s.is_empty() => Ok(secrecy::SecretString::from(s)),
-                _ => {
-                    tracing::warn!(secret_ref = %secret_ref, "stored credential is empty or not valid UTF-8");
-                    Err(StoredUnavailable {
-                        response: stored_unavailable_envelope(
-                            "stored credential could not be decoded",
-                        ),
-                        audit_cause: "unseal_failed",
-                    })
-                }
+        secret_ref,
+    )
+    .await
+    .map_err(|failure| StoredUnavailable {
+        response: stored_unavailable_envelope(match failure {
+            KeyFailure::StoreUnconfigured => {
+                "credential store not configured (LOCKSMITH_CREDENTIAL_SEALING_KEY unset)"
             }
-        }
-        Err(e) => {
-            tracing::warn!(secret_ref = %secret_ref, error = %e, "stored credential unseal failed");
-            Err(StoredUnavailable {
-                response: stored_unavailable_envelope("stored credential could not be unsealed"),
-                audit_cause: "unseal_failed",
-            })
-        }
-    }
+            KeyFailure::Missing => "stored credential not found (missing or rotated out)",
+            KeyFailure::ReadFailed => "stored credential store unavailable",
+            KeyFailure::Undecodable | KeyFailure::OpUnresolved => {
+                "stored credential could not be unsealed"
+            }
+        }),
+        audit_cause: failure.cause(),
+    })
 }
 
 /// Render the §4.7.9 envelope for a stored-credential-resolution failure.

@@ -203,6 +203,30 @@ impl RegistrationRepository {
     /// caller layer — the repo doesn't enforce, just persists what's
     /// passed).
     pub async fn upsert(&self, r: &Registration) -> Result<(), RegistrationError> {
+        self.upsert_where(r, "").await.map(|_| ())
+    }
+
+    /// #159 M2 — [`Self::upsert`] for a broker edit that kept the route's
+    /// key: it updates only while the stored key and destination still
+    /// equal the ones being written, so a rotation or re-point that
+    /// committed after the caller read the route is never undone.
+    pub async fn upsert_keeping_key(&self, r: &Registration) -> Result<(), RegistrationError> {
+        let changed = self
+            .upsert_where(
+                r,
+                " WHERE registrations.auth_json = excluded.auth_json \
+                  AND registrations.upstream = excluded.upstream \
+                  AND registrations.egress = excluded.egress \
+                  AND registrations.upstream_ca_pem IS excluded.upstream_ca_pem",
+            )
+            .await?;
+        if changed == 0 {
+            return Err(RegistrationError::BrokerKeyChanged);
+        }
+        Ok(())
+    }
+
+    async fn upsert_where(&self, r: &Registration, guard: &str) -> Result<u64, RegistrationError> {
         if r.definition_pinned()
             || r.mcp
                 .as_ref()
@@ -217,7 +241,7 @@ impl RegistrationRepository {
         let metadata_json = serde_json::to_string(&r.metadata)
             .map_err(|e| RegistrationError::Backend(format!("serialize metadata: {e}")))?;
 
-        sqlx::query(
+        let sql = format!(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
               body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json) \
@@ -233,30 +257,37 @@ impl RegistrationRepository {
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
                 updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
-                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json",
-        )
-        .bind(&r.name)
-        .bind(r.kind.as_str())
-        .bind(&r.description)
-        .bind(&r.upstream)
-        .bind(&auth_json)
-        .bind(egress_as_str(r.egress))
-        .bind(&timeouts_json)
-        .bind(r.body_limit_bytes as i64)
-        .bind(&metadata_json)
-        .bind(i64::from(r.seed))
-        .bind(i64::from(r.disabled))
-        .bind(r.created_at)
-        .bind(r.updated_at)
-        .bind(r.protocol.as_str())
-        .bind(r.mcp.as_ref().map(serde_json::to_string).transpose().map_err(|_| RegistrationError::InvalidMcp)?)
-        .bind(r.upstream_ca_pem.as_deref())
-        .bind(r.profile.map(super::RouteProfile::as_str))
-        .bind(broker_json(r)?)
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx_err)?;
-        Ok(())
+                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json{guard}",
+        );
+        let done = sqlx::query(&sql)
+            .bind(&r.name)
+            .bind(r.kind.as_str())
+            .bind(&r.description)
+            .bind(&r.upstream)
+            .bind(&auth_json)
+            .bind(egress_as_str(r.egress))
+            .bind(&timeouts_json)
+            .bind(r.body_limit_bytes as i64)
+            .bind(&metadata_json)
+            .bind(i64::from(r.seed))
+            .bind(i64::from(r.disabled))
+            .bind(r.created_at)
+            .bind(r.updated_at)
+            .bind(r.protocol.as_str())
+            .bind(
+                r.mcp
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|_| RegistrationError::InvalidMcp)?,
+            )
+            .bind(r.upstream_ca_pem.as_deref())
+            .bind(r.profile.map(super::RouteProfile::as_str))
+            .bind(broker_json(r)?)
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_err)?;
+        Ok(done.rows_affected())
     }
 
     /// Hard delete a row. Use [`Self::set_disabled`] for seed rows.
