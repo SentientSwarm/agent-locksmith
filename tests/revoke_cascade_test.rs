@@ -101,7 +101,7 @@ async fn prune_revoked_clears_an_earlier_revoke() {
         .unwrap();
 
     let dry: Value = h
-        .op_req(Method::POST, "/agents/prune-revoked")
+        .op_req(Method::POST, "/revoked-agents/prune")
         .json(&json!({ "dry_run": true }))
         .await
         .json();
@@ -114,7 +114,7 @@ async fn prune_revoked_clears_an_earlier_revoke() {
     assert_eq!(leftovers(&h).await.0, 1, "a dry run changes nothing");
 
     let done: Value = h
-        .op_req(Method::POST, "/agents/prune-revoked")
+        .op_req(Method::POST, "/revoked-agents/prune")
         .json(&json!({}))
         .await
         .json();
@@ -129,7 +129,7 @@ async fn prune_revoked_clears_an_earlier_revoke() {
     );
 
     let again: Value = h
-        .op_req(Method::POST, "/agents/prune-revoked")
+        .op_req(Method::POST, "/revoked-agents/prune")
         .json(&json!({}))
         .await
         .json();
@@ -141,11 +141,57 @@ async fn prune_revoked_leaves_live_agents_alone() {
     let h = setup().await;
     authority(&h).await;
     let r: Value = h
-        .op_req(Method::POST, "/agents/prune-revoked")
+        .op_req(Method::POST, "/revoked-agents/prune")
         .json(&json!({}))
         .await
         .json();
     assert_eq!(r["agents"], json!([]));
     assert_eq!(leftovers(&h).await.0, 1);
     assert_eq!(leftovers(&h).await.1, 1);
+}
+
+#[tokio::test]
+async fn prune_without_a_json_body_changes_nothing() {
+    let h = setup().await;
+    authority(&h).await;
+    sqlx::query("UPDATE agents SET revoked_at = unixepoch() WHERE public_id = ?")
+        .bind(&h.pid)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    // A dry-run body sent without a JSON content type must not run a prune.
+    let r = h
+        .op_req(Method::POST, "/revoked-agents/prune")
+        .bytes(r#"{"dry_run":true}"#.into())
+        .await;
+    assert!(r.status_code().is_client_error(), "{}", r.status_code());
+    assert_eq!(leftovers(&h).await.0, 1);
+}
+
+#[tokio::test]
+async fn an_agent_named_like_the_action_is_still_found() {
+    let h = setup().await;
+    sqlx::query("UPDATE agents SET name = 'prune-revoked' WHERE public_id = ?")
+        .bind(&h.pid)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    h.op_req(Method::GET, "/agents/prune-revoked")
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn deregister_audits_what_it_removed() {
+    let h = setup().await;
+    authority(&h).await;
+    h.admin
+        .post("/admin/agent/deregister")
+        .add_header("authorization", &h.agent_bearer)
+        .await
+        .assert_status_success();
+    assert_eq!(leftovers(&h).await, (0, 0, "[]".into()));
+    let d = h.last_audit("agent_deregister").await;
+    assert_eq!(d["removed"]["bindings"], 1);
+    assert_eq!(d["removed"]["stashed_bindings"], 1);
 }

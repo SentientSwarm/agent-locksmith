@@ -507,10 +507,10 @@ impl AdminService {
             } else {
                 Decision::Denied
             },
-            details: result
-                .as_ref()
-                .err()
-                .map(|e| json!({ "error": e.to_string() })),
+            details: Some(match &result {
+                Ok(removed) => json!({ "removed": removed.counts() }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }),
             ..AuditEvent::default()
         })
         .await;

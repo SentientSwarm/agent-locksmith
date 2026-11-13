@@ -139,13 +139,13 @@ routes:
   refusals:
   - invalid_credential
   - agent_not_found
-- id: admin.POST./admin/operator/agents/prune-revoked
+- id: admin.POST./admin/operator/revoked-agents/prune
   listener: admin
   method: POST
-  path: /admin/operator/agents/prune-revoked
+  path: /admin/operator/revoked-agents/prune
   source:
     file: src/admin/uds.rs
-    route: /agents/prune-revoked
+    route: /revoked-agents/prune
   refusals:
   - invalid_credential
 - id: admin.GET./admin/operator/audit

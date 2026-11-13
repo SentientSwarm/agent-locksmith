@@ -10,7 +10,7 @@ GET = "admin.GET./admin/operator/agents/{public_id}"
 PATCH = "admin.PATCH./admin/operator/agents/{public_id}"
 CERT = "admin.PATCH./admin/operator/agents/{public_id}/cert_identity"
 REVOKE = "admin.POST./admin/operator/agents/{public_id}/revoke"
-PRUNE = "admin.POST./admin/operator/agents/prune-revoked"
+PRUNE = "admin.POST./admin/operator/revoked-agents/prune"
 UNKNOWN = "adm-no-such-agent"
 
 

@@ -8,7 +8,7 @@
   bindings, grants and native grant sets in the same write, and audits
   their counts (#157). Before, they stayed behind and could not be
   listed or removed once the agent was revoked. `locksmith agent
-  prune-revoked [--dry-run]` (`POST /admin/operator/agents/prune-revoked`)
+  prune-revoked [--dry-run]` (`POST /admin/operator/revoked-agents/prune`)
   removes what earlier revokes left: it names agents and routes, never
   credential values, and audits counts only.
 

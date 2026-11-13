@@ -340,7 +340,7 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
             let resp: Value = client
                 .json(
                     "POST",
-                    "/admin/operator/agents/prune-revoked",
+                    "/admin/operator/revoked-agents/prune",
                     Auth::Operator(&token),
                     Some(&json!({ "dry_run": dry_run })),
                 )

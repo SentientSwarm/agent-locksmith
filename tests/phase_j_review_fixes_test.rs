@@ -600,3 +600,50 @@ async fn selected_oauth_write_requires_explicit_label() {
         }
     }
 }
+
+/// #157 — revoking removes the agent's bindings, so their `op://`
+/// references leave the resolver cache too.
+#[tokio::test]
+async fn revoked_agents_op_override_reference_is_evicted() {
+    let h = setup().await;
+    h.admin
+        .put(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "op_bearer", "reference": OVERRIDE_REF } }))
+        .await
+        .assert_status_ok();
+    assert!(h.op_resolver.get(OVERRIDE_REF).is_some());
+    h.admin
+        .post(&format!(
+            "/admin/operator/agents/{}/revoke",
+            h.agent_public_id
+        ))
+        .add_header("authorization", &h.op_bearer)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+    assert!(h.op_resolver.get(OVERRIDE_REF).is_none());
+}
+
+/// #157 — pruning an earlier revoke evicts the same references.
+#[tokio::test]
+async fn pruned_op_override_reference_is_evicted() {
+    let h = setup().await;
+    h.admin
+        .put(&h.override_url("shared-api"))
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "auth_spec": { "kind": "op_bearer", "reference": OVERRIDE_REF } }))
+        .await
+        .assert_status_ok();
+    sqlx::query("UPDATE agents SET revoked_at = unixepoch() WHERE id = ?")
+        .bind(h.agent_id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    h.admin
+        .post("/admin/operator/revoked-agents/prune")
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
+    assert!(h.op_resolver.get(OVERRIDE_REF).is_none());
+}
