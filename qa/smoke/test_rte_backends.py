@@ -135,13 +135,19 @@ def test_unknown_route_or_backend_is_404(rte):
 
 @case(
     "SMK-RTE-004", area="RTE", kind="refusal",
-    covers=[SWITCH, "cli.route.switch"], codes=["if_match_required", "revision_conflict"],
+    covers=[SWITCH, "cli.route.switch"],
+    codes=["if_match_required", "if_match_invalid", "revision_conflict"],
 )
 def test_switch_needs_the_current_revision(rte):
-    """A switch without If-Match is 428; a stale revision is 409 and changes nothing."""
+    """No If-Match is 428, a malformed one 400; a stale revision is 409 and changes nothing."""
     t = rte["t"]
     r = uds(t, "POST", "/admin/operator/routes/rte-r/switch", {"backend": "primary"})
     assert r.status == 428 and r.code == "if_match_required"
+    r = uds(
+        t, "POST", "/admin/operator/routes/rte-r/switch", {"backend": "primary"},
+        headers={"If-Match": "not-a-revision"},
+    )
+    assert r.status == 400 and r.code == "if_match_invalid", r.text
     stale = t.cli("route", "switch", "rte-r", "--backend", "primary", "--if-match", "999999")
     assert stale.error_code == "revision_conflict", stale.err
     assert t.cli("route", "backend", "list", "rte-r").json["active_backend"] == "primary"

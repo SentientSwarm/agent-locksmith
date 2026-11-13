@@ -176,20 +176,18 @@ async fn list(State(st): State<BackendsState>, Path(route): Path<String>) -> Res
     if let Err(r) = route_of(&st, &route).await {
         return r;
     }
-    let repo = BackendRepository::new(st.regs.repo.pool.clone());
-    let (active, backends, rev) = match (
-        repo.active_backend(&route).await,
-        repo.list(&route).await,
-        repo.revision(&route).await,
-    ) {
-        (Ok(a), Ok(b), Ok(r)) => (a, b, r),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return backend_error(&e),
+    let eff = match BackendRepository::new(st.regs.repo.pool.clone())
+        .list_effective(&route)
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => return backend_error(&e),
     };
     Json(json!({
         "route": route,
-        "active_backend": active,
-        "revision": rev,
-        "backends": backends.iter().map(view).collect::<Vec<_>>(),
+        "active_backend": eff.active,
+        "revision": eff.revision,
+        "backends": eff.backends.iter().map(view).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -202,11 +200,13 @@ async fn get_one(
         return r;
     }
     match BackendRepository::new(st.regs.repo.pool.clone())
-        .get(&route, &backend)
+        .list_effective(&route)
         .await
     {
-        Ok(Some(b)) => Json(view(&b)).into_response(),
-        Ok(None) => backend_error(&BackendError::NotFound),
+        Ok(eff) => match eff.backends.iter().find(|b| b.name == backend) {
+            Some(b) => Json(view(b)).into_response(),
+            None => backend_error(&BackendError::NotFound),
+        },
         Err(e) => backend_error(&e),
     }
 }
@@ -254,11 +254,6 @@ async fn put(
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }
     let repo = BackendRepository::new(st.regs.repo.pool.clone());
-    match repo.active_backend(&route).await {
-        Ok(a) if a == backend => return backend_error(&BackendError::ActiveBackend),
-        Ok(_) => {}
-        Err(e) => return backend_error(&e),
-    }
     let b = RouteBackend {
         route,
         name: backend,
@@ -300,11 +295,6 @@ async fn delete(
         return r;
     }
     let repo = BackendRepository::new(st.regs.repo.pool.clone());
-    match repo.active_backend(&route).await {
-        Ok(a) if a == backend => return backend_error(&BackendError::ActiveBackend),
-        Ok(_) => {}
-        Err(e) => return backend_error(&e),
-    }
     match repo.delete(&route, &backend).await {
         Ok(true) => {
             let details = json!({ "route": route, "backend": backend });
@@ -391,7 +381,7 @@ async fn switch(
         );
     };
     let Ok(expected) = expected else {
-        return backend_error(&BackendError::RevisionConflict);
+        return error(StatusCode::BAD_REQUEST, "bad_request", "if_match_invalid");
     };
     let before = match route_of(&st, &route).await {
         Ok(r) => r,
