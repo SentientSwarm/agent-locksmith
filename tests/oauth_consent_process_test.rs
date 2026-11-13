@@ -16,6 +16,11 @@ mod callback_tests;
 mod metadata_tests;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn controlled_consent_taken_callback_port_is_retried() {
+    consent::taken_callback_port_is_retried().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controlled_consent_actual_cli_and_receiving_identity() {
     consent::journey().await;
 }

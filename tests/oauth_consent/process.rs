@@ -67,28 +67,52 @@ fn configure(f: &Fixture, t: &Twin) -> u16 {
     std::fs::write(path, c.to_string()).unwrap();
     callback
 }
+/// The callback port in the current config; startup may have moved it.
+fn bound_callback(f: &Fixture) -> u16 {
+    let c: Value =
+        serde_json::from_slice(&std::fs::read(f.path().join("config.yaml")).unwrap()).unwrap();
+    let address = c["oauth_consent"]["callback"]["address"].as_str().unwrap();
+    address.rsplit(':').next().unwrap().parse().unwrap()
+}
 async fn start(f: &mut Fixture) {
     start_binary(f, process::DAEMON).await;
 }
 async fn start_binary(f: &mut Fixture, binary: &str) {
+    // A probed callback port can be taken before the daemon binds it
+    // (#153): on that startup failure, move to a fresh port and retry.
+    for attempt in 1..=3 {
+        match try_start(f, binary).await {
+            Ok(()) => return,
+            Err(log) if attempt < 3 && log.contains("callback_bind_failed") => {
+                f.daemon = None;
+                move_callback(f);
+            }
+            Err(log) => panic!("daemon startup failed; log tail:\n{}", tail(&log)),
+        }
+    }
+}
+/// Start the daemon and wait (30 s, for full-suite load) until it serves.
+/// `Err` carries the daemon log when it exits or never becomes ready.
+async fn try_start(f: &mut Fixture, binary: &str) -> Result<(), String> {
     assert!(f.daemon.is_none());
     // Port 0 in config: each start binds a fresh port, read from the log.
     f.reset_assigned_port();
-    let log = std::fs::File::create(f.path().join("daemon.log")).unwrap();
+    let log_path = f.path().join("daemon.log");
+    let log = std::fs::File::create(&log_path).unwrap();
     let mut c = process::command(binary);
     c.arg("--config")
         .arg(f.path().join("config.yaml"))
         .env("LOCKSMITH_OAUTH_SEALING_KEY", KEY)
-        .env("RUST_LOG", "agent_locksmith=info")
+        .env("RUST_LOG", "agent_locksmith=info,locksmithd=error")
         .stdout(Stdio::from(log.try_clone().unwrap()))
         .stderr(Stdio::from(log));
     f.daemon = Some(process::Guard(c.spawn().unwrap()));
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + Duration::from_secs(30);
+    let read_log = || std::fs::read_to_string(&log_path).unwrap_or_default();
     loop {
-        assert!(
-            f.daemon.as_mut().unwrap().0.try_wait().unwrap().is_none(),
-            "daemon startup (private log retained until fixture drop)"
-        );
+        if f.daemon.as_mut().unwrap().0.try_wait().unwrap().is_some() {
+            return Err(read_log());
+        }
         f.adopt_assigned_port();
         if f.path().join("admin.sock").exists()
             && f.http
@@ -97,11 +121,32 @@ async fn start_binary(f: &mut Fixture, binary: &str) {
                 .await
                 .is_ok_and(|r| r.status() == 200)
         {
-            break;
+            return Ok(());
         }
-        assert!(Instant::now() < until);
+        if Instant::now() >= until {
+            return Err(format!("readiness deadline passed\n{}", read_log()));
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+/// Re-probe the callback port and rewrite every config value naming it.
+fn move_callback(f: &Fixture) {
+    let old = bound_callback(f);
+    let new = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let path = f.path().join("config.yaml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    let config = config
+        .replace(&format!(":{old}/"), &format!(":{new}/"))
+        .replace(&format!(":{old}\""), &format!(":{new}\""));
+    std::fs::write(path, config).unwrap();
+}
+fn tail(log: &str) -> String {
+    let lines: Vec<_> = log.lines().collect();
+    lines[lines.len().saturating_sub(40)..].join("\n")
 }
 async fn request(f: &Fixture, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
     let (status, bytes) = UdsClient::new(f.path().join("admin.sock"))
@@ -180,8 +225,9 @@ pub async fn schemas() {
             std::fs::write(f.path().join(format!("schema-{variant}")), "fixture").unwrap();
         }
         let t = Twin::start(&f);
-        let port = configure(&f, &t);
+        configure(&f, &t);
         start(&mut f).await;
+        let port = bound_callback(&f);
         registration(&f, &t, port).await;
         let created = connect(&f, "schema");
         let response = f
@@ -228,8 +274,9 @@ pub async fn schemas() {
 pub async fn orphan() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start(&mut f).await;
+    let port = bound_callback(&f);
     registration(&f, &t, port).await;
     let created = connect(&f, "orphan");
     assert_eq!(
@@ -327,8 +374,9 @@ pub async fn orphan() {
 pub async fn journey() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start(&mut f).await;
+    let port = bound_callback(&f);
     let auth = registration(&f, &t, port).await;
     let agent = f.op(&[
         "agent",
@@ -451,8 +499,9 @@ pub async fn late() {
     for stop in [false, true] {
         let mut f = Fixture::new();
         let t = Twin::start(&f);
-        let port = configure(&f, &t);
+        configure(&f, &t);
         start(&mut f).await;
+        let port = bound_callback(&f);
         registration(&f, &t, port).await;
         std::fs::write(f.path().join("hold-token"), "hold").unwrap();
         let created = connect(&f, "held");
@@ -493,7 +542,7 @@ pub async fn late() {
 pub async fn principal() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
-    let callback_port = configure(&f, &t);
+    configure(&f, &t);
     let operator_path = f.path().join("operators.yaml");
     let mut operators: Value =
         serde_yaml::from_slice(&std::fs::read(&operator_path).unwrap()).unwrap();
@@ -515,16 +564,13 @@ pub async fn principal() {
         .unwrap()
         .push(other_record["operators"][0].clone());
     std::fs::write(&operator_path, operators.to_string()).unwrap();
-    let admin_port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
     let path = f.path().join("config.yaml");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    config["listen"]["admin_https"] = json!({"enabled":true,"host":"127.0.0.1","port":admin_port,"cert_path":f.path().join("server.pem"),"key_path":f.path().join("server.key"),"auth_mode":"both","mtls":{"ca_bundle_path":f.path().join("ca.pem")}});
+    config["listen"]["admin_https"] = json!({"enabled":true,"host":"127.0.0.1","port":0,"cert_path":f.path().join("server.pem"),"key_path":f.path().join("server.key"),"auth_mode":"both","mtls":{"ca_bundle_path":f.path().join("ca.pem")}});
     std::fs::write(path, config.to_string()).unwrap();
     start(&mut f).await;
+    let callback_port = bound_callback(&f);
+    let admin_port = f.admin_https_port().expect("admin HTTPS bound");
     registration(&f, &t, callback_port).await;
     let created = connect(&f, "owned");
     let id = created["attempt_id"].as_str().unwrap();
@@ -577,8 +623,9 @@ pub async fn principal() {
 pub async fn embedded() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start(&mut f).await;
+    let port = bound_callback(&f);
     registration(&f, &t, port).await;
     f.stop();
     let mut c = process::command(std::env::current_exe().unwrap().to_str().unwrap());
@@ -764,6 +811,21 @@ pub async fn callback_bind_failure() {
     );
     t.stop();
     println!("held callback port fails startup before any listener serves");
+}
+
+/// A probed callback port can be taken before the daemon binds it, most
+/// often under full-suite load (#153). Startup re-probes and retries.
+pub async fn taken_callback_port_is_retried() {
+    let mut f = Fixture::new();
+    let t = Twin::start(&f);
+    let first = configure(&f, &t);
+    let _held = std::net::TcpListener::bind(("127.0.0.1", first)).unwrap();
+    start(&mut f).await;
+    let port = bound_callback(&f);
+    assert_ne!(port, first, "startup moved off the taken port");
+    registration(&f, &t, port).await;
+    f.stop();
+    t.stop();
 }
 
 #[path = "refresh_process.rs"]

@@ -36,8 +36,9 @@ async fn one(mutation: &str) {
 pub async fn controlled() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start(&mut f).await;
+    let port = bound_callback(&f);
     registration(&f, &t, port).await;
     let attempt = connect(&f, "strict");
     let raw = super::super::callback(&t, port, &attempt);

@@ -35,6 +35,8 @@ pub async fn public_callback() {
         .push(other);
     std::fs::write(&path, config.to_string()).unwrap();
     start(&mut f).await;
+    let port = bound_callback(&f);
+    let public = format!("https://callback.example.test:{port}/oauth/callback");
     let auth = json!({"kind":"oauth_pkce","client_id":"fixture-client","redirect_uri":public,"scopes":["read"],"auth_url":t.url("/authorize"),"token_url":t.url("/token")});
     assert_eq!(request(&f,"PUT","/admin/operator/tools/fixture",Some(json!({"upstream":t.url("/mcp/readonly"),"auth":auth,"egress":"direct","protocol":"mcp_streamable_http","mcp":{"protocol_version":"2025-11-25","allow_private_destination":true,"compact":true}}))).await.0,200);
     let created = connect(&f, "public");
