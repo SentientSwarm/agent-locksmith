@@ -31,7 +31,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
 issue() {  # issue NAME SUBJECT EXTENSIONS
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
     -keyout "$1.key" -out "$1.csr" -subj "$2" 2>/dev/null
-  printf '%b' "$3" > "$1.ext"
+  # Name the issuing key: strict TLS clients (Python 3.13+) require it.
+  printf '%b\nauthorityKeyIdentifier=keyid\nsubjectKeyIdentifier=hash\n' "$3" > "$1.ext"
   openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
     -out "$1.pem" -days 90 -extfile "$1.ext" 2>/dev/null
 }
