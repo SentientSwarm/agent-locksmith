@@ -258,7 +258,7 @@ key, names the calling agent, and never sends an agent's own credential.
 
 ```bash
 locksmith model put codex-pool --upstream http://127.0.0.1:43210 \
-  --auth none --egress direct --broker \
+  --egress direct --broker \
   --attribution-header x-account-label --health-path /healthz
 printf '%s' "$POOL_KEY" | locksmith model set-key codex-pool   # stdin, never argv
 locksmith agent set-credential "$AGENT_ID" codex-pool --broker
@@ -267,9 +267,11 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
 - **Key.** The route's auth is the broker key: `stored_bearer` or
   `stored_header` (sealed with `set-key`, which reads stdin; `--header H`
   sends it in `H` instead of `Authorization: Bearer`), or `op_bearer` /
-  `op_header`. `--auth none` means no key is set yet, and every request
-  fails closed (503 `credential_unresolved`) until one is. Env and OAuth
-  keys are refused (400 `invalid_broker`).
+  `op_header`. A broker `put` without `--auth` keeps the route's key, so
+  editing the spec never discards it; a new broker starts with none.
+  `--auth none` clears the key. Without a key every request fails closed
+  (503 `credential_unresolved`). Env and OAuth keys are refused (400
+  `invalid_broker`).
 - **Selection.** Agents select a broker route with `--broker` (stored as
   `{"kind":"broker"}`). It is the only selection a broker route accepts, and
   a broker selection is refused on an ordinary route. An agent granted the

@@ -267,8 +267,9 @@ def test_broker_refusals(brk):
     covers=[API, TOOL_PUT, "beh.broker.attribution"],
 )
 def test_attribution_label_reaches_audit(brk):
-    """A configured response header naming the serving account is copied into audit
-    as details.broker_account; it is still forwarded to the agent."""
+    """Editing the broker without --auth keeps its key. A configured response header
+    naming the serving account is copied into audit as details.broker_account; it is
+    still forwarded to the agent."""
     t, up, agent = brk["t"], brk["up"], brk["agent"]
     up.routes["/v1/attr"] = Reply(headers={"x-account-label": "acct-7"})
     put = t.cli(
@@ -277,8 +278,6 @@ def test_attribution_label_reaches_audit(brk):
         "brk-pool",
         "--upstream",
         up.url,
-        "--auth",
-        "none",
         "--egress",
         "direct",
         "--broker",
@@ -286,8 +285,10 @@ def test_attribution_label_reaches_audit(brk):
         "x-account-label",
     )
     assert put.code == 0, put.err
-    key = t.cli("tool", "set-key", "brk-pool", stdin=KEY)
-    assert key.code == 0, key.err
+    kept = t.cli("tool", "get", "brk-pool").json["auth"]
+    assert kept["kind"] == "stored_bearer", (
+        "editing a broker without --auth dropped its key"
+    )
     r = t.http("GET", "/api/brk-pool/v1/attr", token=agent["token"])
     assert r.status == 200
     assert r.headers.get("x-account-label") == "acct-7"

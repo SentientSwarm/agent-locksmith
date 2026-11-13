@@ -554,7 +554,17 @@ pub async fn op_put(
     //   auth on a model just don't specify `none`.
     // - kind=infra accepts any shape including field-absent (becomes
     //   `AuthSpec::None`).
+    // - a broker tool/model may omit it: see below.
     let auth = match (kind, body.auth) {
+        // A broker edit without `auth` keeps the route's broker key, so a
+        // spec change never discards it; a new broker starts keyless.
+        (Kind::Tool | Kind::Model, None) if body.broker.is_some() => {
+            match state.repo.get(&name).await {
+                Ok(Some(r)) if r.broker.is_some() => r.auth,
+                Ok(_) => AuthSpec::None,
+                Err(e) => return registration_error_response(&e),
+            }
+        }
         (Kind::Tool, None) | (Kind::Model, None) => {
             return registration_error_response(&RegistrationError::AuthRequired);
         }

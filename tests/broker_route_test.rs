@@ -201,3 +201,40 @@ async fn broker_key_seals_as_bearer_or_named_header() {
     assert_eq!(clash.status_code(), 400);
     assert_eq!(code(&clash), "invalid_broker");
 }
+
+#[tokio::test]
+async fn broker_put_without_auth_keeps_the_key() {
+    let h = setup().await;
+    let mut body = broker_body("https://broker.example", json!({}));
+    body.as_object_mut().unwrap().remove("auth");
+    h.put_model("pool", body.clone()).await.assert_status_ok();
+    let got: Value = h
+        .op_req(axum::http::Method::GET, "/models/pool")
+        .await
+        .json();
+    assert_eq!(
+        got["auth"],
+        json!({ "kind": "none" }),
+        "a new broker starts keyless"
+    );
+
+    let sref = h.seal("pool", "broker-key-1").await;
+    body["broker"] = json!({ "health": { "path": "/v2/healthz" } });
+    h.put_model("pool", body).await.assert_status_ok();
+    let got: Value = h
+        .op_req(axum::http::Method::GET, "/models/pool")
+        .await
+        .json();
+    assert_eq!(
+        got["auth"],
+        json!({ "kind": "stored_bearer", "secret_ref": sref }),
+        "an edit without auth keeps the sealed key"
+    );
+    assert_eq!(got["broker"]["health"]["path"], "/v2/healthz");
+
+    let plain = upstream_body("https://plain.example");
+    let mut no_auth = plain.clone();
+    no_auth.as_object_mut().unwrap().remove("auth");
+    let r = h.put_model("plain", no_auth).await;
+    assert_eq!(code(&r), "auth_required", "only a broker may omit auth");
+}
