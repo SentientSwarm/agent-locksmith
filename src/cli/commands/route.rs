@@ -5,7 +5,9 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::client::{Auth, CliClient, CliError};
-use crate::commands::registration::{parse_auth_spec, read_upstream_ca_file};
+use crate::commands::registration::{
+    BrokerArgs, parse_auth_spec, read_secret_stdin, read_upstream_ca_file,
+};
 use crate::output::{Format, print};
 
 #[derive(Subcommand)]
@@ -48,8 +50,19 @@ pub enum BackendCmd {
         #[arg(long)]
         upstream_ca_file: Option<std::path::PathBuf>,
         /// Auth template: `none`, `header:NAME=ENV`, `bearer=ENV`, etc.
+        /// A broker backend uses `none` here, then `set-credential`.
         #[arg(long)]
         auth: String,
+        #[command(flatten)]
+        broker: BrokerArgs,
+    },
+    /// Seal a key read from stdin onto an inactive backend (a broker key).
+    SetCredential {
+        route: String,
+        backend: String,
+        /// Send the key in this header instead of `Authorization: Bearer`.
+        #[arg(long)]
+        header: Option<String>,
     },
     /// Delete an inactive backend and its stashed bindings.
     Delete { route: String, backend: String },
@@ -99,6 +112,7 @@ pub async fn run(client: &CliClient, format: Format, cmd: RouteCmd) -> Result<()
                 egress,
                 upstream_ca_file,
                 auth,
+                broker,
             } => {
                 let auth = parse_auth_spec(Some(&auth))?.unwrap_or(json!({ "kind": "none" }));
                 let mut body = json!({ "upstream": upstream, "auth": auth });
@@ -108,7 +122,23 @@ pub async fn run(client: &CliClient, format: Format, cmd: RouteCmd) -> Result<()
                 if let Some(f) = upstream_ca_file {
                     body["upstream_ca_pem"] = json!(read_upstream_ca_file(&f)?);
                 }
+                if let Some(spec) = broker.to_spec() {
+                    body["broker"] = spec;
+                }
                 let p = path(&route, &format!("/backends/{backend}"));
+                let resp: Value = client.json("PUT", &p, op, Some(&body)).await?;
+                print(&resp, format);
+            }
+            BackendCmd::SetCredential {
+                route,
+                backend,
+                header,
+            } => {
+                let mut body = json!({ "value": read_secret_stdin()? });
+                if let Some(h) = header {
+                    body["header"] = json!(h);
+                }
+                let p = path(&route, &format!("/backends/{backend}/credential"));
                 let resp: Value = client.json("PUT", &p, op, Some(&body)).await?;
                 print(&resp, format);
             }
@@ -152,6 +182,47 @@ mod tests {
                 "https://b.example",
                 "--auth",
                 "none"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn broker_backend_flags_parse() {
+        let put = Cli::try_parse_from([
+            "t",
+            "backend",
+            "put",
+            "r",
+            "pool",
+            "--upstream",
+            "https://b.example",
+            "--auth",
+            "none",
+            "--broker",
+            "--health-path",
+            "/healthz",
+        ])
+        .unwrap();
+        let RouteCmd::Backend {
+            cmd: BackendCmd::Put { broker, .. },
+        } = put.cmd
+        else {
+            panic!("put");
+        };
+        assert_eq!(
+            broker.to_spec(),
+            Some(json!({ "health": { "path": "/healthz" } }))
+        );
+        assert!(
+            Cli::try_parse_from([
+                "t",
+                "backend",
+                "set-credential",
+                "r",
+                "pool",
+                "--header",
+                "X-K"
             ])
             .is_ok()
         );

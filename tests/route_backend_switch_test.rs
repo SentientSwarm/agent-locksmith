@@ -178,6 +178,7 @@ fn backend(name: &str, upstream: &str) -> RouteBackend {
         egress: EgressMode::Direct,
         upstream_ca_pem: None,
         auth: AuthSpec::None,
+        broker: None,
         created_at: 0,
         updated_at: 0,
     }
