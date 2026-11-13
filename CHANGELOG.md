@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The proxy no longer follows upstream redirects. A followed redirect to
+  another host carried the route's key with it when the key used a
+  custom header name such as `x-api-key`, so an upstream with an open
+  redirect could hand the key to any host. The agent now receives the
+  3xx: a `Location` on the route's own upstream is rewritten onto the
+  route as before, and any other `Location` is left for the agent to
+  fetch directly, without Locksmith's credential.
 - Revoking an agent now removes its account bindings, stashed backend
   bindings, grants and native grant sets in the same write, and audits
   their counts (#157). Before, they stayed behind and could not be
