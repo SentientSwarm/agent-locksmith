@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Revoking an agent now removes its account bindings, stashed backend
+  bindings, grants and native grant sets in the same write, and audits
+  their counts (#157). Before, they stayed behind and could not be
+  listed or removed once the agent was revoked. `locksmith agent
+  prune-revoked [--dry-run]` (`POST /admin/operator/revoked-agents/prune`)
+  removes what earlier revokes left: it names agents and routes, never
+  credential values, and audits counts only.
+
 ### Added
 
 - Broker routes (`--broker` on `tool|model put` and `route backend put`).

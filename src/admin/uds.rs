@@ -243,6 +243,8 @@ pub fn build_router(state: UdsState) -> Router {
 
     let operator_existing = Router::new()
         .route("/agents", get(op_list_agents).post(op_create_agent))
+        // Outside `/agents/{public_id}` so no agent name is shadowed.
+        .route("/revoked-agents/prune", post(op_prune_revoked))
         .route(
             "/agents/{public_id}",
             get(op_get_agent).patch(op_modify_agent),
@@ -504,7 +506,10 @@ async fn handle_deregister(
     Extension(agent): Extension<crate::auth_v2::AgentIdentity>,
 ) -> Response {
     match state.admin.deregister_agent(&agent).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            state.resync_op_references().await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => admin_err_response(e),
     }
 }
@@ -614,7 +619,37 @@ async fn op_revoke_agent(
     Path(id): Path<String>,
 ) -> Response {
     match state.admin.revoke_agent(&op, &id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Its bindings are gone, so their `op://` references go too.
+            state.resync_op_references().await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PruneRevokedInput {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /admin/operator/revoked-agents/prune` (#157). The JSON body is
+/// required, so a dry run sent without a JSON content type is refused
+/// rather than run for real.
+async fn op_prune_revoked(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Json(body): Json<PruneRevokedInput>,
+) -> Response {
+    match state.admin.prune_revoked(&op, body.dry_run).await {
+        Ok(v) => {
+            if !body.dry_run {
+                state.resync_op_references().await;
+            }
+            Json(v).into_response()
+        }
         Err(e) => admin_err_response(e),
     }
 }

@@ -81,6 +81,7 @@ locksmith agent list
 locksmith agent get <public_id>
 locksmith agent modify <public_id> [--allowlist ...] [--denylist ...]
 locksmith agent revoke <public_id>
+locksmith agent prune-revoked [--dry-run]
 ```
 
 | Flag | Description |
@@ -91,7 +92,12 @@ locksmith agent revoke <public_id>
 | `agent set-cert-identity <public_id> <identity>` | Bind an mTLS certificate identity. |
 
 `register` returns the bearer once. `revoke` sets the agent's row
-to revoked; subsequent calls 401. Omitted/null/empty allowlists grant nothing.
+to revoked; subsequent calls 401. In the same write it removes the agent's
+account bindings (including those stashed for inactive route backends), its
+grants and its native grant sets, and audits `agent_revoke` with their counts.
+`prune-revoked` removes what revokes made before this change left behind,
+listing each agent's bound routes but never credential values; `--dry-run`
+reports without changing anything, and a second run finds nothing. Omitted/null/empty allowlists grant nothing.
 Names must be existing enabled tool/model registrations. `modify --allowlist`
 replaces the full set; `--allowlist -` clears it. Omitted modify fields stay
 unchanged. `grants_reviewed` distinguishes old policies needing offline review;

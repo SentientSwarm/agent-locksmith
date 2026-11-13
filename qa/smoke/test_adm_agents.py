@@ -10,6 +10,7 @@ GET = "admin.GET./admin/operator/agents/{public_id}"
 PATCH = "admin.PATCH./admin/operator/agents/{public_id}"
 CERT = "admin.PATCH./admin/operator/agents/{public_id}/cert_identity"
 REVOKE = "admin.POST./admin/operator/agents/{public_id}/revoke"
+PRUNE = "admin.POST./admin/operator/revoked-agents/prune"
 UNKNOWN = "adm-no-such-agent"
 
 
@@ -181,3 +182,29 @@ def test_export_agents_is_a_secret_free_snapshot(t1, managed):
     assert managed["id"] in {a["public_id"] for a in out.json}
     assert managed["token"] not in out.out
     assert "hash" not in out.out and "argon2" not in out.out
+
+
+@case(
+    "SMK-ADM-067",
+    area="ADM",
+    kind="positive",
+    covers=["cli.agent.revoke", REVOKE, "cli.agent.prune-revoked", PRUNE],
+)
+def test_revoke_removes_bindings_and_prune_finds_nothing(t1, accounts):
+    """`revoke` removes the agent's account bindings and grants in the same write and
+    audits the counts (#157); `prune-revoked` then finds nothing to remove, with or
+    without `--dry-run`."""
+    gone = register(t1, "adm-revoke-cascade", allowlist=accounts)
+    bind = t1.cli("agent", "set-credential", gone["id"], accounts, "--no-auth")
+    assert bind.code == 0, bind.err
+    out = t1.cli("agent", "revoke", gone["id"])
+    assert out.code == 0, out.err
+    rows = t1.cli("audit", "query", "--agent", gone["id"], "--limit", "20").json
+    revoked = [r for r in rows if r.get("event") == "agent_revoke"]
+    assert revoked and revoked[0]["details"]["removed"]["bindings"] == 1
+    assert revoked[0]["details"]["removed"]["grants"] == 1
+    for flags in (["--dry-run"], []):
+        pruned = t1.cli("agent", "prune-revoked", *flags)
+        assert pruned.code == 0, pruned.err
+        ids = [a["public_id"] for a in pruned.json["agents"]]
+        assert gone["id"] not in ids

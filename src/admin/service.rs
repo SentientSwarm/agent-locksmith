@@ -507,10 +507,10 @@ impl AdminService {
             } else {
                 Decision::Denied
             },
-            details: result
-                .as_ref()
-                .err()
-                .map(|e| json!({ "error": e.to_string() })),
+            details: Some(match &result {
+                Ok(removed) => json!({ "removed": removed.counts() }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }),
             ..AuditEvent::default()
         })
         .await;
@@ -714,6 +714,8 @@ impl AdminService {
     ) -> Result<(), AdminError> {
         // Operator-driven revocation is a security-affecting event per
         // T3.11 review (changes the agent's trust posture).
+        // #157: bindings, stashes and grants go in the same write; audit
+        // records how many, never which credentials.
         let result = self.agents.revoke(public_id).await;
         self.audit_for_operator(
             op,
@@ -727,10 +729,10 @@ impl AdminService {
                 } else {
                     Decision::Denied
                 },
-                details: result
-                    .as_ref()
-                    .err()
-                    .map(|e| json!({ "error": e.to_string() })),
+                details: Some(match &result {
+                    Ok(removed) => json!({ "removed": removed.counts() }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }),
                 ..AuditEvent::default()
             },
         )
@@ -740,6 +742,50 @@ impl AdminService {
         }
         result?;
         Ok(())
+    }
+
+    /// Remove the bindings, stashes and grants that revokes before #157
+    /// left on revoked agents. The response names agents and routes; the
+    /// audit row records counts only.
+    pub async fn prune_revoked(
+        &self,
+        op: &OperatorIdentity,
+        dry_run: bool,
+    ) -> Result<Json, AdminError> {
+        let result = self.agents.prune_revoked(dry_run).await;
+        let details = match &result {
+            Ok(agents) => {
+                let sum = |f: fn(&crate::repo::agent::StrippedAuthority) -> i64| -> i64 {
+                    agents.iter().map(|a| f(&a.removed)).sum()
+                };
+                json!({
+                    "dry_run": dry_run,
+                    "agents": agents.len(),
+                    "bindings": sum(|r| r.bindings.len() as i64),
+                    "stashed_bindings": sum(|r| r.stashed_bindings.len() as i64),
+                    "grants": sum(|r| r.grants),
+                    "native_grant_sets": sum(|r| r.native_grant_sets),
+                })
+            }
+            Err(e) => json!({ "dry_run": dry_run, "error": e.to_string() }),
+        };
+        self.audit_for_operator(
+            op,
+            AuditEvent {
+                ts_ms: now_ms(),
+                event_class: EventClass::Security,
+                event: "agent_prune_revoked".into(),
+                decision: if result.is_ok() {
+                    Decision::Allowed
+                } else {
+                    Decision::Denied
+                },
+                details: Some(details),
+                ..AuditEvent::default()
+            },
+        )
+        .await;
+        Ok(json!({ "dry_run": dry_run, "agents": result? }))
     }
 
     pub async fn mint_bootstrap_token(

@@ -89,7 +89,9 @@ consumed after that snapshot. Use this existing-command quarantine sequence:
    review. No OAuth refresh runtime is created without its key.
 2. Inventory **every** agent using `locksmith agent list --include-revoked` and
    each agent's `agent credentials list`. Background selection considers bindings
-   belonging to revoked agents too. In this release, lookup by a revoked public
+   belonging to revoked agents too. Revoking now removes an agent's bindings, but
+   a snapshot taken before that change can still hold them; `locksmith agent
+   prune-revoked` removes them. In this release, lookup by a revoked public
    ID can fail: use its unique **name**, first `agent get "$NAME"` and check that
    `public_id` equals the inventory row. Do not skip lookup errors or unmatched
    identities. Record each OAuth registration/label and selection privately.
