@@ -129,6 +129,10 @@ pub struct PutBody {
     /// is a 400 `invalid_profile`, not an extractor 422.
     #[serde(default)]
     pub profile: Option<String>,
+    /// Brokered routes phase 3 — present when this route's destination is
+    /// an account broker. Cannot be added or removed in place.
+    #[serde(default)]
+    pub broker: Option<super::broker::BrokerSpec>,
 }
 
 /// Phase J (ADR-0008) — body for `PUT /admin/operator/<kind>/<name>/credential`.
@@ -142,6 +146,11 @@ pub struct PutBody {
 pub struct PutCredentialBody {
     /// Zeroized on drop; exposed only for the instant it is sealed.
     pub value: secrecy::SecretString,
+    /// Send the value in this header (`stored_header`) instead of the
+    /// route's current shape. Brokered routes phase 3 uses it for header
+    /// broker keys.
+    #[serde(default)]
+    pub header: Option<String>,
 }
 
 /// Render a `Registration` as the admin-facing JSON. Operators see
@@ -163,6 +172,7 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
         "upstream_ca": upstream_ca_summary(r.upstream_ca_pem.as_deref()),
         "profile": r.effective_profile().as_str(),
         "profile_source": if r.profile.is_some() { "explicit" } else { "inferred" },
+        "broker": r.broker,
         "seed": r.seed,
         "disabled": r.disabled,
         "created_at": r.created_at,
@@ -206,6 +216,12 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
         ),
         RegistrationError::InvalidProfile => {
             (StatusCode::BAD_REQUEST, "bad_request", "invalid_profile")
+        }
+        RegistrationError::InvalidBroker(_) => {
+            (StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
+        }
+        RegistrationError::BrokerKindChange => {
+            (StatusCode::CONFLICT, "conflict", "broker_kind_change")
         }
         RegistrationError::NameInUse { .. } => (StatusCode::CONFLICT, "conflict", "name_in_use"),
         RegistrationError::WrongKind { .. } => (StatusCode::CONFLICT, "conflict", "wrong_kind"),
@@ -305,6 +321,9 @@ pub struct AdminRegistrationsState {
     /// Per-agent override repo — read by the `op` resync so references
     /// used only by an override stay resolved.
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    /// Brokered routes phase 3 — last probe per broker route, shown as
+    /// `health` on reads.
+    pub broker_health: crate::registrations::broker_health::BrokerHealth,
 }
 
 impl AdminRegistrationsState {
@@ -383,8 +402,18 @@ impl AdminRegistrationsState {
         Ok(())
     }
 
+    /// The route's last broker probe (`null` when not yet probed), for a
+    /// broker route that declares a probe; `None` otherwise.
+    pub(crate) fn health_json(&self, registration: &Registration) -> Option<Value> {
+        registration.broker.as_ref()?.health.as_ref()?;
+        Some(json!(self.broker_health.current(registration)))
+    }
+
     pub(crate) fn describe(&self, registration: &Registration) -> Value {
         let mut value = registration_to_admin_json(registration);
+        if let Some(health) = self.health_json(registration) {
+            value["health"] = health;
+        }
         let catalog = self.catalog.as_ref().map(|c| c.load());
         value["configured"] = true.into();
         if registration.definition_pinned() {
@@ -525,7 +554,17 @@ pub async fn op_put(
     //   auth on a model just don't specify `none`.
     // - kind=infra accepts any shape including field-absent (becomes
     //   `AuthSpec::None`).
+    // - a broker tool/model may omit it: see below.
     let auth = match (kind, body.auth) {
+        // A broker edit without `auth` keeps the route's broker key, so a
+        // spec change never discards it; a new broker starts keyless.
+        (Kind::Tool | Kind::Model, None) if body.broker.is_some() => {
+            match state.repo.get(&name).await {
+                Ok(Some(r)) if r.broker.is_some() => r.auth,
+                Ok(_) => AuthSpec::None,
+                Err(e) => return registration_error_response(&e),
+            }
+        }
         (Kind::Tool, None) | (Kind::Model, None) => {
             return registration_error_response(&RegistrationError::AuthRequired);
         }
@@ -540,6 +579,24 @@ pub async fn op_put(
         return registration_error_response(&RegistrationError::InvalidMetadata(
             "selection_only".into(),
         ));
+    }
+    if matches!(auth, AuthSpec::Broker) {
+        return registration_error_response(&RegistrationError::InvalidBroker(
+            "broker is a selection kind, not a route key".into(),
+        ));
+    }
+    if let Some(spec) = &body.broker {
+        if !matches!(kind, Kind::Tool | Kind::Model)
+            || body.protocol != super::Protocol::Http
+            || body.mcp.is_some()
+        {
+            return registration_error_response(&RegistrationError::InvalidBroker(
+                "a broker is an HTTP tool or model route".into(),
+            ));
+        }
+        if let Err(e) = super::broker::validate(spec, &auth) {
+            return registration_error_response(&e);
+        }
     }
     if let Err(msg) = auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
@@ -557,6 +614,9 @@ pub async fn op_put(
                     existing_kind: existing.kind,
                     requested_kind: kind,
                 });
+            }
+            if existing.broker.is_some() != body.broker.is_some() {
+                return registration_error_response(&RegistrationError::BrokerKindChange);
             }
             (existing.created_at, existing.disabled)
         }
@@ -580,6 +640,7 @@ pub async fn op_put(
             .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
         upstream_ca_pem: body.upstream_ca_pem,
         profile,
+        broker: body.broker,
         seed: false, // PUT always flips to operator-owned
         disabled,
         created_at,
@@ -715,6 +776,22 @@ pub async fn op_put_credential(
             requested_kind: kind,
         });
     }
+    if let Some(h) = &body.header
+        && axum::http::HeaderName::from_bytes(h.as_bytes()).is_err()
+    {
+        return registration_error_response(&RegistrationError::InvalidMetadata(
+            "invalid header name".into(),
+        ));
+    }
+    if let Some(spec) = &existing.broker {
+        let shape = super::credential::stored_auth(
+            body.header.as_deref().or(existing.auth.header_name()),
+            "cs_pending",
+        );
+        if let Err(e) = super::broker::validate(spec, &shape) {
+            return registration_error_response(&e);
+        }
+    }
 
     // Seal the cleartext; the SecretString zeroizes on drop. Never logged /
     // echoed (CCS-1).
@@ -730,7 +807,7 @@ pub async fn op_put_credential(
     let now = unix_now();
     let secret_ref = match state
         .repo
-        .store_credential(&existing, &sealed, &nonce)
+        .store_credential_as(&existing, &sealed, &nonce, body.header.as_deref())
         .await
     {
         Ok(reference) => reference,

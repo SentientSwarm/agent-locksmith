@@ -121,6 +121,7 @@ async fn setup(wire_key: bool) -> E2E {
 
     // Admin router.
     let uds = UdsState {
+        broker_health: Default::default(),
         admin: admin_service,
         agent_auth: bearer_concrete,
         operator_auth,

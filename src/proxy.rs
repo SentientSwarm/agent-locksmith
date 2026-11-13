@@ -51,6 +51,9 @@ struct RequestCtx {
     /// fixup happened (most calls); flows into `details.codex_body_fixup`
     /// on the `proxy_request` audit row when set.
     codex_body_fixup: Option<serde_json::Value>,
+    /// Brokered routes phase 3 — the serving account captured from the
+    /// broker's attribution header, set once the response arrives.
+    broker_account: std::sync::OnceLock<serde_json::Value>,
 }
 
 impl RequestCtx {
@@ -77,6 +80,7 @@ impl RequestCtx {
             agent_name,
             started,
             codex_body_fixup: None,
+            broker_account: std::sync::OnceLock::new(),
         }
     }
 
@@ -128,6 +132,12 @@ struct ProxyTarget {
     /// pointing at a non-default label. `None` for non-OAuth requests.
     oauth_session_label: Option<String>,
     oauth_selection: Option<AuthSpec>,
+    /// Brokered routes phase 3 — the route's broker spec when its
+    /// destination is an account broker.
+    broker: Option<crate::registrations::broker::BrokerSpec>,
+    /// The caller's public id, set by admission on broker routes for the
+    /// identity header.
+    broker_agent: Option<String>,
 }
 
 /// What the proxy needs to know about auth at injection time. Each
@@ -272,7 +282,9 @@ impl ProxyTarget {
         // registrations are built via [`from_registration_oauth`]
         // after the proxy_handler resolves the access token.
         let auth = match &r.auth {
-            AuthSpec::None => ProxyAuth::None,
+            // `broker` is a selection kind only; templates refuse it on
+            // write, so a route's own auth is never `broker`.
+            AuthSpec::None | AuthSpec::Broker => ProxyAuth::None,
             AuthSpec::Header { header, .. } => ProxyAuth::Header {
                 header: header.clone(),
                 audit_mode: "header",
@@ -339,6 +351,8 @@ impl ProxyTarget {
             auth_source: "registration_default",
             oauth_session_label: None,
             oauth_selection: None,
+            broker: r.broker.clone(),
+            broker_agent: None,
         }
     }
 
@@ -368,6 +382,8 @@ impl ProxyTarget {
             auth_source: "registration_default",
             oauth_session_label: None,
             oauth_selection: None,
+            broker: None,
+            broker_agent: None,
         }
     }
 }
@@ -696,6 +712,14 @@ fn build_upstream_request(
     // `instructions` made the body larger than the original
     // Content-Length advertised).
     let extra_strip = target.auth.strip_header_lower();
+    // Brokered routes phase 3 — the broker trusts the identity header only
+    // because the request carries the broker key, so an agent's own copy
+    // (any case) never passes through.
+    let identity_header = target
+        .broker
+        .as_ref()
+        .and_then(|b| b.identity_header.as_deref())
+        .map(str::to_ascii_lowercase);
     let codex_upstream = target.profile.is_codex();
     // Phase G4 — for codex requests, snapshot whether the agent supplied
     // their own `originator` header before stripping; controls whether
@@ -715,10 +739,20 @@ fn build_upstream_request(
             // Strip the agent's value (if any) here; we re-inject below.
             || (codex_upstream && lower == "openai-beta")
             || extra_strip.as_deref() == Some(&lower)
+            || identity_header.as_deref() == Some(&lower)
         {
             continue;
         }
         upstream_req = upstream_req.header(name, value);
+    }
+    if let (Some(header), Some(agent)) = (
+        target
+            .broker
+            .as_ref()
+            .and_then(|b| b.identity_header.as_deref()),
+        target.broker_agent.as_deref(),
+    ) {
+        upstream_req = upstream_req.header(header, agent);
     }
 
     // Inject configured credentials. Reads from the resolved-creds
@@ -896,6 +930,7 @@ async fn handle_upstream_response(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    capture_broker_account(ctx, target, resp.headers());
     let mut response_headers = forward_response_headers(resp.headers());
     if let Some(base) = agent_base {
         upstream_urls::rewrite_headers(&mut response_headers, &target.upstream, base);
@@ -1222,6 +1257,11 @@ fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
         "auth_mode": target.auth.audit_mode(),
         "auth_source": target.auth_source,
     });
+    if target.broker.is_some() {
+        v["auth_mode"] = json!("broker");
+        v["broker_key_mode"] = json!(target.auth.audit_mode());
+        v["backend_kind"] = json!("broker");
+    }
     if let Some(sid) = target.auth.oauth_session_id() {
         v["oauth_session_id"] = json!(sid);
     }
@@ -1231,7 +1271,30 @@ fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
     if let Some(fixup) = &ctx.codex_body_fixup {
         v["codex_body_fixup"] = fixup.clone();
     }
+    if let Some(serde_json::Value::Object(account)) = ctx.broker_account.get() {
+        for (k, val) in account {
+            v[k] = val.clone();
+        }
+    }
     v
+}
+
+/// Brokered routes phase 3 — copy the broker's attribution header into
+/// the request's audit details: `broker_account` when the value is a
+/// short printable label, `broker_account_invalid` otherwise. The header
+/// is still forwarded to the agent unchanged.
+fn capture_broker_account(ctx: &RequestCtx, target: &ProxyTarget, headers: &HeaderMap) {
+    let Some(a) = target.broker.as_ref().and_then(|b| b.attribution.as_ref()) else {
+        return;
+    };
+    let Some(raw) = headers.get(a.header.as_str()) else {
+        return;
+    };
+    let value = match crate::registrations::broker::attribution_value(raw.as_bytes(), a.sensitive) {
+        Some(label) => json!({ "broker_account": label }),
+        None => json!({ "broker_account_invalid": true }),
+    };
+    let _ = ctx.broker_account.set(value);
 }
 
 /// Emit a `proxy/timeout` or `proxy/upstream_error` audit row + the

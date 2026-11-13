@@ -26,6 +26,9 @@ pub struct RouteBackend {
     /// Auth template copied onto the route when this backend becomes
     /// active (header name / env var / stored-credential shape).
     pub auth: AuthSpec,
+    /// Brokered routes phase 3 — `Some` when this destination is an
+    /// account broker.
+    pub broker: Option<super::broker::BrokerSpec>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -42,6 +45,8 @@ pub enum BackendError {
     AuthUnsupported,
     #[error("route revision changed")]
     RevisionConflict,
+    #[error("invalid broker: {0}")]
+    InvalidBroker(String),
     #[error("serialize: {0}")]
     Json(#[from] serde_json::Error),
     #[error("database: {0}")]
@@ -73,13 +78,30 @@ fn row_to_backend(row: &sqlx::sqlite::SqliteRow) -> Result<RouteBackend, Backend
         egress: parse_egress(row.get::<&str, _>("egress"))?,
         upstream_ca_pem: row.get("upstream_ca_pem"),
         auth: serde_json::from_str(row.get::<&str, _>("auth_json"))?,
+        broker: row
+            .get::<Option<&str>, _>("broker_json")
+            .map(serde_json::from_str)
+            .transpose()?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
 }
 
-const COLUMNS: &str =
-    "route, name, upstream, egress, upstream_ca_pem, auth_json, created_at, updated_at";
+const COLUMNS: &str = "route, name, upstream, egress, upstream_ca_pem, auth_json, broker_json, \
+                       created_at, updated_at";
+
+/// Upsert one declared backend row (shared by `put` and `switch`).
+const UPSERT: &str = "INSERT INTO registration_backends \
+     (route, name, upstream, egress, upstream_ca_pem, auth_json, broker_json, created_at, updated_at) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+     ON CONFLICT(route, name) DO UPDATE SET upstream = excluded.upstream, \
+     egress = excluded.egress, upstream_ca_pem = excluded.upstream_ca_pem, \
+     auth_json = excluded.auth_json, broker_json = excluded.broker_json, \
+     updated_at = excluded.updated_at";
+
+fn broker_json(b: Option<&super::broker::BrokerSpec>) -> Result<Option<String>, BackendError> {
+    Ok(b.map(serde_json::to_string).transpose()?)
+}
 
 pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -117,22 +139,18 @@ impl BackendRepository {
     pub async fn put(&self, b: &RouteBackend) -> Result<(), BackendError> {
         let now = unix_now();
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        sqlx::query(&format!(
-            "INSERT INTO registration_backends ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(route, name) DO UPDATE SET upstream = excluded.upstream, \
-             egress = excluded.egress, upstream_ca_pem = excluded.upstream_ca_pem, \
-             auth_json = excluded.auth_json, updated_at = excluded.updated_at"
-        ))
-        .bind(&b.route)
-        .bind(&b.name)
-        .bind(&b.upstream)
-        .bind(egress_str(b.egress))
-        .bind(&b.upstream_ca_pem)
-        .bind(serde_json::to_string(&b.auth)?)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(UPSERT)
+            .bind(&b.route)
+            .bind(&b.name)
+            .bind(&b.upstream)
+            .bind(egress_str(b.egress))
+            .bind(&b.upstream_ca_pem)
+            .bind(serde_json::to_string(&b.auth)?)
+            .bind(broker_json(b.broker.as_ref())?)
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
         bump_revision(&mut tx, &b.route).await?;
         tx.commit().await?;
         Ok(())
@@ -175,6 +193,69 @@ impl BackendRepository {
         bump_revision(&mut tx, route).await?;
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Seal a key onto an inactive declared backend: insert the sealed
+    /// value and point the backend's auth at it (`stored_header` when
+    /// `header` is given, else `stored_bearer`) in one transaction that
+    /// also moves the route revision. Returns the new `secret_ref`.
+    pub async fn store_credential(
+        &self,
+        route: &str,
+        backend: &str,
+        sealed: &[u8],
+        nonce: &[u8],
+        header: Option<&str>,
+    ) -> Result<String, BackendError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let active: Option<String> =
+            sqlx::query_scalar("SELECT active_backend FROM registrations WHERE name = ?")
+                .bind(route)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(BackendError::NotFound)?;
+        if active.as_deref().unwrap_or(PRIMARY) == backend {
+            return Err(BackendError::ActiveBackend);
+        }
+        let row = sqlx::query(
+            "SELECT auth_json, broker_json FROM registration_backends \
+              WHERE route = ? AND name = ?",
+        )
+        .bind(route)
+        .bind(backend)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BackendError::NotFound)?;
+        let current: AuthSpec = serde_json::from_str(row.get::<&str, _>("auth_json"))?;
+        let broker: Option<super::broker::BrokerSpec> = row
+            .get::<Option<&str>, _>("broker_json")
+            .map(serde_json::from_str)
+            .transpose()?;
+        let header = header.or(current.header_name());
+        // Checked on the row this transaction writes, so a concurrent edit
+        // cannot slip a clashing key header past it.
+        if let Some(spec) = &broker {
+            super::broker::validate(spec, &super::credential::stored_auth(header, "cs_pending"))
+                .map_err(|e| BackendError::InvalidBroker(e.to_string()))?;
+        }
+        let reference =
+            crate::repo::CredentialSecretsRepository::insert_into(&mut tx, sealed, nonce)
+                .await
+                .map_err(|e| BackendError::Db(sqlx::Error::Protocol(e.to_string())))?;
+        let auth = super::credential::stored_auth(header, &reference);
+        sqlx::query(
+            "UPDATE registration_backends SET auth_json = ?, updated_at = ? \
+             WHERE route = ? AND name = ?",
+        )
+        .bind(serde_json::to_string(&auth)?)
+        .bind(unix_now())
+        .bind(route)
+        .bind(backend)
+        .execute(&mut *tx)
+        .await?;
+        bump_revision(&mut tx, route).await?;
+        tx.commit().await?;
+        Ok(reference)
     }
 
     /// The route's current `registration_instances.revision` (the
@@ -239,7 +320,7 @@ impl BackendRepository {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
             "SELECT r.kind, r.protocol, r.mcp_json, r.upstream, r.egress, r.upstream_ca_pem, \
-                    r.auth_json, r.active_backend, i.revision \
+                    r.auth_json, r.broker_json, r.active_backend, i.revision \
                FROM registrations r JOIN registration_instances i ON i.name = r.name \
               WHERE r.name = ?",
         )
@@ -279,22 +360,18 @@ impl BackendRepository {
         let now = unix_now();
 
         // 1. Record the current destination as backend `from`.
-        sqlx::query(&format!(
-            "INSERT INTO registration_backends ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(route, name) DO UPDATE SET upstream = excluded.upstream, \
-             egress = excluded.egress, upstream_ca_pem = excluded.upstream_ca_pem, \
-             auth_json = excluded.auth_json, updated_at = excluded.updated_at"
-        ))
-        .bind(route)
-        .bind(&from)
-        .bind(row.get::<String, _>("upstream"))
-        .bind(row.get::<String, _>("egress"))
-        .bind(row.get::<Option<String>, _>("upstream_ca_pem"))
-        .bind(&auth_json)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(UPSERT)
+            .bind(route)
+            .bind(&from)
+            .bind(row.get::<String, _>("upstream"))
+            .bind(row.get::<String, _>("egress"))
+            .bind(row.get::<Option<String>, _>("upstream_ca_pem"))
+            .bind(&auth_json)
+            .bind(row.get::<Option<String>, _>("broker_json"))
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
 
         // 2. Stash the route's bindings under `from`.
         let stashed = sqlx::query(
@@ -327,12 +404,14 @@ impl BackendRepository {
         .await?;
         sqlx::query(
             "UPDATE registrations SET upstream = ?, egress = ?, upstream_ca_pem = ?, \
-             auth_json = ?, active_backend = ?, seed = 0, updated_at = ? WHERE name = ?",
+             auth_json = ?, broker_json = ?, active_backend = ?, seed = 0, updated_at = ? \
+             WHERE name = ?",
         )
         .bind(&t.upstream)
         .bind(egress_str(t.egress))
         .bind(&t.upstream_ca_pem)
         .bind(serde_json::to_string(&t.auth)?)
+        .bind(broker_json(t.broker.as_ref())?)
         .bind(target)
         .bind(now)
         .bind(route)
@@ -464,6 +543,7 @@ mod tests {
             egress: EgressMode::Direct,
             upstream_ca_pem: None,
             auth: AuthSpec::None,
+            broker: None,
             created_at: 0,
             updated_at: 0,
         }

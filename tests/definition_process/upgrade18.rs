@@ -110,7 +110,7 @@ pub async fn exercise() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        25
+        26
     );
     pool.close().await;
     assert_eq!(
@@ -143,6 +143,6 @@ pub async fn exercise() {
     assert!(row.get::<i64, _>("incarnation") > 100);
     pool.close().await;
     println!(
-        "actual schema-17 -> 25: exact pins/manual HTTP/native/revocation/sealed legacy+controlled/highwater preserved; old whole daemon refuses before all listeners; successor reopens"
+        "actual schema-17 -> 26: exact pins/manual HTTP/native/revocation/sealed legacy+controlled/highwater preserved; old whole daemon refuses before all listeners; successor reopens"
     );
 }

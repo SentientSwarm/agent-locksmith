@@ -49,6 +49,9 @@ fn selected_env(name: &str) -> Result<secrecy::SecretString, Failure> {
 pub(super) fn apply_spec(target: &mut ProxyTarget, spec: AuthSpec) -> Result<(), Failure> {
     target.auth = match spec {
         AuthSpec::None => ProxyAuth::None,
+        // Admission sends the route's broker key; the selection itself
+        // carries no credential to materialize.
+        AuthSpec::Broker => return Err(Failure::CredentialUnavailable),
         AuthSpec::Header { header, env_var } => ProxyAuth::Header {
             header,
             audit_mode: "header",

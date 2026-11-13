@@ -84,6 +84,7 @@ async fn setup(with_key: bool) -> Harness {
     };
 
     let state = UdsState {
+        broker_health: Default::default(),
         admin,
         agent_auth,
         operator_auth,

@@ -103,6 +103,110 @@ pub struct PutOpts {
     /// the route to inference.
     #[arg(long, value_parser = ["generic", "openai-codex-responses"])]
     pub profile: Option<String>,
+
+    #[command(flatten)]
+    pub broker: BrokerArgs,
+}
+
+/// Brokered routes phase 3 — make the route an account broker. The route's
+/// own key (set with `set-key`) authenticates Locksmith to the broker;
+/// agents select it with `agent set-credential --broker`.
+#[derive(clap::Args, Debug, Default)]
+pub struct BrokerArgs {
+    /// The destination is an account broker.
+    #[arg(long)]
+    pub broker: bool,
+    /// Header naming the calling agent (default X-Locksmith-Agent).
+    #[arg(long, requires = "broker", conflicts_with = "no_identity_header")]
+    pub identity_header: Option<String>,
+    /// Do not name the calling agent to the broker.
+    #[arg(long, requires = "broker")]
+    pub no_identity_header: bool,
+    /// Response header naming the serving account, recorded in audit.
+    #[arg(long, requires = "broker")]
+    pub attribution_header: Option<String>,
+    /// Record a sha256 of the attribution value instead of the value.
+    #[arg(long, requires = "attribution_header")]
+    pub attribution_sensitive: bool,
+    /// Health probe path (GET, sent with the broker key).
+    #[arg(long, requires = "broker")]
+    pub health_path: Option<String>,
+    /// Status the health probe expects (default 200).
+    #[arg(long, requires = "health_path")]
+    pub health_status: Option<u16>,
+    /// Seconds between health probes (default 30).
+    #[arg(long, requires = "health_path")]
+    pub health_interval: Option<u64>,
+}
+
+impl BrokerArgs {
+    /// The `broker` body field, or `None` for a plain upstream route.
+    pub fn to_spec(&self) -> Option<Value> {
+        if !self.broker {
+            return None;
+        }
+        let mut spec = serde_json::Map::new();
+        if self.no_identity_header {
+            spec.insert("identity_header".into(), Value::Null);
+        } else if let Some(h) = &self.identity_header {
+            spec.insert("identity_header".into(), json!(h));
+        }
+        if let Some(h) = &self.attribution_header {
+            spec.insert(
+                "attribution".into(),
+                json!({ "header": h, "sensitive": self.attribution_sensitive }),
+            );
+        }
+        if let Some(path) = &self.health_path {
+            let mut health = json!({ "path": path });
+            if let Some(s) = self.health_status {
+                health["expect_status"] = json!(s);
+            }
+            if let Some(i) = self.health_interval {
+                health["interval_seconds"] = json!(i);
+            }
+            spec.insert("health".into(), health);
+        }
+        Some(Value::Object(spec))
+    }
+}
+
+/// Read one secret value from stdin: printable ASCII, at most 8 KiB, one
+/// trailing newline ignored. Never from argv.
+pub(crate) fn read_secret_stdin() -> Result<String, CliError> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin().take(8194).read_to_end(&mut bytes)?;
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+    if bytes.is_empty() || bytes.len() > 8192 || !bytes.iter().all(|b| (0x21..=0x7e).contains(b)) {
+        return Err(CliError::Usage(
+            "stdin must hold one printable value of at most 8 KiB".into(),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| CliError::Usage("stdin is not UTF-8".into()))
+}
+
+/// Seal the route's own key from stdin (`PUT /{kind}/{name}/credential`).
+pub async fn do_set_key(
+    client: &CliClient,
+    format: Format,
+    kind: CliKind,
+    name: &str,
+    header: Option<String>,
+) -> Result<(), CliError> {
+    let token = CliClient::op_token()?;
+    let mut body = json!({ "value": read_secret_stdin()? });
+    if let Some(h) = header {
+        body["header"] = json!(h);
+    }
+    let path = format!("/admin/operator/{}/{}/credential", kind.url_segment(), name);
+    let resp: Value = client
+        .json("PUT", &path, Auth::Operator(&token), Some(&body))
+        .await?;
+    print(&resp, format);
+    Ok(())
 }
 
 fn parse_metadata_kv(s: &str) -> Result<(String, String), String> {
@@ -259,6 +363,9 @@ pub async fn do_put(
     if let Some(profile) = opts.profile {
         body.insert("profile".into(), json!(profile));
     }
+    if let Some(broker) = opts.broker.to_spec() {
+        body.insert("broker".into(), broker);
+    }
     if let Some(path) = opts.upstream_ca_file {
         body.insert(
             "upstream_ca_pem".into(),
@@ -311,6 +418,42 @@ mod tests {
     struct PutCli {
         #[command(flatten)]
         opts: PutOpts,
+    }
+
+    #[test]
+    fn broker_flags_build_the_spec() {
+        use clap::Parser;
+        let base = ["t", "--upstream", "https://b.example"];
+        let plain = PutCli::try_parse_from(base).unwrap();
+        assert_eq!(plain.opts.broker.to_spec(), None);
+        let full = PutCli::try_parse_from(base.iter().chain(&[
+            "--broker",
+            "--attribution-header",
+            "x-account-label",
+            "--attribution-sensitive",
+            "--health-path",
+            "/healthz",
+            "--health-interval",
+            "60",
+        ]))
+        .unwrap();
+        assert_eq!(
+            full.opts.broker.to_spec(),
+            Some(json!({
+                "attribution": { "header": "x-account-label", "sensitive": true },
+                "health": { "path": "/healthz", "interval_seconds": 60 },
+            }))
+        );
+        let off = PutCli::try_parse_from(base.iter().chain(&["--broker", "--no-identity-header"]))
+            .unwrap();
+        assert_eq!(
+            off.opts.broker.to_spec(),
+            Some(json!({ "identity_header": null }))
+        );
+        assert!(
+            PutCli::try_parse_from(base.iter().chain(&["--health-path", "/h"])).is_err(),
+            "broker flags need --broker"
+        );
     }
 
     #[test]

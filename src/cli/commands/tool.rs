@@ -50,6 +50,14 @@ pub enum ToolCmd {
         #[command(flatten)]
         opts: Box<PutOpts>,
     },
+    /// Seal the route's own key (a broker key) read from stdin.
+    SetKey {
+        /// Registration name.
+        name: String,
+        /// Send the key in this header instead of `Authorization: Bearer`.
+        #[arg(long)]
+        header: Option<String>,
+    },
     /// Delete a tool. Operator rows are removed; seed rows are flipped to disabled=1.
     Delete {
         /// Registration name.
@@ -76,6 +84,9 @@ pub async fn run(client: &CliClient, format: Format, cmd: ToolCmd) -> Result<(),
         }
         ToolCmd::List => registration::do_list(client, format, CliKind::Tool).await,
         ToolCmd::Get { name } => registration::do_get(client, format, CliKind::Tool, &name).await,
+        ToolCmd::SetKey { name, header } => {
+            registration::do_set_key(client, format, CliKind::Tool, &name, header).await
+        }
         ToolCmd::Put { name, opts } => {
             registration::do_put(client, format, CliKind::Tool, &name, *opts).await
         }

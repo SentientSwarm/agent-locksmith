@@ -4,6 +4,20 @@
 
 ### Added
 
+- Broker routes (`--broker` on `tool|model put` and `route backend put`).
+  A broker destination picks the provider account itself: Locksmith sends
+  one route-level key (sealed with `tool|model set-key` or `route backend
+  set-credential`, both reading stdin, or an `op://` reference) and the
+  caller's public id in `X-Locksmith-Agent`, replacing any copy the agent
+  sends. A broker `put` without `--auth` keeps the route's
+  key. Agents select it with `agent set-credential --broker`. An optional
+  attribution header is copied into audit as `details.broker_account`
+  (hashed when sensitive). An optional health probe refuses a down broker
+  with 503 `backend_unavailable` without dispatch, logs transitions, shows
+  the last probe as `health` on `tool|model get`, and adds broker counts to
+  `/readyz` without failing readiness. `invalid_broker` (400) and
+  `broker_kind_change` (409) refuse bad specs and in-place kind changes.
+  Migration 0026.
 - Route backends (`locksmith route backend put|list|get|delete`,
   `locksmith route switch`). A tool or model route can declare several
   destinations and switch its active one without re-granting agents:

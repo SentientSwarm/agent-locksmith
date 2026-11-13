@@ -9,12 +9,25 @@ impl RegistrationRepository {
         sealed: &[u8],
         nonce: &[u8],
     ) -> Result<String, RegistrationError> {
+        self.store_credential_as(expected, sealed, nonce, None)
+            .await
+    }
+
+    /// As [`Self::store_credential`], sending the value in `header` when
+    /// given (a `stored_header` key) instead of the route's current shape.
+    pub async fn store_credential_as(
+        &self,
+        expected: &Registration,
+        sealed: &[u8],
+        nonce: &[u8],
+        header: Option<&str>,
+    ) -> Result<String, RegistrationError> {
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(backend)?;
-        let row = sqlx::query("SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile FROM registrations WHERE name = ?")
+        let row = sqlx::query("SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json FROM registrations WHERE name = ?")
             .bind(&expected.name).fetch_optional(&mut *tx).await.map_err(backend)?;
         let current = row
             .map(super::repo::row_to_registration)
@@ -29,7 +42,7 @@ impl RegistrationRepository {
         let reference = CredentialSecretsRepository::insert_into(&mut tx, sealed, nonce)
             .await
             .map_err(backend)?;
-        let auth = auth(expected, &reference);
+        let auth = stored_auth(header.or(expected.auth.header_name()), &reference);
         sqlx::query("UPDATE registrations SET auth_json = ?, seed = 0, updated_at = unixepoch() WHERE name = ?")
             .bind(serde_json::to_string(&auth).map_err(backend)?).bind(&expected.name)
             .execute(&mut *tx).await.map_err(backend)?;
@@ -37,8 +50,9 @@ impl RegistrationRepository {
         Ok(reference)
     }
 }
-fn auth(existing: &Registration, reference: &str) -> AuthSpec {
-    match existing.auth.header_name() {
+/// The stored shape a sealed value takes: a named header, else a bearer.
+pub(crate) fn stored_auth(header: Option<&str>, reference: &str) -> AuthSpec {
+    match header {
         Some(header) => AuthSpec::StoredHeader {
             header: header.into(),
             secret_ref: reference.into(),

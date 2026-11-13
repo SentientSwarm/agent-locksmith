@@ -79,6 +79,7 @@ async fn setup() -> H {
         Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer.clone();
     let uds = UdsState {
+        broker_health: Default::default(),
         admin: Arc::new(AdminService::new(
             agents,
             BootstrapTokenRepository::new(pool.clone()),
@@ -178,6 +179,7 @@ fn backend(name: &str, upstream: &str) -> RouteBackend {
         egress: EgressMode::Direct,
         upstream_ca_pem: None,
         auth: AuthSpec::None,
+        broker: None,
         created_at: 0,
         updated_at: 0,
     }

@@ -60,6 +60,8 @@ pub enum LogComponent {
     Agent,
     Proxy,
     Config,
+    /// Brokered routes phase 3 — broker health transitions.
+    Broker,
 }
 
 impl LogComponent {
@@ -70,6 +72,7 @@ impl LogComponent {
             LogComponent::Agent => "agent",
             LogComponent::Proxy => "proxy",
             LogComponent::Config => "config",
+            LogComponent::Broker => "broker",
         }
     }
 
@@ -81,6 +84,7 @@ impl LogComponent {
             "agent" => Some(LogComponent::Agent),
             "proxy" => Some(LogComponent::Proxy),
             "config" => Some(LogComponent::Config),
+            "broker" => Some(LogComponent::Broker),
             _ => None,
         }
     }

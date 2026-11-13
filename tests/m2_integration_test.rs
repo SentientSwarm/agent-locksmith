@@ -198,6 +198,7 @@ async fn setup() -> M2 {
     let op_resolver = Arc::new(resolver);
 
     let uds = UdsState {
+        broker_health: Default::default(),
         admin: admin_service,
         agent_auth: bearer_concrete,
         operator_auth,

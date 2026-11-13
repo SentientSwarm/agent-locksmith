@@ -20,6 +20,8 @@ pub mod api;
 pub mod auth_spec;
 pub mod backends;
 pub mod backends_api;
+pub mod broker;
+pub mod broker_health;
 pub mod catalog;
 mod credential;
 mod definitions;
@@ -73,6 +75,17 @@ pub enum RegistrationError {
     /// phase 1). Wire: 400 bad_request / `invalid_profile`.
     #[error("invalid profile: use generic or openai-codex-responses")]
     InvalidProfile,
+
+    /// Broker spec unusable (brokered routes phase 3): bad header name,
+    /// health probe or key kind, or `broker` used as a template.
+    /// Wire: 400 bad_request / `invalid_broker`.
+    #[error("invalid broker: {0}")]
+    InvalidBroker(String),
+
+    /// A route PUT that would turn an upstream route into a broker or
+    /// back. Wire: 409 conflict / `broker_kind_change`.
+    #[error("broker kind change: use a new route or a backend switch")]
+    BrokerKindChange,
 
     /// Cross-kind name reuse — `name` is already registered under a
     /// different kind. Wire: 409 conflict / `name_in_use`.

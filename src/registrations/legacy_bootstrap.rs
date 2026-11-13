@@ -87,6 +87,7 @@ pub async fn bootstrap_from_config_tools(
             body_limit_bytes: tool.body_limit_bytes,
             upstream_ca_pem: None,
             profile: None,
+            broker: None,
             metadata: serde_json::Value::Object(serde_json::Map::new()),
             seed: false,
             disabled: false,

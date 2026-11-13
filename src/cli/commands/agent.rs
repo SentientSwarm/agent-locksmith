@@ -155,6 +155,10 @@ pub struct SetCredentialArgs {
     /// Explicitly select an existing live sealed bearer reference.
     #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin"])]
     pub stored_bearer_ref: Option<String>,
+    /// Select a broker route: Locksmith sends the route's broker key and
+    /// the broker picks the account.
+    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin","stored_bearer_ref"])]
+    pub broker: bool,
 }
 
 pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<(), CliError> {
@@ -355,9 +359,12 @@ fn build_auth_spec(args: &SetCredentialArgs) -> Result<Value, CliError> {
     if args.no_auth {
         return Ok(json!({"kind": "none"}));
     }
+    if args.broker {
+        return Ok(json!({"kind": "broker"}));
+    }
     let auth = args.auth.as_deref().ok_or_else(|| {
         CliError::Usage(
-            "must provide one of: --auth bearer=ENV, --auth header=H:ENV, --no-auth, --oauth-session LABEL".into(),
+            "must provide one of: --auth bearer=ENV, --auth header=H:ENV, --no-auth, --broker, --oauth-session LABEL".into(),
         )
     })?;
     if let Some(env_var) = auth.strip_prefix("bearer=") {
@@ -392,5 +399,27 @@ fn option_replace(input: Option<Vec<String>>) -> Option<Option<Vec<String>>> {
         None => None,
         Some(v) if v.len() == 1 && v[0] == "-" => Some(Some(vec![])),
         Some(v) => Some(Some(v)),
+    }
+}
+
+#[cfg(test)]
+mod broker_selection_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: SetCredentialArgs,
+    }
+
+    #[test]
+    fn broker_flag_selects_the_broker_kind() {
+        let cli = Cli::try_parse_from(["x", "agent-id", "pool", "--broker"]).unwrap();
+        assert_eq!(
+            build_auth_spec(&cli.args).unwrap(),
+            json!({"kind": "broker"})
+        );
+        assert!(Cli::try_parse_from(["x", "a", "pool", "--broker", "--no-auth"]).is_err());
     }
 }

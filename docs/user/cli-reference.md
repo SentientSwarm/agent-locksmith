@@ -250,6 +250,72 @@ locksmith route switch codex --backend broker --if-match <revision>
   The active backend cannot be replaced, deleted or re-selected (409
   `active_backend`).
 
+### Broker routes
+
+A **broker** is a destination that holds the provider accounts itself and
+picks one per request. Locksmith authenticates to it with one route-level
+key, names the calling agent, and never sends an agent's own credential.
+
+```bash
+locksmith model put codex-pool --upstream http://127.0.0.1:43210 \
+  --egress direct --broker \
+  --attribution-header x-account-label --health-path /healthz
+printf '%s' "$POOL_KEY" | locksmith model set-key codex-pool   # stdin, never argv
+locksmith agent set-credential "$AGENT_ID" codex-pool --broker
+```
+
+- **Key.** The route's auth is the broker key: `stored_bearer` or
+  `stored_header` (sealed with `set-key`, which reads stdin; `--header H`
+  sends it in `H` instead of `Authorization: Bearer`), or `op_bearer` /
+  `op_header`. A broker `put` without `--auth` keeps the route's key, so
+  editing the spec never discards it; a new broker starts with none.
+  `--auth none` clears the key. Without a key every request fails closed
+  (503 `credential_unresolved`). Env and OAuth keys are refused (400
+  `invalid_broker`).
+- **Selection.** Agents select a broker route with `--broker` (stored as
+  `{"kind":"broker"}`). It is the only selection a broker route accepts, and
+  a broker selection is refused on an ordinary route. An agent granted the
+  route but not bound is refused (403 `tool_not_allowed`, audit
+  `account_binding_missing`).
+- **Identity.** The broker receives the caller's public id in
+  `X-Locksmith-Agent` (`--identity-header H` renames it,
+  `--no-identity-header` omits it). Any copy the agent sends is stripped.
+  The header cannot be `Authorization`, `Host` or the key header.
+- **Attribution.** `--attribution-header H` copies the broker's response
+  header `H` into audit as `details.broker_account` when it is 1-64
+  printable ASCII characters without spaces; otherwise audit records
+  `broker_account_invalid: true`. `--attribution-sensitive` records
+  `sha256:<hex>` instead. The header still reaches the agent.
+- **Health.** `--health-path /p` probes `GET <upstream>/p` with the broker
+  key every `--health-interval` seconds (5-3600, default 30), expecting
+  `--health-status` (default 200) within 5 s. After a failed probe the
+  route answers 503 `backend_unavailable` without dispatch, until a probe
+  passes. A route not yet probed is admitted. Transitions are logged as
+  `broker_down` (warn) and `broker_up` (info) under the `broker` component
+  of the operational log (`GET /admin/operator/logs`). `tool|model get` shows the last probe as
+  `health` (`status`, `http_status`, `checked_at`; `null` before the first).
+  `/readyz` reports `brokers: {up, down, unknown}` counts only, and a down
+  broker never fails readiness.
+- **Audit.** Proxy rows carry `auth_mode: broker`, `auth_source: broker`,
+  `broker_key_mode` (the key's kind, never its value) and
+  `backend_kind: broker`.
+- An existing route cannot change between broker and ordinary destination
+  in place (409 `broker_kind_change`). Declare a broker backend and switch
+  to it instead:
+
+```bash
+locksmith route backend put codex pool --upstream http://127.0.0.1:43210 \
+  --auth none --egress direct --broker
+printf '%s' "$POOL_KEY" | locksmith route backend set-credential codex pool
+locksmith route switch codex --backend pool --if-match <revision>
+locksmith agent set-credential "$AGENT_ID" codex --broker
+```
+
+  Upstream bindings are stashed with the old backend and never reach the
+  broker. Switching back restores them. `route backend set-credential`
+  seals an inactive backend's key and moves the route revision. The active
+  backend's key is set with `tool|model set-key`.
+
 ### Per-route upstream CA
 
 An HTTPS upstream behind a private CA can carry its own trust anchors:

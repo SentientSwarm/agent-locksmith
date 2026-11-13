@@ -100,6 +100,8 @@ pub struct AppState {
     /// record degraded/credential-unresolved events on the operational-log
     /// stream (distinct from audit, secret-free).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// Brokered routes phase 3 — last health probe per broker route.
+    pub broker_health: crate::registrations::broker_health::BrokerHealth,
     /// Phase J / M2 (CCS-8) — `op://` reference resolver cache. `None`
     /// when the `op` custody backend isn't wired. The proxy hot path
     /// injects `op` credentials from this cache (T2.3); resolution
@@ -420,6 +422,7 @@ pub fn build_app_full_with_phase_k(
         operational_log,
         op_resolver,
         native,
+        Default::default(),
     )
 }
 
@@ -439,6 +442,7 @@ pub fn build_app_full_with_native(
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     op_resolver: Option<Arc<crate::secret::OpResolver>>,
     native: Arc<crate::native::Runtime>,
+    broker_health: crate::registrations::broker_health::BrokerHealth,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -461,6 +465,7 @@ pub fn build_app_full_with_native(
         credential_secrets,
         operational_log,
         op_resolver,
+        broker_health,
     });
 
     router(state)
@@ -564,9 +569,13 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
             .into_response();
     }
 
+    // Brokered routes phase 3 — counts only: /readyz is unauthenticated,
+    // so it never names routes. A down broker does not fail readiness.
+    let brokers = state.broker_health.counts(&state.catalog.load());
     Json(json!({
         "status": "ready",
         "uptime_seconds": state.started_at.elapsed().as_secs(),
+        "brokers": { "up": brokers.up, "down": brokers.down, "unknown": brokers.unknown },
     }))
     .into_response()
 }

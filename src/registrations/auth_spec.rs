@@ -54,6 +54,11 @@ pub enum AuthSpec {
         profile_digest: String,
     },
     None,
+    /// Brokered routes phase 3: a per-agent selection on a broker route.
+    /// The agent sends no account of its own; Locksmith sends the
+    /// route's broker key and the broker picks the account. Valid only as
+    /// a selection on a broker route, never as a template.
+    Broker,
     Header {
         header: String,
         env_var: String,
@@ -195,6 +200,7 @@ impl AuthSpec {
             // store at inject-time (T1.6), not the env-var static
             // resolver, so they yield no env-backed SecretRef here.
             AuthSpec::None
+            | AuthSpec::Broker
             | AuthSpec::StoredHeader { .. }
             | AuthSpec::StoredBearer { .. }
             // `op_*` resolve via the OpResolver cache (T2.3), not the

@@ -25,6 +25,14 @@ pub enum ModelCmd {
         #[command(flatten)]
         opts: Box<PutOpts>,
     },
+    /// Seal the route's own key (a broker key) read from stdin.
+    SetKey {
+        /// Registration name.
+        name: String,
+        /// Send the key in this header instead of `Authorization: Bearer`.
+        #[arg(long)]
+        header: Option<String>,
+    },
     /// Delete a model.
     Delete {
         /// Registration name.
@@ -41,6 +49,9 @@ pub async fn run(client: &CliClient, format: Format, cmd: ModelCmd) -> Result<()
     match cmd {
         ModelCmd::List => registration::do_list(client, format, CliKind::Model).await,
         ModelCmd::Get { name } => registration::do_get(client, format, CliKind::Model, &name).await,
+        ModelCmd::SetKey { name, header } => {
+            registration::do_set_key(client, format, CliKind::Model, &name, header).await
+        }
         ModelCmd::Put { name, opts } => {
             registration::do_put(client, format, CliKind::Model, &name, *opts).await
         }

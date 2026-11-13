@@ -447,6 +447,25 @@ async fn run_owned(
         observation.clone(),
     );
     let mut native_task = native.start(coord.shutdown_signal());
+    // Brokered routes phase 3 — probe broker health in the background;
+    // admission refuses a broker whose last probe failed.
+    let broker_health = crate::registrations::broker_health::BrokerHealth::default();
+    let admin_state = admin_state.map(|mut s| {
+        s.broker_health = broker_health.clone();
+        s
+    });
+    let mut broker_probe_task = catalog_for_app.clone().map(|catalog| {
+        let prober = crate::registrations::broker_health::Prober::new(
+            broker_health.clone(),
+            catalog,
+            shared_config.clone(),
+            credential_sealing_key_for_app.clone(),
+            credential_secrets_for_app.clone(),
+            op_resolver_for_app.clone(),
+            operational_log_for_app.clone(),
+        );
+        tokio::spawn(prober.run(coord.shutdown_signal()))
+    });
     let agent_router = match catalog_for_app {
         Some(catalog) => crate::app::build_app_full_with_native(
             shared_config.clone(),
@@ -463,6 +482,7 @@ async fn run_owned(
             operational_log_for_app,
             op_resolver_for_app,
             native.clone(),
+            broker_health,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -717,6 +737,9 @@ async fn run_owned(
         if let Some(s) = credential_sweeper_task.as_mut() {
             let _ = s.await;
         }
+        if let Some(s) = broker_probe_task.as_mut() {
+            let _ = s.await;
+        }
         if let Some(s) = revocation_task.as_mut() {
             let _ = s.await;
         }
@@ -760,6 +783,7 @@ async fn run_owned(
                 sweeper_task.as_mut(),
                 ops_log_sweeper_task.as_mut(),
                 credential_sweeper_task.as_mut(),
+                broker_probe_task.as_mut(),
                 revocation_task.as_mut(),
                 refresh_task.as_mut(),
             ]
@@ -1264,6 +1288,7 @@ async fn build_admin_substrate(
 
     Ok(AdminSetup {
         uds_state: UdsState {
+            broker_health: Default::default(),
             admin: Arc::new(admin),
             agent_auth: bearer,
             operator_auth: Arc::new(operator_auth),

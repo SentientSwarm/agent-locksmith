@@ -38,6 +38,10 @@ pub fn router(state: BackendsState) -> Router {
             "/routes/{route}/backends/{backend}",
             get(get_one).put(put).delete(delete),
         )
+        .route(
+            "/routes/{route}/backends/{backend}/credential",
+            axum::routing::put(put_credential),
+        )
         .route("/routes/{route}/switch", post(switch))
         .with_state(state)
 }
@@ -51,6 +55,9 @@ pub struct BackendBody {
     #[serde(default)]
     pub upstream_ca_pem: Option<String>,
     pub auth: AuthSpec,
+    /// Brokered routes phase 3 — this destination is an account broker.
+    #[serde(default)]
+    pub broker: Option<super::broker::BrokerSpec>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +86,9 @@ fn backend_error(e: &BackendError) -> Response {
         }
         BackendError::RevisionConflict => {
             error(StatusCode::CONFLICT, "conflict", "revision_conflict")
+        }
+        BackendError::InvalidBroker(_) => {
+            error(StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
         }
         BackendError::Json(_) | BackendError::Db(_) => {
             tracing::error!("route backend store error");
@@ -121,6 +131,7 @@ fn view(b: &RouteBackend) -> Value {
             "sha256": super::upstream_ca::sha256_hex(pem),
         })),
         "auth": b.auth,
+        "broker": b.broker,
         "created_at": b.created_at,
         "updated_at": b.updated_at,
     })
@@ -229,6 +240,16 @@ async fn put(
     if oauth(&body.auth) {
         return backend_error(&BackendError::AuthUnsupported);
     }
+    if body.auth == AuthSpec::Broker {
+        return registration_error_response(&RegistrationError::InvalidBroker(
+            "broker is a selection kind, not a backend key".into(),
+        ));
+    }
+    if let Some(spec) = &body.broker
+        && let Err(e) = super::broker::validate(spec, &body.auth)
+    {
+        return registration_error_response(&e);
+    }
     if let Err(msg) = body.auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }
@@ -245,6 +266,7 @@ async fn put(
         egress,
         upstream_ca_pem: body.upstream_ca_pem,
         auth: body.auth,
+        broker: body.broker,
         created_at: 0,
         updated_at: 0,
     };
@@ -292,6 +314,62 @@ async fn delete(
         Ok(false) => backend_error(&BackendError::NotFound),
         Err(e) => backend_error(&e),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendCredentialBody {
+    /// Zeroized on drop; exposed only for the instant it is sealed.
+    pub value: secrecy::SecretString,
+    /// Send the value in this header (`stored_header`); default bearer.
+    #[serde(default)]
+    pub header: Option<String>,
+}
+
+/// `PUT /routes/{route}/backends/{backend}/credential` — seal a key onto
+/// an inactive backend. Returns `{secret_ref}` only; the value is never
+/// echoed, logged or audited.
+async fn put_credential(
+    State(st): State<BackendsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    Path((route, backend)): Path<(String, String)>,
+    Json(body): Json<BackendCredentialBody>,
+) -> Response {
+    use secrecy::ExposeSecret;
+    let Some(key) = st.regs.credential_sealing_key.as_ref() else {
+        return backend_error(&BackendError::NotFound);
+    };
+    if let Err(r) = route_of(&st, &route).await {
+        return r;
+    }
+    if let Some(h) = &body.header
+        && axum::http::HeaderName::from_bytes(h.as_bytes()).is_err()
+    {
+        return registration_error_response(&RegistrationError::InvalidMetadata(
+            "invalid header name".into(),
+        ));
+    }
+    let repo = BackendRepository::new(st.regs.repo.pool.clone());
+    let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {
+        Ok(pair) => pair,
+        Err(_) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "internal_error",
+            );
+        }
+    };
+    let reference = match repo
+        .store_credential(&route, &backend, &sealed, &nonce, body.header.as_deref())
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return backend_error(&e),
+    };
+    let details = json!({ "route": route, "backend": backend, "secret_ref": reference });
+    audit(&st, &op, &route, "route_backend_credential_set", details).await;
+    Json(json!({ "secret_ref": reference })).into_response()
 }
 
 async fn switch(

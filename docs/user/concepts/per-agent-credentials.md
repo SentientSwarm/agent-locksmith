@@ -49,6 +49,12 @@ request. Editing the registration credential template cannot repoint an existing
 explicit env selection. Explicit `AuthSpec::None` is an owner-approved selection
 and still obeys the agent's ACL; an absent or broken credential is never no-auth.
 
+A **broker route** picks the account itself, so its agents select `--broker`
+(`{"kind":"broker"}`) instead of an account. Locksmith then sends the route's
+own broker key and the caller's identity, never an agent credential. `broker`
+is the only selection a broker route accepts and is refused on any other route.
+See the CLI reference, "Broker routes".
+
 Use the [reviewed migration](migrating-account-bindings.md) for existing shared
 account users. Rehearse the [saved actual-daemon smoke](../../development/explicit-account-bindings-smoke.md)
 before cutover. See the [D1 change notes](../changes/explicit-account-bindings.md)
