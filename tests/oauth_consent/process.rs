@@ -570,7 +570,7 @@ pub async fn principal() {
     std::fs::write(path, config.to_string()).unwrap();
     start(&mut f).await;
     let callback_port = bound_callback(&f);
-    let admin_port = f.admin_https_port().expect("admin HTTPS bound");
+    let admin_port = f.wait_admin_https_port().await;
     registration(&f, &t, callback_port).await;
     let created = connect(&f, "owned");
     let id = created["attempt_id"].as_str().unwrap();

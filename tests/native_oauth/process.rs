@@ -182,7 +182,7 @@ async fn journey_mode(hosted: bool) {
     )
     .unwrap();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     if hosted {
         let config_path = f.path().join("config.yaml");
         let mut config: Value =
@@ -199,6 +199,7 @@ async fn journey_mode(hosted: bool) {
         std::fs::write(f.path().join("hosted-sse"), "fixture").unwrap();
     }
     start(&mut f).await;
+    let port = bound_callback(&f);
     native_registration(&f, &t, port).await;
     let created = connect(&f, "native");
     assert_eq!(
@@ -346,8 +347,9 @@ pub async fn races() {
         )
         .unwrap();
         let t = Twin::start(&f);
-        let port = configure(&f, &t);
+        configure(&f, &t);
         start(&mut f).await;
+        let port = bound_callback(&f);
         native_registration(&f, &t, port).await;
         let created = connect(&f, "native");
         assert_eq!(
@@ -483,13 +485,14 @@ pub async fn hosted_catalog_refusals() {
     )
     .unwrap();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     let config_path = f.path().join("config.yaml");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     config["oauth_consent"]["profiles"][0]["kind"] = json!("linear-hosted-fixture-v1");
     config["oauth_consent"]["profiles"][0]["selected_tools"] = json!(["read_record"]);
     std::fs::write(&config_path, config.to_string()).unwrap();
     start(&mut f).await;
+    let port = bound_callback(&f);
     native_registration(&f, &t, port).await;
     let created = connect(&f, "catalog");
     assert_eq!(
