@@ -149,6 +149,21 @@ impl Fixture {
     pub fn admin_https_port(&self) -> Option<u16> {
         assigned_port::admin_https(self.path())
     }
+    /// The admin HTTPS port once the daemon has logged it. That listener
+    /// starts on its own task, so readiness can come before the log line.
+    pub async fn wait_admin_https_port(&self) -> u16 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(port) = self.admin_https_port() {
+                return port;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "admin HTTPS never bound"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
     fn assert_running(&mut self) {
         assert!(
             self.daemon

@@ -138,7 +138,7 @@ async fn actual_self_listener_is_refused_before_wire() {
 
     // The registration guard covers only the agent port. Every other actual
     // listener is refused by the runtime destination check before the wire.
-    let admin = f.admin_https_port().expect("admin HTTPS bound");
+    let admin = f.wait_admin_https_port().await;
     let a = f.enroll("self", &format!("https://localhost:{admin}/mcp/native"));
     let id = a["public_id"].as_str().unwrap();
     let s = flow::show(&f, id);
@@ -170,7 +170,7 @@ async fn actual_mtls_admin_listener_is_not_reported_as_agent() {
     });
     std::fs::write(path, config.to_string()).unwrap();
     f.start(process::DAEMON).await;
-    let admin = f.admin_https_port().expect("admin HTTPS bound");
+    let admin = f.wait_admin_https_port().await;
     assert_ne!(f.port, admin, "agent port read from the log is the agent's");
     let live = f.http.get(f.url("/livez")).send().await.unwrap();
     assert_eq!(live.status(), 200);

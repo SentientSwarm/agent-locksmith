@@ -3,8 +3,9 @@ async fn setup() -> (Fixture, Twin, u16, Value) {
     let mut f = Fixture::new();
     std::fs::write(f.path().join("refresh-enabled"), "fixture").unwrap();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start(&mut f).await;
+    let port = bound_callback(&f);
     registration(&f, &t, port).await;
     let created = connect(&f, "refresh");
     assert_eq!(
@@ -416,8 +417,9 @@ pub async fn upgrade() {
     let mut f = Fixture::new();
     std::fs::write(f.path().join("refresh-enabled"), "fixture").unwrap();
     let t = Twin::start(&f);
-    let port = configure(&f, &t);
+    configure(&f, &t);
     start_binary(&mut f, &prior).await;
+    let port = bound_callback(&f);
     registration(&f, &t, port).await;
     let created = connect(&f, "refresh");
     assert_eq!(
