@@ -172,6 +172,58 @@ A `broker` backend declares:
   broker does **not** fail daemon readiness, because other routes still serve.
   Its route answers 503 `backend_unavailable` without dispatch.
 
+**Phase 3 as built.** A broker is a `broker` object on the route (or on a
+declared backend) beside the usual destination; the route's auth template is
+the broker key. `registrations.broker_json` holds the active destination's
+spec and `registration_backends.broker_json` a declared backend's, so a
+switch carries it like any other destination field (migration 0026). The
+0009/0023 stash trigger also fires when a backend changes kind, so bindings
+stashed for an upstream never come back on a broker or the reverse.
+Decisions:
+
+- Agents select a broker route with a dedicated `broker` selection
+  (`agent set-credential --broker`, `{"kind":"broker"}`, audit
+  `auth_mode: broker`). It is the only selection a broker route accepts and
+  is refused elsewhere (400 `grant_target_invalid`). This answers open
+  question 1: a switch to a broker never widens access, because bindings
+  stay per backend and agents bound on the upstream are unbound on the
+  broker until selected there. No grant re-review is needed.
+- The identity header defaults to `X-Locksmith-Agent: <public_id>`, which
+  answers open question 2: the public id, not the name. `null` disables it,
+  and any agent-supplied copy is stripped in any case. It cannot be
+  `Authorization`, `Host` or the key header.
+- Broker keys are `stored_bearer`, `stored_header`, `op_bearer` or
+  `op_header`. `none` is accepted as "key not set yet" and fails closed
+  (503 `credential_unresolved`) until a key is sealed; env and OAuth keys
+  are refused (400 `invalid_broker`). The route's own key is sealed with
+  `tool|model set-key` and an inactive backend's with
+  `route backend set-credential`. Both read stdin, and the backend write
+  validates the key header against the broker spec in the same transaction
+  that stores it.
+- A route cannot change between upstream and broker in place (409
+  `broker_kind_change`); switching to a declared broker backend is the path.
+- Health: the probe sends the broker key, times out after 5 s and runs on
+  the route's interval (5-3600 s, default 30). A never-probed route is
+  admitted; a route whose last probe failed answers 503
+  `backend_unavailable` without dispatch. Only the active destination is
+  probed. `/readyz` is unauthenticated, so it reports
+  `brokers: {up, down, unknown}` counts only and a down broker never fails
+  readiness; the per-route state is on the operator route GET and list
+  (`health`) and transitions go to the operational log (`broker` component,
+  `broker_down` / `broker_up`). This replaces "per backend in `/readyz`
+  details" above.
+- A probe result is tied to the destination it tested (upstream, egress,
+  CA, key and probe). After a re-point, a key change, a probe removal or a
+  backend switch the old result no longer applies: the route counts as
+  unknown, is admitted, and is probed on the next tick.
+- A broker `put` without `auth` keeps the route's key, so spec edits never
+  discard it; `auth: none` clears it.
+- Attribution records `details.broker_account` only for 1-64 bytes of
+  ASCII graphic characters, `sha256:<hex>` when sensitive, and
+  `broker_account_invalid: true` otherwise. The header is still forwarded.
+- On a broker, the codex profile keeps its body fix-ups and required headers
+  but never injects `ChatGPT-Account-ID`.
+
 ### 5. Account ownership
 
 The collision is about a **grant**, not an account. Two independent sign-ins
@@ -257,11 +309,12 @@ Each phase ships with QA contract entries and smoke cases under `qa/`.
 
 ## Open questions
 
-1. Should `route switch` require the agents' grants to be re-reviewed when the
-   new backend is a broker (a different trust shape than a direct upstream), or
-   is operator intent enough?
-2. Default for the agent identity header: the public id (stable, opaque) or the
-   agent name (readable, but it leaks naming to the broker)?
+1. ~~Should `route switch` require the agents' grants to be re-reviewed when
+   the new backend is a broker?~~ Closed in phase 3: no. Agents need an
+   explicit `broker` selection on the broker backend, so a switch never
+   widens access.
+2. ~~Default for the agent identity header: the public id or the agent
+   name?~~ Closed in phase 3: the public id.
 3. Is refusing refresh-token import for rotating providers too strict for
    operators migrating from an existing tool? `--adopt-exclusive` is the
    proposed escape hatch.
