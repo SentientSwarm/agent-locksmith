@@ -87,6 +87,9 @@ fn backend_error(e: &BackendError) -> Response {
         BackendError::RevisionConflict => {
             error(StatusCode::CONFLICT, "conflict", "revision_conflict")
         }
+        BackendError::InvalidBroker(_) => {
+            error(StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
+        }
         BackendError::Json(_) | BackendError::Db(_) => {
             tracing::error!("route backend store error");
             error(
@@ -347,17 +350,6 @@ async fn put_credential(
         ));
     }
     let repo = BackendRepository::new(st.regs.repo.pool.clone());
-    if let Ok(Some(b)) = repo.get(&route, &backend).await
-        && let Some(spec) = &b.broker
-    {
-        let shape = super::credential::stored_auth(
-            body.header.as_deref().or(b.auth.header_name()),
-            "cs_pending",
-        );
-        if let Err(e) = super::broker::validate(spec, &shape) {
-            return registration_error_response(&e);
-        }
-    }
     let (sealed, nonce) = match key.seal(body.value.expose_secret().as_bytes()) {
         Ok(pair) => pair,
         Err(_) => {

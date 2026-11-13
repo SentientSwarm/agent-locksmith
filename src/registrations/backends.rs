@@ -45,6 +45,8 @@ pub enum BackendError {
     AuthUnsupported,
     #[error("route revision changed")]
     RevisionConflict,
+    #[error("invalid broker: {0}")]
+    InvalidBroker(String),
     #[error("serialize: {0}")]
     Json(#[from] serde_json::Error),
     #[error("database: {0}")]
@@ -215,19 +217,32 @@ impl BackendRepository {
         if active.as_deref().unwrap_or(PRIMARY) == backend {
             return Err(BackendError::ActiveBackend);
         }
-        let current: Option<String> = sqlx::query_scalar(
-            "SELECT auth_json FROM registration_backends WHERE route = ? AND name = ?",
+        let row = sqlx::query(
+            "SELECT auth_json, broker_json FROM registration_backends \
+              WHERE route = ? AND name = ?",
         )
         .bind(route)
         .bind(backend)
         .fetch_optional(&mut *tx)
-        .await?;
-        let current: AuthSpec = serde_json::from_str(&current.ok_or(BackendError::NotFound)?)?;
+        .await?
+        .ok_or(BackendError::NotFound)?;
+        let current: AuthSpec = serde_json::from_str(row.get::<&str, _>("auth_json"))?;
+        let broker: Option<super::broker::BrokerSpec> = row
+            .get::<Option<&str>, _>("broker_json")
+            .map(serde_json::from_str)
+            .transpose()?;
+        let header = header.or(current.header_name());
+        // Checked on the row this transaction writes, so a concurrent edit
+        // cannot slip a clashing key header past it.
+        if let Some(spec) = &broker {
+            super::broker::validate(spec, &super::credential::stored_auth(header, "cs_pending"))
+                .map_err(|e| BackendError::InvalidBroker(e.to_string()))?;
+        }
         let reference =
             crate::repo::CredentialSecretsRepository::insert_into(&mut tx, sealed, nonce)
                 .await
                 .map_err(|e| BackendError::Db(sqlx::Error::Protocol(e.to_string())))?;
-        let auth = super::credential::stored_auth(header.or(current.header_name()), &reference);
+        let auth = super::credential::stored_auth(header, &reference);
         sqlx::query(
             "UPDATE registration_backends SET auth_json = ?, updated_at = ? \
              WHERE route = ? AND name = ?",

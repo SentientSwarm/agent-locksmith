@@ -219,3 +219,14 @@ async fn backend_broker_validated() {
         .json();
     assert_eq!(got["broker"]["identity_header"], "X-Locksmith-Agent");
 }
+
+#[tokio::test]
+async fn backend_key_header_cannot_clash_with_identity_header() {
+    let (h, _a, _b) = scenario().await;
+    let r = h
+        .op_req(Method::PUT, "/routes/r/backends/pool/credential")
+        .json(&json!({ "value": "k", "header": "x-locksmith-agent" }))
+        .await;
+    assert_eq!(r.status_code(), 400);
+    assert_eq!(r.json::<Value>()["error"]["code"], "invalid_broker");
+}
