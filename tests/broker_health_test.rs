@@ -209,3 +209,115 @@ async fn admin_get_shows_route_health() {
     assert_eq!(row["health"]["status"], "down");
     assert!(!list.to_string().contains("broker-key-1"));
 }
+
+/// `/healthz` always 500; every other GET 200.
+async fn failing_broker() -> MockServer {
+    broker_server(0).await
+}
+
+fn stored(sref: &str) -> Value {
+    json!({ "kind": "stored_bearer", "secret_ref": sref })
+}
+
+#[tokio::test]
+async fn removed_probe_admits_and_forgets() {
+    let h = setup().await;
+    let m = failing_broker().await;
+    let mut body = broker_body(&m.uri(), json!({ "health": { "path": "/healthz" } }));
+    body["auth"] = json!({ "kind": "none" });
+    h.put_model("pool", body).await.assert_status_ok();
+    let sref = h.seal("pool", "broker-key-1").await;
+    h.grant(&["pool"]).await;
+    h.bind("pool", json!({ "kind": "broker" }))
+        .await
+        .assert_status_ok();
+    h.prober.tick_at(FAR_FUTURE).await;
+    assert_eq!(h.call("pool", "/v1/models").await.status_code(), 503);
+
+    let mut body = broker_body(&m.uri(), json!({}));
+    body["auth"] = stored(&sref);
+    h.put_model("pool", body).await.assert_status_ok();
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    assert!(
+        h.health.get("pool").is_none(),
+        "unprobed routes are forgotten"
+    );
+}
+
+#[tokio::test]
+async fn repointed_broker_is_probed_again() {
+    let h = setup().await;
+    let bad = failing_broker().await;
+    let good = broker_server(10).await;
+    let spec = json!({ "health": { "path": "/healthz", "interval_seconds": 3600 } });
+    let mut body = broker_body(&bad.uri(), spec.clone());
+    body["auth"] = json!({ "kind": "none" });
+    h.put_model("pool", body).await.assert_status_ok();
+    let sref = h.seal("pool", "broker-key-1").await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
+
+    let mut body = broker_body(&good.uri(), spec);
+    body["auth"] = stored(&sref);
+    h.put_model("pool", body).await.assert_status_ok();
+    h.grant(&["pool"]).await;
+    h.bind("pool", json!({ "kind": "broker" }))
+        .await
+        .assert_status_ok();
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    let got: Value = h
+        .op_req(axum::http::Method::GET, "/models/pool")
+        .await
+        .json();
+    assert!(
+        got["health"].is_null(),
+        "a result for the old destination is not shown"
+    );
+    h.prober.tick_at(FAR_FUTURE + 1).await;
+    assert!(
+        !good.received_requests().await.unwrap().is_empty(),
+        "a new destination is probed on the next tick"
+    );
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
+}
+
+#[tokio::test]
+async fn failover_to_a_broker_backend_is_admitted() {
+    let h = setup().await;
+    let bad = failing_broker().await;
+    let good = broker_server(10).await;
+    route(&h, &bad).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    assert_eq!(h.call("pool", "/v1/models").await.status_code(), 503);
+
+    h.op_req(axum::http::Method::PUT, "/routes/pool/backends/b")
+        .json(&json!({
+            "upstream": good.uri(), "egress": "direct",
+            "auth": { "kind": "none" }, "broker": {}
+        }))
+        .await
+        .assert_status_ok();
+    h.op_req(
+        axum::http::Method::PUT,
+        "/routes/pool/backends/b/credential",
+    )
+    .json(&json!({ "value": "broker-key-2" }))
+    .await
+    .assert_status_ok();
+    let rev = h
+        .op_req(axum::http::Method::GET, "/routes/pool/backends")
+        .await
+        .json::<Value>()["revision"]
+        .as_i64()
+        .unwrap();
+    h.op_req(axum::http::Method::POST, "/routes/pool/switch")
+        .add_header("if-match", &rev.to_string())
+        .json(&json!({ "backend": "b" }))
+        .await
+        .assert_status_ok();
+    h.bind("pool", json!({ "kind": "broker" }))
+        .await
+        .assert_status_ok();
+    h.call("pool", "/v1/models").await.assert_status_ok();
+}

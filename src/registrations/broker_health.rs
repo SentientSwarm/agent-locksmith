@@ -39,6 +39,19 @@ pub struct HealthState {
     pub status: HealthStatus,
     pub checked_at: i64,
     pub http_status: Option<u16>,
+    /// [`fingerprint`] of the destination probed. A result for any other
+    /// destination, key or probe counts as unknown.
+    #[serde(skip)]
+    pub fingerprint: String,
+}
+
+/// Identifies what a probe tested: upstream, egress, CA, key and probe.
+/// `None` when the registration declares no probe.
+pub fn fingerprint(r: &Registration) -> Option<String> {
+    use sha2::Digest;
+    let probe = r.broker.as_ref()?.health.as_ref()?;
+    let doc = json!([r.upstream, r.egress, r.upstream_ca_pem, r.auth, probe]);
+    Some(format!("{:x}", sha2::Sha256::digest(doc.to_string())))
 }
 
 /// Last probe result per broker route, shared by the prober, admission
@@ -65,11 +78,25 @@ impl BrokerHealth {
         map.insert(route.to_string(), state).map(|prev| prev.status)
     }
 
+    /// The last result for `r`'s current destination; `None` when `r`
+    /// declares no probe or was not probed as it is now.
+    pub fn current(&self, r: &Registration) -> Option<HealthState> {
+        let fp = fingerprint(r)?;
+        self.get(&r.name).filter(|s| s.fingerprint == fp)
+    }
+
+    /// Forget every route not in `keep`.
+    fn retain(&self, keep: &std::collections::HashSet<&str>) {
+        if let Ok(mut map) = self.0.write() {
+            map.retain(|name, _| keep.contains(name.as_str()));
+        }
+    }
+
     /// Counts over the catalog's probed brokers.
     pub fn counts(&self, catalog: &Catalog) -> Counts {
         let mut c = Counts::default();
         for r in probed(catalog) {
-            match self.get(&r.name).map(|s| s.status) {
+            match self.current(r).map(|s| s.status) {
                 Some(HealthStatus::Up) => c.up += 1,
                 Some(HealthStatus::Down) => c.down += 1,
                 None => c.unknown += 1,
@@ -124,12 +151,15 @@ impl Prober {
     /// `now` (unix seconds), and record the results.
     pub async fn tick_at(&self, now: i64) {
         let catalog = self.catalog.load_full();
+        self.health
+            .retain(&probed(&catalog).map(|r| r.name.as_str()).collect());
+        // A result for an earlier destination makes the route due now.
         let due: Vec<_> = probed(&catalog)
             .filter(|r| {
                 let every = r.broker.as_ref().and_then(|b| b.health.as_ref());
                 let every = every.map_or(30, |h| h.interval_seconds) as i64;
                 self.health
-                    .get(&r.name)
+                    .current(r)
                     .is_none_or(|s| now.saturating_sub(s.checked_at) >= every)
             })
             .cloned()
@@ -138,7 +168,8 @@ impl Prober {
             futures_util::future::join_all(due.iter().map(|r| self.probe_once(r, now))).await;
         for (r, state) in due.iter().zip(results) {
             let (status, http_status) = (state.status, state.http_status);
-            let prev = self.health.set(&r.name, state);
+            let prev = self.health.current(r).map(|s| s.status);
+            self.health.set(&r.name, state);
             // Log changes, and a first probe that fails; a first success
             // is the expected state and stays quiet.
             if prev != Some(status) && !(prev.is_none() && status == HealthStatus::Up) {
@@ -149,10 +180,12 @@ impl Prober {
 
     /// Probe one broker route.
     pub async fn probe_once(&self, r: &Registration, now: i64) -> HealthState {
+        let fp = fingerprint(r).unwrap_or_default();
         let down = |http_status| HealthState {
             status: HealthStatus::Down,
             checked_at: now,
             http_status,
+            fingerprint: fp.clone(),
         };
         let Some(probe) = r.broker.as_ref().and_then(|b| b.health.as_ref()) else {
             return down(None);
@@ -184,6 +217,7 @@ impl Prober {
                     },
                     checked_at: now,
                     http_status: Some(code),
+                    fingerprint: fp,
                 }
             }
             Err(_) => down(None),

@@ -406,7 +406,7 @@ impl AdminRegistrationsState {
     /// broker route that declares a probe; `None` otherwise.
     pub(crate) fn health_json(&self, registration: &Registration) -> Option<Value> {
         registration.broker.as_ref()?.health.as_ref()?;
-        Some(json!(self.broker_health.get(&registration.name)))
+        Some(json!(self.broker_health.current(registration)))
     }
 
     pub(crate) fn describe(&self, registration: &Registration) -> Value {

@@ -90,7 +90,7 @@ async fn broker(
     use crate::registrations::broker_health::HealthStatus;
     if state
         .broker_health
-        .get(&registration.name)
+        .current(registration)
         .is_some_and(|h| h.status == HealthStatus::Down)
     {
         return Err(Box::new(backend_unavailable(state, ctx).await));
