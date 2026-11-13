@@ -937,6 +937,7 @@ async fn handle_upstream_response(
     capture_broker_account(ctx, target, resp.headers());
     let mut response_headers = forward_response_headers(resp.headers());
     if let Some(base) = agent_base {
+        upstream_urls::absolutize_location(&mut response_headers, resp.url());
         upstream_urls::rewrite_headers(&mut response_headers, &target.upstream, base);
     }
 

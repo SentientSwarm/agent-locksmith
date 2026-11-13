@@ -81,3 +81,39 @@ async fn same_upstream_redirect_points_back_at_locksmith() {
     let hits = upstream.received_requests().await.unwrap();
     assert!(hits.iter().all(|r| r.url.path() == "/go"), "followed");
 }
+
+/// A relative `Location` was resolved by the client while redirects were
+/// followed. Returned as is, it would resolve against Locksmith instead
+/// of the route, so it is resolved against the upstream request first.
+#[tokio::test]
+async fn relative_redirect_is_resolved_onto_the_route() {
+    let upstream = MockServer::start().await;
+    Mock::given(path("/v1/go"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/v1/next?a=1"))
+        .mount(&upstream)
+        .await;
+    Mock::given(path("/v1/dir/go"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "sibling"))
+        .mount(&upstream)
+        .await;
+
+    let h = harness(&upstream.uri()).await;
+    for (from, to) in [
+        (
+            "/api/keyed/v1/go",
+            "http://locksmith.test:9200/api/keyed/v1/next?a=1",
+        ),
+        (
+            "/api/keyed/v1/dir/go",
+            "http://locksmith.test:9200/api/keyed/v1/dir/sibling",
+        ),
+    ] {
+        let resp = h
+            .server
+            .get(from)
+            .add_header("host", "locksmith.test:9200")
+            .await;
+        assert_eq!(resp.status_code(), 302, "{from}");
+        assert_eq!(resp.headers()["location"], to, "{from}");
+    }
+}

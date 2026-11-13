@@ -219,7 +219,16 @@ fn build_client_for(
         builder = builder.proxy(proxy);
     }
 
-    builder.build().unwrap_or_else(|_| Client::new())
+    builder.build().unwrap_or_else(|_| no_redirect_client())
+}
+
+/// Last resort when a configured client cannot be built. It still never
+/// follows redirects, like every other client in the pool.
+fn no_redirect_client() -> Client {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("a default client always builds")
 }
 
 /// #135 — trust only `pem`'s certificates. Each becomes a trust anchor, so
@@ -246,6 +255,7 @@ fn route_only_trust(builder: reqwest::ClientBuilder, pem: &str) -> reqwest::Clie
 /// TLS handshake fails rather than falling back to public trust.
 fn no_trust_client() -> Client {
     Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .tls_built_in_root_certs(false)
         .build()
         .expect("a client without roots always builds")

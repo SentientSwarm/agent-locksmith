@@ -19,6 +19,16 @@
   removes what earlier revokes left: it names agents and routes, never
   credential values, and audits counts only.
 
+### Changed
+
+- Agents now receive upstream redirects instead of their final response.
+  Redirects to the route's own upstream point back at Locksmith, so
+  clients that follow redirects (`curl -L`, most HTTP libraries) see no
+  difference. Redirects to another host, such as GitHub tarball and log
+  downloads to signed storage URLs, must be fetched by the agent over its
+  own egress; an agent that can reach the network only through Locksmith
+  can no longer complete them.
+
 ### Added
 
 - Broker routes (`--broker` on `tool|model put` and `route backend put`).

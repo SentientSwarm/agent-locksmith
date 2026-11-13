@@ -93,6 +93,27 @@ pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str, link: bool)
     changed.then_some(out)
 }
 
+/// AGENT-242 — resolve a relative `Location` (`/v1/next`, `sibling`,
+/// `//host/x`) against the upstream request URL. Redirects are returned,
+/// not followed, so a relative value left as is would resolve against
+/// Locksmith instead of the route. Absolute values are left alone.
+pub(super) fn absolutize_location(headers: &mut HeaderMap, request_url: &reqwest::Url) {
+    let name = axum::http::header::LOCATION;
+    let Some(value) = headers.get(&name).and_then(|v| v.to_str().ok()) else {
+        return;
+    };
+    if reqwest::Url::parse(value).is_ok() {
+        return;
+    }
+    let resolved = request_url
+        .join(value)
+        .ok()
+        .and_then(|u| HeaderValue::from_str(u.as_str()).ok());
+    if let Some(resolved) = resolved {
+        headers.insert(name, resolved);
+    }
+}
+
 /// Apply [`rewrite`] to the URL-bearing headers in place.
 pub(super) fn rewrite_headers(headers: &mut HeaderMap, upstream: &str, agent_base: &str) {
     for name in URL_HEADERS {
