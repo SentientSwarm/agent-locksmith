@@ -117,6 +117,20 @@ pub fn validate(spec: &BrokerSpec, auth: &AuthSpec) -> Result<(), RegistrationEr
     Ok(())
 }
 
+/// The audit value for a broker's attribution header: the label itself
+/// (or `sha256:<hex>` when sensitive) when it is 1-64 bytes of ASCII
+/// graphic characters, else `None` so nothing unvetted reaches audit.
+pub fn attribution_value(raw: &[u8], sensitive: bool) -> Option<String> {
+    if raw.is_empty() || raw.len() > 64 || !raw.iter().all(|b| (0x21..=0x7e).contains(b)) {
+        return None;
+    }
+    if sensitive {
+        use sha2::Digest;
+        return Some(format!("sha256:{:x}", sha2::Sha256::digest(raw)));
+    }
+    String::from_utf8(raw.to_vec()).ok()
+}
+
 fn header_name(raw: &str) -> Result<String, RegistrationError> {
     axum::http::HeaderName::from_bytes(raw.as_bytes())
         .map(|h| h.as_str().to_string())
@@ -126,6 +140,7 @@ fn header_name(raw: &str) -> Result<String, RegistrationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     fn key() -> AuthSpec {
         AuthSpec::StoredBearer {
@@ -161,6 +176,22 @@ mod tests {
         ] {
             assert!(validate(&BrokerSpec::default(), &bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn attribution_value_accepts_short_printable_labels_only() {
+        assert_eq!(attribution_value(b"acct-7", false), Some("acct-7".into()));
+        let hashed = attribution_value(b"acct-7", true).unwrap();
+        assert_eq!(
+            hashed,
+            format!("sha256:{:x}", sha2::Sha256::digest(b"acct-7"))
+        );
+        let long = vec![b'a'; 65];
+        for bad in [&b"a b"[..], b"a\tb", &[0xC3, 0xA9], &long, b""] {
+            assert_eq!(attribution_value(bad, false), None, "{bad:?}");
+            assert_eq!(attribution_value(bad, true), None, "{bad:?}");
+        }
+        assert!(attribution_value(&[b'a'; 64], false).is_some());
     }
 
     #[test]

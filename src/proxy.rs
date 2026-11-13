@@ -51,6 +51,9 @@ struct RequestCtx {
     /// fixup happened (most calls); flows into `details.codex_body_fixup`
     /// on the `proxy_request` audit row when set.
     codex_body_fixup: Option<serde_json::Value>,
+    /// Brokered routes phase 3 — the serving account captured from the
+    /// broker's attribution header, set once the response arrives.
+    broker_account: std::sync::OnceLock<serde_json::Value>,
 }
 
 impl RequestCtx {
@@ -77,6 +80,7 @@ impl RequestCtx {
             agent_name,
             started,
             codex_body_fixup: None,
+            broker_account: std::sync::OnceLock::new(),
         }
     }
 
@@ -926,6 +930,7 @@ async fn handle_upstream_response(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    capture_broker_account(ctx, target, resp.headers());
     let mut response_headers = forward_response_headers(resp.headers());
     if let Some(base) = agent_base {
         upstream_urls::rewrite_headers(&mut response_headers, &target.upstream, base);
@@ -1266,7 +1271,30 @@ fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {
     if let Some(fixup) = &ctx.codex_body_fixup {
         v["codex_body_fixup"] = fixup.clone();
     }
+    if let Some(serde_json::Value::Object(account)) = ctx.broker_account.get() {
+        for (k, val) in account {
+            v[k] = val.clone();
+        }
+    }
     v
+}
+
+/// Brokered routes phase 3 — copy the broker's attribution header into
+/// the request's audit details: `broker_account` when the value is a
+/// short printable label, `broker_account_invalid` otherwise. The header
+/// is still forwarded to the agent unchanged.
+fn capture_broker_account(ctx: &RequestCtx, target: &ProxyTarget, headers: &HeaderMap) {
+    let Some(a) = target.broker.as_ref().and_then(|b| b.attribution.as_ref()) else {
+        return;
+    };
+    let Some(raw) = headers.get(a.header.as_str()) else {
+        return;
+    };
+    let value = match crate::registrations::broker::attribution_value(raw.as_bytes(), a.sensitive) {
+        Some(label) => json!({ "broker_account": label }),
+        None => json!({ "broker_account_invalid": true }),
+    };
+    let _ = ctx.broker_account.set(value);
 }
 
 /// Emit a `proxy/timeout` or `proxy/upstream_error` audit row + the

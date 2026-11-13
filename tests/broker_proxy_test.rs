@@ -193,3 +193,66 @@ async fn codex_profile_on_broker_skips_account_header() {
         std::slice::from_ref(&h.pid)
     );
 }
+
+async fn labelled_upstream(label: &str) -> MockServer {
+    let m = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-account-label", label)
+                .set_body_string("ok"),
+        )
+        .mount(&m)
+        .await;
+    m
+}
+
+#[tokio::test]
+async fn attribution_recorded_on_audit() {
+    let h = setup().await;
+    let m = labelled_upstream("acct-7").await;
+    broker_route(
+        &h,
+        &m,
+        json!({ "attribution": { "header": "x-account-label" } }),
+    )
+    .await;
+    let r = h.call("pool", "/v1/models").await;
+    r.assert_status_ok();
+    assert_eq!(r.header("x-account-label"), "acct-7", "still forwarded");
+    let d = h.last_audit("proxy_request").await;
+    assert_eq!(d["broker_account"], "acct-7");
+    assert!(d.get("broker_account_invalid").is_none());
+}
+
+#[tokio::test]
+async fn sensitive_attribution_is_hashed() {
+    let h = setup().await;
+    let m = labelled_upstream("acct-7").await;
+    broker_route(
+        &h,
+        &m,
+        json!({ "attribution": { "header": "x-account-label", "sensitive": true } }),
+    )
+    .await;
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    let d = h.last_audit("proxy_request").await;
+    let v = d["broker_account"].as_str().unwrap();
+    assert!(v.starts_with("sha256:") && !v.contains("acct-7"), "{v}");
+}
+
+#[tokio::test]
+async fn invalid_attribution_flagged() {
+    let h = setup().await;
+    let m = labelled_upstream("two words").await;
+    broker_route(
+        &h,
+        &m,
+        json!({ "attribution": { "header": "x-account-label" } }),
+    )
+    .await;
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    let d = h.last_audit("proxy_request").await;
+    assert_eq!(d["broker_account_invalid"], true);
+    assert!(d.get("broker_account").is_none());
+}
