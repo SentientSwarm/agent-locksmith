@@ -250,6 +250,9 @@ async fn put(
     {
         return registration_error_response(&e);
     }
+    if let Err(e) = super::broker::validate_auth_header(&body.auth) {
+        return registration_error_response(&e);
+    }
     if let Err(msg) = body.auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }

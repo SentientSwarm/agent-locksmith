@@ -86,6 +86,13 @@ pub fn validate_credential_header(raw: &str) -> Result<(), RegistrationError> {
     Ok(())
 }
 
+/// Validate the header an inline `auth` body sends its key in (`header`,
+/// `stored_header`, `op_header`). Wire: 400 `invalid_metadata`.
+pub fn validate_auth_header(auth: &super::AuthSpec) -> Result<(), RegistrationError> {
+    auth.header_name()
+        .map_or(Ok(()), validate_credential_header)
+}
+
 fn default_identity_header() -> Option<String> {
     Some(DEFAULT_IDENTITY_HEADER.into())
 }

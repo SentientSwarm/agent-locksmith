@@ -615,6 +615,9 @@ pub async fn op_put(
             return registration_error_response(&e);
         }
     }
+    if let Err(e) = super::broker::validate_auth_header(&auth) {
+        return registration_error_response(&e);
+    }
     if let Err(msg) = auth.validate_op_reference() {
         return registration_error_response(&RegistrationError::InvalidMetadata(msg));
     }

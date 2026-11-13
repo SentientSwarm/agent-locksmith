@@ -111,6 +111,7 @@ routes:
   refusals:
   - invalid_credential
   - selection_only
+  - invalid_metadata
   - invalid_op_reference
   - agent_not_found
   - grant_target_invalid

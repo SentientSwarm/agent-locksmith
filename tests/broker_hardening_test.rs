@@ -151,6 +151,58 @@ async fn reserved_credential_header_is_refused() {
         .assert_status_ok();
 }
 
+/// Item 1 — an inline `auth` body names a header too: route PUT, backend
+/// PUT and the per-agent override refuse reserved names there as well.
+#[tokio::test]
+async fn reserved_inline_auth_header_is_refused() {
+    let h = setup().await;
+    let m = upstream().await;
+    broker_route(&h, &m, json!({})).await;
+    h.put_model(
+        "plain",
+        json!({ "upstream": "https://p.example",
+                                 "auth": { "kind": "none" }, "egress": "direct" }),
+    )
+    .await
+    .assert_status_ok();
+    h.grant(&["pool", "plain"]).await;
+    for name in RESERVED {
+        let auth = json!({ "kind": "op_header", "header": name,
+                           "reference": "op://vault/item/field" });
+        let route = h
+            .put_model(
+                "plain",
+                json!({ "upstream": "https://p.example", "auth": auth,
+                        "egress": "direct" }),
+            )
+            .await;
+        assert_eq!(route.status_code(), 400, "route {name}");
+        assert_eq!(code(&route), "invalid_metadata", "route {name}");
+        let backend = h
+            .op_req(Method::PUT, "/routes/pool/backends/b")
+            .json(
+                &json!({ "upstream": "https://b.example", "egress": "direct",
+                           "auth": auth, "broker": {} }),
+            )
+            .await;
+        assert_eq!(backend.status_code(), 400, "backend {name}");
+        assert_eq!(code(&backend), "invalid_metadata", "backend {name}");
+        let agent = h
+            .op_req(Method::PUT, &format!("/agents/{}/credentials/plain", h.pid))
+            .json(&json!({ "auth_spec": auth }))
+            .await;
+        assert_eq!(agent.status_code(), 400, "agent {name}");
+    }
+    let ok = json!({ "kind": "op_header", "header": "X-Api-Key",
+                     "reference": "op://vault/item/field" });
+    h.put_model(
+        "plain",
+        json!({ "upstream": "https://p.example", "auth": ok, "egress": "direct" }),
+    )
+    .await
+    .assert_status_ok();
+}
+
 const FAR_FUTURE: i64 = i64::MAX / 2;
 
 /// A broker route `pool` on `m` probing `/healthz` (expecting `expect`).
