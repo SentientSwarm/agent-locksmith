@@ -21,6 +21,7 @@ pub mod auth_spec;
 pub mod backends;
 pub mod backends_api;
 pub mod broker;
+pub mod broker_health;
 pub mod catalog;
 mod credential;
 mod definitions;

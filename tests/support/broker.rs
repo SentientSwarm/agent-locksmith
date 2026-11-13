@@ -5,10 +5,11 @@
 
 use agent_locksmith::admin::AdminService;
 use agent_locksmith::admin::uds::{UdsState, build_router};
-use agent_locksmith::app::build_app_full_with_phase_k;
+use agent_locksmith::app::build_app_full_with_native;
 use agent_locksmith::auth_v2::{AgentAuthenticator, BearerAuthenticator, OperatorAuthenticator};
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::migrations::open_and_migrate;
+use agent_locksmith::registrations::broker_health::{BrokerHealth, Prober};
 use agent_locksmith::registrations::{Catalog, RegistrationRepository};
 use agent_locksmith::repo::{
     AgentCredentialRepository, AgentRepository, BootstrapTokenRepository,
@@ -27,6 +28,8 @@ use tempfile::TempDir;
 pub struct H {
     _dir: TempDir,
     pub pool: sqlx::SqlitePool,
+    pub health: BrokerHealth,
+    pub prober: Prober,
     pub admin: TestServer,
     pub agent: TestServer,
     pub op: String,
@@ -92,7 +95,26 @@ pub async fn setup() -> H {
         operational_log_store: None,
         op_resolver: None,
     };
-    let agent = build_app_full_with_phase_k(
+    let health = BrokerHealth::default();
+    let oplog = agent_locksmith::operational_log_sink::OperationalLogEmitter::spawn(
+        agent_locksmith::repo::OperationalLogStore::new(pool.clone()),
+        64,
+    );
+    let prober = Prober::new(
+        health.clone(),
+        catalog.clone(),
+        cfg.clone(),
+        Some(key.clone()),
+        Some(secrets.clone()),
+        None,
+        Some(Arc::new(oplog)),
+    );
+    let native = agent_locksmith::native::Runtime::new(
+        cfg.load().mcp.clone(),
+        Some(registrations.clone()),
+        catalog.clone(),
+    );
+    let agent = build_app_full_with_native(
         cfg,
         Some(audit),
         resolved,
@@ -106,10 +128,14 @@ pub async fn setup() -> H {
         Some(secrets),
         None,
         None,
+        native,
+        health.clone(),
     );
     H {
         _dir: dir,
         pool,
+        health,
+        prober,
         admin: TestServer::new(build_router(uds)),
         agent: TestServer::new(agent),
         op: format!("Bearer {}", op_token.wire_format()),

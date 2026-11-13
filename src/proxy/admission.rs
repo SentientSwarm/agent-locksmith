@@ -87,6 +87,14 @@ async fn broker(
     account: AuthSpec,
     identity: &AgentIdentity,
 ) -> Result<ProxyTarget, Box<Response>> {
+    use crate::registrations::broker_health::HealthStatus;
+    if state
+        .broker_health
+        .get(&registration.name)
+        .is_some_and(|h| h.status == HealthStatus::Down)
+    {
+        return Err(Box::new(backend_unavailable(state, ctx).await));
+    }
     let key = &registration.auth;
     let usable = account == AuthSpec::Broker
         && crate::registrations::broker::is_broker_key(key)
@@ -100,6 +108,23 @@ async fn broker(
     target.auth_source = "broker";
     target.broker_agent = Some(identity.public_id.clone());
     Ok(target)
+}
+
+/// The broker failed its last health probe: refuse without dispatch.
+async fn backend_unavailable(state: &AppState, ctx: &RequestCtx) -> Response {
+    let mut event = ctx.audit_event_base();
+    event.status = Some(503);
+    event.decision = Decision::Denied;
+    event.details = Some(json!({ "cause": "backend_unavailable", "backend_kind": "broker" }));
+    audit_record(&state.audit, event).await;
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error": {
+            "type": "availability_error", "code": "backend_unavailable",
+            "message": "the route's broker failed its health probe; try again later"
+        }})),
+    )
+        .into_response()
 }
 
 async fn unavailable(state: &AppState, ctx: &RequestCtx, code: &str) -> Response {
