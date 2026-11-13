@@ -276,20 +276,57 @@ impl AgentRepository {
         Ok(())
     }
 
-    /// Soft-delete via `revoked_at = now`. Idempotent — re-revoking a
-    /// revoked agent updates `revoked_at` to the latest call's timestamp;
-    /// callers who care about first-revoke ordering should check before.
-    pub async fn revoke(&self, public_id: &str) -> Result<(), RepoError> {
-        let now = unix_now();
-        let res = sqlx::query("UPDATE agents SET revoked_at = ? WHERE public_id = ?")
-            .bind(now)
+    /// Soft-delete via `revoked_at = now`, removing the agent's account
+    /// bindings, stashed backend bindings, grants and native grant sets
+    /// in the same transaction (#157). Idempotent — re-revoking updates
+    /// `revoked_at` to the latest call's timestamp and removes anything an
+    /// earlier revoke left behind.
+    pub async fn revoke(&self, public_id: &str) -> Result<StrippedAuthority, RepoError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let id: Option<i64> = sqlx::query_scalar("SELECT id FROM agents WHERE public_id = ?")
             .bind(public_id)
-            .execute(&self.pool)
+            .fetch_optional(&mut *tx)
             .await?;
-        if res.rows_affected() == 0 {
-            return Err(RepoError::AgentNotFound);
+        let id = id.ok_or(RepoError::AgentNotFound)?;
+        sqlx::query("UPDATE agents SET revoked_at = ? WHERE id = ?")
+            .bind(unix_now())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let removed = authority_of(&mut tx, id).await?;
+        strip_authority(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(removed)
+    }
+
+    /// Remove what earlier revokes left behind: bindings, stashed backend
+    /// bindings, grants and native grant sets of every revoked agent.
+    /// `dry_run` reports without changing anything. Agents with nothing
+    /// left are omitted, so a second run returns nothing.
+    pub async fn prune_revoked(&self, dry_run: bool) -> Result<Vec<PrunedAgent>, RepoError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let revoked: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, public_id, name FROM agents WHERE revoked_at IS NOT NULL ORDER BY id",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut pruned = Vec::new();
+        for (id, public_id, name) in revoked {
+            let removed = authority_of(&mut tx, id).await?;
+            if removed.is_empty() {
+                continue;
+            }
+            if !dry_run {
+                strip_authority(&mut tx, id).await?;
+            }
+            pruned.push(PrunedAgent {
+                public_id,
+                name,
+                removed,
+            });
         }
-        Ok(())
+        tx.commit().await?;
+        Ok(pruned)
     }
 
     /// Rotate the agent's secret. INF-9: WHERE-clause CAS — first
@@ -510,4 +547,94 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// What a revoke or prune removed from one agent (#157): bound routes,
+/// stashed `route/backend` bindings, granted connections and native grant
+/// sets. Names only, never credential values.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StrippedAuthority {
+    pub bindings: Vec<String>,
+    pub stashed_bindings: Vec<String>,
+    pub grants: i64,
+    pub native_grant_sets: i64,
+}
+
+impl StrippedAuthority {
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+            && self.stashed_bindings.is_empty()
+            && self.grants == 0
+            && self.native_grant_sets == 0
+    }
+
+    /// Counts only, for audit.
+    pub fn counts(&self) -> Json {
+        serde_json::json!({
+            "bindings": self.bindings.len(),
+            "stashed_bindings": self.stashed_bindings.len(),
+            "grants": self.grants,
+            "native_grant_sets": self.native_grant_sets,
+        })
+    }
+}
+
+/// A revoked agent `prune_revoked` found authority for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PrunedAgent {
+    pub public_id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub removed: StrippedAuthority,
+}
+
+async fn authority_of(
+    tx: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<StrippedAuthority, RepoError> {
+    let bindings = sqlx::query_scalar(
+        "SELECT registration FROM agent_credential_overrides WHERE agent_id = ? \
+         ORDER BY registration",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let stashed_bindings = sqlx::query_scalar(
+        "SELECT route || '/' || backend FROM backend_bindings WHERE agent_id = ? ORDER BY 1",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let grants = sqlx::query_scalar(
+        "SELECT CASE WHEN json_valid(tool_allowlist) \
+         THEN json_array_length(tool_allowlist) ELSE 0 END FROM agents WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let native_grant_sets =
+        sqlx::query_scalar("SELECT COUNT(*) FROM native_grant_sets WHERE agent_id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    Ok(StrippedAuthority {
+        bindings,
+        stashed_bindings,
+        grants,
+        native_grant_sets,
+    })
+}
+
+/// Remove an agent's bindings, stashes, grants and native grant sets.
+/// Deleting bindings fires the native triggers that drop tool grants.
+async fn strip_authority(tx: &mut sqlx::SqliteConnection, id: i64) -> Result<(), RepoError> {
+    for sql in [
+        "DELETE FROM agent_credential_overrides WHERE agent_id = ?",
+        "DELETE FROM backend_bindings WHERE agent_id = ?",
+        "DELETE FROM native_grant_sets WHERE agent_id = ?",
+        "UPDATE agents SET tool_allowlist = '[]' WHERE id = ? AND tool_allowlist IS NOT '[]'",
+    ] {
+        sqlx::query(sql).bind(id).execute(&mut *tx).await?;
+    }
+    Ok(())
 }

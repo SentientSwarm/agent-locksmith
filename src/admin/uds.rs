@@ -248,6 +248,7 @@ pub fn build_router(state: UdsState) -> Router {
             get(op_get_agent).patch(op_modify_agent),
         )
         .route("/agents/{public_id}/revoke", post(op_revoke_agent))
+        .route("/agents/prune-revoked", post(op_prune_revoked))
         .route(
             "/agents/{public_id}/cert_identity",
             axum::routing::patch(op_set_agent_cert_identity),
@@ -615,6 +616,26 @@ async fn op_revoke_agent(
 ) -> Response {
     match state.admin.revoke_agent(&op, &id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => admin_err_response(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PruneRevokedInput {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /admin/operator/agents/prune-revoked` (#157).
+async fn op_prune_revoked(
+    State(state): State<UdsState>,
+    Extension(op): Extension<OperatorIdentity>,
+    body: Option<Json<PruneRevokedInput>>,
+) -> Response {
+    let dry_run = body.map(|Json(b)| b.dry_run).unwrap_or_default();
+    match state.admin.prune_revoked(&op, dry_run).await {
+        Ok(v) => Json(v).into_response(),
         Err(e) => admin_err_response(e),
     }
 }

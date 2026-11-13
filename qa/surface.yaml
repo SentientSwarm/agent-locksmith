@@ -11,7 +11,7 @@ floors:
   ENROL: 5
   PROXY: 6
   AGT: 44
-  ADM: 50
+  ADM: 51
   CAT: 48
   TLS: 41
   NAT: 44
@@ -139,6 +139,15 @@ routes:
   refusals:
   - invalid_credential
   - agent_not_found
+- id: admin.POST./admin/operator/agents/prune-revoked
+  listener: admin
+  method: POST
+  path: /admin/operator/agents/prune-revoked
+  source:
+    file: src/admin/uds.rs
+    route: /agents/prune-revoked
+  refusals:
+  - invalid_credential
 - id: admin.GET./admin/operator/audit
   listener: admin
   method: GET
@@ -1067,6 +1076,8 @@ cli:
   command: agent register
 - id: cli.agent.revoke
   command: agent revoke
+- id: cli.agent.prune-revoked
+  command: agent prune-revoked
 - id: cli.agent.select-oauth
   command: agent select-oauth
 - id: cli.agent.set-cert-identity

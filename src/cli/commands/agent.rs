@@ -106,6 +106,13 @@ pub enum AgentCmd {
         #[command(subcommand)]
         cmd: AgentCredentialsCmd,
     },
+    /// Remove bindings and grants left on revoked agents by an earlier
+    /// revoke. Lists each agent's bound routes; never credential values.
+    PruneRevoked {
+        /// Report what would be removed without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -328,6 +335,17 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                 }),
                 format,
             );
+        }
+        AgentCmd::PruneRevoked { dry_run } => {
+            let resp: Value = client
+                .json(
+                    "POST",
+                    "/admin/operator/agents/prune-revoked",
+                    Auth::Operator(&token),
+                    Some(&json!({ "dry_run": dry_run })),
+                )
+                .await?;
+            print(&resp, format);
         }
         AgentCmd::Credentials { cmd } => match cmd {
             AgentCredentialsCmd::List { id } => {

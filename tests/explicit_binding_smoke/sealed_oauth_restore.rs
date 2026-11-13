@@ -123,9 +123,7 @@ pub async fn quarantine() {
         "known revoked-id lookup limit"
     );
     assert_eq!(f.op(&["agent", "get", "oauth-reader"])["public_id"], old.id);
-    let selections = f.op(&["agent", "credentials", "list", "oauth-reader"]);
-    assert_eq!(selections.as_array().unwrap().len(), 1);
-    f.op(&["agent", "unset-credential", "oauth-reader", "accounts"]);
+    // Revoking removed the agent's bindings in the same write (#157).
     assert!(
         f.op(&["agent", "credentials", "list", "oauth-reader"])
             .as_array()
