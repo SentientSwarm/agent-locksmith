@@ -49,6 +49,12 @@
 
 ### Fixed
 
+- Route backends (#155): the active-backend check on `route backend put`
+  and `delete` now runs inside the write, so a concurrent switch cannot
+  let an edit land on the live destination. `route backend list` and
+  `get` show the active backend from the route itself. A non-numeric
+  `If-Match` on `route switch` is 400 `if_match_invalid`, not 409
+  `revision_conflict`.
 - Point upstream URLs in `Link` and `Location` response headers back at
   Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
   so following `rel="next"` bypassed Locksmith and failed without a

@@ -110,6 +110,14 @@ pub(crate) fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Result of [`BackendRepository::list_effective`].
+#[derive(Debug, Clone)]
+pub struct EffectiveBackends {
+    pub active: String,
+    pub revision: i64,
+    pub backends: Vec<RouteBackend>,
+}
+
 #[derive(Clone)]
 pub struct BackendRepository {
     pool: SqlitePool,
@@ -129,6 +137,26 @@ async fn bump_revision(
     Ok(())
 }
 
+/// Refuse a write to the route's active backend, read inside the write's
+/// own transaction so a concurrent switch cannot slip between the check
+/// and the write (#155).
+async fn refuse_active(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    route: &str,
+    name: &str,
+) -> Result<(), BackendError> {
+    let active: Option<String> =
+        sqlx::query_scalar("SELECT active_backend FROM registrations WHERE name = ?")
+            .bind(route)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(BackendError::NotFound)?;
+    if active.as_deref().unwrap_or(PRIMARY) == name {
+        return Err(BackendError::ActiveBackend);
+    }
+    Ok(())
+}
+
 impl BackendRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -139,6 +167,7 @@ impl BackendRepository {
     pub async fn put(&self, b: &RouteBackend) -> Result<(), BackendError> {
         let now = unix_now();
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        refuse_active(&mut tx, &b.route, &b.name).await?;
         sqlx::query(UPSERT)
             .bind(&b.route)
             .bind(&b.name)
@@ -180,8 +209,50 @@ impl BackendRepository {
         .collect()
     }
 
+    /// The route's backends as an operator sees them, read in one
+    /// snapshot: the declared rows, with the active backend taken from the
+    /// route itself (a declared row for it may be stale or absent), plus
+    /// the active name and the route revision (#155).
+    pub async fn list_effective(&self, route: &str) -> Result<EffectiveBackends, BackendError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT r.name AS route, COALESCE(r.active_backend, 'primary') AS name, \
+                    r.upstream, r.egress, r.upstream_ca_pem, r.auth_json, r.broker_json, \
+                    r.created_at, r.updated_at, i.revision \
+               FROM registrations r JOIN registration_instances i ON i.name = r.name \
+              WHERE r.name = ?",
+        )
+        .bind(route)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BackendError::NotFound)?;
+        let active = row_to_backend(&row)?;
+        let revision: i64 = row.get("revision");
+        let mut backends = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM registration_backends WHERE route = ? AND name != ? \
+              ORDER BY name"
+        ))
+        .bind(route)
+        .bind(&active.name)
+        .fetch_all(&mut *tx)
+        .await?
+        .iter()
+        .map(row_to_backend)
+        .collect::<Result<Vec<_>, _>>()?;
+        tx.commit().await?;
+        let at = backends.partition_point(|b| b.name < active.name);
+        let name = active.name.clone();
+        backends.insert(at, active);
+        Ok(EffectiveBackends {
+            active: name,
+            revision,
+            backends,
+        })
+    }
+
     pub async fn delete(&self, route: &str, name: &str) -> Result<bool, BackendError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        refuse_active(&mut tx, route, name).await?;
         let r = sqlx::query("DELETE FROM registration_backends WHERE route = ? AND name = ?")
             .bind(route)
             .bind(name)
@@ -208,15 +279,7 @@ impl BackendRepository {
         header: Option<&str>,
     ) -> Result<String, BackendError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let active: Option<String> =
-            sqlx::query_scalar("SELECT active_backend FROM registrations WHERE name = ?")
-                .bind(route)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(BackendError::NotFound)?;
-        if active.as_deref().unwrap_or(PRIMARY) == backend {
-            return Err(BackendError::ActiveBackend);
-        }
+        refuse_active(&mut tx, route, backend).await?;
         let row = sqlx::query(
             "SELECT auth_json, broker_json FROM registration_backends \
               WHERE route = ? AND name = ?",

@@ -233,8 +233,10 @@ locksmith route switch codex --backend broker --if-match <revision>
 - `--if-match` is the route revision from `route backend list`. Editing or
   deleting any backend also moves the revision, so a switch cannot land on
   a destination changed after you read it. A missing revision is 428
-  `if_match_required`; a stale one is 409 `revision_conflict` and changes
-  nothing.
+  `if_match_required`, one that is not a number is 400 `if_match_invalid`,
+  and a stale one is 409 `revision_conflict` and changes nothing.
+- `route backend list` and `get` show the active backend as the route
+  currently has it, so an edit made with `tool|model put` shows there too.
 - Each switch writes a `route_backend_switched` security audit event with
   the upstream, egress and CA fingerprint before and after, and reports
   `profile_before` / `profile_after`. Backend edits write

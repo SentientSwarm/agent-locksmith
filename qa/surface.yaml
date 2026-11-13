@@ -1047,6 +1047,7 @@ routes:
   - unknown_name
   - route_not_switchable
   - if_match_required
+  - if_match_invalid
   - revision_conflict
   - active_backend
   - backend_auth_unsupported
