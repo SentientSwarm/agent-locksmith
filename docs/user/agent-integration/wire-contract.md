@@ -213,7 +213,9 @@ Locksmith does not follow redirects. The agent receives the upstream's
 3xx. A relative `Location` (`/v1/next`, `next`) is first resolved against
 the upstream request, and a `Location` under the route's upstream is then
 rewritten as above, so following it goes back through Locksmith with the
-same credential. Without a usable `Host` header nothing is rewritten, and
+same credential. On a route with response controls, a redirect comes
+back with its headers and an empty body; the controls apply to the final
+response. Without a usable `Host` header nothing is rewritten, and
 a same-host `Location` with a different scheme or port is not under the
 upstream base, so it is left as an absolute upstream URL. A redirect to
 another host (for example GitHub's tarball and log downloads,

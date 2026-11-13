@@ -10,6 +10,10 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn harness(upstream: &str) -> registered::Fixture {
+    harness_with(upstream, "").await
+}
+
+async fn harness_with(upstream: &str, extra: &str) -> registered::Fixture {
     let yaml = format!(
         r#"
 listen:
@@ -23,7 +27,7 @@ tools:
       header: "x-api-key"
       value: "route-key"
     timeout_seconds: 15
-"#
+{extra}"#
     );
     let mut h = registered::setup(parse_config_str(&yaml).unwrap()).await;
     h.server.add_header("authorization", &h.bearer);
@@ -116,4 +120,44 @@ async fn relative_redirect_is_resolved_onto_the_route() {
         assert_eq!(resp.status_code(), 302, "{from}");
         assert_eq!(resp.headers()["location"], to, "{from}");
     }
+}
+
+/// A redirect envelope is not the final response: on a route with response
+/// controls it is returned with its `Location` and an empty body, rather
+/// than failing the content-type allowlist meant for the final response.
+#[tokio::test]
+async fn redirect_passes_response_controls_without_its_body() {
+    let upstream = MockServer::start().await;
+    Mock::given(path("/go"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/next")
+                .set_body_raw(b"<a href=/next>moved</a>".to_vec(), "text/html"),
+        )
+        .mount(&upstream)
+        .await;
+    let controls = r#"    response:
+      content_type_allowlist: ["application/json"]
+      redaction_patterns:
+        - id: never
+          regex: "never-matches-xyz"
+"#;
+
+    let h = harness_with(&upstream.uri(), controls).await;
+    let resp = h
+        .server
+        .get("/api/keyed/go")
+        .add_header("host", "locksmith.test:9200")
+        .await;
+
+    assert_eq!(resp.status_code(), 302);
+    assert_eq!(
+        resp.headers()["location"],
+        "http://locksmith.test:9200/api/keyed/next"
+    );
+    assert!(
+        resp.as_bytes().is_empty(),
+        "unapproved redirect body passed"
+    );
+    assert!(resp.headers().get("content-type").is_none());
 }

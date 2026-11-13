@@ -27,7 +27,10 @@
   difference. Redirects to another host, such as GitHub tarball and log
   downloads to signed storage URLs, must be fetched by the agent over its
   own egress; an agent that can reach the network only through Locksmith
-  can no longer complete them.
+  can no longer complete them. The agent's client must drop its
+  Locksmith bearer (`Authorization`) on a host change, as standard
+  clients do. On routes with response controls a redirect is returned
+  with an empty body.
 
 ### Added
 
