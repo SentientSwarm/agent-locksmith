@@ -38,6 +38,9 @@ pub struct OperatorMtlsContext {
 #[derive(Clone)]
 pub struct UdsState {
     pub admin: Arc<AdminService>,
+    /// Brokered routes phase 3 — last broker probe per route, shown on
+    /// the registration and backend reads. Empty outside the daemon.
+    pub broker_health: crate::registrations::broker_health::BrokerHealth,
     pub agent_auth: Arc<BearerAuthenticator>,
     pub operator_auth: Arc<OperatorAuthenticator>,
     /// `None` ⇒ bearer-only operator path (UDS always; HTTPS in M4
@@ -132,6 +135,7 @@ fn build_registrations_admin_router(
         operational_log: state.operational_log.clone(),
         op_resolver: state.op_resolver.clone(),
         agent_creds: state.agent_creds.clone(),
+        broker_health: state.broker_health.clone(),
     };
     Router::new()
         .route("/tools", get(api::op_list_tools))

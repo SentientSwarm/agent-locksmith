@@ -103,6 +103,7 @@ fn state(
     let agents = AgentRepository::new(pool.clone());
     let config = config();
     UdsState {
+        broker_health: Default::default(),
         admin: Arc::new(AdminService::new(
             agents.clone(),
             BootstrapTokenRepository::new(pool.clone()),

@@ -90,6 +90,7 @@ async fn setup() -> Harness {
     let operator_auth = Arc::new(OperatorAuthenticator::load(&ops_path).unwrap());
 
     let state = UdsState {
+        broker_health: Default::default(),
         admin: Arc::new(admin),
         agent_auth,
         operator_auth,

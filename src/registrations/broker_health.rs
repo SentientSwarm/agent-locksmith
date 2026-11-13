@@ -27,13 +27,14 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the prober wakes to look for due probes.
 pub const TICK: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
     Up,
     Down,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct HealthState {
     pub status: HealthStatus,
     pub checked_at: i64,

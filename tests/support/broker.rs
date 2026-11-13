@@ -74,7 +74,9 @@ pub async fn setup() -> H {
     let bearer =
         Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer.clone();
+    let health = BrokerHealth::default();
     let uds = UdsState {
+        broker_health: health.clone(),
         admin: Arc::new(AdminService::with_audit(
             agents,
             BootstrapTokenRepository::new(pool.clone()),
@@ -95,7 +97,6 @@ pub async fn setup() -> H {
         operational_log_store: None,
         op_resolver: None,
     };
-    let health = BrokerHealth::default();
     let oplog = agent_locksmith::operational_log_sink::OperationalLogEmitter::spawn(
         agent_locksmith::repo::OperationalLogStore::new(pool.clone()),
         64,

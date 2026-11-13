@@ -176,3 +176,36 @@ async fn transition_logged_once() {
     assert!(downs[0].2.contains("pool"));
     assert!(!downs[0].2.contains("broker-key-1"));
 }
+
+#[tokio::test]
+async fn admin_get_shows_route_health() {
+    let h = setup().await;
+    let m = broker_server(1).await;
+    route(&h, &m).await;
+    let get = |path: &'static str| {
+        let h = &h;
+        async move {
+            h.op_req(axum::http::Method::GET, path)
+                .await
+                .json::<Value>()
+        }
+    };
+    assert!(get("/models/pool").await["health"].is_null(), "unknown");
+    h.prober.tick_at(FAR_FUTURE).await;
+    let got = get("/models/pool").await;
+    assert_eq!(got["health"]["status"], "up");
+    assert_eq!(got["health"]["http_status"], 200);
+    assert_eq!(got["health"]["checked_at"], FAR_FUTURE);
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    assert_eq!(get("/models/pool").await["health"]["status"], "down");
+    let list = get("/models").await;
+    let row = list["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "pool")
+        .unwrap()
+        .clone();
+    assert_eq!(row["health"]["status"], "down");
+    assert!(!list.to_string().contains("broker-key-1"));
+}

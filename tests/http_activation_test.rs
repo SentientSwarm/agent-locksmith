@@ -99,6 +99,7 @@ impl Fixture {
             Some(bindings.clone()),
         ));
         let admin = AdminRegistrationsState {
+            broker_health: Default::default(),
             consent: None,
             local_listener: None,
             repo: regs,

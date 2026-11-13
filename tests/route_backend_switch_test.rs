@@ -79,6 +79,7 @@ async fn setup() -> H {
         Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer.clone();
     let uds = UdsState {
+        broker_health: Default::default(),
         admin: Arc::new(AdminService::new(
             agents,
             BootstrapTokenRepository::new(pool.clone()),

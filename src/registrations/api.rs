@@ -321,6 +321,9 @@ pub struct AdminRegistrationsState {
     /// Per-agent override repo — read by the `op` resync so references
     /// used only by an override stay resolved.
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
+    /// Brokered routes phase 3 — last probe per broker route, shown as
+    /// `health` on reads.
+    pub broker_health: crate::registrations::broker_health::BrokerHealth,
 }
 
 impl AdminRegistrationsState {
@@ -399,8 +402,18 @@ impl AdminRegistrationsState {
         Ok(())
     }
 
+    /// The route's last broker probe (`null` when not yet probed), for a
+    /// broker route that declares a probe; `None` otherwise.
+    pub(crate) fn health_json(&self, registration: &Registration) -> Option<Value> {
+        registration.broker.as_ref()?.health.as_ref()?;
+        Some(json!(self.broker_health.get(&registration.name)))
+    }
+
     pub(crate) fn describe(&self, registration: &Registration) -> Value {
         let mut value = registration_to_admin_json(registration);
+        if let Some(health) = self.health_json(registration) {
+            value["health"] = health;
+        }
         let catalog = self.catalog.as_ref().map(|c| c.load());
         value["configured"] = true.into();
         if registration.definition_pinned() {

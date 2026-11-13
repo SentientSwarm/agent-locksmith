@@ -191,6 +191,7 @@ async fn setup() -> Harness {
     resync_op_references(&op_resolver, &catalog_arc, Some(&agent_creds)).await;
 
     let uds = UdsState {
+        broker_health: Default::default(),
         admin: admin_service,
         agent_auth: bearer_concrete,
         operator_auth,

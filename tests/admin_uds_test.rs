@@ -78,6 +78,7 @@ tools: []
     let operator_auth = Arc::new(OperatorAuthenticator::load(&ops_path).unwrap());
 
     let state = UdsState {
+        broker_health: Default::default(),
         admin,
         agent_auth,
         operator_auth,

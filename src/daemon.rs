@@ -450,6 +450,10 @@ async fn run_owned(
     // Brokered routes phase 3 — probe broker health in the background;
     // admission refuses a broker whose last probe failed.
     let broker_health = crate::registrations::broker_health::BrokerHealth::default();
+    let admin_state = admin_state.map(|mut s| {
+        s.broker_health = broker_health.clone();
+        s
+    });
     let mut broker_probe_task = catalog_for_app.clone().map(|catalog| {
         let prober = crate::registrations::broker_health::Prober::new(
             broker_health.clone(),
@@ -1284,6 +1288,7 @@ async fn build_admin_substrate(
 
     Ok(AdminSetup {
         uds_state: UdsState {
+            broker_health: Default::default(),
             admin: Arc::new(admin),
             agent_auth: bearer,
             operator_auth: Arc::new(operator_auth),

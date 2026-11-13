@@ -14,6 +14,7 @@ pub async fn prepare(s: &mut Setup, mechanism: &str) {
     let old = s.f.repo.get("native").await.unwrap().unwrap();
     s.f.repo.delete("native").await.unwrap();
     let state = AdminRegistrationsState {
+        broker_health: Default::default(),
         consent: s.rt.consent.clone(),
         local_listener: None,
         repo: s.f.repo.clone(),
