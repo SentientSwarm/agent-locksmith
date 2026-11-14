@@ -125,16 +125,38 @@ def prior_build(text, pins):
     return (path, out.group(1), commit.group(1)) if out and commit and path else None
 
 
-def run_prior_build(build, pins, step_env, run, temp, log):
-    path, out, commit = build
-    cached = CACHE / "prior-bins" / out
-    provenance = cached / "PROVENANCE.txt"
-    pinned_at = git("rev-parse", "HEAD", cwd=pins[path], check=False)
-    if (
-        pinned_at == commit
+def output(cmd, env, cwd):
+    """A command's stdout, or "" when it is missing or fails."""
+    try:
+        done = subprocess.run(
+            cmd, check=False, cwd=cwd, env=env, capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        return ""
+    return done.stdout if done.returncode == 0 else ""
+
+
+def build_key(text, env, ws):
+    """The build step and the compiler: a change to either invalidates the cache."""
+    rustc = output(["rustc", "--version", "--verbose"], env, ws)
+    return hashlib.sha256(f"{text}\0{rustc}".encode()).hexdigest()
+
+
+def cache_hit(cached, pin, commit, key):
+    provenance, stored = cached / "PROVENANCE.txt", cached / "BUILD-KEY"
+    return (
+        git("rev-parse", "HEAD", cwd=pin, check=False) == commit
         and provenance.exists()
         and f"source_commit={commit}" in provenance.read_text()
-    ):
+        and stored.exists()
+        and stored.read_text() == key
+    )
+
+
+def run_prior_build(build, pins, step_env, run, temp, log, key):
+    path, out, commit = build
+    cached = CACHE / "prior-bins" / out
+    if cache_hit(cached, pins[path], commit, key):
         shutil.copytree(cached, temp / out, dirs_exist_ok=True)
         log.write(f"cached prior build {out} at {commit}\n")
         return True
@@ -142,31 +164,35 @@ def run_prior_build(build, pins, step_env, run, temp, log):
     pin_ws.mkdir(parents=True, exist_ok=True)
     link(pin_ws / path, pins[path])
     ok = run({**step_env, "GITHUB_WORKSPACE": str(pin_ws)})
-    if ok:
+    if ok:  # stage, then swap in, so an interrupted copy is never a hit
+        staged = cached.with_name(out + ".new")
+        shutil.rmtree(staged, ignore_errors=True)
+        shutil.copytree(temp / out, staged)
+        (staged / "BUILD-KEY").write_text(key)
         shutil.rmtree(cached, ignore_errors=True)
-        shutil.copytree(temp / out, cached)
+        staged.rename(cached)
     shutil.rmtree(pin_ws / "target", ignore_errors=True)
     return ok
 
 
-def toolchain_env(version):
-    tc = (
-        Path.home()
-        / f".rustup/toolchains/{version}-{platform.machine().replace('arm64', 'aarch64')}-apple-darwin"
-    )
-    path = os.environ["PATH"]
-    if tc.exists():
+def toolchain_env(env, version, ws):
+    """`dtolnay/rust-toolchain@V`: select V for every later step, then check it."""
+    home = Path(env.get("RUSTUP_HOME") or Path(env["HOME"]) / ".rustup")
+    path = env["PATH"]
+    for tc in sorted(home.glob(f"toolchains/{version}-*")):
         path = f"{tc}/bin:{path}"
-    found = subprocess.run(
-        ["rustc", "--version"],
-        check=False,
-        env={**os.environ, "PATH": path},
-        capture_output=True,
-        text=True,
-    ).stdout
-    if version not in found:
+    pinned = {**env, "PATH": path, "RUSTUP_TOOLCHAIN": version}
+    found = output(["rustc", "--version"], pinned, ws)
+    if not found.startswith(f"rustc {version} "):
         raise SystemExit(f"rust {version} required, found: {found.strip() or 'none'}")
-    return path
+    env.update(pinned)
+
+
+def prune_runs(runs, keep):
+    """Keep the newest `keep` runs; directories are `<sha>-<UTC stamp>`."""
+    by_age = sorted(runs.iterdir(), key=lambda p: p.name.split("-", 1)[-1])
+    for old in by_age[:-keep]:
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def keep_artifact(with_, evidence):
@@ -212,7 +238,7 @@ def run_job(name, job, ctx, env, ws, repo, evidence, log):
                     repo, ws, with_["ref"], with_["path"]
                 )
         elif uses.startswith("dtolnay/rust-toolchain"):
-            env["PATH"] = toolchain_env(uses.split("@")[1])
+            toolchain_env(env, uses.split("@")[1], ws)
         elif uses.startswith("astral-sh/setup-uv"):
             ok = shutil.which("uv") is not None
         elif uses.startswith("Swatinem/rust-cache"):
@@ -242,7 +268,13 @@ def run_job(name, job, ctx, env, ws, repo, evidence, log):
             build = prior_build(text, pins)
             if build:
                 ok = run_prior_build(
-                    build, pins, step_env, run, Path(env["RUNNER_TEMP"]), log
+                    build,
+                    pins,
+                    step_env,
+                    run,
+                    Path(env["RUNNER_TEMP"]),
+                    log,
+                    build_key(text, step_env, ws),
                 )
             else:
                 ok = run(step_env)
@@ -329,8 +361,7 @@ def main():
     # Uploaded artifacts were copied out; the scratch tree holds gigabytes of
     # prior binaries and venvs.
     shutil.rmtree(temp, ignore_errors=True)
-    for old in sorted((CACHE / "runs").iterdir())[:-KEEP_RUNS]:
-        shutil.rmtree(old, ignore_errors=True)
+    prune_runs(CACHE / "runs", KEEP_RUNS)
     green = all(j["result"] == "pass" for j in summary["jobs"].values())
     print(f"local CI {'PASS' if green else 'FAIL'} at {sha[:12]}; evidence: {evidence}")
     if args.post_status:

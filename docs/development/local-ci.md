@@ -56,7 +56,7 @@ The environment starts from a short allowlist (`HOME`, `USER`, `PATH`,
 shell. Provider API keys in your shell would otherwise switch on paid live
 tests, and `CARGO_*` or `BASH_ENV` would change what is built and run.
 
-The runner fails closed on anything it does not implement: any other `if:`
+The runner fails closed on these settings it does not implement: any other `if:`
 expression, step settings such as `working-directory`, `shell` or
 `continue-on-error`, job settings such as `env`, `if` or `defaults`, and
 workflow-level `defaults`. Add support to the script before using one.
@@ -83,7 +83,8 @@ can only check out its own repository's commits. It holds the workspace
 worktree and its `target/`, the pinned prior-source worktrees, the cached
 prior binaries and `runs/<sha>-<time>/` evidence. The first run builds
 every pinned prior binary; later runs reuse one only when its pinned
-worktree is still at the recorded commit. The last 20 runs' evidence is
+worktree is still at the recorded commit and the build step's text and
+the compiler (`rustc --version --verbose`) are unchanged. The last 20 runs' evidence is
 kept, without the runner's scratch directory. One run at a time holds
 `lock`. Delete the directory to start clean (run `git worktree prune`
 afterwards).
@@ -97,3 +98,7 @@ afterwards).
   (see [native validation](native-validation.md)), so a local run would
   have to invent that metadata. Releases still need it on GitHub.
 - Artifacts stay on the machine rather than being uploaded.
+- Steps run under `bash -eo pipefail`, stricter than GitHub's default
+  `bash -e`: a failure inside a pipeline fails the step here.
+- `with:` inputs other than the ones in the table are not enforced; for
+  example `setup-uv`'s `version` only checks that `uv` exists.
