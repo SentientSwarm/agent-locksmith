@@ -154,10 +154,18 @@ locksmith rekey-credentials --database "$DB" \
 ```
 
 Every `credential_secrets` row, tombstoned rows included, is resealed under the
-new key with a fresh nonce in one transaction. If the old key cannot open any
-row, the command exits 1 and changes nothing. A key file that group or others can
-read is refused with exit 2. Keys are never taken from arguments or the
-environment, and no value is printed. Then start the daemon with
+new key with a fresh nonce in one transaction. If there is a row the old key
+cannot open, the command exits 1 and changes nothing. A key file that group or
+others can read is refused with exit 2, as is the same key given twice. Keys are
+never taken from arguments or the environment, and no value is printed. Run it as
+the daemon's user; the result is written entirely into the database file.
+
+A database holding rows under two keys (for example tombstoned rows left by an
+earlier key change) cannot be re-keyed until the retention sweep removes them.
+
+Re-keying a copy of a database changes only the key. The copy keeps every stored
+upstream value and OAuth row it had (OAuth rows stay under the OAuth key). To give
+a copy its own credentials, replace or revoke those values as well. Then start the daemon with
 `LOCKSMITH_CREDENTIAL_SEALING_KEY` set to the new key. Backups taken before the
 re-key still need the old key; keep it according to your security policy.
 

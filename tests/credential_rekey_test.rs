@@ -178,3 +178,62 @@ fn fresh_b64() -> String {
     getrandom::fill(&mut bytes).unwrap();
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
+
+#[tokio::test]
+async fn a_late_unopenable_row_rolls_back_rows_already_rewritten() {
+    let dir = TempDir::new().unwrap();
+    let (old, other, new) = (
+        CredentialSealingKey::generate().unwrap(),
+        CredentialSealingKey::generate().unwrap(),
+        CredentialSealingKey::generate().unwrap(),
+    );
+    store(&dir, &old, &["a", "b"]).await;
+    store(&dir, &other, &["stray"]).await;
+
+    let err = rekey_credentials(&dir.path().join("locksmith.db"), &old, &new)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, RekeyError::WrongKey), "{err:?}");
+    let under_old = unseal_all(&dir, &old).await;
+    assert!(
+        under_old[0].is_ok() && under_old[1].is_ok(),
+        "{under_old:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_database_file_alone_carries_the_new_key() {
+    let dir = TempDir::new().unwrap();
+    let (old, new) = (
+        CredentialSealingKey::generate().unwrap(),
+        CredentialSealingKey::generate().unwrap(),
+    );
+    store(&dir, &old, &["a"]).await;
+    rekey_credentials(&dir.path().join("locksmith.db"), &old, &new)
+        .await
+        .unwrap();
+
+    let copy = TempDir::new().unwrap();
+    std::fs::copy(
+        dir.path().join("locksmith.db"),
+        copy.path().join("locksmith.db"),
+    )
+    .unwrap();
+    assert_eq!(unseal_all(&copy, &new).await, vec![Ok("a".to_string())]);
+}
+
+#[tokio::test]
+async fn the_same_key_twice_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let b64 = fresh_b64();
+    let key = CredentialSealingKey::from_b64(&b64).unwrap();
+    store(&dir, &key, &["a"]).await;
+    let out = cli(
+        &dir.path().join("locksmith.db"),
+        &key_file(&dir, "old.key", &b64, 0o600),
+        &key_file(&dir, "new.key", &b64, 0o600),
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("same key"));
+}
