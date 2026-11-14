@@ -10,7 +10,7 @@ gate; the gates are a local review and local tests.
 
 - `main` is the integration branch and the base for new work. Keep it releasable.
 - Work on a short-lived local `feature/`, `fix/` or `docs/` branch from current `origin/main`, one reviewable slice at a time.
-- Before landing, run the tiered checks (see [local CI](local-ci.md)): fmt, clippy and the tests for the touched code on every change; the prior-binary migration checks when migrations or the schema change; the full suite and QA before a deploy and nightly.
+- Before landing, run the tiered checks (see [local CI](local-ci.md)): fmt, clippy and the tests for the touched code on every change; the prior-binary migration checks when migrations or the schema change; QA smoke when a CLI command, an HTTP route or QA-exercised behaviour changes; the full suite and QA before a deploy and nightly.
 - Run the two-engine [local review](review.md) on the branch diff, last, after every change you intend to land. Every change is reviewed, including docs-only and test-only changes, which use the docs/tests prompt. Critical and High findings block; fix them and review again. Other findings go to a follow-up ticket.
 - Land with a fast-forward: `git switch main && git merge --ff-only <branch> && git push origin main`, then delete the branch.
 - `develop` is retired as an integration branch. Do not base new branches on it.

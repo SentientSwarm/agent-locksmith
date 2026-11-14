@@ -12,6 +12,7 @@ Tiered, per [branching](branching.md):
 |---|---|
 | Every change | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and the tests for the touched code |
 | A migration or schema change | also `scripts/ci-local.py --jobs test`, which runs the prior-binary migration checks |
+| A CLI command or HTTP route (any listener), or behaviour the QA smoke or UAT cases exercise (`qa/`, `docs/guide/`) | also `scripts/ci-local.py --jobs qa-smoke`. Its PR-mode gate fails when a command or route is missing from, or stale in, `qa/surface.yaml`, when a case fails, or when an area drops below its floor. It does not require a case for every entry: that is checked only by `qa/run.py --mode release`, which no local CI job runs, so add the cases yourself: a passing positive case for each entry, plus refusal cases for each refusal code it lists (see [QA](../../qa/README.md)) |
 | Before a deploy, and nightly | `scripts/ci-local.py` (every job) on the commit being deployed |
 
 ## Run it
