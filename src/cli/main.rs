@@ -88,6 +88,8 @@ enum Cmd {
     BootstrapOperator(bootstrap_operator::BootstrapOperatorArgs),
     /// Offline reference-only account upgrade. Stop daemon and back up first.
     MigrateBindings(commands::migrate_bindings::ArgsOffline),
+    /// Offline re-key of stored credential values. Stop daemon and back up first.
+    RekeyCredentials(commands::rekey_credentials::RekeyArgs),
     /// Tool management (operator).
     Tool {
         #[command(subcommand)]
@@ -177,6 +179,16 @@ async fn main() -> ExitCode {
         };
     }
 
+    if let Cmd::RekeyCredentials(args) = cmd {
+        return match commands::rekey_credentials::run(args).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err((code, message)) => {
+                eprintln!("error: {message}");
+                ExitCode::from(code)
+            }
+        };
+    }
+
     if let Cmd::MigrateBindings(args) = cmd {
         return match commands::migrate_bindings::run(args).await {
             Ok(()) => ExitCode::SUCCESS,
@@ -208,6 +220,7 @@ async fn main() -> ExitCode {
         Cmd::Agent { cmd } => agent::run(&client, cli.format, cmd).await,
         Cmd::Bootstrap { cmd } => bootstrap::run(&client, cli.format, cmd).await,
         Cmd::MigrateBindings(_) => unreachable!("handled before client construction"),
+        Cmd::RekeyCredentials(_) => unreachable!("handled before client construction"),
         Cmd::BootstrapOperator(_) => unreachable!("handled before client construction"),
         Cmd::Integration { cmd } => commands::integration::run(&client, cli.format, cmd).await,
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,

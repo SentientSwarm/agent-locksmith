@@ -9,6 +9,7 @@ pub mod model;
 pub mod mtls;
 pub mod oauth;
 pub mod registration;
+pub mod rekey_credentials;
 pub mod route;
 pub mod self_svc;
 pub mod tool;

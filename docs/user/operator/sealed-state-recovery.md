@@ -141,11 +141,27 @@ Changing an upstream stored value is supported: `agent set-credential "$AGENT"
 "$REGISTRATION" --stored-bearer-stdin < "$PRIVATE_VALUE_FILE"` creates a fresh
 reference. Intentionally shared agents need deliberate selection of that new
 reference; other agents selecting the old live reference are not silently moved.
-This is value replacement, **not sealing-key rotation**. There is no in-place
-stored-key rewrap command. Changing only the stored sealing key strands existing
-ciphertexts. Recover the compatible key, or deliberately provision new values and
-replace all affected selections under a planned rebuild. Keep old keys available
-for retained backups according to your security policy.
+This is value replacement, **not sealing-key rotation**.
+
+To rotate the stored sealing key, re-key the database offline. Stop the daemon
+and take a SQLite-safe backup first; the daemon reads stored values per request.
+Put each base64 key in its own owner-only file (mode 0600 or 0400):
+
+```bash
+locksmith rekey-credentials --database "$DB" \
+  --old-key-file "$OLD_KEY_FILE" --new-key-file "$NEW_KEY_FILE"
+# {"rekeyed":N}
+```
+
+Every `credential_secrets` row, tombstoned rows included, is resealed under the
+new key with a fresh nonce in one transaction. If the old key cannot open any
+row, the command exits 1 and changes nothing. A key file that group or others can
+read is refused with exit 2. Keys are never taken from arguments or the
+environment, and no value is printed. Then start the daemon with
+`LOCKSMITH_CREDENTIAL_SEALING_KEY` set to the new key. Backups taken before the
+re-key still need the old key; keep it according to your security policy.
+
+Changing only the configured key without re-keying strands existing ciphertexts.
 
 OAuth key replacement likewise does not re-encrypt old rows. Use quarantine,
 local revocation and fresh provider issuance under the new key, then explicit

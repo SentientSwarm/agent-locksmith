@@ -19,6 +19,14 @@
   removes what earlier revokes left: it names agents and routes, never
   credential values, and audits counts only.
 
+### Added
+
+- `locksmith rekey-credentials --database DB --old-key-file F --new-key-file F`
+  re-keys stored credential values offline: every row is resealed under the
+  new credential sealing key in one transaction, or none is if the old key is
+  wrong. Keys are read only from owner-only files. This is the stored-key
+  rotation path, and lets a database copy run under its own key.
+
 ### Changed
 
 - Agents now receive upstream redirects instead of their final response.

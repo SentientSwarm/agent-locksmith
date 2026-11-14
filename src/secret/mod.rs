@@ -23,6 +23,7 @@ pub mod env;
 pub mod file_sealed;
 pub mod materialize;
 pub mod op_resolver;
+pub mod rekey;
 pub mod vault;
 
 pub use aws::AwsSecretsManagerBackend;
