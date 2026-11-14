@@ -12,7 +12,10 @@ before it lands. There are no pull requests (see
    or `qa/` uses the docs/tests prompt; anything else uses the code
    prompt.
 3. Run both engines against `origin/main`, in parallel:
-   - Codex: `codex review --base origin/main - < docs/development/review-prompts/<prompt>.md`
+   - Codex: `codex review - < docs/development/review-prompts/<prompt>.md`.
+     Codex does not accept a custom prompt together with `--base`; the
+     prompt itself names `origin/main`. Check the output for findings,
+     not the exit code: Codex exits 0 even when a run is cut short.
    - Claude: a fresh, isolated session given the same prompt and the
      diff (`git diff origin/main...HEAD`), reading files but not running
      builds.
