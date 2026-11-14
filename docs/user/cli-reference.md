@@ -620,9 +620,10 @@ review, unavailable-source handling, verification and rollback consequences.
 reseals every stored credential value under a new credential sealing key in one
 transaction and prints `{"rekeyed":N}`. Stop the daemon and back up first, and run
 it as the daemon's user. Each key file holds one base64 key and must be mode 0600
-or 0400. Exit 1 means the old key could not open a row and nothing changed; exit 2
-means unusable input (a missing or open-permission key file, an invalid key, or
-the same key twice). No operator token is used. Then start the daemon with
+or 0400. Exit 2 means unusable input (a missing or open-permission key file, an
+invalid key, or the same key twice). Exit 1 means the run failed: a wrong old key
+says `nothing was changed`; any other exit-1 message is a database error, such as
+a missing or locked database, to read before retrying. No operator token is used. Then start the daemon with
 `LOCKSMITH_CREDENTIAL_SEALING_KEY` set to the new key. See
 [sealed-state recovery](operator/sealed-state-recovery.md).
 
