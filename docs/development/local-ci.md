@@ -15,6 +15,47 @@ Tiered, per [branching](branching.md):
 | A CLI command or HTTP route (any listener), or behaviour the QA smoke or UAT cases exercise (`qa/`, `docs/guide/`) | also `scripts/ci-local.py --jobs qa-smoke`. Its PR-mode gate fails when a command or route is missing from, or stale in, `qa/surface.yaml`, when a case fails, or when an area drops below its floor. It does not require a case for every entry: that is checked only by `qa/run.py --mode release`, which no local CI job runs, so add the cases yourself: a passing positive case for each entry, plus refusal cases for each refusal code it lists (see [QA](../../qa/README.md)) |
 | Before a deploy, and nightly | `scripts/ci-local.py` (every job) on the commit being deployed |
 
+## Test binaries
+
+Integration tests are grouped into seven binaries rather than one per file,
+because every binary is linked, and on macOS vetted by `syspolicyd` the first
+time it runs. With one binary per file, that check alone could stall a
+parallel run for an hour. `Cargo.toml` sets `autotests = false` and lists
+each binary.
+
+| Binary | Holds |
+|---|---|
+| `admin_suite` | admin API, audit, operational logs, repositories, migrations, CLI |
+| `catalog_suite` | registrations, HTTP services, routes, brokers, definitions, bindings |
+| `daemon_suite` | tests that start real `locksmithd` or CLI processes |
+| `mtls_suite` | mTLS validation and revocation, admin HTTPS |
+| `native_suite` | in-process native MCP lifecycle, policy and dispatch |
+| `oauth_suite` | OAuth admin, serde, seeding, device login, recovery |
+| `proxy_suite` | the agent proxy, response controls, credential sources |
+
+Each `tests/<binary>.rs` includes former test files unchanged, by path, as
+modules named after the file. To run what used to be `--test proxy_test`:
+
+```bash
+cargo test --test proxy_suite proxy_test::
+cargo test --test native_suite -- native_lifecycle_test:: native_state_test::
+```
+
+Filters are substring matches, so `admin_https_test::` also runs
+`cli_admin_https_test::`.
+
+Eighteen files stay as their own binaries: those that change environment
+variables or the process umask, re-run their own executable, resolve
+helper modules from the crate root, or are named by `ci.yml`. A new test
+file needs a line in one of the suite files, or its own `[[test]]` entry
+if it does any of those things. With `autotests = false`, a file in
+neither place would never be built; `test_inventory_test` (in
+`admin_suite`) fails when any `tests/*.rs` is built other than exactly once.
+
+[cargo-nextest](https://nexte.st) also works (`cargo nextest run
+--workspace`). `.config/nextest.toml` limits the process-starting tests to
+four at a time.
+
 ## Run it
 
 ```bash

@@ -110,7 +110,7 @@ body read. Operator authentication before the handler is outside those deadlines
 
 ## Checks and attribution
 
-Focused target: `cargo test --locked --test native_preparation_test`.
+Focused target: `cargo test --locked --test native_suite native_preparation_test::`.
 Actual daemon/CLI/separate verified-TLS receiver:
 `cargo test --locked --test native_preparation_process_test`.
 Per-agent stored write cases also live in `agent_stored_override_test`.

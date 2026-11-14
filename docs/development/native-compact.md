@@ -68,7 +68,7 @@ cargo fmt --check
 cargo build --locked --offline --bins
 cargo test --locked --offline --test native_compact_process_test -- --nocapture
 LOCKSMITH_NATIVE_PYTHON=/path/to/existing/pinned/python \
-  cargo test --locked --offline --test native_compact_sdk_test -- --nocapture
+  cargo test --locked --offline --test daemon_suite native_compact_sdk_test:: -- --nocapture
 QA_RECEIVER="$PWD/tests/native_dispatch/receiver.py" \
   cargo test --locked --offline --features s3-disconnect-proof \
   --test native_compact_ownership_test --test native_dispatch_ownership_test \

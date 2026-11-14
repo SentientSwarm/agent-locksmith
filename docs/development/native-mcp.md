@@ -114,8 +114,8 @@ Use a disposable worktree and private generated state. No installed service or
 real provider credential is needed. Commands:
 
 ```sh
-cargo test --locked --test native_registration_test --test native_configuration_test
-cargo test --locked --test native_lifecycle_test --test native_boundaries_test --test native_state_test --test native_policy_test
+cargo test --locked --test native_suite -- native_registration_test:: native_configuration_test::
+cargo test --locked --test native_suite -- native_lifecycle_test:: native_boundaries_test:: native_state_test:: native_policy_test::
 uv venv --python 3.13 target/native-python
 uv pip install --python target/native-python/bin/python -r tests/native_process/requirements.txt
 LOCKSMITH_NATIVE_PYTHON=target/native-python/bin/python cargo test --locked --test native_process_test -- --nocapture --test-threads=1

@@ -130,7 +130,7 @@ a guarantee against a hostile direct database writer.
 ## Verification
 
 ```sh
-cargo test --locked --test definition_validation_test --test definition_api_test
+cargo test --locked --test catalog_suite -- definition_validation_test:: definition_api_test::
 cargo test --locked --test definition_process_test -- --nocapture --test-threads=1
 ```
 

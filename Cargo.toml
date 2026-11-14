@@ -5,6 +5,8 @@ edition = "2024"
 description = "Secure proxy for AI agent tool access with credential injection"
 license = "MIT"
 repository = "https://github.com/SentientSwarm/agent-locksmith"
+# Test binaries are listed below; see docs/development/local-ci.md#test-binaries.
+autotests = false
 
 [[bin]]
 name = "locksmithd"
@@ -82,6 +84,102 @@ rmcp = { path = "crates/mcp-transport/vendor/rmcp" }
 # AGENT-218.
 [profile.release.build-override]
 strip = false
+
+
+# Grouped integration test binaries: each includes several test files by path.
+[[test]]
+name = "admin_suite"
+path = "tests/admin_suite.rs"
+
+[[test]]
+name = "catalog_suite"
+path = "tests/catalog_suite.rs"
+
+[[test]]
+name = "daemon_suite"
+path = "tests/daemon_suite.rs"
+
+[[test]]
+name = "mtls_suite"
+path = "tests/mtls_suite.rs"
+
+[[test]]
+name = "native_suite"
+path = "tests/native_suite.rs"
+
+[[test]]
+name = "oauth_suite"
+path = "tests/oauth_suite.rs"
+
+[[test]]
+name = "proxy_suite"
+path = "tests/proxy_suite.rs"
+
+# Standalone: they change process-wide state, re-run their own binary, resolve
+# modules from the crate root, or are named by CI and the docs.
+[[test]]
+name = "agent_listener_mtls_e2e_test"
+path = "tests/agent_listener_mtls_e2e_test.rs"
+
+[[test]]
+name = "build_identity_test"
+path = "tests/build_identity_test.rs"
+
+[[test]]
+name = "definition_process_test"
+path = "tests/definition_process_test.rs"
+
+[[test]]
+name = "env_expansion_test"
+path = "tests/env_expansion_test.rs"
+
+[[test]]
+name = "explicit_account_bindings_test"
+path = "tests/explicit_account_bindings_test.rs"
+
+[[test]]
+name = "explicit_binding_smoke_test"
+path = "tests/explicit_binding_smoke_test.rs"
+
+[[test]]
+name = "inference_matrix_cloud_test"
+path = "tests/inference_matrix_cloud_test.rs"
+
+[[test]]
+name = "native_compact_process_test"
+path = "tests/native_compact_process_test.rs"
+
+[[test]]
+name = "native_oauth_test"
+path = "tests/native_oauth_test.rs"
+
+[[test]]
+name = "native_preparation_process_test"
+path = "tests/native_preparation_process_test.rs"
+
+[[test]]
+name = "native_process_test"
+path = "tests/native_process_test.rs"
+
+[[test]]
+name = "oauth_consent_process_test"
+path = "tests/oauth_consent_process_test.rs"
+
+[[test]]
+name = "phase_f_oauth_proxy_test"
+path = "tests/phase_f_oauth_proxy_test.rs"
+
+[[test]]
+name = "phase_g_overrides_test"
+path = "tests/phase_g_overrides_test.rs"
+
+[[test]]
+name = "secret_backend_env_test"
+path = "tests/secret_backend_env_test.rs"
+
+[[test]]
+name = "secret_proxy_integration_test"
+path = "tests/secret_proxy_integration_test.rs"
 
 # Opt-in replay preserves the historical oracle byte-for-byte; see the smoke guide.
 [features]

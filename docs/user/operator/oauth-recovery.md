@@ -98,7 +98,7 @@ must observe either the complete committed pair or the durable pending state.
 ## Reproducible checks
 
 ```sh
-cargo test --locked --test oauth_incarnation_test --test oauth_recovery_test
+cargo test --locked --test oauth_suite -- oauth_incarnation_test:: oauth_recovery_test::
 cargo test --locked --lib oauth::refresh::recovery_process -- --nocapture
 cargo test --locked --test explicit_binding_smoke_test refresh -- --nocapture
 LOCKSMITH_RECOVERY_PRIOR_DAEMON=/path/to/schema12/locksmithd \

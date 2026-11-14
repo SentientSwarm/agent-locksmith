@@ -71,7 +71,7 @@ already-admitted work may finish. There is no new stream cancellation system.
 
 ```sh
 cargo test --locked --test explicit_binding_smoke_test -- --nocapture
-cargo test --locked --test http_grants_test --test http_activation_test
+cargo test --locked --test catalog_suite -- http_grants_test:: http_activation_test::
 ```
 
 The [saved process smoke](../../development/explicit-account-bindings-smoke.md)

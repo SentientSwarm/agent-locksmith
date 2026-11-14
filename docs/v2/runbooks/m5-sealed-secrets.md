@@ -187,10 +187,10 @@ From the repo root:
 
 ```bash
 # Unit/integration tests for the secret module.
-cargo test --test secret_ref_parse_test
+cargo test --test proxy_suite secret_ref_parse_test::
 cargo test --test secret_backend_env_test
-cargo test --test secret_backend_file_sealed_test
-cargo test --test secret_backend_stubs_test
+cargo test --test proxy_suite secret_backend_file_sealed_test::
+cargo test --test proxy_suite secret_backend_stubs_test::
 
 # Daemon-driven integration: sealed creds reach the proxy hot path.
 cargo test --test secret_proxy_integration_test

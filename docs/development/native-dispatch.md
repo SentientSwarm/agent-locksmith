@@ -83,8 +83,8 @@ The root full suite, strict all-target Clippy/fmt/binaries and separate transpor
 suite/Clippy/fmt/vendor checks remain required. Focused targets:
 
 ```sh
-cargo test --locked --test native_dispatch_test
-cargo test --locked --test native_dispatch_process_test -- --nocapture
+cargo test --locked --test native_suite native_dispatch_test::
+cargo test --locked --test daemon_suite native_dispatch_process_test:: -- --nocapture
 ```
 
 Install the [pinned Python environment](../../tests/native_process/requirements.txt)

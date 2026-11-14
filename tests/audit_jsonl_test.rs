@@ -173,7 +173,8 @@ tools: []
     let cfg = parse_config_str(&yaml).unwrap();
     let (coord, handle) = daemon::run_with_drain_window(cfg, Duration::from_secs(5)).await;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // Startup shares the CPU with the rest of admin_suite; this bounds a failure only.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !socket.exists() {
         if std::time::Instant::now() > deadline {
             panic!("socket never bound");

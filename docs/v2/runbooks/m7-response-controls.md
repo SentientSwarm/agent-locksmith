@@ -138,17 +138,17 @@ From the repo root:
 
 ```bash
 # Unit + apply tests
-cargo test --test response_controls_config_test
-cargo test --test response_controls_apply_test
-cargo test --test response_controls_streaming_test
+cargo test --test proxy_suite response_controls_config_test::
+cargo test --test proxy_suite response_controls_apply_test::
+cargo test --test proxy_suite response_controls_streaming_test::
 
 # Integration (daemon-driven)
-cargo test --test response_controls_size_test
-cargo test --test response_controls_content_type_test
-cargo test --test response_controls_redaction_test
+cargo test --test proxy_suite response_controls_size_test::
+cargo test --test proxy_suite response_controls_content_type_test::
+cargo test --test proxy_suite response_controls_redaction_test::
 
 # M1 streaming regression — must still report 3/3 ok
-cargo test --test streaming_passthrough_test
+cargo test --test proxy_suite streaming_passthrough_test::
 ```
 
 For a manual smoke against a real deployment with a streaming upstream:

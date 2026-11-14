@@ -38,7 +38,7 @@ Tick every item before claiming M1 done. The last column shows where each criter
 The load-bearing M1 test. Run from the repo root:
 
 ```bash
-cargo test --test streaming_passthrough_test
+cargo test --test proxy_suite streaming_passthrough_test::
 ```
 
 Expected: 3 tests pass within ~5s. The longest test is `test_long_running_stream_completes` (~5s simulated upstream).
@@ -52,7 +52,7 @@ If a test fails with `first byte arrived after Xms, expected < 100ms`: profile t
 ## 3. Running the local-upstream matrix
 
 ```bash
-cargo test --test inference_matrix_local_test
+cargo test --test proxy_suite inference_matrix_local_test::
 ```
 
 The fixture test always runs. Ollama / LM Studio tests skip when their hosts are unreachable; output looks like:
@@ -74,7 +74,7 @@ To exercise Ollama or LM Studio:
 Override the host via env var:
 
 ```bash
-OLLAMA_HOST=192.168.1.10:11434 cargo test --test inference_matrix_local_test
+OLLAMA_HOST=192.168.1.10:11434 cargo test --test proxy_suite inference_matrix_local_test::
 ```
 
 ---
@@ -205,9 +205,9 @@ cargo test --tests
 ANTHROPIC_API_KEY=... OPENAI_API_KEY=... cargo test --tests
 
 # Targeted M1 acceptance:
-cargo test --test streaming_passthrough_test
-cargo test --test inference_matrix_local_test
-cargo test --test config_strict_test
-cargo test --test health_test
-cargo test --test deprecation_test
+cargo test --test proxy_suite streaming_passthrough_test::
+cargo test --test proxy_suite inference_matrix_local_test::
+cargo test --test admin_suite config_strict_test::
+cargo test --test proxy_suite health_test::
+cargo test --test admin_suite deprecation_test::
 ```

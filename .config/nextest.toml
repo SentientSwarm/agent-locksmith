@@ -1,0 +1,15 @@
+# cargo-nextest settings (https://nexte.st). Every test runs in its own
+# process, in parallel. Tests that start daemons, CLIs or Python MCP servers
+# share a small group: at full parallelism they starve each other and time
+# out. A test that runs past the slow timeout is killed, not waited on.
+
+[test-groups]
+process = { max-threads = 4 }
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+fail-fast = false
+
+[[profile.default.overrides]]
+filter = 'binary(daemon_suite) | binary(/_process_|_process$|_e2e|build_identity|explicit_binding_smoke/) | test(/^cli_|::process::/)'
+test-group = 'process'

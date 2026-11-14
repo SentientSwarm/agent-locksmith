@@ -167,7 +167,7 @@ Without `--grants`, preview retains the older account-only format. Applying that
 format does not review an old agent policy; run the finite grant cutover before
 expecting HTTP access.
 
-The migration regression command is `cargo test --test binding_migration_test`.
+The migration regression command is `cargo test --test catalog_suite binding_migration_test::`.
 
 It runs actual offline CLI processes against disposable SQLite fixtures and
 checks real registered-agent authentication/custody/forwarding against synthetic

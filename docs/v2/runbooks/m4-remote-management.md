@@ -190,16 +190,16 @@ From the repo root, with the daemon running and an operator token in env:
 
 ```bash
 # 1. Off-by-default check
-cargo test --test admin_https_off_by_default_test
+cargo test --test mtls_suite admin_https_off_by_default_test::
 
 # 2. PEM-load fail-fast
-cargo test --test admin_https_pem_load_test
+cargo test --test mtls_suite admin_https_pem_load_test::
 
 # 3. Listener round-trip
-cargo test --test admin_https_test
+cargo test --test mtls_suite admin_https_test::
 
 # 4. CLI cross-transport contract
-cargo test --test cli_admin_https_test
+cargo test --test mtls_suite cli_admin_https_test::
 ```
 
 All four binaries must report `test result: ok` with 100% pass.

@@ -115,8 +115,8 @@ cargo fmt --check
 python3 scripts/ci-local.py --rev <sha> [--post-status]
 
 # Single test binary / single test
-cargo test --test admin_https_mtls_e2e_test
-cargo test --test proxy_test -- streaming_passthrough  # name filter
+cargo test --test daemon_suite admin_https_mtls_e2e_test::  # one former binary
+cargo test --test proxy_suite proxy_test::streaming_passthrough  # name filter
 cargo test path::to::module::test_name                 # for unit tests in src/
 
 # Audit-write benchmark (criterion)
@@ -141,7 +141,7 @@ SQLite migrations under `migrations/` are embedded and applied on daemon startup
 - **`locksmithd`** (`src/main.rs`) — the daemon. Loads YAML config, wires telemetry + shutdown coordinator, calls `daemon::run`.
 - **`locksmith`** (`src/cli/main.rs`) — operator + agent self-service CLI. Talks to the daemon over the admin UDS or admin HTTPS. Subcommands: `agent`, `bootstrap`, `bootstrap-operator` (offline; mints operator credential), `tool` / `model` / `infra` (catalog management — Phase E.4), `oauth` (Phase F.4), `audit`, `export`, `mtls`, `status`, `rotate`. Exit codes are SPEC §4.7.2 (0/1/2/3/4/5).
 
-Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/` (~70 test binaries, ~340 tests at v2.0.0).
+Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/`: seven grouped suite binaries plus 18 standalone ones (see `docs/development/local-ci.md#test-binaries`; `autotests = false`, so a new file must be added to a suite or `Cargo.toml`).
 
 ## Runtime architecture
 
@@ -231,7 +231,7 @@ src/
   shutdown.rs              ShutdownCoordinator + drain window
   telemetry.rs             tracing-subscriber JSON setup
   deprecation.rs           one-shot warnings for legacy config shapes
-tests/                     integration tests, one binary per file
+tests/                     integration tests: *_suite.rs group files by path; standalone binaries in Cargo.toml
 benches/audit_write_bench  criterion bench — validates A-2 / INF-26 audit throughput
 migrations/                SQLite schema (embedded into the binary)
 seed/catalog.yaml          Phase E.7: bundled default registrations (16 entries at v2.1.0)

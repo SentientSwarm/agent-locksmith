@@ -95,8 +95,8 @@ are resurrected. No schema marker is needed for the observed fail-closed path.
 Focused commands:
 
 ```sh
-cargo test --locked --test native_context_test
-cargo test --locked --test native_context_process_test -- --nocapture
+cargo test --locked --test native_suite native_context_test::
+cargo test --locked --test daemon_suite native_context_process_test:: -- --nocapture
 LOCKSMITH_CONTEXT_PRIOR_DAEMON=/path/to/preserved/d7/locksmithd \
   cargo test --locked --test native_context_process_test upgrade -- --ignored --nocapture
 ```
