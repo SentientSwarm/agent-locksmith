@@ -20,7 +20,7 @@ and the actual daemon smoke are also available separately:
 ```sh
 cargo test --locked --test native_suite native_skill_test::
 cargo test --locked --test proxy_suite -- skill_test:: skill_guidance_test::
-cargo test --locked --test daemon_suite native_skill_process_test:: -- --nocapture
+cargo test --locked --test native_skill_process_test -- --nocapture
 ```
 
 The process case reuses the existing daemon/CLI, verified TLS native receiver and

@@ -96,10 +96,6 @@ name = "catalog_suite"
 path = "tests/catalog_suite.rs"
 
 [[test]]
-name = "daemon_suite"
-path = "tests/daemon_suite.rs"
-
-[[test]]
 name = "mtls_suite"
 path = "tests/mtls_suite.rs"
 
@@ -115,15 +111,45 @@ path = "tests/oauth_suite.rs"
 name = "proxy_suite"
 path = "tests/proxy_suite.rs"
 
-# Standalone: they change process-wide state, re-run their own binary, resolve
-# modules from the crate root, or are named by CI and the docs.
+# Standalone: they start real daemon, CLI or SDK processes (kept apart so their
+# timing-sensitive startup does not compete with a whole suite), change
+# process-wide state, re-run their own binary, resolve modules from the crate
+# root, or are named by CI and the docs.
+[[test]]
+name = "admin_https_mtls_e2e_test"
+path = "tests/admin_https_mtls_e2e_test.rs"
+
 [[test]]
 name = "agent_listener_mtls_e2e_test"
 path = "tests/agent_listener_mtls_e2e_test.rs"
 
 [[test]]
+name = "bootstrap_only_daemon_test"
+path = "tests/bootstrap_only_daemon_test.rs"
+
+[[test]]
+name = "broker_daemon_test"
+path = "tests/broker_daemon_test.rs"
+
+[[test]]
 name = "build_identity_test"
 path = "tests/build_identity_test.rs"
+
+[[test]]
+name = "cli_e2e_test"
+path = "tests/cli_e2e_test.rs"
+
+[[test]]
+name = "credential_store_e2e_test"
+path = "tests/credential_store_e2e_test.rs"
+
+[[test]]
+name = "daemon_listener_startup_test"
+path = "tests/daemon_listener_startup_test.rs"
+
+[[test]]
+name = "daemon_runtime_test"
+path = "tests/daemon_runtime_test.rs"
 
 [[test]]
 name = "definition_process_test"
@@ -146,8 +172,24 @@ name = "inference_matrix_cloud_test"
 path = "tests/inference_matrix_cloud_test.rs"
 
 [[test]]
+name = "mtls_revocation_daemon_test"
+path = "tests/mtls_revocation_daemon_test.rs"
+
+[[test]]
 name = "native_compact_process_test"
 path = "tests/native_compact_process_test.rs"
+
+[[test]]
+name = "native_compact_sdk_test"
+path = "tests/native_compact_sdk_test.rs"
+
+[[test]]
+name = "native_context_process_test"
+path = "tests/native_context_process_test.rs"
+
+[[test]]
+name = "native_dispatch_process_test"
+path = "tests/native_dispatch_process_test.rs"
 
 [[test]]
 name = "native_oauth_test"
@@ -160,6 +202,10 @@ path = "tests/native_preparation_process_test.rs"
 [[test]]
 name = "native_process_test"
 path = "tests/native_process_test.rs"
+
+[[test]]
+name = "native_skill_process_test"
+path = "tests/native_skill_process_test.rs"
 
 [[test]]
 name = "oauth_consent_process_test"

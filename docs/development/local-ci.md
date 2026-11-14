@@ -17,7 +17,7 @@ Tiered, per [branching](branching.md):
 
 ## Test binaries
 
-Integration tests are grouped into seven binaries rather than one per file,
+Integration tests are grouped into six suite binaries rather than one per file,
 because every binary is linked, and on macOS vetted by `syspolicyd` the first
 time it runs. With one binary per file, that check alone could stall a
 parallel run for an hour. `Cargo.toml` sets `autotests = false` and lists
@@ -27,24 +27,26 @@ each binary.
 |---|---|
 | `admin_suite` | admin API, audit, operational logs, repositories, migrations, CLI |
 | `catalog_suite` | registrations, HTTP services, routes, brokers, definitions, bindings |
-| `daemon_suite` | tests that start real `locksmithd` or CLI processes |
 | `mtls_suite` | mTLS validation and revocation, admin HTTPS |
 | `native_suite` | in-process native MCP lifecycle, policy and dispatch |
 | `oauth_suite` | OAuth admin, serde, seeding, device login, recovery |
 | `proxy_suite` | the agent proxy, response controls, credential sources |
 
 Each `tests/<binary>.rs` includes former test files unchanged, by path, as
-modules named after the file. To run what used to be `--test proxy_test`:
+modules named after the file. To run what used to be `--test streaming_passthrough_test`:
 
 ```bash
-cargo test --test proxy_suite proxy_test::
+cargo test --test proxy_suite streaming_passthrough_test::
 cargo test --test native_suite -- native_lifecycle_test:: native_state_test::
 ```
 
 Filters are substring matches, so `admin_https_test::` also runs
-`cli_admin_https_test::`.
+`cli_admin_https_test::`, and `proxy_test::` also runs
+`credential_store_proxy_test::` and `op_credential_proxy_test::`.
 
-Eighteen files stay as their own binaries: those that change environment
+Thirty files stay as their own binaries: those that start real daemon, CLI
+or SDK processes (in one binary, about fifty of them would start at once and
+their startup deadlines would compete), those that change environment
 variables or the process umask, re-run their own executable, resolve
 helper modules from the crate root, or are named by `ci.yml`. A new test
 file needs a line in one of the suite files, or its own `[[test]]` entry

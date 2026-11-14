@@ -411,8 +411,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
 # Single test binary or single test.
-cargo test --test daemon_suite admin_https_mtls_e2e_test::
-cargo test --test proxy_suite proxy_test::streaming_passthrough
+cargo test --test admin_https_mtls_e2e_test
+cargo test --test proxy_suite streaming_passthrough_test::
 
 # Audit-write benchmark.
 cargo bench --bench audit_write_bench
