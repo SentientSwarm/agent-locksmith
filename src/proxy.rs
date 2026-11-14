@@ -937,11 +937,26 @@ async fn handle_upstream_response(
     capture_broker_account(ctx, target, resp.headers());
     let mut response_headers = forward_response_headers(resp.headers());
     if let Some(base) = agent_base {
+        upstream_urls::absolutize_location(&mut response_headers, resp.url());
         upstream_urls::rewrite_headers(&mut response_headers, &target.upstream, base);
     }
 
     // M7 / T7.2-T7.4: per-tool response controls.
     let rc = state.response_controls.get(&ctx.tool_name).cloned();
+    // AGENT-242 — redirects are returned, not followed, so a 3xx is an
+    // envelope rather than the final response the controls are written
+    // for. Return its status and (rewritten) headers with no body, so no
+    // unapproved body passes and the agent can follow the redirect.
+    if rc.is_some() && status.is_redirection() {
+        record_proxy_request_success(&state.audit, ctx, target, upstream_host, upstream_status)
+            .await;
+        response_headers.remove(axum::http::header::CONTENT_TYPE);
+        response_headers.remove(axum::http::header::CONTENT_LENGTH);
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = status;
+        *response.headers_mut() = response_headers;
+        return response;
+    }
     if let Some(rc) = rc.as_ref() {
         // Content-type allowlist (T7.2 streaming pre-check).
         if !rc.streaming_content_type_allowed(upstream_content_type.as_deref()) {

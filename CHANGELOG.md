@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The proxy no longer follows upstream redirects. A followed redirect to
+  another host carried the route's key with it when the key used a
+  custom header name such as `x-api-key`, so an upstream with an open
+  redirect could hand the key to any host. The agent now receives the
+  3xx: a `Location` on the route's own upstream is rewritten onto the
+  route as before, and any other `Location` is left for the agent to
+  fetch directly, without Locksmith's credential.
 - Revoking an agent now removes its account bindings, stashed backend
   bindings, grants and native grant sets in the same write, and audits
   their counts (#157). Before, they stayed behind and could not be
@@ -11,6 +18,19 @@
   prune-revoked [--dry-run]` (`POST /admin/operator/revoked-agents/prune`)
   removes what earlier revokes left: it names agents and routes, never
   credential values, and audits counts only.
+
+### Changed
+
+- Agents now receive upstream redirects instead of their final response.
+  Redirects to the route's own upstream point back at Locksmith, so
+  clients that follow redirects (`curl -L`, most HTTP libraries) see no
+  difference. Redirects to another host, such as GitHub tarball and log
+  downloads to signed storage URLs, must be fetched by the agent over its
+  own egress; an agent that can reach the network only through Locksmith
+  can no longer complete them. The agent's client must drop its
+  Locksmith bearer (`Authorization`) on a host change, as standard
+  clients do. On routes with response controls a redirect is returned
+  with an empty body.
 
 ### Added
 

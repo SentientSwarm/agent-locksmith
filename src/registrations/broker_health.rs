@@ -153,7 +153,7 @@ impl Prober {
             secrets,
             op_resolver,
             oplog,
-            clients: ClientPool::without_redirects(),
+            clients: ClientPool::new(),
             key_unresolved: Default::default(),
         }
     }

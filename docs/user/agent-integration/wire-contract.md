@@ -209,8 +209,21 @@ rewritten links use `http://<public host>`. Make the front end redirect or
 refuse plain HTTP, or agents following such a link would send their bearer
 unencrypted.
 
-Redirects are followed by Locksmith, for example GitHub's tarball and log
-downloads. The agent receives the final response.
+Locksmith does not follow redirects. The agent receives the upstream's
+3xx. A relative `Location` (`/v1/next`, `next`) is first resolved against
+the upstream request, and a `Location` under the route's upstream is then
+rewritten as above, so following it goes back through Locksmith with the
+same credential. On a route with response controls, a redirect comes
+back with its headers and an empty body; the controls apply to the final
+response. Without a usable `Host` header nothing is rewritten, and
+a same-host `Location` with a different scheme or port is not under the
+upstream base, so it is left as an absolute upstream URL. A redirect to
+another host (for example GitHub's tarball and log downloads,
+which point at signed storage URLs) keeps its original `Location`; the
+agent fetches it directly, without Locksmith's credential, over its own
+egress. Use a client that follows redirects (`curl -L`, most HTTP
+libraries by default) and drops `Authorization` on a host change, which
+standard clients do.
 
 #### Streaming
 

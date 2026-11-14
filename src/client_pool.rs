@@ -61,26 +61,20 @@ impl ToolFingerprint {
     }
 }
 
+/// Every client in the pool refuses to follow redirects (#159,
+/// AGENT-242). A followed cross-host redirect would carry Locksmith's
+/// injected key to a host the route never named: reqwest strips
+/// `Authorization` and cookies on such hops but keeps custom names such
+/// as `x-api-key`. The 3xx goes back to the agent instead, with a
+/// same-upstream `Location` already rewritten onto the route.
 #[derive(Default)]
 pub struct ClientPool {
     entries: RwLock<HashMap<String, (Arc<Client>, ToolFingerprint)>>,
-    /// #159 — never follow redirects (broker health probes): a redirect
-    /// would carry a custom key header to another host and misreport
-    /// health.
-    no_redirects: bool,
 }
 
 impl ClientPool {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// A pool whose clients never follow redirects.
-    pub fn without_redirects() -> Self {
-        Self {
-            no_redirects: true,
-            ..Self::default()
-        }
     }
 
     /// Get an `Arc<Client>` for `tool`, building (or rebuilding) only if no
@@ -156,18 +150,7 @@ impl ClientPool {
         {
             return Arc::clone(client);
         }
-        let redirect = if self.no_redirects {
-            reqwest::redirect::Policy::none()
-        } else {
-            reqwest::redirect::Policy::default()
-        };
-        let client = Arc::new(build_client_with(
-            timeouts,
-            egress,
-            upstream_ca_pem,
-            config,
-            redirect,
-        ));
+        let client = Arc::new(build_client_for(timeouts, egress, upstream_ca_pem, config));
         entries.insert(name.to_string(), (Arc::clone(&client), fingerprint));
         client
     }
@@ -202,24 +185,8 @@ fn build_client_for(
     upstream_ca_pem: Option<&str>,
     config: &AppConfig,
 ) -> Client {
-    build_client_with(
-        timeouts,
-        egress,
-        upstream_ca_pem,
-        config,
-        reqwest::redirect::Policy::default(),
-    )
-}
-
-fn build_client_with(
-    timeouts: ToolTimeouts,
-    egress: EgressMode,
-    upstream_ca_pem: Option<&str>,
-    config: &AppConfig,
-    redirect: reqwest::redirect::Policy,
-) -> Client {
     let mut builder = Client::builder()
-        .redirect(redirect)
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(timeouts.request_seconds))
         .read_timeout(Duration::from_secs(timeouts.idle_seconds));
 
@@ -252,7 +219,16 @@ fn build_client_with(
         builder = builder.proxy(proxy);
     }
 
-    builder.build().unwrap_or_else(|_| Client::new())
+    builder.build().unwrap_or_else(|_| no_redirect_client())
+}
+
+/// Last resort when a configured client cannot be built. It still never
+/// follows redirects, like every other client in the pool.
+fn no_redirect_client() -> Client {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("a default client always builds")
 }
 
 /// #135 — trust only `pem`'s certificates. Each becomes a trust anchor, so
@@ -279,6 +255,7 @@ fn route_only_trust(builder: reqwest::ClientBuilder, pem: &str) -> reqwest::Clie
 /// TLS handshake fails rather than falling back to public trust.
 fn no_trust_client() -> Client {
     Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .tls_built_in_root_certs(false)
         .build()
         .expect("a client without roots always builds")
