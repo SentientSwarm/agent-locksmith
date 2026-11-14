@@ -64,10 +64,47 @@ def pinned_checkout(repo, ws, ref, path):
     if not (src / ".git").exists():
         git("fetch", "-q", "origin", ref, cwd=repo, check=False)
         git("worktree", "add", "--detach", str(src), ref, cwd=repo)
-    link = ws / path
-    if link.is_symlink() or link.exists():
-        link.unlink()
-    link.symlink_to(src)
+    link(ws / path, src)
+    return src
+
+
+def link(at, to):
+    if at.is_symlink() or at.exists():
+        at.unlink()
+    at.symlink_to(to)
+
+
+def prior_build(text, pins):
+    """A step that builds a pinned checkout into `$RUNNER_TEMP/<dir>`.
+
+    Returns (path, dir, commit) or None. Such outputs depend only on the
+    pinned commit, so they are cached by it, and a miss builds in its own
+    target directory: one shared target lets cargo's mtime freshness hand
+    one revision's binary to another.
+    """
+    out = re.search(r'mkdir -p "\$RUNNER_TEMP/([^"]+)"', text)
+    commit = re.search(r"source_commit=([0-9a-f]{40})", text)
+    path = next((p for p in pins if f"$GITHUB_WORKSPACE/{p}/" in text), None)
+    return (path, out.group(1), commit.group(1)) if out and commit and path else None
+
+
+def run_prior_build(build, pins, step_env, run, temp, log):
+    path, out, commit = build
+    cached = CACHE / "prior-bins" / out
+    provenance = cached / "PROVENANCE.txt"
+    if provenance.exists() and f"source_commit={commit}" in provenance.read_text():
+        shutil.copytree(cached, temp / out, dirs_exist_ok=True)
+        log.write(f"cached prior build {out} at {commit}\n")
+        return True
+    pin_ws = CACHE / "pin-ws" / path
+    pin_ws.mkdir(parents=True, exist_ok=True)
+    link(pin_ws / path, pins[path])
+    ok = run({**step_env, "GITHUB_WORKSPACE": str(pin_ws)})
+    if ok:
+        shutil.rmtree(cached, ignore_errors=True)
+        shutil.copytree(temp / out, cached)
+    shutil.rmtree(pin_ws / "target", ignore_errors=True)
+    return ok
 
 
 def toolchain_env(version):
@@ -106,7 +143,7 @@ def keep_artifact(with_, evidence):
 
 
 def run_job(name, job, ctx, env, ws, repo, evidence, log):
-    results, failed = [], False
+    results, failed, pins = [], False, {}
     for i, step in enumerate(job["steps"], 1):
         label = step.get("name") or step.get("uses") or step["run"].splitlines()[0]
         cond = str(step.get("if", ""))
@@ -123,7 +160,9 @@ def run_job(name, job, ctx, env, ws, repo, evidence, log):
         ok = True
         if uses.startswith("actions/checkout"):
             if "ref" in with_:
-                pinned_checkout(repo, ws, with_["ref"], with_["path"])
+                pins[with_["path"]] = pinned_checkout(
+                    repo, ws, with_["ref"], with_["path"]
+                )
         elif uses.startswith("dtolnay/rust-toolchain"):
             env["PATH"] = toolchain_env(uses.split("@")[1])
         elif uses.startswith("astral-sh/setup-uv"):
@@ -138,23 +177,27 @@ def run_job(name, job, ctx, env, ws, repo, evidence, log):
                 **{k: expand(v, ctx) for k, v in (step.get("env") or {}).items()},
             }
             open(env["GITHUB_ENV"], "w").close()
-            proc = subprocess.run(
-                [
-                    "bash",
-                    "--noprofile",
-                    "--norc",
-                    "-eo",
-                    "pipefail",
-                    "-c",
-                    expand(step["run"], ctx),
-                ],
-                check=False,
-                cwd=ws,
-                env=step_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-            )
-            ok = proc.returncode == 0
+            text = expand(step["run"], ctx)
+
+            def run(run_env, text=text):
+                bash = ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", text]
+                proc = subprocess.run(
+                    bash,
+                    check=False,
+                    cwd=ws,
+                    env=run_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+                return proc.returncode == 0
+
+            build = prior_build(text, pins)
+            if build:
+                ok = run_prior_build(
+                    build, pins, step_env, run, Path(env["RUNNER_TEMP"]), log
+                )
+            else:
+                ok = run(step_env)
             for line in Path(env["GITHUB_ENV"]).read_text().splitlines():
                 if "=" in line:
                     key, value = line.split("=", 1)
