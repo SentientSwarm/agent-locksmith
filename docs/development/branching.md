@@ -4,11 +4,16 @@ Effective 2026-10-18. This is the current branch policy for agent-locksmith and 
 
 ## Normal development
 
+Effective 2026-11-13: changes land on `main` without pull requests.
+GitHub Actions is off for this repository, so a PR adds no automated
+gate; the gates are a local review and local tests.
+
 - `main` is the integration branch and the base for new work. Keep it releasable.
-- Create short-lived `feature/<description>` branches from current `origin/main`. `fix/` and `docs/` prefixes are appropriate for those changes.
-- Keep each branch/PR focused on one reviewable delivery slice. An initiative or multi-project roadmap does not need a long-lived integration branch.
-- Run the relevant checks and open the PR against `main`. Merge after review and a passing [local CI](local-ci.md) run on the head commit (GitHub Actions is off for this repository); remove the completed branch when it is no longer needed.
-- `develop` is retired as an integration branch. Do not base new branches or PRs on it.
+- Work on a short-lived local `feature/`, `fix/` or `docs/` branch from current `origin/main`, one reviewable slice at a time.
+- Before landing, run the tiered checks (see [local CI](local-ci.md)): fmt, clippy and the tests for the touched code on every change; the prior-binary migration checks when migrations or the schema change; the full suite and QA before a deploy and nightly.
+- Run the two-engine [local review](review.md) on the branch diff, last, after every change you intend to land. Every change is reviewed, including docs-only and test-only changes, which use the docs/tests prompt. Critical and High findings block; fix them and review again. Other findings go to a follow-up ticket.
+- Land with a fast-forward: `git switch main && git merge --ff-only <branch> && git push origin main`, then delete the branch.
+- `develop` is retired as an integration branch. Do not base new branches on it.
 
 For a clean checkout:
 

@@ -5,7 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Working branch
 
 `main` is the integration branch. Create short-lived feature/fix/docs branches
-from current `origin/main`, targeting `main`. `develop` is retired. Optional
+from current `origin/main` and land them on `main` by fast-forward, with no
+pull request, after the tiered local checks and a two-engine
+[local review](docs/development/review.md), including for docs-only and
+test-only changes. `develop` is retired. Optional
 `release/<major>.<minor>` branches stabilize a release while new work continues
 on `main`. See [Branching and releases](docs/development/branching.md); historical
 `docs/v2/` branch instructions are superseded. Read Cargo.toml and tags for
