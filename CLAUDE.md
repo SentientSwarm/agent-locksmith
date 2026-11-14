@@ -109,7 +109,8 @@ cargo test --all
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
-# Full CI, locally (GitHub Actions is off; this is the merge gate).
+# Full CI, locally (GitHub Actions is off). Before deploys, nightly, and
+# for migration/schema changes; see docs/development/local-ci.md.
 # Runs .github/workflows/ci.yml (test + qa-smoke) at one commit.
 python3 scripts/ci-local.py --rev <sha> [--post-status]
 

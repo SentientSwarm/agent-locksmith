@@ -32,7 +32,7 @@ Normally release a tested commit from `main` with a version tag. A release branc
 
 - Cut `release/<major>.<minor>` from a selected tested `main` commit, not from `develop`.
 - Limit it to stabilization, release metadata and fixes for that version. New features continue through feature branches into `main`.
-- Apply fixes to `main` first and backport through a reviewed PR where practical. If a fix starts on the release branch, carry it to `main` promptly through a focused change; do not lose it when the release branch is retired.
+- Apply fixes to `main` first and backport through a reviewed change where practical. If a fix starts on the release branch, carry it to `main` promptly through a focused change; do not lose it when the release branch is retired.
 - Run the same CI checks on `main` and `release/**` PR targets and branch pushes.
 - Tag the tested release commit. Tags identify shipped versions; a release branch alone does not publish a release.
 - Retain the release branch only while that release line needs maintenance.

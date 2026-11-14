@@ -11,6 +11,7 @@ uploaded artifacts into the evidence directory). See docs/development/local-ci.m
 import argparse
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import platform
@@ -22,10 +23,25 @@ from pathlib import Path
 
 import yaml
 
-CACHE = Path(os.environ.get("LOCKSMITH_CI_CACHE", Path.home() / ".cache/locksmith-ci"))
+CACHE_BASE = Path(
+    os.environ.get("LOCKSMITH_CI_CACHE", Path.home() / ".cache/locksmith-ci")
+)
+CACHE = CACHE_BASE  # set per repository in main()
 # native-validation.yml is release provenance: it records the GitHub runner
 # image and needs all four native runners, so it is not run locally.
 JOBS = {"test": "ci.yml", "qa-smoke": "ci.yml"}
+KEEP_RUNS = 20
+# Only what the workflows rely on. Anything else, such as provider API keys
+# (which switch on paid live tests), CARGO_* or BASH_ENV, would make the
+# result depend on the developer's shell.
+ENV_ALLOWLIST = {
+    "HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "LC_ALL",
+    "TERM", "CARGO_HOME", "RUSTUP_HOME",
+}  # fmt: skip
+WORKFLOW_KEYS = {"name", True, "on", "env", "jobs", "permissions", "concurrency"}
+JOB_KEYS = {"name", "runs-on", "steps"}
+STEP_KEYS = {"name", "uses", "with", "run", "env", "if"}
+CONDITIONS = {"", "always()", "failure()", "success()"}
 
 
 def git(*args, cwd=None, check=True):
@@ -33,6 +49,27 @@ def git(*args, cwd=None, check=True):
         ["git", *args], cwd=cwd, check=check, capture_output=True, text=True
     )
     return out.stdout.strip()
+
+
+def base_env(environ):
+    return {k: v for k, v in environ.items() if k in ENV_ALLOWLIST}
+
+
+def cache_dir(base, repo):
+    """Per-repository cache: worktrees only resolve their own repository's commits."""
+    common = Path(git("rev-parse", "--git-common-dir", cwd=repo))
+    common = (Path(repo) / common).resolve()
+    return Path(base) / "repos" / hashlib.sha256(str(common).encode()).hexdigest()[:16]
+
+
+def unsupported(what, keys, allowed):
+    extra = sorted(str(k) for k in set(keys) - allowed)
+    if extra:
+        raise SystemExit(f"{what} uses settings this runner does not support: {extra}")
+
+
+def check_workflow(wf):
+    unsupported("workflow", wf, WORKFLOW_KEYS)
 
 
 def expand(text, ctx):
@@ -92,7 +129,12 @@ def run_prior_build(build, pins, step_env, run, temp, log):
     path, out, commit = build
     cached = CACHE / "prior-bins" / out
     provenance = cached / "PROVENANCE.txt"
-    if provenance.exists() and f"source_commit={commit}" in provenance.read_text():
+    pinned_at = git("rev-parse", "HEAD", cwd=pins[path], check=False)
+    if (
+        pinned_at == commit
+        and provenance.exists()
+        and f"source_commit={commit}" in provenance.read_text()
+    ):
         shutil.copytree(cached, temp / out, dirs_exist_ok=True)
         log.write(f"cached prior build {out} at {commit}\n")
         return True
@@ -142,15 +184,21 @@ def keep_artifact(with_, evidence):
     return found or with_.get("if-no-files-found", "warn") != "error"
 
 
+def should_run(cond, failed):
+    if cond not in CONDITIONS:
+        raise SystemExit(f"unsupported step condition: if: {cond}")
+    return cond == "always()" or (cond == "failure()") == failed
+
+
 def run_job(name, job, ctx, env, ws, repo, evidence, log):
+    unsupported(f"job {name}", job, JOB_KEYS)
+    for step in job["steps"]:
+        unsupported(f"a step of job {name}", step, STEP_KEYS)
+        should_run(str(step.get("if", "")).strip(), False)
     results, failed, pins = [], False, {}
     for i, step in enumerate(job["steps"], 1):
         label = step.get("name") or step.get("uses") or step["run"].splitlines()[0]
-        cond = str(step.get("if", ""))
-        if failed and "always()" not in cond:
-            results.append((label, "skipped"))
-            continue
-        if "failure()" in cond and not failed:
+        if not should_run(str(step.get("if", "")).strip(), failed):
             results.append((label, "skipped"))
             continue
         log.write(f"\n===== [{name} {i}] {label}\n")
@@ -224,8 +272,13 @@ def main():
     )
     args = ap.parse_args()
 
+    unknown = set(args.jobs.split(",")) - set(JOBS)
+    if unknown:
+        raise SystemExit(f"unknown jobs: {sorted(unknown)}; choose from {list(JOBS)}")
     repo = Path(git("rev-parse", "--show-toplevel"))
     sha = git("rev-parse", "--verify", f"{args.rev}^{{commit}}", cwd=repo)
+    global CACHE
+    CACHE = cache_dir(CACHE_BASE, repo)
     CACHE.mkdir(parents=True, exist_ok=True)
     # Held for the whole run, released when the process exits.
     lock = open(CACHE / "lock", "w")  # noqa: SIM115
@@ -247,7 +300,7 @@ def main():
         "github.sha": sha,
     }
     env = {
-        **os.environ,
+        **base_env(os.environ),
         "GITHUB_WORKSPACE": str(ws),
         "RUNNER_TEMP": str(temp),
         "GITHUB_SHA": sha,
@@ -260,6 +313,7 @@ def main():
             # Each GitHub job starts on a fresh runner: clean tree, base env.
             prepare_workspace(repo, sha)
             wf = yaml.safe_load((ws / ".github/workflows" / JOBS[name]).read_text())
+            check_workflow(wf)
             job = wf["jobs"][name]
             job_env = {
                 **env,
@@ -272,6 +326,11 @@ def main():
                 if state != "pass":
                     print(f"  {state}: {label}")
     (evidence / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+    # Uploaded artifacts were copied out; the scratch tree holds gigabytes of
+    # prior binaries and venvs.
+    shutil.rmtree(temp, ignore_errors=True)
+    for old in sorted((CACHE / "runs").iterdir())[:-KEEP_RUNS]:
+        shutil.rmtree(old, ignore_errors=True)
     green = all(j["result"] == "pass" for j in summary["jobs"].values())
     print(f"local CI {'PASS' if green else 'FAIL'} at {sha[:12]}; evidence: {evidence}")
     if args.post_status:
@@ -282,7 +341,7 @@ def main():
             .removesuffix(".git")
         )
         for name, job in summary["jobs"].items():
-            subprocess.run(
+            posted = subprocess.run(
                 [
                     "gh",
                     "api",
@@ -296,9 +355,14 @@ def main():
                     "-f",
                     f"description=scripts/ci-local.py on {host}",
                 ],
-                check=True,
+                check=False,
                 capture_output=True,
+                text=True,
             )
+            if posted.returncode != 0:
+                raise SystemExit(
+                    f"posting local-ci/{name} failed: {posted.stderr.strip()}"
+                )
     sys.exit(0 if green else 1)
 
 

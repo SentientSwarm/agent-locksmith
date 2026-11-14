@@ -3,7 +3,16 @@
 GitHub Actions is turned off for this repository to save budget. The
 `ci.yml` workflow is still the specification of CI; `scripts/ci-local.py`
 runs it on a developer machine against one commit.
-A local CI pass on the head commit is the CI requirement for merging.
+
+## When to run what
+
+Tiered, per [branching](branching.md):
+
+| When | Run |
+|---|---|
+| Every change | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and the tests for the touched code |
+| A migration or schema change | also `scripts/ci-local.py --jobs test`, which runs the prior-binary migration checks |
+| Before a deploy, and nightly | `scripts/ci-local.py` (every job) on the commit being deployed |
 
 ## Run it
 
@@ -15,8 +24,9 @@ python3 scripts/ci-local.py --post-status      # also post commit statuses
 ```
 
 Only committed code is tested: the commit is checked out in a separate
-worktree, so local edits never leak into a result. The script needs Python
-with PyYAML, `uv`, `git`, Rust 1.94.0 (rustup) and, for `--post-status`,
+worktree, so local edits never leak into a result. The script itself runs
+from your checkout, so commit runner changes before trusting a result. It
+needs Python 3.11 or later with PyYAML, `uv`, `git`, Rust 1.94.0 (rustup) and, for `--post-status`,
 an authenticated `gh`.
 
 It exits 0 only when every selected job passes, and prints the evidence
@@ -25,7 +35,8 @@ target, per-step results) and any uploaded artifacts, such as the QA and
 UAT evidence.
 
 `--post-status` posts a `local-ci/<job>` commit status (`success` or
-`failure`) on the tested commit, so the result shows on the PR.
+`failure`) on the tested commit, so the result is recorded on GitHub
+against that commit. A failed post stops the run with `gh`'s error.
 
 ## Jobs
 
@@ -38,8 +49,19 @@ UAT evidence.
 
 `run:` steps execute as written, with `bash -eo pipefail`,
 `GITHUB_WORKSPACE`, `RUNNER_TEMP`, `GITHUB_SHA` and a working `GITHUB_ENV`.
-`if: always()` and `if: failure()` behave as on GitHub. `uses:` steps get
-a local equivalent:
+`if: always()`, `if: failure()` and `if: success()` behave as on GitHub.
+
+The environment starts from a short allowlist (`HOME`, `USER`, `PATH`,
+`TMPDIR`, locale, `CARGO_HOME`, `RUSTUP_HOME` and a few more), not your
+shell. Provider API keys in your shell would otherwise switch on paid live
+tests, and `CARGO_*` or `BASH_ENV` would change what is built and run.
+
+The runner fails closed on anything it does not implement: any other `if:`
+expression, step settings such as `working-directory`, `shell` or
+`continue-on-error`, job settings such as `env`, `if` or `defaults`, and
+workflow-level `defaults`. Add support to the script before using one.
+
+`uses:` steps get a local equivalent:
 
 | Action | Local equivalent |
 |---|---|
@@ -55,12 +77,16 @@ add its local equivalent to the script.
 
 ## Cache
 
-Everything lives under `~/.cache/locksmith-ci` (override with
-`LOCKSMITH_CI_CACHE`): the workspace worktree and its `target/`, the
-pinned prior-source worktrees, and `runs/<sha>-<time>/` evidence. The
-first run builds every pinned prior binary; later runs reuse them. One
-run at a time holds `lock`. Delete the directory to start clean (run
-`git worktree prune` afterwards).
+Everything lives under `~/.cache/locksmith-ci/repos/<id>/` (override the
+base with `LOCKSMITH_CI_CACHE`), one directory per clone, since a worktree
+can only check out its own repository's commits. It holds the workspace
+worktree and its `target/`, the pinned prior-source worktrees, the cached
+prior binaries and `runs/<sha>-<time>/` evidence. The first run builds
+every pinned prior binary; later runs reuse one only when its pinned
+worktree is still at the recorded commit. The last 20 runs' evidence is
+kept, without the runner's scratch directory. One run at a time holds
+`lock`. Delete the directory to start clean (run `git worktree prune`
+afterwards).
 
 ## Differences from GitHub
 
