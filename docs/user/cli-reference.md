@@ -614,6 +614,18 @@ exit 5 with no partial changes; an unchanged repeat inserts zero rows.
 See the [migration procedure](concepts/migrating-account-bindings.md) for backup,
 review, unavailable-source handling, verification and rollback consequences.
 
+## Offline stored-credential re-key
+
+`locksmith rekey-credentials --database EXISTING_DB --old-key-file FILE --new-key-file FILE`
+reseals every stored credential value under a new credential sealing key in one
+transaction and prints `{"rekeyed":N}`. Stop the daemon and back up first, and run
+it as the daemon's user. Each key file holds one base64 key and must be mode 0600
+or 0400. Exit 1 means the old key could not open a row and nothing changed; exit 2
+means unusable input (a missing or open-permission key file, an invalid key, or
+the same key twice). No operator token is used. Then start the daemon with
+`LOCKSMITH_CREDENTIAL_SEALING_KEY` set to the new key. See
+[sealed-state recovery](operator/sealed-state-recovery.md).
+
 For a runnable local setup see [getting started](getting-started.md). Execute
 the [saved cutover smoke](../development/explicit-account-bindings-smoke.md)
 to verify daemon/CLI setup, selection, clear/repair and offline migration.

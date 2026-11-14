@@ -1173,6 +1173,8 @@ cli:
   command: oauth revoke
 - id: cli.oauth.status
   command: oauth status
+- id: cli.rekey-credentials
+  command: rekey-credentials
 - id: cli.rotate
   command: rotate
 - id: cli.status
