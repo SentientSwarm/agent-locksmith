@@ -53,8 +53,11 @@ neither place would never be built; `test_inventory_test` (in
 `admin_suite`) fails when any `tests/*.rs` is built other than exactly once.
 
 [cargo-nextest](https://nexte.st) also works (`cargo nextest run
---workspace`). `.config/nextest.toml` limits the process-starting tests to
-four at a time.
+--workspace`), and is faster for touched-code runs, but `cargo test`
+remains the gate. `.config/nextest.toml` limits the process-starting tests
+to four at a time and retries them twice: running every binary's tests at
+once exposes a probed-port race in some fixtures (AGENT-219), and a test
+that passes only on retry is reported as FLAKY.
 
 ## Run it
 

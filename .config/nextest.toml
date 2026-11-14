@@ -13,3 +13,7 @@ fail-fast = false
 [[profile.default.overrides]]
 filter = 'binary(daemon_suite) | binary(/_process_|_process$|_e2e|build_identity|explicit_binding_smoke/) | test(/^cli_|::process::/)'
 test-group = 'process'
+# Several fixtures probe a free port, release it, then let the daemon bind it
+# (AGENT-219). With tests from every binary binding ports at once, another
+# process can take it first. A pass on retry is reported as FLAKY, not hidden.
+retries = 2
