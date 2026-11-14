@@ -106,6 +106,10 @@ cargo test --all
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
+# Full CI, locally (GitHub Actions is off; this is the merge gate).
+# Runs .github/workflows/ci.yml (test + qa-smoke) at one commit.
+python3 scripts/ci-local.py --rev <sha> [--post-status]
+
 # Single test binary / single test
 cargo test --test admin_https_mtls_e2e_test
 cargo test --test proxy_test -- streaming_passthrough  # name filter

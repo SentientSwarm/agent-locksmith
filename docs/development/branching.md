@@ -7,7 +7,7 @@ Effective 2026-10-18. This is the current branch policy for agent-locksmith and 
 - `main` is the integration branch and the base for new work. Keep it releasable.
 - Create short-lived `feature/<description>` branches from current `origin/main`. `fix/` and `docs/` prefixes are appropriate for those changes.
 - Keep each branch/PR focused on one reviewable delivery slice. An initiative or multi-project roadmap does not need a long-lived integration branch.
-- Run the relevant checks and open the PR against `main`. Merge after review and required CI; remove the completed branch when it is no longer needed.
+- Run the relevant checks and open the PR against `main`. Merge after review and a passing [local CI](local-ci.md) run on the head commit (GitHub Actions is off for this repository); remove the completed branch when it is no longer needed.
 - `develop` is retired as an integration branch. Do not base new branches or PRs on it.
 
 For a clean checkout:
