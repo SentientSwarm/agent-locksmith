@@ -61,16 +61,23 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
 ## What is scanned
 
 - **JSON bodies** (a content type containing `json` that parses) are
-  scanned string by string after JSON unescaping, so escaping cannot hide
-  a match, and a redaction rewrites only that string.
+  scanned string by string, object keys included, after JSON unescaping,
+  so escaping cannot hide a match, and a redaction rewrites only that
+  string or key.
 - **Other UTF-8 bodies** are scanned as one text.
 - **Binary bodies** (not UTF-8) are not scanned. They pass and are audited
   `inspection_skipped` with reason `not_text`, whatever `on_error` says,
   so uploads are never blocked by a text scanner.
+- **Content-encoded bodies** (any `Content-Encoding` other than
+  `identity`, such as gzip) can't be scanned as sent and could hide text,
+  so they are audited `inspection_skipped` with reason `encoded` and
+  follow `on_error`. On a route with a response policy, Locksmith drops
+  the agent's `Accept-Encoding` so the upstream answers uncompressed.
 - **Bodies over `max_scan_bytes`** are audited `inspection_skipped` with
   reason `oversize` and follow `on_error`: forwarded under `fail_open`,
   blocked under `fail_closed`. A large response is read only up to the
-  limit; under `fail_open` the rest streams through unscanned.
+  limit; under `fail_open` the rest is forwarded unscanned, and the
+  route's response controls (size cap, redaction) still apply to it.
 - **Streamed responses** (`text/event-stream`) are audited
   `inspection_skipped` with reason `streaming` until streamed scanning
   lands (AGENT-265).
@@ -87,7 +94,7 @@ something:
 | Event | When |
 |---|---|
 | `inspection_hit` | At least one hit. `decision` is `denied` for a block. |
-| `inspection_skipped` | Not scanned: `reason` is `oversize`, `not_text` or `streaming`. |
+| `inspection_skipped` | Not scanned: `reason` is `oversize`, `not_text`, `encoded` or `streaming`. |
 | `inspection_error` | A scanner failed and nothing was found. |
 
 Details carry `direction`, `verdict`, `count` and `hits`, each hit as

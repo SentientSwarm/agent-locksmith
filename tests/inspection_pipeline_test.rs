@@ -336,3 +336,95 @@ fn duplicate_route_fails_config_load() {
     .to_string();
     assert!(err.contains("out"), "{err}");
 }
+
+#[tokio::test]
+async fn oversize_unscanned_response_still_gets_response_controls() {
+    // Too large to inspect under fail_open, the body is forwarded
+    // unscanned, but the route's own response-control redaction must
+    // still apply to it.
+    let body = format!("{}SECRET-abc123{}", "a".repeat(4096), "b".repeat(16));
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_string(body),
+        )
+        .mount(&up)
+        .await;
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "out"
+    description: "Inspected route"
+    upstream: "{}"
+    response:
+      redaction_patterns:
+        - id: secret
+          regex: "SECRET-[a-z0-9]+"
+inspection:
+  routes:
+    - route: out
+      response:
+        scanners: ["literal:{CANARY}"]
+        max_scan_bytes: 1024
+"#,
+        up.uri()
+    );
+    let h = harness(parse_config_str(&yaml).unwrap()).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        !resp.text().contains("SECRET-abc123"),
+        "response controls were bypassed"
+    );
+}
+
+#[tokio::test]
+async fn encoded_request_body_follows_on_error() {
+    // A compressed body cannot be scanned; under fail_closed it must not
+    // pass just because it is not text.
+    let up = upstream("{}").await;
+    let h = harness(config(&up.uri(), &request_policy("block"))).await;
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .add_header("content-encoding", "gzip")
+        .bytes(vec![0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe].into())
+        .await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "encoded");
+}
+
+#[tokio::test]
+async fn inspected_response_is_requested_uncompressed() {
+    let up = upstream("{}").await;
+    let policy = format!(
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n"
+    );
+    let h = harness(config(&up.uri(), &policy)).await;
+    h.server
+        .post("/api/out/x")
+        .add_header("accept-encoding", "gzip, br")
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
+    let sent = &up.received_requests().await.unwrap()[0];
+    assert!(sent.headers.get("accept-encoding").is_none());
+}
+
+#[tokio::test]
+async fn json_object_keys_are_scanned() {
+    let up = upstream("{}").await;
+    let h = harness(config(&up.uri(), &request_policy("block"))).await;
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .json(&json!({ CANARY: 1 }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+}

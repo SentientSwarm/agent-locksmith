@@ -557,7 +557,12 @@ pub async fn proxy_handler(
             .is_some(),
         &ctx.tool_name,
     );
-    let headers = req.headers().clone();
+    let mut headers = req.headers().clone();
+    // AGENT-262 — an inspected response must arrive uncompressed to be
+    // scanned, so the agent's Accept-Encoding is not forwarded.
+    if inspect::response_policy(&state, &ctx.tool_name).is_some() {
+        headers.remove(axum::http::header::ACCEPT_ENCODING);
+    }
     let body_bytes = match read_request_body(req, target.body_limit_bytes).await {
         Ok(b) => b,
         Err(_) => {
@@ -990,8 +995,7 @@ async fn handle_upstream_response(
         if inspect::is_event_stream(upstream_content_type.as_deref()) {
             inspect::record_stream_skipped(&state.audit, ctx).await;
         } else {
-            let ct = upstream_content_type.clone();
-            return match inspect::response(policy, &state, ctx, target, ct.as_deref(), resp).await {
+            return match inspect::response(policy, &state, ctx, target, resp).await {
                 inspect::Buffered::Respond(r) => r,
                 inspect::Buffered::Body(body) => match rc.as_ref() {
                     Some(rc) => {
@@ -1023,6 +1027,26 @@ async fn handle_upstream_response(
                         response
                     }
                 },
+                // Unscanned, but the route's response controls still
+                // apply: buffer the rest and run them.
+                inspect::Buffered::Unscanned(body) if rc.is_some() => {
+                    let Ok(bytes) = axum::body::to_bytes(body, UNSCANNED_CONTROLS_LIMIT).await
+                    else {
+                        return inspect::upstream_read_failed();
+                    };
+                    respond_with_controls(
+                        rc.as_ref().expect("guarded"),
+                        &state.audit,
+                        ctx,
+                        target,
+                        upstream_host,
+                        upstream_status,
+                        upstream_content_type,
+                        response_headers,
+                        bytes.to_vec(),
+                    )
+                    .await
+                }
                 inspect::Buffered::Unscanned(body) => {
                     record_proxy_request_success(
                         &state.audit,
@@ -1092,6 +1116,10 @@ async fn handle_upstream_response(
     *response.headers_mut() = response_headers;
     response
 }
+
+/// Upper bound on a response buffered for response controls after it
+/// was too large to inspect.
+const UNSCANNED_CONTROLS_LIMIT: usize = 64 * 1024 * 1024;
 
 /// Strip hop-by-hop headers (the body is rebuilt as an axum stream
 /// downstream, so axum/hyper sets these afresh).

@@ -3,7 +3,9 @@
 
 use super::{ProxyTarget, RequestCtx, audit_record};
 use crate::app::AppState;
-use crate::inspection::{self, Direction, DirectionPolicy, Outcome, Report, SkipReason, Verdict};
+use crate::inspection::{
+    self, BodyMeta, Direction, DirectionPolicy, Outcome, Report, SkipReason, Verdict,
+};
 use crate::repo::audit::{AuditRepository, Decision, EventClass};
 use axum::{
     Json,
@@ -34,10 +36,7 @@ pub(super) async fn request(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<Bytes, Response> {
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok());
-    match inspection::apply(policy, Direction::Request, content_type, &body) {
+    match inspection::apply(policy, Direction::Request, meta(headers), &body) {
         Outcome::Forward {
             body: rewritten,
             report,
@@ -52,6 +51,18 @@ pub(super) async fn request(
                 "request blocked by inspection",
             ))
         }
+    }
+}
+
+fn meta(headers: &HeaderMap) -> BodyMeta<'_> {
+    let get = |name| {
+        headers
+            .get(name)
+            .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
+    };
+    BodyMeta {
+        content_type: get(axum::http::header::CONTENT_TYPE),
+        content_encoding: get(axum::http::header::CONTENT_ENCODING),
     }
 }
 
@@ -93,27 +104,20 @@ pub(super) async fn response(
     state: &AppState,
     ctx: &RequestCtx,
     _target: &ProxyTarget,
-    content_type: Option<&str>,
     resp: reqwest::Response,
 ) -> Buffered {
     let audit = &state.audit;
+    let headers = resp.headers().clone();
+    let meta = meta(&headers);
     let mut stream = resp.bytes_stream();
     let mut prefix: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(c) => prefix.extend_from_slice(&c),
-            Err(_) => {
-                return Buffered::Respond(
-                    (
-                        StatusCode::BAD_GATEWAY,
-                        Json(json!({"error": {"message": "upstream body read failed", "type": "upstream_error", "code": "upstream_error"}})),
-                    )
-                        .into_response(),
-                );
-            }
+            Err(_) => return Buffered::Respond(upstream_read_failed()),
         }
         if prefix.len() > policy.max_scan_bytes {
-            let outcome = inspection::apply(policy, Direction::Response, content_type, &prefix);
+            let outcome = inspection::apply(policy, Direction::Response, meta, &prefix);
             return match outcome {
                 Outcome::Block { report } => {
                     record(audit, ctx, &report, Some(502)).await;
@@ -132,7 +136,7 @@ pub(super) async fn response(
             };
         }
     }
-    match inspection::apply(policy, Direction::Response, content_type, &prefix) {
+    match inspection::apply(policy, Direction::Response, meta, &prefix) {
         Outcome::Forward { body, report } => {
             record(audit, ctx, &report, None).await;
             Buffered::Body(body.unwrap_or(prefix))
@@ -145,6 +149,14 @@ pub(super) async fn response(
             ))
         }
     }
+}
+
+pub(super) fn upstream_read_failed() -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({"error": {"message": "upstream body read failed", "type": "upstream_error", "code": "upstream_error"}})),
+    )
+        .into_response()
 }
 
 fn blocked(status: StatusCode, message: &str) -> Response {

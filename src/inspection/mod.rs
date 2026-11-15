@@ -138,6 +138,8 @@ pub enum SkipReason {
     Oversize,
     NotText,
     Streaming,
+    /// Compressed or otherwise content-encoded: not scannable as sent.
+    Encoded,
 }
 
 impl SkipReason {
@@ -146,6 +148,7 @@ impl SkipReason {
             SkipReason::Oversize => "oversize",
             SkipReason::NotText => "not_text",
             SkipReason::Streaming => "streaming",
+            SkipReason::Encoded => "encoded",
         }
     }
 }
@@ -209,11 +212,18 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The headers that decide how a body is read.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BodyMeta<'a> {
+    pub content_type: Option<&'a str>,
+    pub content_encoding: Option<&'a str>,
+}
+
 /// Inspect `body` under `policy`.
 pub fn apply(
     policy: &DirectionPolicy,
     direction: Direction,
-    content_type: Option<&str>,
+    meta: BodyMeta<'_>,
     body: &[u8],
 ) -> Outcome {
     let mut report = Report::new(direction);
@@ -221,6 +231,16 @@ pub fn apply(
         report.skipped = Some(SkipReason::Oversize);
         return unjudged(policy, report);
     }
+    // A compressed body can't be scanned as sent. Unlike plain binary it
+    // can hide text, so it follows `on_error` rather than passing.
+    if meta
+        .content_encoding
+        .is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity"))
+    {
+        report.skipped = Some(SkipReason::Encoded);
+        return unjudged(policy, report);
+    }
+    let content_type = meta.content_type;
     // Binary bodies are not text the scanners understand; they pass
     // (audited) whatever `on_error` says, so uploads are never blocked.
     let Ok(doc) = text::Document::parse(content_type, body) else {
@@ -302,9 +322,19 @@ mod tests {
 
     #[test]
     fn scanner_error_follows_on_error() {
-        let closed = apply(&policy(OnError::FailClosed), Direction::Request, None, b"x");
+        let closed = apply(
+            &policy(OnError::FailClosed),
+            Direction::Request,
+            BodyMeta::default(),
+            b"x",
+        );
         assert!(matches!(closed, Outcome::Block { report } if report.error.is_some()));
-        let open = apply(&policy(OnError::FailOpen), Direction::Request, None, b"x");
+        let open = apply(
+            &policy(OnError::FailOpen),
+            Direction::Request,
+            BodyMeta::default(),
+            b"x",
+        );
         assert!(
             matches!(open, Outcome::Forward { body: None, report } if report.error.as_deref() == Some("failing: unavailable"))
         );
@@ -335,7 +365,7 @@ mod tests {
             on_error: OnError::FailClosed,
             max_scan_bytes: 1024,
         };
-        let out = apply(&p, Direction::Request, None, b"x");
+        let out = apply(&p, Direction::Request, BodyMeta::default(), b"x");
         assert!(matches!(out, Outcome::Forward { report, .. } if report.verdict == Verdict::Flag));
     }
 }

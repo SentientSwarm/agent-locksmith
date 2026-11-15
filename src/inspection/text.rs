@@ -61,7 +61,10 @@ fn walk(v: &Value, f: &mut impl FnMut(&str)) {
     match v {
         Value::String(s) => f(s),
         Value::Array(a) => a.iter().for_each(|x| walk(x, f)),
-        Value::Object(o) => o.values().for_each(|x| walk(x, f)),
+        Value::Object(o) => o.iter().for_each(|(k, x)| {
+            f(k);
+            walk(x, f)
+        }),
         _ => {}
     }
 }
@@ -70,7 +73,17 @@ fn walk_mut(v: &mut Value, f: &mut impl FnMut(&mut String)) {
     match v {
         Value::String(s) => f(s),
         Value::Array(a) => a.iter_mut().for_each(|x| walk_mut(x, f)),
-        Value::Object(o) => o.values_mut().for_each(|x| walk_mut(x, f)),
+        Value::Object(o) => {
+            // Keys are scanned too, so rebuild the map with redacted keys
+            // in the same order `walk` visits them.
+            let entries = std::mem::take(o);
+            for (k, mut x) in entries {
+                let mut key = k;
+                f(&mut key);
+                walk_mut(&mut x, f);
+                o.insert(key, x);
+            }
+        }
         _ => {}
     }
 }
@@ -107,7 +120,15 @@ mod tests {
         let doc = Document::parse(Some("application/json"), br#"{"a":"xAy","b":[1,"z"]}"#)
             .ok()
             .unwrap();
-        assert_eq!(doc.segments(), vec!["xAy".to_string(), "z".to_string()]);
+        assert_eq!(
+            doc.segments(),
+            vec![
+                "a".to_string(),
+                "xAy".to_string(),
+                "b".to_string(),
+                "z".to_string()
+            ]
+        );
     }
 
     #[test]
