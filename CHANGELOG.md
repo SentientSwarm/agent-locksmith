@@ -4,13 +4,21 @@
 
 ### Fixed
 
-- `egress: proxied` routes no longer go direct when the egress proxy is
-  missing or broken (AGENT-259). Before, an unset `egress_proxy`, a URL
-  that didn't parse, or a client that failed to build each silently
-  sent the route straight to the internet. Now `egress_proxy` must parse
-  at config load, and a proxied route with nothing enforcing egress
-  answers 503 `egress_proxy_unconfigured` and writes an
-  `egress_unenforced` security audit event.
+- Route traffic on `egress: proxied` routes no longer goes direct when
+  the egress proxy is missing or broken (AGENT-259). Before, an unset
+  `egress_proxy`, a URL that didn't parse, or a client that failed to
+  build each silently sent the route straight to the internet. Now
+  `egress_proxy` must parse at config load, and a proxied route with
+  nothing enforcing egress answers 503 `egress_proxy_unconfigured` and
+  writes an `egress_unenforced` security audit event. OAuth token
+  refreshes and logins still connect directly; that is tracked
+  separately.
+
+  **Upgrade note:** most seed catalog routes are `egress: proxied`. A
+  deployment with no `egress_proxy` (a development or standalone
+  install) now gets 503 on them. Set `egress_proxy` to enforce egress
+  through a proxy, or `egress: { mode: external }` to keep connecting
+  directly when the surrounding infrastructure enforces egress.
 - The proxy no longer follows upstream redirects. A followed redirect to
   another host carried the route's key with it when the key used a
   custom header name such as `x-api-key`, so an upstream with an open

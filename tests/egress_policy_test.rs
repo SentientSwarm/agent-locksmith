@@ -21,11 +21,17 @@ use tempfile::TempDir;
 
 struct H {
     _dir: TempDir,
+    pool: sqlx::SqlitePool,
     admin: TestServer,
     op: String,
 }
 
 async fn setup() -> H {
+    setup_with_tools("tools: []\n").await
+}
+
+/// `tools` is the YAML `tools:` block of the daemon config.
+async fn setup_with_tools(tools: &str) -> H {
     let dir = TempDir::new().unwrap();
     let op_token = token::StructuredToken::generate(token::TokenNamespace::Operator);
     let hash = argon2_helper::hash(&secrecy::SecretString::from(
@@ -47,9 +53,9 @@ async fn setup() -> H {
     let agents = AgentRepository::new(pool.clone());
     let registrations = Arc::new(RegistrationRepository::new(pool.clone()));
     let catalog = Catalog::from_repo(registrations.as_ref()).await.unwrap();
-    let cfg = parse_config_str(
-        "listen:\n  host: 127.0.0.1\n  port: 9200\negress_proxy: \"http://127.0.0.1:8888\"\ntools: []\n",
-    )
+    let cfg = parse_config_str(&format!(
+        "listen:\n  host: 127.0.0.1\n  port: 9200\negress_proxy: \"http://127.0.0.1:8888\"\n{tools}"
+    ))
     .unwrap();
     let cfg = Arc::new(ArcSwap::from_pointee(cfg));
     let uds = UdsState {
@@ -75,6 +81,7 @@ async fn setup() -> H {
     };
     H {
         _dir: dir,
+        pool: pool.clone(),
         admin: TestServer::new(build_router(uds)),
         op: format!("Bearer {}", op_token.wire_format()),
     }
@@ -159,5 +166,42 @@ fn pipelock_render_lists_hosts() {
     assert_eq!(
         yaml["api_allowlist"],
         serde_yaml::from_str::<serde_yaml::Value>("[a.example, b.example]").unwrap()
+    );
+}
+
+#[tokio::test]
+async fn yaml_tools_are_ignored_when_registrations_are_authoritative() {
+    // With a registration repository the database is the authority
+    // (D4); a YAML tool the operator never registered is not served, so
+    // it must not widen the allowlist.
+    let h = setup_with_tools(
+        "tools:\n  - name: stale\n    description: d\n    upstream: https://stale.example\n    egress: proxied\n",
+    )
+    .await;
+    assert_eq!(h.policy().await["hosts"], json!([]));
+}
+
+#[tokio::test]
+async fn registration_read_failure_is_an_error_not_a_partial_policy() {
+    let h = setup().await;
+    h.route("search", "https://api.search.example", "proxied")
+        .await;
+    sqlx::query("DROP TABLE registrations")
+        .execute(&h.pool)
+        .await
+        .ok();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&h.pool)
+        .await
+        .ok();
+    let r = h
+        .admin
+        .get("/admin/operator/egress/policy")
+        .add_header("authorization", &h.op)
+        .await;
+    assert_eq!(r.status_code(), 503, "{}", r.text());
+    assert_eq!(
+        r.json::<Value>()["error"]["code"],
+        "registrations_unavailable"
     );
 }

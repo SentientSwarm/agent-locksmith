@@ -5,31 +5,47 @@
 use super::uds::UdsState;
 use crate::auth_v2::OperatorIdentity;
 use crate::config::{EgressEnforcement, EgressMode};
-use axum::{Extension, Json, extract::State};
+use axum::{
+    Extension, Json,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// `GET /admin/operator/egress/policy`.
+/// With a registration repository the database is the authority on what
+/// is served (D4), so YAML tools are used only on legacy deployments
+/// without one. A failed read is an error, never a partial allowlist.
 pub(super) async fn op_egress_policy(
     State(state): State<UdsState>,
     Extension(_op): Extension<OperatorIdentity>,
-) -> Json<Value> {
+) -> Response {
     let config = state.admin.config_snapshot();
-    let mut routes: Vec<(String, String)> = config
-        .tools
-        .iter()
-        .filter(|t| t.egress == EgressMode::Proxied)
-        .map(|t| (t.name.clone(), t.upstream.clone()))
-        .collect();
-    if let Some(repo) = &state.registrations
-        && let Ok(rows) = repo.list(None).await
-    {
-        routes.extend(
-            rows.into_iter()
+    let routes: Vec<(String, String)> = match &state.registrations {
+        Some(repo) => match repo.list(None).await {
+            Ok(rows) => rows
+                .into_iter()
                 .filter(|r| !r.disabled && r.egress == EgressMode::Proxied)
-                .map(|r| (r.name, r.upstream)),
-        );
-    }
+                .map(|r| (r.name, r.upstream))
+                .collect(),
+            Err(_) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": { "code": "registrations_unavailable",
+                        "message": "registrations could not be read; no partial policy is returned" } })),
+                )
+                    .into_response();
+            }
+        },
+        None => config
+            .tools
+            .iter()
+            .filter(|t| t.egress == EgressMode::Proxied)
+            .map(|t| (t.name.clone(), t.upstream.clone()))
+            .collect(),
+    };
     let mode = config.egress_enforcement().map(|m| match m {
         EgressEnforcement::Pipelock => "pipelock",
         EgressEnforcement::External => "external",
@@ -39,6 +55,7 @@ pub(super) async fn op_egress_policy(
         "egress_proxy_set": config.egress_proxy.is_some(),
         "hosts": hosts(&routes),
     }))
+    .into_response()
 }
 
 /// Group `(route, upstream)` pairs by destination host and port, sorted.

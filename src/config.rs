@@ -656,8 +656,9 @@ fn parse_with_registry(
 /// mode must have one, so a typo can never turn enforcement off.
 fn validate_egress(cfg: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(url) = &cfg.egress_proxy {
-        reqwest::Proxy::all(url.as_str())
-            .map_err(|e| format!("egress_proxy `{url}` is not a usable proxy URL: {e}"))?;
+        // Never echo the URL or reqwest's error: a proxy URL can carry
+        // credentials, and config errors go to stderr.
+        reqwest::Proxy::all(url.as_str()).map_err(|_| "egress_proxy is not a usable proxy URL")?;
     }
     if cfg.egress_enforcement() == Some(EgressEnforcement::Pipelock) && cfg.egress_proxy.is_none() {
         return Err("egress.mode `pipelock` requires egress_proxy".into());

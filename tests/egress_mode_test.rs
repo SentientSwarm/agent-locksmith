@@ -135,6 +135,19 @@ fn invalid_egress_proxy_is_rejected() {
 }
 
 #[test]
+fn invalid_proxy_error_never_echoes_the_url() {
+    // A proxy URL can carry credentials; a config error must not print it.
+    let err = parse_config_str(&yaml(
+        "https://up.example",
+        "egress_proxy: \"http://user:s3cret-pw@[bad\"",
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(!err.contains("s3cret-pw"), "{err}");
+    assert!(err.contains("egress_proxy"), "{err}");
+}
+
+#[test]
 fn enforcement_defaults_follow_egress_proxy() {
     let none = parse_config_str(&yaml("https://up.example", "")).unwrap();
     assert_eq!(none.egress_enforcement(), None);
