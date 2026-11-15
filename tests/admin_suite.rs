@@ -36,6 +36,8 @@ mod credential_rekey_test;
 mod credential_store_admin_test;
 #[path = "deprecation_test.rs"]
 mod deprecation_test;
+#[path = "egress_policy_test.rs"]
+mod egress_policy_test;
 #[path = "migrations_test.rs"]
 mod migrations_test;
 #[path = "operational_log_admin_test.rs"]

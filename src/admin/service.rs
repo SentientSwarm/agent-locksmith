@@ -284,6 +284,13 @@ impl AdminService {
         auth.value.looks_present()
     }
 
+    /// The current config snapshot (no hot reload: fixed after startup).
+    pub(crate) fn config_snapshot(
+        &self,
+    ) -> arc_swap::Guard<std::sync::Arc<crate::config::AppConfig>> {
+        self.config.load()
+    }
+
     /// Operator-context audit. Stamps `operator_name` from `op` (when
     /// not already set) and records the transport-level auth method:
     /// `op.auth_method` if Some (e.g. `"mtls"` from #83's cert path),

@@ -360,6 +360,19 @@ locksmith agent set-credential "$AGENT_ID" codex --broker
   seals an inactive backend's key and moves the route revision. The active
   backend's key is set with `tool|model set-key`.
 
+### Egress policy
+
+```bash
+locksmith egress policy             # JSON: mode, hosts and the routes behind each
+locksmith egress policy --pipelock  # Pipelock api_allowlist fragment
+```
+
+`GET /admin/operator/egress/policy` lists every host that an enabled
+`egress: proxied` route reaches, grouped by host and port, with the routes
+behind it, plus the effective `egress.mode`. The proxy URL is not returned.
+Use `--pipelock` to generate the egress proxy's allowlist from Locksmith's
+routes instead of maintaining it separately.
+
 ### Per-route upstream CA
 
 An HTTPS upstream behind a private CA can carry its own trust anchors:

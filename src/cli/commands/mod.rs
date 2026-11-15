@@ -2,6 +2,7 @@ pub mod agent;
 pub mod audit;
 pub mod bootstrap;
 pub mod bootstrap_operator;
+pub mod egress;
 pub mod export;
 pub mod infra;
 pub mod migrate_bindings;

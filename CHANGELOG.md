@@ -41,6 +41,10 @@
   `external` (the surrounding infrastructure, such as a mesh egress
   policy, enforces egress and proxied routes connect directly). The
   daemon logs the mode at startup.
+- `locksmith egress policy [--pipelock]` (`GET /admin/operator/egress/policy`)
+  publishes the hosts reached by proxied routes, grouped by host with the
+  routes behind each, and can render them as a Pipelock `api_allowlist`
+  (AGENT-137).
 - `locksmith rekey-credentials --database DB --old-key-file F --new-key-file F`
   re-keys stored credential values offline: every row is resealed under the
   new credential sealing key in one transaction, or none is if the old key is

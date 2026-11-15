@@ -246,6 +246,10 @@ pub fn build_router(state: UdsState) -> Router {
         // Outside `/agents/{public_id}` so no agent name is shadowed.
         .route("/revoked-agents/prune", post(op_prune_revoked))
         .route(
+            "/egress/policy",
+            get(super::egress_policy::op_egress_policy),
+        )
+        .route(
             "/agents/{public_id}",
             get(op_get_agent).patch(op_modify_agent),
         )

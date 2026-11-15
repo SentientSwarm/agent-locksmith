@@ -8,6 +8,7 @@
 
 mod authority_audit;
 pub mod bootstrap_listener;
+pub mod egress_policy;
 pub mod error_envelope;
 pub mod https;
 pub mod service;
