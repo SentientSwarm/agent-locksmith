@@ -42,6 +42,8 @@ mod migrations_test;
 mod operational_log_admin_test;
 #[path = "operational_log_retention_test.rs"]
 mod operational_log_retention_test;
+#[path = "operator_authority_audit_test.rs"]
+mod operator_authority_audit_test;
 #[path = "repo_test.rs"]
 mod repo_test;
 #[path = "test_inventory_test.rs"]

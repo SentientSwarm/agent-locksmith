@@ -102,6 +102,10 @@ Names must be existing enabled tool/model registrations. `modify --allowlist`
 replaces the full set; `--allowlist -` clears it. Omitted modify fields stay
 unchanged. `grants_reviewed` distinguishes old policies needing offline review;
 it does not attest activation or credential readiness. Denylist still wins.
+Each `modify` writes one `agent_modify` operator audit event whose details
+give the before and after value of every field it changed (`allowlist`,
+`denylist`, `expires_at`); a metadata change is recorded as changed, not by
+value.
 
 #### Explicit account bindings
 
@@ -129,6 +133,13 @@ empty-placeholder bindings require deliberate re-selection.
 `unset-credential` is idempotent — removing an absent binding returns success.
 After clearing, subsequent requests to that registration are denied until an
 explicit binding is set again.
+
+`set-credential` (including `--broker` and stored values) writes one
+`agent_credential_set` operator audit event, and `unset-credential` one
+`agent_credential_unset`. The event's `tool` is the registration, and its
+details name the new and previous binding by kind, with the header name, OAuth
+session label or stored `secret_ref` where the kind has one. Env-var names,
+`op://` references and credential values are never recorded.
 
 ### `bootstrap` — bootstrap-token management (operator)
 

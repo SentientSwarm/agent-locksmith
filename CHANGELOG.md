@@ -18,6 +18,13 @@
   prune-revoked [--dry-run]` (`POST /admin/operator/revoked-agents/prune`)
   removes what earlier revokes left: it names agents and routes, never
   credential values, and audits counts only.
+- Operator grant and binding changes are now audited (AGENT-253).
+  `agent modify` rows had empty details, and `agent set-credential` /
+  `unset-credential` wrote no row at all, so after the fact nobody could
+  tell who granted a route or switched an agent's account. `agent_modify`
+  now records each changed field before and after, and binding changes
+  write `agent_credential_set` / `agent_credential_unset` naming the route
+  and the binding kind, never a credential value.
 
 ### Added
 

@@ -40,7 +40,21 @@ pub(super) async fn set(
         return failure("credential_store_unconfigured", StatusCode::NOT_FOUND);
     }
     match write(&state, &op, &id, &registration, body).await {
-        Ok(value) => {
+        Ok((value, written)) => {
+            state
+                .admin
+                .audit_binding(
+                    &op,
+                    "agent_credential_set",
+                    super::authority_audit::BindingChange {
+                        agent_public_id: &written.agent_public_id,
+                        registration: &registration,
+                        binding: Some(&written.binding),
+                        previous: written.previous.as_ref(),
+                        error: None,
+                    },
+                )
+                .await;
             state.resync_op_references().await;
             Json(value).into_response()
         }
@@ -65,13 +79,19 @@ fn invalid(body: &Input) -> bool {
                     .bytes()
                     .all(|b| (0x21..=0x7e).contains(&b))))
 }
+/// What a successful write bound, for the audit row (AGENT-253).
+struct Written {
+    agent_public_id: String,
+    binding: AuthSpec,
+    previous: Option<AuthSpec>,
+}
 async fn write(
     state: &UdsState,
     op: &OperatorIdentity,
     id: &str,
     registration: &str,
     body: Input,
-) -> Result<serde_json::Value, AdminError> {
+) -> Result<(serde_json::Value, Written), AdminError> {
     let agent = state.admin.get_agent(op, id).await?;
     let creds = state.agent_creds.as_ref().ok_or_else(unavailable)?;
     let key = state
@@ -83,7 +103,11 @@ async fn write(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|_| unavailable())?;
-    let (header, old_ref) = shape(&mut tx, agent.id, registration, &body).await?;
+    let (header, previous) = shape(&mut tx, agent.id, registration, &body).await?;
+    let old_ref = previous
+        .as_ref()
+        .and_then(AuthSpec::stored_secret_ref)
+        .map(str::to_owned);
     let (sealed, nonce) = key
         .seal(body.value.expose_secret().as_bytes())
         .map_err(|_| unavailable())?;
@@ -94,9 +118,15 @@ async fn write(
     if let (Some(old), Some(secrets)) = (old_ref, state.credential_secrets.as_ref()) {
         let _ = secrets.tombstone_if_unreferenced(&old).await;
     }
-    Ok(
-        json!({"agent_public_id":agent.public_id,"registration":registration,"secret_ref":secret_ref}),
-    )
+    let value = json!({"agent_public_id":agent.public_id,"registration":registration,"secret_ref":secret_ref});
+    Ok((
+        value,
+        Written {
+            agent_public_id: agent.public_id,
+            binding: auth,
+            previous,
+        },
+    ))
 }
 fn auth(header: Option<String>, secret_ref: &str) -> AuthSpec {
     match header {
@@ -114,7 +144,7 @@ async fn shape(
     agent: i64,
     name: &str,
     body: &Input,
-) -> Result<(Option<String>, Option<String>), AdminError> {
+) -> Result<(Option<String>, Option<AuthSpec>), AdminError> {
     let row = sqlx::query("SELECT r.auth_json,b.auth_spec AS selected FROM registrations r LEFT JOIN agent_credential_overrides b ON b.registration=r.name AND b.agent_id=? WHERE r.name=? AND r.disabled=0 AND r.kind IN ('tool','model')")
         .bind(agent).bind(name).fetch_optional(c).await.map_err(|_| unavailable())?.ok_or(AdminError::InvalidGrantTarget)?;
     let selected: Option<String> = row.get("selected");
@@ -122,13 +152,12 @@ async fn shape(
         .map(|s| serde_json::from_str(&s))
         .transpose()
         .map_err(|_| unavailable())?;
-    let old = selected
-        .as_ref()
-        .and_then(AuthSpec::stored_secret_ref)
-        .map(str::to_owned);
     let default: AuthSpec =
         serde_json::from_str(&row.get::<String, _>("auth_json")).map_err(|_| unavailable())?;
-    Ok((header(body, selected.as_ref().unwrap_or(&default)), old))
+    Ok((
+        header(body, selected.as_ref().unwrap_or(&default)),
+        selected,
+    ))
 }
 fn header(body: &Input, inherited: &AuthSpec) -> Option<String> {
     if body.bearer {

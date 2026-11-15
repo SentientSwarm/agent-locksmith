@@ -288,7 +288,7 @@ impl AdminService {
     /// not already set) and records the transport-level auth method:
     /// `op.auth_method` if Some (e.g. `"mtls"` from #83's cert path),
     /// otherwise the canonical `"operator"` label preserved from M2.
-    async fn audit_for_operator(&self, op: &OperatorIdentity, mut event: AuditEvent) {
+    pub(crate) async fn audit_for_operator(&self, op: &OperatorIdentity, mut event: AuditEvent) {
         if event.operator_name.is_none() {
             event.operator_name = Some(op.name.clone());
         }
@@ -634,6 +634,14 @@ impl AdminService {
         public_id: &str,
         input: ModifyAgentInput,
     ) -> Result<(), AdminError> {
+        // AGENT-253: record what changed, read before the write.
+        let before = self
+            .agents
+            .get_active_by_public_id(public_id)
+            .await
+            .ok()
+            .flatten();
+        let mut details = super::authority_audit::modify_details(before.as_ref(), &input);
         let result = self
             .agents
             .update_policy_reviewed(
@@ -656,10 +664,12 @@ impl AdminService {
                 } else {
                     Decision::Denied
                 },
-                details: result
-                    .as_ref()
-                    .err()
-                    .map(|e| json!({ "error": e.to_string() })),
+                details: Some({
+                    if let Err(e) = &result {
+                        details["error"] = e.to_string().into();
+                    }
+                    details
+                }),
                 ..AuditEvent::default()
             },
         )
@@ -904,7 +914,7 @@ impl AdminService {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

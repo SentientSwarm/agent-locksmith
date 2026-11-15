@@ -992,6 +992,12 @@ async fn op_set_agent_credential(
         Ok(a) => a,
         Err(e) => return admin_err_response(e),
     };
+    let previous = creds
+        .get(agent.id, &registration)
+        .await
+        .ok()
+        .flatten()
+        .map(|o| o.auth_spec);
     let result = if body.require_live_bearer {
         creds
             .set_live_bearer(agent.id, &registration, &body.auth_spec)
@@ -999,6 +1005,20 @@ async fn op_set_agent_credential(
     } else {
         creds.set(agent.id, &registration, &body.auth_spec).await
     };
+    state
+        .admin
+        .audit_binding(
+            &op,
+            "agent_credential_set",
+            super::authority_audit::BindingChange {
+                agent_public_id: &agent.public_id,
+                registration: &registration,
+                binding: Some(&body.auth_spec),
+                previous: previous.as_ref(),
+                error: result.as_ref().err().map(|e| e.to_string()),
+            },
+        )
+        .await;
     match result {
         Ok(()) => {
             // An `op_*` override must resolve without a restart (T2.2).
@@ -1042,13 +1062,31 @@ async fn op_unset_agent_credential(
     };
     // Capture a stored override's ref before the delete so the sealed value
     // can be tombstoned once nothing points at it (T2.4).
-    let old_ref = creds
+    let previous = creds
         .get(agent.id, &registration)
         .await
         .ok()
         .flatten()
-        .and_then(|o| o.auth_spec.stored_secret_ref().map(str::to_string));
-    if let Err(e) = creds.delete(agent.id, &registration).await {
+        .map(|o| o.auth_spec);
+    let old_ref = previous
+        .as_ref()
+        .and_then(|a| a.stored_secret_ref().map(str::to_string));
+    let deleted = creds.delete(agent.id, &registration).await;
+    state
+        .admin
+        .audit_binding(
+            &op,
+            "agent_credential_unset",
+            super::authority_audit::BindingChange {
+                agent_public_id: &agent.public_id,
+                registration: &registration,
+                binding: None,
+                previous: previous.as_ref(),
+                error: deleted.as_ref().err().map(|e| e.to_string()),
+            },
+        )
+        .await;
+    if let Err(e) = deleted {
         return admin_err_response(crate::admin::service::AdminError::Backend(format!(
             "agent_credential_overrides.delete: {e}"
         )));

@@ -6,6 +6,7 @@
 //! the M2 admin UDS listener (`uds`), and (post-M2) by the M4 admin
 //! HTTPS listener and the M6 bootstrap-only listener.
 
+mod authority_audit;
 pub mod bootstrap_listener;
 pub mod error_envelope;
 pub mod https;
