@@ -20,6 +20,8 @@ pub struct AppConfig {
     /// `pipelock` when `egress_proxy` is set, otherwise unenforced, and
     /// proxied routes fail closed (see [`AppConfig::egress_enforcement`]).
     pub egress: Option<EgressConfig>,
+    /// AGENT-262 — per-route content inspection (see `crate::inspection`).
+    pub inspection: Option<crate::inspection::InspectionConfig>,
     /// Upstream TLS trust (optional). Lets operators trust a private/
     /// internal CA for upstream verification — needed for HTTPS upstreams
     /// behind an internal CA (e.g. Kamiwaza's "Kamiwaza Application
@@ -642,6 +644,7 @@ fn parse_with_registry(
     let config: AppConfig = serde_yaml::from_value(value)?;
     validate_response_controls(&config)?;
     validate_egress(&config)?;
+    crate::inspection::config::compile(config.inspection.as_ref())?;
     config.mcp.validate()?;
     if let Some(consent) = &config.oauth_consent {
         consent.validate()?;

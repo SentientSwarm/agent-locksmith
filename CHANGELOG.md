@@ -43,6 +43,15 @@
 
 ### Added
 
+- Content inspection (AGENT-262). An `inspection:` config block gives a
+  route request and response scanners with a verdict on a hit (`pass`,
+  `flag`, `redact` or `block`) and a choice of failing open or closed.
+  Request bodies are scanned before anything is sent upstream, and
+  buffered responses before anything reaches the agent. Each inspection
+  that finds, skips or fails something writes an `inspection_*` security
+  audit event carrying rule ids and SHA-256 hashes, never the matched
+  text. The first scanner is `literal:<text>`. See
+  `docs/development/inspection.md`.
 - `egress.mode` (AGENT-261) declares who enforces `egress: proxied`
   routes: `pipelock` (every proxied route uses `egress_proxy`, which is
   then required; the default whenever `egress_proxy` is set) or

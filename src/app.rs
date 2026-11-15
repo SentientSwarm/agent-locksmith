@@ -40,6 +40,9 @@ pub struct AppState {
     /// `response:` block are absent from the map and the proxy
     /// streams unchanged (M0..M6 behavior).
     pub response_controls: Arc<HashMap<String, ResponseControls>>,
+    /// AGENT-262 — per-route inspection policies, compiled once (config
+    /// load already validated them).
+    pub inspection: Arc<crate::inspection::Inspection>,
     /// mTLS authenticator for the agent listener (post-v2 / #67). Only
     /// populated when the daemon is configured for `auth_mode: mtls`
     /// or `auth_mode: both`; absent under bearer-only deployments.
@@ -446,6 +449,12 @@ pub fn build_app_full_with_native(
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
+    let inspection = Arc::new(
+        crate::inspection::config::compile(snapshot.inspection.as_ref()).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "inspection compile failed at AppState build (config validation should have caught this)");
+            Default::default()
+        }),
+    );
     drop(snapshot);
     let state = Arc::new(AppState {
         native,
@@ -455,6 +464,7 @@ pub fn build_app_full_with_native(
         audit,
         resolved_creds,
         response_controls,
+        inspection,
         mtls_authenticator,
         agent_auth,
         registrations,

@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod admission;
 mod egress;
+mod inspect;
 mod oauth;
 mod selection;
 mod upstream_urls;
@@ -563,6 +564,16 @@ pub async fn proxy_handler(
             return record_body_read_error(&state.audit, &ctx, upstream_host).await;
         }
     };
+    // AGENT-262 — inspect what the agent sent before anything leaves.
+    let body_bytes = match inspect::request_policy(&state, &ctx.tool_name) {
+        Some(policy) => {
+            match inspect::request(policy, &state.audit, &ctx, &headers, body_bytes).await {
+                Ok(b) => b,
+                Err(blocked) => return blocked,
+            }
+        }
+        None => body_bytes,
+    };
 
     // Phase G3 — codex Responses API body fixup. Only when both
     // predicates match (upstream is chatgpt.com codex AND request
@@ -972,6 +983,64 @@ async fn handle_upstream_response(
             )
             .await;
         }
+    }
+    // AGENT-262 — buffered response inspection. Streamed responses are
+    // not scanned yet; they are audited as skipped.
+    if let Some(policy) = inspect::response_policy(&state, &ctx.tool_name) {
+        if inspect::is_event_stream(upstream_content_type.as_deref()) {
+            inspect::record_stream_skipped(&state.audit, ctx).await;
+        } else {
+            let ct = upstream_content_type.clone();
+            return match inspect::response(policy, &state, ctx, target, ct.as_deref(), resp).await {
+                inspect::Buffered::Respond(r) => r,
+                inspect::Buffered::Body(body) => match rc.as_ref() {
+                    Some(rc) => {
+                        respond_with_controls(
+                            rc,
+                            &state.audit,
+                            ctx,
+                            target,
+                            upstream_host,
+                            upstream_status,
+                            upstream_content_type,
+                            response_headers,
+                            body,
+                        )
+                        .await
+                    }
+                    None => {
+                        record_proxy_request_success(
+                            &state.audit,
+                            ctx,
+                            target,
+                            upstream_host,
+                            upstream_status,
+                        )
+                        .await;
+                        let mut response = Response::new(Body::from(body));
+                        *response.status_mut() = status;
+                        *response.headers_mut() = response_headers;
+                        response
+                    }
+                },
+                inspect::Buffered::Unscanned(body) => {
+                    record_proxy_request_success(
+                        &state.audit,
+                        ctx,
+                        target,
+                        upstream_host,
+                        upstream_status,
+                    )
+                    .await;
+                    let mut response = Response::new(body);
+                    *response.status_mut() = status;
+                    *response.headers_mut() = response_headers;
+                    response
+                }
+            };
+        }
+    }
+    if let Some(rc) = rc.as_ref() {
         // Tool has redaction patterns ⇒ buffer + apply non-streaming.
         // Tools that need streaming + redaction compose with D-18
         // in-process scanners (LlamaFirewall) — see m7-response-controls
@@ -1383,6 +1452,33 @@ async fn apply_buffered_response_controls(
         Ok(b) => b.to_vec(),
         Err(e) => return record_upstream_body_read_error(audit, ctx, upstream_host, e).await,
     };
+    respond_with_controls(
+        rc,
+        audit,
+        ctx,
+        target,
+        upstream_host,
+        upstream_status,
+        upstream_content_type,
+        response_headers,
+        body_bytes,
+    )
+    .await
+}
+
+/// Apply M7 response controls to an already-buffered body and respond.
+#[allow(clippy::too_many_arguments)]
+async fn respond_with_controls(
+    rc: &ResponseControls,
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    target: &ProxyTarget,
+    upstream_host: Option<String>,
+    upstream_status: u16,
+    upstream_content_type: Option<String>,
+    response_headers: HeaderMap,
+    body_bytes: Vec<u8>,
+) -> Response {
     match rc.apply_non_streaming(upstream_content_type.as_deref(), body_bytes) {
         ApplyOutcome::SizeExceeded { observed, cap } => {
             record_response_size_exceeded_buffered(audit, ctx, upstream_host, observed, cap).await

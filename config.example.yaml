@@ -41,6 +41,17 @@ listen:
 # egress:
 #   mode: external
 
+# Content inspection per route (optional; see docs/development/inspection.md).
+# inspection:
+#   routes:
+#     - route: search
+#       request:
+#         scanners: ["literal:DO-NOT-SEND"]
+#         on_hit: block          # pass | flag | redact | block
+#       response:
+#         scanners: ["literal:DO-NOT-SEND"]
+#         on_hit: redact
+
 logging:
   level: "info"
   # file: "/var/log/locksmith/proxy.log"

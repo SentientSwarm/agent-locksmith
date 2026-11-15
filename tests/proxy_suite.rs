@@ -26,6 +26,8 @@ mod health_test;
 mod identityless_isolation_test;
 #[path = "inference_matrix_local_test.rs"]
 mod inference_matrix_local_test;
+#[path = "inspection_pipeline_test.rs"]
+mod inspection_pipeline_test;
 #[path = "integration_test.rs"]
 mod integration_test;
 #[path = "m2_integration_test.rs"]
