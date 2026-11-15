@@ -216,7 +216,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BodyMeta<'a> {
     pub content_type: Option<&'a str>,
-    pub content_encoding: Option<&'a str>,
+    /// Any `Content-Encoding` other than `identity` (or one that could
+    /// not be read): the body is not scannable as sent.
+    pub encoded: bool,
 }
 
 /// Inspect `body` under `policy`.
@@ -233,10 +235,7 @@ pub fn apply(
     }
     // A compressed body can't be scanned as sent. Unlike plain binary it
     // can hide text, so it follows `on_error` rather than passing.
-    if meta
-        .content_encoding
-        .is_some_and(|e| !e.trim().eq_ignore_ascii_case("identity"))
-    {
+    if meta.encoded {
         report.skipped = Some(SkipReason::Encoded);
         return unjudged(policy, report);
     }

@@ -55,15 +55,28 @@ pub(super) async fn request(
 }
 
 fn meta(headers: &HeaderMap) -> BodyMeta<'_> {
-    let get = |name| {
-        headers
-            .get(name)
-            .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
-    };
     BodyMeta {
-        content_type: get(axum::http::header::CONTENT_TYPE),
-        content_encoding: get(axum::http::header::CONTENT_ENCODING),
+        content_type: headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        encoded: encoded(headers),
     }
+}
+
+/// True when any `Content-Encoding` value, or any comma-separated token
+/// in one, is not `identity`. An unreadable value counts as encoded, so a
+/// malformed header can't slip a compressed body past the scanners.
+fn encoded(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(axum::http::header::CONTENT_ENCODING)
+        .iter()
+        .any(|v| match v.to_str() {
+            Ok(s) => s
+                .split(',')
+                .map(str::trim)
+                .any(|t| !t.is_empty() && !t.eq_ignore_ascii_case("identity")),
+            Err(_) => true,
+        })
 }
 
 /// Is this response a server-sent event stream?
@@ -212,4 +225,28 @@ pub(super) async fn record(
     };
     event.details = Some(details);
     audit_record(audit, event).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderValue, header::CONTENT_ENCODING};
+
+    fn encoded(values: &[&[u8]]) -> bool {
+        let mut h = HeaderMap::new();
+        for v in values {
+            h.append(CONTENT_ENCODING, HeaderValue::from_bytes(v).unwrap());
+        }
+        meta(&h).encoded
+    }
+
+    #[test]
+    fn any_non_identity_encoding_counts() {
+        assert!(!encoded(&[]));
+        assert!(!encoded(&[b"identity"]));
+        assert!(encoded(&[b"gzip"]));
+        assert!(encoded(&[b"identity", b"gzip"]), "a second header value");
+        assert!(encoded(&[b"identity, br"]), "a comma-separated token");
+        assert!(encoded(&[b"\xffgzip"]), "an unreadable value fails closed");
+    }
 }
