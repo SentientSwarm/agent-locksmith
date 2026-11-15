@@ -18,6 +18,8 @@ mod auth_v2_test;
 mod credential_store_proxy_test;
 #[path = "discovery_test.rs"]
 mod discovery_test;
+#[path = "egress_mode_test.rs"]
+mod egress_mode_test;
 #[path = "health_test.rs"]
 mod health_test;
 #[path = "identityless_isolation_test.rs"]

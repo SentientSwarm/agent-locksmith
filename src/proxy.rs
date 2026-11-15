@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod admission;
+mod egress;
 mod oauth;
 mod selection;
 mod upstream_urls;
@@ -590,7 +591,7 @@ pub async fn proxy_handler(
             body_bytes
         };
 
-    let upstream_req = build_upstream_request(
+    let upstream_req = match build_upstream_request(
         &state,
         &config,
         &target,
@@ -599,7 +600,10 @@ pub async fn proxy_handler(
         headers,
         body_bytes,
         ctx.agent_name.as_deref(),
-    );
+    ) {
+        Ok(req) => req,
+        Err(cause) => return egress::record_egress_unavailable(&state.audit, &ctx, cause).await,
+    };
 
     match upstream_req.send().await {
         Ok(resp) => {
@@ -686,14 +690,14 @@ fn build_upstream_request(
     // agent didn't supply one. `None` for M0/M1 paths without
     // `AgentIdentity`; falls back to a static `"locksmith-proxy"` then.
     agent_name: Option<&str>,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder, crate::client_pool::ClientUnavailable> {
     let client = state.client_pool.get_or_build_for(
         &target.name,
         target.timeouts,
         target.egress,
         target.upstream_ca_pem.as_deref(),
         config,
-    );
+    )?;
     let mut upstream_req = client.request(method, upstream_url);
 
     // Forward headers, stripping auth-related ones so the agent can't
@@ -908,7 +912,7 @@ fn build_upstream_request(
     if !body_bytes.is_empty() {
         upstream_req = upstream_req.body(body_bytes);
     }
-    upstream_req
+    Ok(upstream_req)
 }
 
 /// Top-level dispatch for the upstream's response: snapshot headers,

@@ -28,8 +28,18 @@ listen:
 #   request_bytes: 262144
 
 # HTTP CONNECT proxy used for tools whose `egress: proxied` is set
-# (typically Pipelock, per D-16).
+# (typically Pipelock, per D-16). It must parse as a proxy URL.
 # egress_proxy: "http://127.0.0.1:8888"
+#
+# Who enforces `egress: proxied` routes (optional):
+#   pipelock  every proxied route goes through egress_proxy (required).
+#             The default whenever egress_proxy is set.
+#   external  the surrounding infrastructure (a mesh egress policy, for
+#             example) enforces egress; proxied routes connect directly.
+# With neither egress_proxy nor egress.mode, proxied routes fail closed
+# with 503 egress_proxy_unconfigured; they never go direct.
+# egress:
+#   mode: external
 
 logging:
   level: "info"

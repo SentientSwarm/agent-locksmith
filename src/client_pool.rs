@@ -16,7 +16,18 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::config::{AppConfig, EgressMode, ToolConfig, ToolTimeouts};
+use crate::config::{AppConfig, EgressEnforcement, EgressMode, ToolConfig, ToolTimeouts};
+
+/// AGENT-259 — why no client can serve a route. A proxied route never
+/// gets a client that skips the proxy it was meant to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientUnavailable {
+    /// The route is `proxied` but nothing enforces egress: no
+    /// `egress_proxy` and no `egress.mode`.
+    ProxyUnconfigured,
+    /// The client (or its proxy) could not be built.
+    BuildFailed,
+}
 
 /// Stable fingerprint of the tool fields that affect `Client` construction.
 /// Two tool configs with the same fingerprint produce equivalent clients;
@@ -27,6 +38,7 @@ struct ToolFingerprint {
     idle_seconds: u64,
     egress: EgressMode,
     egress_proxy_url: Option<String>,
+    enforcement: Option<EgressEnforcement>,
     /// #135 — SHA-256 of the route's own CA PEM; `None` uses the default
     /// trust (public roots plus the global bundle).
     upstream_ca_sha256: Option<String>,
@@ -56,6 +68,7 @@ impl ToolFingerprint {
             } else {
                 None
             },
+            enforcement: config.egress_enforcement(),
             upstream_ca_sha256: upstream_ca_pem.map(crate::registrations::upstream_ca::sha256_hex),
         }
     }
@@ -79,7 +92,11 @@ impl ClientPool {
 
     /// Get an `Arc<Client>` for `tool`, building (or rebuilding) only if no
     /// cached client matches the tool's current fingerprint.
-    pub fn get_or_build(&self, tool: &ToolConfig, config: &AppConfig) -> Arc<Client> {
+    pub fn get_or_build(
+        &self,
+        tool: &ToolConfig,
+        config: &AppConfig,
+    ) -> Result<Arc<Client>, ClientUnavailable> {
         let fingerprint = ToolFingerprint::of(tool, config);
 
         // Fast path: matching cached entry.
@@ -91,7 +108,7 @@ impl ClientPool {
             if let Some((client, cached_fp)) = entries.get(&tool.name)
                 && cached_fp == &fingerprint
             {
-                return Arc::clone(client);
+                return Ok(Arc::clone(client));
             }
         }
 
@@ -106,11 +123,11 @@ impl ClientPool {
         if let Some((client, cached_fp)) = entries.get(&tool.name)
             && cached_fp == &fingerprint
         {
-            return Arc::clone(client);
+            return Ok(Arc::clone(client));
         }
-        let client = Arc::new(build_client(tool, config));
+        let client = Arc::new(build_client(tool, config)?);
         entries.insert(tool.name.clone(), (Arc::clone(&client), fingerprint));
-        client
+        Ok(client)
     }
 
     /// Phase E.6 — variant keyed by fields rather than a `ToolConfig`.
@@ -126,7 +143,7 @@ impl ClientPool {
         egress: EgressMode,
         upstream_ca_pem: Option<&str>,
         config: &AppConfig,
-    ) -> Arc<Client> {
+    ) -> Result<Arc<Client>, ClientUnavailable> {
         let fingerprint = ToolFingerprint::of_parts(timeouts, egress, upstream_ca_pem, config);
 
         {
@@ -137,7 +154,7 @@ impl ClientPool {
             if let Some((client, cached_fp)) = entries.get(name)
                 && cached_fp == &fingerprint
             {
-                return Arc::clone(client);
+                return Ok(Arc::clone(client));
             }
         }
 
@@ -148,11 +165,11 @@ impl ClientPool {
         if let Some((client, cached_fp)) = entries.get(name)
             && cached_fp == &fingerprint
         {
-            return Arc::clone(client);
+            return Ok(Arc::clone(client));
         }
-        let client = Arc::new(build_client_for(timeouts, egress, upstream_ca_pem, config));
+        let client = Arc::new(build_client_for(timeouts, egress, upstream_ca_pem, config)?);
         entries.insert(name.to_string(), (Arc::clone(&client), fingerprint));
-        client
+        Ok(client)
     }
 
     /// Remove cache entries for tool names not in `keep`. Called by M2's
@@ -175,7 +192,7 @@ impl ClientPool {
     }
 }
 
-fn build_client(tool: &ToolConfig, config: &AppConfig) -> Client {
+fn build_client(tool: &ToolConfig, config: &AppConfig) -> Result<Client, ClientUnavailable> {
     build_client_for(tool.timeouts, tool.egress, None, config)
 }
 
@@ -184,23 +201,21 @@ fn build_client_for(
     egress: EgressMode,
     upstream_ca_pem: Option<&str>,
     config: &AppConfig,
-) -> Client {
+) -> Result<Client, ClientUnavailable> {
+    let proxy = egress_proxy(egress, config)?;
     let mut builder = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(timeouts.request_seconds))
         .read_timeout(Duration::from_secs(timeouts.idle_seconds));
+    if let Some(proxy) = proxy.clone() {
+        builder = builder.proxy(proxy);
+    }
 
     if let Some(pem) = upstream_ca_pem {
         // #135 — the route's own anchors replace every other root. Fail
         // closed: an unusable stored value leaves no anchors, so TLS fails.
         builder = route_only_trust(builder, pem);
-        if matches!(egress, EgressMode::Proxied)
-            && let Some(proxy_url) = &config.egress_proxy
-            && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
-        {
-            builder = builder.proxy(proxy);
-        }
-        return builder.build().unwrap_or_else(|_| no_trust_client());
+        return finish(builder, proxy.is_some(), no_trust_client);
     }
 
     // Extra upstream-CA trust (e.g. an internal CA in front of an HTTPS
@@ -211,15 +226,47 @@ fn build_client_for(
     {
         builder = add_ca_bundle(builder, ca_path);
     }
+    finish(builder, proxy.is_some(), no_redirect_client)
+}
 
-    if matches!(egress, EgressMode::Proxied)
-        && let Some(proxy_url) = &config.egress_proxy
-        && let Ok(proxy) = reqwest::Proxy::all(proxy_url)
-    {
-        builder = builder.proxy(proxy);
+/// AGENT-259 — the proxy a route must use. `proxied` routes get the
+/// configured proxy under `pipelock`, none under `external`, and an error
+/// when nothing enforces egress: they never fall through to direct.
+fn egress_proxy(
+    egress: EgressMode,
+    config: &AppConfig,
+) -> Result<Option<reqwest::Proxy>, ClientUnavailable> {
+    if !matches!(egress, EgressMode::Proxied) {
+        return Ok(None);
     }
+    match config.egress_enforcement() {
+        None => Err(ClientUnavailable::ProxyUnconfigured),
+        Some(EgressEnforcement::External) => Ok(None),
+        Some(EgressEnforcement::Pipelock) => {
+            let url = config
+                .egress_proxy
+                .as_deref()
+                .ok_or(ClientUnavailable::ProxyUnconfigured)?;
+            reqwest::Proxy::all(url)
+                .map(Some)
+                .map_err(|_| ClientUnavailable::BuildFailed)
+        }
+    }
+}
 
-    builder.build().unwrap_or_else(|_| no_redirect_client())
+/// Build the client. A failed build for a proxied route is an error:
+/// the fallbacks below carry no proxy. Direct routes keep a fallback that
+/// still refuses redirects (and, for route-CA routes, trusts nothing).
+fn finish(
+    builder: reqwest::ClientBuilder,
+    proxied: bool,
+    fallback: fn() -> Client,
+) -> Result<Client, ClientUnavailable> {
+    match builder.build() {
+        Ok(client) => Ok(client),
+        Err(_) if proxied => Err(ClientUnavailable::BuildFailed),
+        Err(_) => Ok(fallback()),
+    }
 }
 
 /// Last resort when a configured client cannot be built. It still never
@@ -355,12 +402,24 @@ tools: []
     }
 
     #[test]
+    fn proxied_tool_without_enforcement_gets_no_client() {
+        let pool = ClientPool::new();
+        let mut t = tool("out", 30);
+        t.egress = EgressMode::Proxied;
+        assert_eq!(
+            pool.get_or_build(&t, &empty_config()).err(),
+            Some(ClientUnavailable::ProxyUnconfigured)
+        );
+        assert_eq!(pool.len(), 0, "a refusal is never cached");
+    }
+
+    #[test]
     fn returns_same_arc_for_unchanged_tool() {
         let pool = ClientPool::new();
         let cfg = empty_config();
         let t = tool("github", 30);
-        let a = pool.get_or_build(&t, &cfg);
-        let b = pool.get_or_build(&t, &cfg);
+        let a = pool.get_or_build(&t, &cfg).unwrap();
+        let b = pool.get_or_build(&t, &cfg).unwrap();
         assert!(
             Arc::ptr_eq(&a, &b),
             "second lookup should return the cached Arc"
@@ -372,8 +431,8 @@ tools: []
     fn rebuilds_when_fingerprint_changes() {
         let pool = ClientPool::new();
         let cfg = empty_config();
-        let a = pool.get_or_build(&tool("github", 30), &cfg);
-        let b = pool.get_or_build(&tool("github", 60), &cfg);
+        let a = pool.get_or_build(&tool("github", 30), &cfg).unwrap();
+        let b = pool.get_or_build(&tool("github", 60), &cfg).unwrap();
         assert!(
             !Arc::ptr_eq(&a, &b),
             "different fingerprint must produce a new client"
@@ -385,8 +444,8 @@ tools: []
     fn independent_entries_per_tool() {
         let pool = ClientPool::new();
         let cfg = empty_config();
-        let github = pool.get_or_build(&tool("github", 30), &cfg);
-        let anthropic = pool.get_or_build(&tool("anthropic", 30), &cfg);
+        let github = pool.get_or_build(&tool("github", 30), &cfg).unwrap();
+        let anthropic = pool.get_or_build(&tool("anthropic", 30), &cfg).unwrap();
         assert!(!Arc::ptr_eq(&github, &anthropic));
         assert_eq!(pool.len(), 2);
     }
@@ -395,8 +454,8 @@ tools: []
     fn cleanup_removed_drops_unlisted_entries() {
         let pool = ClientPool::new();
         let cfg = empty_config();
-        let _g = pool.get_or_build(&tool("github", 30), &cfg);
-        let _a = pool.get_or_build(&tool("anthropic", 30), &cfg);
+        let _g = pool.get_or_build(&tool("github", 30), &cfg).unwrap();
+        let _a = pool.get_or_build(&tool("anthropic", 30), &cfg).unwrap();
         assert_eq!(pool.len(), 2);
         pool.cleanup_removed(&["anthropic"]);
         assert_eq!(pool.len(), 1);

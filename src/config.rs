@@ -16,6 +16,10 @@ pub struct AppConfig {
     pub listen: ListenConfig,
     pub inbound_auth: Option<InboundAuthConfig>,
     pub egress_proxy: Option<String>,
+    /// AGENT-261 — how `egress: proxied` routes are enforced. Absent:
+    /// `pipelock` when `egress_proxy` is set, otherwise unenforced, and
+    /// proxied routes fail closed (see [`AppConfig::egress_enforcement`]).
+    pub egress: Option<EgressConfig>,
     /// Upstream TLS trust (optional). Lets operators trust a private/
     /// internal CA for upstream verification — needed for HTTPS upstreams
     /// behind an internal CA (e.g. Kamiwaza's "Kamiwaza Application
@@ -49,6 +53,38 @@ pub struct AppConfig {
     /// hourly sweep) when absent. Only consulted when
     /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is set.
     pub credential_store: Option<CredentialStoreConfig>,
+}
+
+/// AGENT-261 — egress enforcement settings.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct EgressConfig {
+    pub mode: EgressEnforcement,
+}
+
+/// Who enforces egress for `egress: proxied` routes.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressEnforcement {
+    /// Every proxied route goes through `egress_proxy`, which is required.
+    Pipelock,
+    /// The surrounding infrastructure (a mesh egress policy, for
+    /// example) enforces egress; proxied routes connect directly.
+    External,
+}
+
+impl AppConfig {
+    /// The effective egress enforcement. `None` means nothing enforces
+    /// egress, and proxied routes must fail closed rather than go direct.
+    pub fn egress_enforcement(&self) -> Option<EgressEnforcement> {
+        match &self.egress {
+            Some(e) => Some(e.mode),
+            None => self
+                .egress_proxy
+                .as_ref()
+                .map(|_| EgressEnforcement::Pipelock),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -605,6 +641,7 @@ fn parse_with_registry(
     apply_deprecations(&mut value, registry);
     let config: AppConfig = serde_yaml::from_value(value)?;
     validate_response_controls(&config)?;
+    validate_egress(&config)?;
     config.mcp.validate()?;
     if let Some(consent) = &config.oauth_consent {
         consent.validate()?;
@@ -613,6 +650,19 @@ fn parse_with_registry(
         }
     }
     Ok(config)
+}
+
+/// AGENT-259 / AGENT-261 — a configured proxy must parse, and `pipelock`
+/// mode must have one, so a typo can never turn enforcement off.
+fn validate_egress(cfg: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(url) = &cfg.egress_proxy {
+        reqwest::Proxy::all(url.as_str())
+            .map_err(|e| format!("egress_proxy `{url}` is not a usable proxy URL: {e}"))?;
+    }
+    if cfg.egress_enforcement() == Some(EgressEnforcement::Pipelock) && cfg.egress_proxy.is_none() {
+        return Err("egress.mode `pipelock` requires egress_proxy".into());
+    }
+    Ok(())
 }
 
 /// Compile every `redaction_patterns[].regex` and reject duplicate

@@ -493,6 +493,7 @@ async fn run_owned(
             registrations_for_app,
         ),
     };
+    log_egress_enforcement(&shared_config.load());
     let agent_shutdown = coord.shutdown_signal();
     // Every listener is bound and every fallible check done before any
     // serve task is spawned, so a startup failure leaves nothing serving.
@@ -1400,4 +1401,21 @@ mod native_body_tests;
 #[cfg(test)]
 pub(crate) fn body_test_lock(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
     state_lock::acquire(Some(path))
+}
+
+/// AGENT-261 — say once at startup who enforces `egress: proxied`, so
+/// running without a proxy is visible rather than silent.
+fn log_egress_enforcement(config: &crate::config::AppConfig) {
+    match config.egress_enforcement() {
+        Some(crate::config::EgressEnforcement::Pipelock) => {
+            info!(mode = "pipelock", "egress: proxied routes use egress_proxy")
+        }
+        Some(crate::config::EgressEnforcement::External) => info!(
+            mode = "external",
+            "egress: proxied routes connect directly; the surrounding infrastructure enforces egress"
+        ),
+        None => tracing::warn!(
+            "egress: no egress_proxy and no egress.mode; proxied routes fail closed with 503"
+        ),
+    }
 }

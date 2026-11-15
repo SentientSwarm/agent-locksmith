@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- `egress: proxied` routes no longer go direct when the egress proxy is
+  missing or broken (AGENT-259). Before, an unset `egress_proxy`, a URL
+  that didn't parse, or a client that failed to build each silently
+  sent the route straight to the internet. Now `egress_proxy` must parse
+  at config load, and a proxied route with nothing enforcing egress
+  answers 503 `egress_proxy_unconfigured` and writes an
+  `egress_unenforced` security audit event.
 - The proxy no longer follows upstream redirects. A followed redirect to
   another host carried the route's key with it when the key used a
   custom header name such as `x-api-key`, so an upstream with an open
@@ -28,6 +35,12 @@
 
 ### Added
 
+- `egress.mode` (AGENT-261) declares who enforces `egress: proxied`
+  routes: `pipelock` (every proxied route uses `egress_proxy`, which is
+  then required; the default whenever `egress_proxy` is set) or
+  `external` (the surrounding infrastructure, such as a mesh egress
+  policy, enforces egress and proxied routes connect directly). The
+  daemon logs the mode at startup.
 - `locksmith rekey-credentials --database DB --old-key-file F --new-key-file F`
   re-keys stored credential values offline: every row is resealed under the
   new credential sealing key in one transaction, or none is if the old key is

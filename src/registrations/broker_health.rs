@@ -226,6 +226,11 @@ impl Prober {
             r.upstream_ca_pem.as_deref(),
             &config,
         );
+        // AGENT-259 — a proxied broker with no enforced egress is down,
+        // not probed directly.
+        let Ok(client) = client else {
+            return Ok(down(None));
+        };
         let url = format!("{}{}", r.upstream.trim_end_matches('/'), probe.path);
         let req = match r.auth.header_name() {
             Some(h) => client.get(url).header(h, key.expose_secret()),
