@@ -55,13 +55,20 @@ def quoted(text: str) -> str:
     return f'"{inner}"'
 
 
+def env_quoted(text: str) -> str:
+    """One double-quoted Environment= assignment. systemd expands %
+    specifiers there but never $ variables, so only % is doubled."""
+    inner = text.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{inner}"'
+
+
 def service(site: sitefile.Site, instance: str, comp: sitefile.Component) -> str:
     root = site.state_root
     env = {"HOME": f"{root}/{comp.name}/home", **comp.env}
     # Environment= lines, not an /usr/bin/env wrapper: a readable wrapper
     # would run dumpable with the environment file's secrets. The guard is
     # a separate unit, so none of this reaches root.
-    environment = "".join(f"Environment={quoted(f'{k}={v}')}\n" for k, v in env.items())
+    environment = "".join(f"Environment={env_quoted(f'{k}={v}')}\n" for k, v in env.items())
     env_file = (
         f"EnvironmentFile={root}/environment/{comp.name}.env\n"
         if comp.environment_file

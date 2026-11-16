@@ -48,7 +48,7 @@ name = "site-a"
 name = "app"
 user = "app"
 command = "/usr/bin/app --home %h --price $5"
-env = { NOTE = 'say "hi" \\ bye', SPACE = "a b" }
+env = { NOTE = 'say "hi" \\ bye', SPACE = "a b", PRICE = "$5 at 50%" }
 ingress = [{ port = 8080, from = ["10.0.0.0/24", "2001:db8::/32"] }]
 
 [[instance.component]]
@@ -161,6 +161,8 @@ class RenderTest(unittest.TestCase):
         self.assertIn("--home %%h --price $$5", exec_line)
         self.assertIn(r'Environment="NOTE=say \"hi\" \\ bye"', lines)
         self.assertIn('Environment="SPACE=a b"', lines)
+        # Environment= expands % specifiers but never $ variables.
+        self.assertIn('Environment="PRICE=$5 at 50%%"', lines)
 
     def test_refuses_existing_output(self):
         existing = self.root / "live"
