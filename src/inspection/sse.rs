@@ -381,7 +381,8 @@ fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
             }
             // Clients start a part's text (or a call's arguments) from
             // what `.added` gives, then append the deltas.
-            let opening = k.ends_with(".added") && matches!(path, "/part/text" | "/item/arguments");
+            let opening = k.ends_with(".added")
+                && matches!(path, "/part/text" | "/part/refusal" | "/item/arguments");
             opening.then(|| "/delta".to_string())
         }
         // A block's opening text is the start of what its deltas extend.

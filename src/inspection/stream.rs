@@ -1644,6 +1644,36 @@ mod tests {
     }
 
     #[test]
+    fn a_match_split_between_an_added_refusal_and_a_delta_is_found() {
+        use serde_json::json;
+        let k = key();
+        let at = |extra: serde_json::Value| {
+            let mut v = json!({"output_index": 0, "content_index": 0});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let events = vec![
+            ev(
+                "response.content_part.added",
+                at(json!({"part": {"type": "refusal", "refusal": format!("no {}", &k[..12])}})),
+            ),
+            ev(
+                "response.refusal.delta",
+                at(json!({"delta": format!("{} end", &k[12..])})),
+            ),
+            ev("response.completed", json!({"response": {}})),
+        ];
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(
+            !out.contains(&k[..12]) && !out.contains(&k[12..24]),
+            "{out}"
+        );
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+    }
+
+    #[test]
     fn a_match_split_between_added_text_and_a_delta_is_found() {
         use serde_json::json;
         let k = key();
@@ -1967,6 +1997,13 @@ mod tests {
         let (out, i) = run(&closed(1 << 20, Verdict::Block), &[named("hi")]);
         assert!(out.contains("inspection_blocked"), "{out}");
         assert!(i.report().error.is_some());
+        let error = format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::json!({
+            "type": "error", "index": 0, "delta": {"type": "text_delta", "text": "hi"}})
+        );
+        let (out, _) = run(&closed(1 << 20, Verdict::Block), &[error]);
+        assert!(out.contains("inspection_blocked"), "{out}");
         // The SSE default name `message` names no event type.
         let plain = format!(
             "event: message\ndata: {}\n\n",

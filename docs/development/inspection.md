@@ -199,8 +199,8 @@ protocol metadata (`type`, `id`, `object`, `model`, `role`,
 fields later events extend go to a window: a chat or completions
 choice's `delta` and `text`, a Responses `*.delta`, an Anthropic block's
 text, thinking and tool input, and the opening text clients start them
-from (`content_block_start`, a Responses `.added` part's text or call's
-arguments). An event a redaction rewrites loses its `logprobs` (`null`,
+from (`content_block_start`, a Responses `.added` part's text or refusal,
+or a call's arguments). An event a redaction rewrites loses its `logprobs` (`null`,
 or `[]` where it is a list): its tokens, their bytes and alternatives
 would spell the text the cut removed.
 
