@@ -191,6 +191,47 @@ command = "/usr/bin/true"
         text = '[site]\nstate_root = "/srv/edge"\n\n[[instance]]\nname = "site-a"\n'
         self.assertRefused(text, "component")
 
+    def test_address_scope_id_refused(self):
+        for bad in ("fe80::1%a;id;#", "fe80::1%$(id)", "fe80::1%eth0"):
+            text = MINIMAL.replace(
+                'name = "site-a"', f'name = "site-a"\naddress = "{bad}"'
+            )
+            self.assertRefused(text, "address")
+
+    def test_cidr_scope_id_refused(self):
+        for bad in (
+            "fe80::%x/64",
+            "fe80::%x } tcp dport 22 accept ; ip6 saddr { ::/64",
+        ):
+            self.assertRefused(
+                with_component_line(f'ingress = [{{ port = 9200, from = ["{bad}"] }}]'),
+                "CIDR",
+            )
+
+    def test_reserved_component_names_refused(self):
+        for bad in ("input", "app-guard"):
+            self.assertRefused(
+                MINIMAL.replace('name = "locksmith"', f'name = "{bad}"'), "reserved"
+            )
+
+    def test_trailing_backslash_in_command_refused(self):
+        text = MINIMAL.replace('config.yaml"', 'config.yaml \\\\"')
+        self.assertIn('\\\\"', text)
+        self.assertRefused(text, "command")
+
+    def test_existing_system_users_refused(self):
+        for bad in (
+            "daemon",
+            "bin",
+            "www-data",
+            "messagebus",
+            "systemd-network",
+            "sshd",
+        ):
+            self.assertRefused(
+                MINIMAL.replace('user = "locksmith"', f'user = "{bad}"'), "user"
+            )
+
     def test_invalid_toml(self):
         self.assertRefused("[site\n", "TOML")
 

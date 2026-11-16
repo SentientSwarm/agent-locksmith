@@ -1,8 +1,9 @@
 #!/usr/bin/python3 -I
 """Fail closed before a Locksmith edge service starts on its custody volume.
 
-Runs as an isolated root ExecStartPre (python3 -I ignores PYTHON* variables
-and user site-packages). The allowed components and the state root come
+Runs as root in its own oneshot unit (locksmith-edge-<component>-guard),
+which the component requires, so the component's environment file never
+reaches it; python3 -I also ignores PYTHON* variables and user site-packages. The allowed components and the state root come
 from a root-owned components.json written by render.py, never from argv.
 It handles no credentials. Receipts attest the operator's completed custody
 ceremony; they cannot discover a remote copy by themselves.
@@ -30,7 +31,8 @@ class Refusal(Exception):
 def mount_type(root: Path) -> str | None:
     """The filesystem type when root is itself a mount point, else None."""
     result = subprocess.run(
-        ["findmnt", "--json", "--mountpoint", str(root), "--output", "FSTYPE"],
+        ["/usr/bin/findmnt", "--json", "--mountpoint", str(root), "--output", "FSTYPE"],
+        env={"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"},
         capture_output=True,
         text=True,
         timeout=5,

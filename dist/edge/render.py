@@ -20,7 +20,7 @@ from pathlib import Path
 # -I drops the script directory from sys.path; add back only that directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sitefile
-from units import GUARD, INPUT_SERVICE, service
+from units import GUARD, INPUT_SERVICE, guard_service, guard_unit, service
 
 UNITS = "usr/local/lib/systemd/system"
 TABLE = "locksmith_edge_input"
@@ -89,9 +89,13 @@ def render(site: sitefile.Site, instance_name: str, output: Path) -> None:
         f"{UNITS}/locksmith-edge-input.service": INPUT_SERVICE,
     }
     for comp in instance.components:
-        files[f"{UNITS}/locksmith-edge-{comp.name}.service"] = service(
-            site, instance.name, comp
-        )
+        for unit, text in [
+            (f"locksmith-edge-{comp.name}.service", service(site, instance.name, comp)),
+            (guard_unit(comp), guard_service(site, instance.name, comp)),
+        ]:
+            if f"{UNITS}/{unit}" in files:
+                raise ValueError(f"component {comp.name!r} collides with unit {unit}")
+            files[f"{UNITS}/{unit}"] = text
     for relative, text in files.items():
         path = output / relative
         path.parent.mkdir(parents=True, exist_ok=True)

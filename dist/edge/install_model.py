@@ -38,6 +38,7 @@ from catalog import (
 __all__ = [
     "InstallError",
     "Model",
+    "check_token",
     "install",
     "load_catalog",
     "parse_catalog",
@@ -55,9 +56,14 @@ def read_token_file(path: Path) -> str:
         raise InstallError(
             f"{path} must not be readable by group or others (chmod 600)"
         )
-    token = path.read_text(encoding="utf-8").strip()
-    if not token or any(c.isspace() for c in token):
-        raise InstallError(f"{path} must contain one token")
+    return check_token(path.read_text(encoding="utf-8"), str(path))
+
+
+def check_token(raw: str, source: str) -> str:
+    """One printable token, or an error that never repeats it."""
+    token = raw.strip()
+    if not token or any(c.isspace() or not c.isprintable() for c in token):
+        raise InstallError(f"{source} must contain one token")
     return token
 
 
@@ -69,11 +75,27 @@ def redirect_allowed(old: str, new: str) -> bool:
     return new_scheme == "https" or (old_scheme == new_scheme == "http")
 
 
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, (parts.hostname or "").lower(), parts.port
+
+
 class _Redirects(urllib.request.HTTPRedirectHandler):
+    """Carry the token across a redirect only back to the endpoint's own
+    origin (HF's resolve cache); never to the CDN or any other host."""
+
+    def __init__(self, endpoint: str, token: str | None):
+        super().__init__()
+        self._endpoint = _origin(endpoint)
+        self._token = token
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not redirect_allowed(req.full_url, newurl):
             raise InstallError("refusing a redirect that downgrades from https")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and self._token and _origin(new.full_url) == self._endpoint:
+            new.add_unredirected_header("Authorization", f"Bearer {self._token}")
+        return new
 
 
 def _fetch(
@@ -135,15 +157,14 @@ def install(
     try:
         repo = staging / target.name
         snap = repo / "snapshots" / model.revision
-        opener = urllib.request.build_opener(_Redirects)
+        sent = token if model.gated else None
+        opener = urllib.request.build_opener(_Redirects(endpoint, sent))
         for spec in model.files:
             dest = snap / spec.path
             dest.parent.mkdir(parents=True, exist_ok=True)
             partial = dest.with_name(dest.name + ".partial")
             url = f"{endpoint}/{model.repo}/resolve/{model.revision}/{urllib.parse.quote(spec.path)}"
-            _fetch(
-                opener, url, token if model.gated else None, partial, spec, model.gated
-            )
+            _fetch(opener, url, sent, partial, spec, model.gated)
             partial.rename(dest)
         (repo / "refs").mkdir()
         (repo / "refs" / "main").write_text(model.revision)
@@ -188,7 +209,7 @@ def main() -> int:
         if args.token_file:
             token = read_token_file(args.token_file)
         elif args.token_prompt:
-            token = getpass.getpass("Hugging Face token: ").strip() or None
+            token = check_token(getpass.getpass("Hugging Face token: "), "the prompt")
         target = install(model, args.hf_home, token=token, accepted_by=args.accepted_by)
     except (InstallError, OSError) as err:
         print(f"install_model: {err}", file=sys.stderr)

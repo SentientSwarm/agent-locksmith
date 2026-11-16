@@ -93,13 +93,37 @@ class RenderTest(unittest.TestCase):
         self.assertIn("MemoryDenyWriteExecute=no", lines)
         self.assertIn("NoNewPrivileges=yes", lines)
 
-    def test_guard_is_isolated_root_prestart(self):
+    def test_guard_runs_in_its_own_unit_without_the_environment_file(self):
+        out = self.out("edge-locksmith")
+        guard = (
+            (out / UNITS / "locksmith-edge-locksmith-guard.service")
+            .read_text()
+            .splitlines()
+        )
+        self.assertIn("Type=oneshot", guard)
+        self.assertIn(
+            "ExecStart=/usr/bin/python3 -I /usr/local/sbin/locksmith-edge-state-check "
+            "edge-locksmith locksmith",
+            guard,
+        )
+        for line in guard:
+            self.assertFalse(
+                line.startswith(("Environment", "User=", "ExecStartPre")), line
+            )
+        self.assertNotIn("[Install]", guard)
+
+    def test_component_requires_and_follows_its_guard(self):
         lines = self.unit(self.out("edge-locksmith"), "locksmith").splitlines()
         self.assertIn(
-            "ExecStartPre=+/usr/bin/python3 -I /usr/local/sbin/locksmith-edge-state-check "
-            "edge-locksmith locksmith",
+            "Requires=locksmith-edge-input.service locksmith-edge-locksmith-guard.service",
             lines,
         )
+        self.assertIn(
+            "After=network-online.target locksmith-edge-input.service "
+            "locksmith-edge-locksmith-guard.service",
+            lines,
+        )
+        self.assertFalse([l for l in lines if l.startswith("ExecStartPre")])
 
     def test_no_unit_wide_environment(self):
         for instance in ("edge-locksmith", "edge-inspector"):
@@ -140,6 +164,15 @@ class RenderTest(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             render.render(EXAMPLE, "edge-locksmith", existing)
         self.assertEqual(list(existing.iterdir()), [])
+
+    def test_unit_name_collision_refused_even_if_validation_is_bypassed(self):
+        comp = sitefile.Component(name="input", user="app", command="/bin/true")
+        site = sitefile.Site(
+            state_root="/srv/edge",
+            instances=[sitefile.Instance(name="site-a", components=[comp])],
+        )
+        with self.assertRaises(ValueError):
+            render.render(site, "site-a", self.root / "collide")
 
     def test_unknown_instance(self):
         with self.assertRaises(KeyError):

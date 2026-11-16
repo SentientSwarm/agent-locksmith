@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -138,6 +139,19 @@ class StateCheckTest(unittest.TestCase):
     def test_relative_state_root_is_refused(self):
         self.write_config(state_root="state")
         self.refused("components file")
+
+    def test_findmnt_runs_by_absolute_path_with_a_clean_environment(self):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs.get("env")))
+            return subprocess.CompletedProcess(argv, 1, "", "")
+
+        with patch.object(self.guard.subprocess, "run", side_effect=fake_run):
+            self.assertIsNone(self.guard.mount_type(self.root))
+        argv, env = calls[0]
+        self.assertEqual(argv[0], "/usr/bin/findmnt")
+        self.assertEqual(env, {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"})
 
     def test_shebang_is_isolated(self):
         first = (EDGE / "state_check.py").read_text().splitlines()[0]

@@ -78,6 +78,9 @@ def _preflight(site: sitefile.Site, p: str, image: str, pool: str) -> list[str]:
 def _instance(
     site, inst, p: str, image: str, pool: str, volume_size: str | None
 ) -> list[str]:
+    # Every value is validated already; quoting is defence in depth for a
+    # script that runs as root.
+    q = shlex.quote
     config = [
         "boot.autostart=false",
         "security.nesting=false",
@@ -87,20 +90,21 @@ def _instance(
         config.append(f"limits.cpu={inst.cpu}")
     if inst.memory is not None:
         config.append(f"limits.memory={inst.memory}")
-    flags = " ".join(f"-c {c}" for c in config)
-    lines = [
-        f"incus --project {p} init {shlex.quote(image)} {inst.name} --storage {pool} {flags}"
-    ]
+    flags = " ".join(f"-c {q(c)}" for c in config)
+    name, volume = q(inst.name), q(f"{inst.name}-state")
+    lines = [f"incus --project {p} init {q(image)} {name} --storage {pool} {flags}"]
     if inst.address is not None:
         key = "ipv6.address" if ":" in inst.address else "ipv4.address"
         lines.append(
-            f"incus --project {p} config device override {inst.name} eth0 {key}={inst.address}"
+            f"incus --project {p} config device override {name} eth0 {q(f'{key}={inst.address}')}"
         )
-    size = f" size={volume_size}" if volume_size else ""
-    mount = f"pool={pool} source={inst.name}-state path={shlex.quote(site.state_root)}"
+    size = f" {q(f'size={volume_size}')}" if volume_size else ""
+    mount = (
+        f"pool={pool} {q(f'source={inst.name}-state')} {q(f'path={site.state_root}')}"
+    )
     lines += [
-        f"incus storage volume create {pool} {inst.name}-state --project {p}{size}",
-        f"incus --project {p} config device add {inst.name} state disk {mount}",
+        f"incus storage volume create {pool} {volume} --project {p}{size}",
+        f"incus --project {p} config device add {name} state disk {mount}",
     ]
     return lines
 

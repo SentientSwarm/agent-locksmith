@@ -66,8 +66,8 @@ def service(site: sitefile.Site, instance: str, comp: sitefile.Component) -> str
     )
     return f"""[Unit]
 Description=Locksmith edge {comp.name} (custody-gated)
-After=network-online.target locksmith-edge-input.service
-Requires=locksmith-edge-input.service
+After=network-online.target locksmith-edge-input.service {guard_unit(comp)}
+Requires=locksmith-edge-input.service {guard_unit(comp)}
 Wants=network-online.target
 RequiresMountsFor={root}
 ConditionPathExists={root}/custody/{comp.name}.ready
@@ -81,8 +81,7 @@ Group={comp.user}
 UMask=0077
 RuntimeDirectory={comp.name}
 RuntimeDirectoryMode=0750
-{env_file}ExecStartPre=+/usr/bin/python3 -I {GUARD} {instance} {comp.name}
-ExecStart=/usr/bin/env {words} {unit_literal(comp.command)}
+{env_file}ExecStart=/usr/bin/env {words} {unit_literal(comp.command)}
 WorkingDirectory={root}/{comp.name}
 Restart=on-failure
 RestartSec=5
@@ -94,4 +93,31 @@ ReadWritePaths={root}/{comp.name} /run/{comp.name}
 
 [Install]
 WantedBy=multi-user.target
+"""
+
+
+def guard_unit(comp: sitefile.Component) -> str:
+    return f"locksmith-edge-{comp.name}-guard.service"
+
+
+def guard_service(site: sitefile.Site, instance: str, comp: sitefile.Component) -> str:
+    """The storage and custody check, as root, in a unit of its own: the
+    component's EnvironmentFile (and any LD_* or PATH in it) never reaches
+    it. The component Requires= and follows it, so a failed check blocks
+    the start, and it runs again before every restart."""
+    return f"""[Unit]
+Description=Locksmith edge {comp.name} storage and custody check
+After=local-fs.target
+RequiresMountsFor={site.state_root}
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I {GUARD} {instance} {comp.name}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
 """

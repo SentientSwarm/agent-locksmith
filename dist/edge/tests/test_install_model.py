@@ -77,6 +77,9 @@ class Fixture:
 
             def do_GET(self):
                 fixture._record("origin", self)
+                if redirect == "hf":
+                    fixture._hf(self)
+                    return
                 if fixture.status != 200:
                     self.send_response(fixture.status)
                     self.end_headers()
@@ -91,6 +94,30 @@ class Fixture:
                 fixture._send(self, self.path)
 
         return Origin
+
+    def _hf(self, handler):
+        """Hugging Face shape: a small file 307s to a same-host resolve cache
+        that requires the token again; an LFS file 302s to the CDN."""
+        cache = "/api/resolve-cache/models"
+        if handler.path.startswith(cache):
+            if "Authorization" not in handler.headers:
+                handler.send_response(401)
+                handler.end_headers()
+                return
+            self._send(
+                handler,
+                handler.path.replace(
+                    f"{cache}/org/test-model/{REV}/", f"/org/test-model/resolve/{REV}/"
+                ),
+            )
+            return
+        if handler.path.endswith("config.json"):
+            handler.send_response(307)
+            handler.send_header("Location", f"{cache}/org/test-model/{REV}/config.json")
+        else:
+            handler.send_response(302)
+            handler.send_header("Location", self.url(self.cdn) + "/blob" + handler.path)
+        handler.end_headers()
 
     def _cdn_handler(self):
         fixture = self
@@ -192,6 +219,28 @@ class InstallTest(unittest.TestCase):
             self.assertNotIn("Authorization", headers)
         self.assertNotIn(TOKEN.encode(), self.all_bytes())
 
+    def test_gated_same_origin_redirect_keeps_token(self):
+        fx = self.fixture(redirect="hf")
+        self.install(fx, gated=True, token=TOKEN)
+        origin = [(path, h) for name, path, h in fx.requests if name == "origin"]
+        cdn = [h for name, _, h in fx.requests if name == "cdn"]
+        self.assertEqual(len(origin), 3)
+        self.assertTrue(
+            any(path.startswith("/api/resolve-cache/") for path, _ in origin)
+        )
+        for _, headers in origin:
+            self.assertEqual(headers.get("Authorization"), f"Bearer {TOKEN}")
+        self.assertEqual(len(cdn), 1)
+        self.assertNotIn("Authorization", cdn[0])
+
+    def test_ungated_same_origin_redirect_sends_no_token(self):
+        fx = self.fixture(redirect="hf")
+        with self.assertRaises(install_model.InstallError):
+            # The fixture's resolve cache demands a token; ungated sends none.
+            self.install(fx, gated=False, token=TOKEN)
+        for _, _, headers in fx.requests:
+            self.assertNotIn("Authorization", headers)
+
     def test_gated_without_token_makes_no_request(self):
         fx = self.fixture()
         with self.assertRaises(install_model.InstallError) as ctx:
@@ -239,6 +288,14 @@ class InstallTest(unittest.TestCase):
         self.token_file.write_text("\n")
         with self.assertRaises(install_model.InstallError):
             install_model.read_token_file(self.token_file)
+
+    def test_prompted_token_is_validated_without_echoing_it(self):
+        for bad in ("", "has space", "line\nbreak", "cr\rhere"):
+            with self.assertRaises(install_model.InstallError) as ctx:
+                install_model.check_token(bad, "the prompt")
+            if bad:
+                self.assertNotIn(bad, str(ctx.exception))
+        self.assertEqual(install_model.check_token(" hf_ok \n", "the prompt"), "hf_ok")
 
     def test_redirect_downgrade_refused(self):
         self.assertFalse(install_model.redirect_allowed("https://a/x", "http://b/y"))

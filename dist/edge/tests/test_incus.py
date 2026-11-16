@@ -106,6 +106,19 @@ class IncusTest(unittest.TestCase):
         with self.assertRaises(incus.IncusError):
             script(image="images:x y")
 
+    def test_values_are_shell_quoted_even_if_validation_is_bypassed(self):
+        inst = sitefile.Instance(
+            name="edge-x",
+            components=[sitefile.Component(name="x", user="x", command="/bin/true")],
+            address="10.0.0.1;id",
+            memory="1GiB;id",
+        )
+        site = sitefile.Site(state_root="/srv/x;id", instances=[inst])
+        text = incus.commands(site, project="edge", image=IMAGE, pool="tank")
+        self.assertIn("'ipv4.address=10.0.0.1;id'", text)
+        self.assertIn("'limits.memory=1GiB;id'", text)
+        self.assertIn("'path=/srv/x;id'", text)
+
     def test_script_parses(self):
         with tempfile.TemporaryDirectory(prefix="incus-test-") as tmp:
             path = Path(tmp) / "prepare.sh"
