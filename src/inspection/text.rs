@@ -140,6 +140,25 @@ pub(crate) fn percent_decode_path(s: &str) -> String {
     decode(s, false)
 }
 
+/// Every decoding of a URL path that some hop may apply: axum decodes the
+/// path once before Locksmith builds the upstream URL, and the upstream
+/// decodes again, so `%2543` reaches the upstream as `C` (AGENT-270).
+/// Decodes until nothing changes, at most [`PATH_DECODE_ROUNDS`] times.
+pub(crate) fn path_views(raw: &str) -> Vec<String> {
+    let mut views = vec![percent_decode_path(raw)];
+    while views.len() < PATH_DECODE_ROUNDS {
+        let next = percent_decode_path(views.last().expect("one view"));
+        if &next == views.last().expect("one view") {
+            break;
+        }
+        views.push(next);
+    }
+    views
+}
+
+/// Bounds [`path_views`]; each round shrinks a path that changes.
+const PATH_DECODE_ROUNDS: usize = 4;
+
 fn decode(s: &str, plus_is_space: bool) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -277,6 +296,17 @@ mod tests {
         values.sort_by_key(|v| v.as_i64());
         assert_eq!(values, vec![Value::from(1), Value::from(2)]);
         assert!(obj.keys().all(|k| k.starts_with("[REDACTED:s]")));
+    }
+
+    #[test]
+    fn path_views_follow_every_decoding_hop() {
+        assert_eq!(path_views("/a/b"), vec!["/a/b"]);
+        assert_eq!(path_views("/x%2543"), vec!["/x%43", "/xC"]);
+        assert_eq!(
+            path_views("/x%25252543"),
+            vec!["/x%252543", "/x%2543", "/x%43", "/xC"]
+        );
+        assert_eq!(path_views("/x%2525252543").len(), 4);
     }
 
     #[test]

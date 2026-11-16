@@ -587,11 +587,18 @@ async fn proxy_request(
     );
     let mut headers = req.headers().clone();
     // AGENT-262 — the decoded path and query leave with the request too,
-    // so request inspection judges them alongside the body.
-    let uri_text: Vec<String> =
-        std::iter::once(crate::inspection::percent_decode_path(req.uri().path()))
-            .chain(req.uri().query().map(crate::inspection::percent_decode))
-            .collect();
+    // so request inspection judges them alongside the body. AGENT-270:
+    // every decoding the upstream may apply to the path is judged, and the
+    // query both as a form (`+` is a space) and with `+` kept literally.
+    let query_views = req.uri().query().into_iter().flat_map(|q| {
+        let form = crate::inspection::percent_decode(q);
+        let literal = crate::inspection::percent_decode_path(q);
+        std::iter::once(form.clone()).chain((literal != form).then_some(literal))
+    });
+    let uri_text: Vec<String> = crate::inspection::path_views(req.uri().path())
+        .into_iter()
+        .chain(query_views)
+        .collect();
     // AGENT-262 — an inspected response must arrive uncompressed to be
     // scanned, so the agent's Accept-Encoding is not forwarded.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {

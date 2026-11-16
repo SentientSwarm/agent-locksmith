@@ -21,7 +21,7 @@ pub mod stream;
 mod text;
 pub mod window;
 
-pub(crate) use text::{percent_decode, percent_decode_path};
+pub(crate) use text::{path_views, percent_decode, percent_decode_path};
 
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};

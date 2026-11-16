@@ -21,7 +21,7 @@ use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tempfile::TempDir;
-use wiremock::matchers::method;
+use wiremock::matchers::{any, method};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const CANARY: &str = "CANARY-7f3e";
@@ -545,6 +545,37 @@ inspection:
         "lost the streaming truncation marker: {} bytes",
         text.len()
     );
+}
+
+#[tokio::test]
+async fn double_encoded_path_is_inspected_as_the_upstream_reads_it() {
+    // AGENT-270: axum decodes `%25` to `%` before the upstream URL is built,
+    // so `%2543` leaves as `%43` and the upstream decodes it to `C`.
+    let up = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&up)
+        .await;
+    let h = harness(config(&up.uri(), &request_policy("block"))).await;
+    let hidden = format!("%25{:02X}{}", CANARY.as_bytes()[0], &CANARY[1..]);
+    let resp = h.server.get(&format!("/api/out/notes/{hidden}")).await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn query_is_also_inspected_with_a_literal_plus() {
+    // AGENT-270: an upstream may read `+` literally, not as a space.
+    let up = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&up)
+        .await;
+    let policy = "  routes:\n    - route: out\n      request:\n        scanners: [\"literal:plus+canary\"]\n        on_hit: block\n";
+    let h = harness(config(&up.uri(), policy)).await;
+    let resp = h.server.get("/api/out/search?q=plus+canary").await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
