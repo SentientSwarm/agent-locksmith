@@ -77,12 +77,15 @@ enum Unfinished {
 }
 
 /// Run `f` off the async workers. A timed-out scan keeps its blocking
-/// thread until it ends.
+/// thread until it ends; the deadline it carries (AGENT-276) stops its
+/// out-of-process scanner calls, so that end comes soon after.
 async fn run_blocking<T: Send + 'static>(
     timeout: Duration,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Unfinished> {
-    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
+    let deadline = std::time::Instant::now() + timeout;
+    let scan = move || crate::inspection::with_deadline(deadline, f);
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(scan)).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(_)) => Err(Unfinished::Failed),
         Err(_) => Err(Unfinished::TimedOut),
@@ -566,6 +569,18 @@ mod tests {
         assert_eq!(run_blocking(Duration::from_secs(5), || 2).await, Ok(2));
         let panicked = run_blocking(Duration::from_secs(5), || -> i32 { panic!("scanner bug") });
         assert_eq!(panicked.await, Err(Unfinished::Failed));
+    }
+
+    /// AGENT-276 — the scan's deadline is visible to the scanners it runs.
+    #[tokio::test]
+    async fn a_blocking_scan_carries_its_deadline() {
+        let start = std::time::Instant::now();
+        let deadline = run_blocking(Duration::from_secs(5), crate::inspection::scan_deadline)
+            .await
+            .unwrap()
+            .expect("run_blocking sets a scan deadline");
+        assert!(deadline > start && deadline <= start + Duration::from_secs(6));
+        assert_eq!(crate::inspection::scan_deadline(), None);
     }
 
     #[test]

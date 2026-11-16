@@ -50,7 +50,10 @@ impl Sidecar {
     }
 
     fn call(&self, text: &str, direction: Direction) -> Result<Vec<u8>, String> {
-        let deadline = Instant::now() + self.timeout;
+        // The sooner of this call's timeout and the whole scan's deadline
+        // (AGENT-276): once the scan's has passed, no call is made.
+        let own = Instant::now() + self.timeout;
+        let deadline = crate::inspection::scan_deadline().map_or(own, |scan| scan.min(own));
         let mut stream = self.connect(deadline)?;
         check_owner(
             peer_uid(&stream).map_err(|e| format!("peer: {e}"))?,
@@ -153,13 +156,15 @@ impl Scanner for Sidecar {
     }
 }
 
-/// Time left before `deadline`, or the timeout error.
+/// Time left before `deadline`, or the timeout error. Never under a
+/// microsecond: socket2 truncates to microseconds, and a zero socket
+/// timeout means none at all.
 fn remaining(deadline: Instant) -> Result<Duration, String> {
     let left = deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
         return Err("timed out".into());
     }
-    Ok(left)
+    Ok(left.max(Duration::from_micros(1)))
 }
 
 /// A malformed answer, described without quoting it: serde's message can
@@ -331,6 +336,44 @@ mod tests {
             let err = s.scan("hello", Direction::Response).unwrap_err();
             assert!(!err.0.contains("MARKER"), "{}", err.0);
         }
+    }
+
+    /// AGENT-276 / Codex P1 — every call shares the scan's deadline, so a
+    /// body with many strings stops calling a slow sidecar once it passes.
+    #[test]
+    fn calls_stop_at_the_scan_deadline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let s = Sidecar::new(
+            "pg",
+            serve(&dir, HIT, Duration::from_millis(150)),
+            Duration::from_secs(1),
+        );
+        let start = Instant::now();
+        let results = crate::inspection::with_deadline(start + Duration::from_millis(200), || {
+            (0..10)
+                .map(|_| s.scan("hello world", Direction::Response).is_ok())
+                .collect::<Vec<_>>()
+        });
+        assert!(results[0], "the first call fits in the deadline");
+        assert!(results[1..].iter().all(|ok| !ok), "{results:?}");
+        assert!(
+            start.elapsed() < Duration::from_millis(800),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    /// A socket timeout under a microsecond rounds to zero, which means
+    /// "no timeout", so the time left is never handed over that small.
+    #[test]
+    fn time_left_is_never_below_a_microsecond() {
+        for nanos in [1, 500, 999] {
+            if let Ok(left) = remaining(Instant::now() + Duration::from_nanos(nanos)) {
+                assert!(left >= Duration::from_micros(1), "{left:?}");
+            }
+        }
+        let left = remaining(Instant::now() + Duration::from_nanos(999_999_999)).unwrap();
+        assert!(left >= Duration::from_micros(1));
     }
 
     #[test]

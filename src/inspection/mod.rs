@@ -27,6 +27,30 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+thread_local! {
+    static SCAN_DEADLINE: std::cell::Cell<Option<std::time::Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// AGENT-276 — run `f` with one deadline shared by every scanner call made
+/// inside it on this thread. Out-of-process scanners make no call once it
+/// has passed, so a body with many strings cannot outlive its scan.
+pub fn with_deadline<R>(deadline: std::time::Instant, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::time::Instant>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCAN_DEADLINE.with(|d| d.set(self.0));
+        }
+    }
+    let _restore = Restore(SCAN_DEADLINE.with(|d| d.replace(Some(deadline))));
+    f()
+}
+
+/// The deadline set by [`with_deadline`] on this thread, if any.
+pub fn scan_deadline() -> Option<std::time::Instant> {
+    SCAN_DEADLINE.with(|d| d.get())
+}
+
 pub use config::InspectionConfig;
 
 /// Which way the inspected bytes travel.

@@ -319,7 +319,10 @@ Each scan is one `POST /scan` over HTTP/1.1 on its own connection, with
 `sidecar:<name>` like any built-in scanner's. A connection failure, a
 status other than 200, a malformed answer, a hit outside the text or a
 missed `timeout_ms` is a scanner error, and the route's `on_error`
-decides.
+decides. `timeout_ms` bounds each call, connecting included. A body
+makes one call per scanned string, and all of them share the scan's
+5 second deadline: once it has passed, no further call is made
+(AGENT-276).
 
 Text sent to a sidecar may hold secrets, so Locksmith checks the uid of
 the process serving the socket (`SO_PEERCRED` on Linux, `getpeereid`
