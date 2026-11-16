@@ -56,7 +56,9 @@ tools: []
 
     // Wait for socket to appear. A daemon that exits during startup is
     // reported with its own error instead of a bare missing-socket timeout.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // Generous: under a full parallel suite, startup can take seconds
+    // (AGENT-271). A daemon that dies is still reported at once below.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while !socket_path.exists() {
         if handle.is_finished() {
             panic!(
