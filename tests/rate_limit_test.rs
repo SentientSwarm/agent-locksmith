@@ -187,3 +187,35 @@ async fn invalid_limits_are_rejected() {
     }
     h.call("up", "/x").await.assert_status_ok();
 }
+
+#[tokio::test]
+async fn limits_are_refused_on_routes_the_proxy_does_not_serve() {
+    // AGENT-272: only `/api/*` enforces limits, so a limit on a native MCP
+    // or infra registration would be listed and audited but never applied.
+    let h = setup().await;
+    h.op_req(Method::PUT, "/tools/native")
+        .json(&json!({
+            "upstream": "https://example.com/mcp", "auth": { "kind": "none" },
+            "egress": "direct", "protocol": "mcp_streamable_http",
+            "mcp": { "protocol_version": "2025-11-25" }
+        }))
+        .await
+        .assert_status_ok();
+    h.op_req(Method::PUT, "/infra/scanner")
+        .json(&upstream_body("https://example.com"))
+        .await
+        .assert_status_ok();
+    for route in ["native", "scanner"] {
+        let r = h
+            .op_req(Method::PUT, &format!("/rate-limits/{route}"))
+            .json(&json!({ "requests_per_minute": 5 }))
+            .await;
+        assert_eq!(r.status_code(), StatusCode::BAD_REQUEST, "{route}");
+        assert_eq!(
+            r.json::<Value>()["error"]["code"],
+            "route_not_limitable",
+            "{route}"
+        );
+    }
+    assert_eq!(count(&h, "rate_limit_set").await, 0);
+}

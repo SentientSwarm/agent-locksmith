@@ -112,10 +112,23 @@ pub(super) async fn op_set(
             "requests_per_minute and max_concurrent must be at least 1",
         );
     }
-    if let Some(regs) = &state.registrations
-        && !matches!(regs.get(&route).await, Ok(Some(_)))
-    {
-        return error(StatusCode::NOT_FOUND, "route_not_found", "no such route");
+    if let Some(regs) = &state.registrations {
+        match regs.get(&route).await {
+            // AGENT-272 — only the `/api/*` proxy enforces limits, so a
+            // limit elsewhere would be listed and audited but never applied.
+            Ok(Some(r))
+                if r.protocol != crate::registrations::Protocol::Http
+                    || r.kind == crate::registrations::Kind::Infra =>
+            {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "route_not_limitable",
+                    "rate limits apply only to HTTP model and tool routes served under /api",
+                );
+            }
+            Ok(Some(_)) => {}
+            _ => return error(StatusCode::NOT_FOUND, "route_not_found", "no such route"),
+        }
     }
     let who = match agent(&state, &op, input.agent.as_deref()).await {
         Ok(w) => w,

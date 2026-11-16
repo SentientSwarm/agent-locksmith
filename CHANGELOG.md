@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- `PUT /admin/operator/rate-limits/{route}` refuses a native MCP or
+  `infra` registration with 400 `route_not_limitable` (AGENT-272). Only
+  the `/api/*` proxy enforces limits, so such a limit was listed and
+  audited but never applied. Limits already stored for those routes stay
+  listed and still do nothing; delete them.
 - A request can no longer leave a route's upstream base path
   (AGENT-286). The path is decoded before the upstream URL is built, and
   the URL parser resolves dot segments and backslashes, so

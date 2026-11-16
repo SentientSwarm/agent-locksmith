@@ -398,7 +398,10 @@ Changes apply at once, without a restart, and are audited
 affected agent a full bucket. `PUT /admin/operator/rate-limits/{route}` takes
 `{requests_per_minute, max_concurrent?, agent?}`; `DELETE` takes `?agent=`.
 A zero value returns 400 `invalid_rate_limit`, an unknown route 404
-`route_not_found`. Buckets are held in memory, so a restart refills them.
+`route_not_found`. Limits apply only to HTTP `model` and `tool` routes
+served under `/api`; a native MCP or `infra` registration returns 400
+`route_not_limitable`. Buckets are held in memory, so a restart refills
+them.
 
 ### Per-route upstream CA
 
