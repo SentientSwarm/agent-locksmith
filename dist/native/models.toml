@@ -1,0 +1,36 @@
+# Inspector model catalog for install_model.py. Each entry pins a
+# Hugging Face revision and every file it installs. LFS files are checked
+# by SHA-256, small files by their git blob SHA-1, so a changed upstream
+# file is refused rather than installed. Weights are never shipped with
+# Locksmith: gated models download under the operator's own HF account.
+
+[[model]]
+id = "horizon-small"
+repo = "Horizon-Labs/prompt-injection-guard-small"
+revision = "2efc2ed5abecd21eb45c2506d231a65d6e392b85"
+license = "apache-2.0"
+gated = false
+files = [
+  { path = "config.json", size = 2031, git_sha1 = "00851d5e9a7573f7afd7e130fbef54ec6bbda7d3" },
+  { path = "tokenizer.json", size = 34387555, sha256 = "47834a7dbbb0c4324fe9569fe47955241594a9ee539c9e478755d6fbc51e5f46" },
+  { path = "tokenizer_config.json", size = 46440, git_sha1 = "9f755196cd8890b3d1bf9c1a9db9e4151456c19f" },
+  { path = "special_tokens_map.json", size = 636, git_sha1 = "8d6368f7e735fbe4781bf6e956b7c6ad0586df80" },
+  { path = "onnx/model.onnx", size = 563101474, sha256 = "e7aacffc0fe5b5a9362b2faea2c2aa7067d55ce88fb64b54a4dc2ec39e4523e7" },
+  { path = "LICENSE", size = 11358, git_sha1 = "d645695673349e3947e8e5ae42332d0ac3164cd7" },
+  { path = "NOTICE", size = 1566, git_sha1 = "90dfe832ee14d551e35f35bbd869ef80c6f04e25" },
+]
+
+[[model]]
+id = "promptguard2-86m"
+repo = "meta-llama/Llama-Prompt-Guard-2-86M"
+revision = "a8ded8e697ce7c355e395a0df51f94adb4a2fd27"
+license = "llama4"
+gated = true
+files = [
+  { path = "config.json", size = 871, git_sha1 = "523fd77f2094749c94c3cec5f1230508c54d71d5" },
+  { path = "model.safetensors", size = 1115268200, sha256 = "e72017dbbe89c1232dcbc4a74ce0c389db5b468c42afd05850347b2a8c5f6b09" },
+  { path = "tokenizer.json", size = 16351353, sha256 = "3e7e96867c2acdd575f0862c74822e05d1d15b93d9d9a4a2144b1ce83ae3339f" },
+  { path = "tokenizer_config.json", size = 19674, git_sha1 = "58c511edbc1ccdea19453c3a8ecd838fd42bc917" },
+  { path = "special_tokens_map.json", size = 286, git_sha1 = "2c9cb07c8fdeeb5ac3ceafb170592e990b204dcd" },
+  { path = "LICENSE", size = 7554, git_sha1 = "be16bdcf5eac8030d7d92c9cc0503480471263c4" },
+]
