@@ -104,6 +104,12 @@ pub struct PutOpts {
     #[arg(long, value_parser = ["generic", "openai-codex-responses"])]
     pub profile: Option<String>,
 
+    /// Request policy: which requests the route forwards at all.
+    /// `databento-historical` forwards only Databento metadata requests.
+    /// Omitting it on a later `put` removes the policy.
+    #[arg(long, value_parser = ["databento-historical"])]
+    pub policy: Option<String>,
+
     #[command(flatten)]
     pub broker: BrokerArgs,
 }
@@ -363,6 +369,9 @@ pub async fn do_put(
     if let Some(profile) = opts.profile {
         body.insert("profile".into(), json!(profile));
     }
+    if let Some(policy) = opts.policy {
+        body.insert("policy".into(), json!(policy));
+    }
     if let Some(broker) = opts.broker.to_spec() {
         body.insert("broker".into(), broker);
     }
@@ -454,6 +463,17 @@ mod tests {
             PutCli::try_parse_from(base.iter().chain(&["--health-path", "/h"])).is_err(),
             "broker flags need --broker"
         );
+    }
+
+    #[test]
+    fn policy_flag_accepts_known_values_and_rejects_others() {
+        use clap::Parser;
+        let base = ["put", "--upstream", "http://x", "--auth", "none"];
+        let got = PutCli::try_parse_from(base.iter().chain(&["--policy", "databento-historical"]))
+            .unwrap();
+        assert_eq!(got.opts.policy.as_deref(), Some("databento-historical"));
+        assert_eq!(PutCli::try_parse_from(base).unwrap().opts.policy, None);
+        assert!(PutCli::try_parse_from(base.iter().chain(&["--policy", "github-api"])).is_err());
     }
 
     #[test]

@@ -91,11 +91,15 @@ fn validate(s: &Selection) -> Result<(), CliError> {
     }
     Ok(())
 }
+/// Seal a value read from stdin as the agent's stored credential: a bearer,
+/// or (AGENT-281) the full value of `header`, such as
+/// `Authorization: Basic ...`. The value never reaches argv.
 pub async fn ingest(
     client: &CliClient,
     format: Format,
     agent: &str,
     connection: &str,
+    header: Option<&str>,
 ) -> Result<(), CliError> {
     validate(&Selection {
         connection: connection.into(),
@@ -103,22 +107,63 @@ pub async fn ingest(
     })?;
     let mut bytes = Vec::new();
     std::io::stdin().take(8194).read_to_end(&mut bytes)?;
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    if bytes.is_empty() || bytes.len() > 8192 || !bytes.iter().all(|b| (0x21..=0x7e).contains(b)) {
-        return Err(invalid());
-    }
-    let value = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let value = stdin_secret(bytes, header.is_some())?;
+    let body = match header {
+        Some(h) => json!({"value": value, "header": h}),
+        None => json!({"value": value, "bearer": true}),
+    };
     request(
         client,
         format,
         "PUT",
         &format!("/admin/operator/agents/{agent}/credentials/{connection}/credential"),
-        Some(json!({"value":value,"bearer":true})),
+        Some(body),
     )
     .await
 }
+/// One trailing newline is dropped. A bearer is visible ASCII only; a
+/// header value may also contain spaces (`Basic <b64>`), but not at either end.
+fn stdin_secret(mut bytes: Vec<u8>, header: bool) -> Result<String, CliError> {
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+    let allowed = |b: &u8| (0x21..=0x7e).contains(b) || (header && *b == b' ');
+    let trimmed = bytes.first() != Some(&b' ') && bytes.last() != Some(&b' ');
+    if bytes.is_empty() || bytes.len() > 8192 || !trimmed || !bytes.iter().all(allowed) {
+        return Err(invalid());
+    }
+    String::from_utf8(bytes).map_err(|_| invalid())
+}
 fn invalid() -> CliError {
     CliError::Usage("invalid native preparation input".into())
+}
+
+#[cfg(test)]
+mod stdin_secret_tests {
+    use super::stdin_secret;
+
+    #[test]
+    fn bearer_is_visible_ascii_only() {
+        assert_eq!(stdin_secret(b"tok\n".to_vec(), false).unwrap(), "tok");
+        assert!(stdin_secret(b"Basic abc".to_vec(), false).is_err());
+        assert!(stdin_secret(b"".to_vec(), false).is_err());
+    }
+
+    #[test]
+    fn header_value_may_contain_inner_spaces() {
+        assert_eq!(
+            stdin_secret(b"Basic abc=\n".to_vec(), true).unwrap(),
+            "Basic abc="
+        );
+        for bad in [
+            &b" Basic abc"[..],
+            b"Basic abc ",
+            b"Basic\tabc",
+            b"a\nb",
+            b"\n",
+        ] {
+            assert!(stdin_secret(bad.to_vec(), true).is_err(), "{bad:?}");
+        }
+        assert!(stdin_secret(vec![b'a'; 8193], true).is_err());
+    }
 }

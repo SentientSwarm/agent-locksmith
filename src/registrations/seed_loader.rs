@@ -316,6 +316,7 @@ fn entry_to_registration(
         body_limit_bytes: entry.body_limit_bytes.unwrap_or(10 * 1024 * 1024),
         upstream_ca_pem: None,
         profile: None,
+        policy: None,
         broker: None,
         metadata: entry
             .metadata

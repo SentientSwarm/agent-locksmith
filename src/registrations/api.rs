@@ -129,6 +129,11 @@ pub struct PutBody {
     /// is a 400 `invalid_profile`, not an extractor 422.
     #[serde(default)]
     pub profile: Option<String>,
+    /// AGENT-281 — request policy (`databento-historical`): which requests
+    /// the route forwards at all. Absent stores NULL (no policy). Parsed in
+    /// `op_put` so an unknown value is a 400 `invalid_policy`.
+    #[serde(default)]
+    pub policy: Option<String>,
     /// Brokered routes phase 3 — present when this route's destination is
     /// an account broker. Cannot be added or removed in place.
     #[serde(default)]
@@ -172,6 +177,7 @@ pub fn registration_to_admin_json(r: &Registration) -> Value {
         "upstream_ca": upstream_ca_summary(r.upstream_ca_pem.as_deref()),
         "profile": r.effective_profile().as_str(),
         "profile_source": if r.profile.is_some() { "explicit" } else { "inferred" },
+        "policy": r.policy.map(super::RoutePolicy::as_str),
         "broker": r.broker,
         "seed": r.seed,
         "disabled": r.disabled,
@@ -216,6 +222,9 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
         ),
         RegistrationError::InvalidProfile => {
             (StatusCode::BAD_REQUEST, "bad_request", "invalid_profile")
+        }
+        RegistrationError::InvalidPolicy => {
+            (StatusCode::BAD_REQUEST, "bad_request", "invalid_policy")
         }
         RegistrationError::InvalidBroker(_) => {
             (StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
@@ -506,6 +515,10 @@ pub async fn op_put(
         Ok(p) => p,
         Err(e) => return registration_error_response(&e),
     };
+    let policy = match body.policy.as_deref().map(str::parse).transpose() {
+        Ok(p) => p,
+        Err(e) => return registration_error_response(&e),
+    };
     if let Err(e) = super::protocol::validate(
         body.protocol,
         body.mcp.as_ref(),
@@ -660,6 +673,7 @@ pub async fn op_put(
             .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
         upstream_ca_pem: body.upstream_ca_pem,
         profile,
+        policy,
         broker: body.broker,
         seed: false, // PUT always flips to operator-owned
         disabled,

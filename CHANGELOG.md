@@ -57,6 +57,17 @@
 
 ### Added
 
+- Route policies (AGENT-281). `--policy databento-historical` makes a
+  route forward only Databento Historical metadata requests; data, batch
+  and symbology requests get 403 `route_request_refused` and a
+  `route_request_refused` audit row, and nothing is sent upstream.
+  Migration 0028 adds `registrations.policy`. See
+  [route policies](docs/user/cli-reference.md#route-policies).
+
+- `locksmith agent set-credential --stored-header-stdin HEADER` seals the
+  full value of a header from stdin, such as `Authorization: Basic ...`,
+  as the agent's stored credential for a route (AGENT-281).
+
 - Per-agent, per-route rate limits (AGENT-266). `locksmith rate-limit
   set <route> --rpm N [--concurrent N] [--agent A]` (`PUT
   /admin/operator/rate-limits/{route}`) sets a route default that applies

@@ -28,6 +28,7 @@ mod definitions;
 pub mod http_service;
 pub mod kind;
 pub mod legacy_bootstrap;
+pub mod policy;
 pub mod profile;
 pub mod protocol;
 pub mod repo;
@@ -38,6 +39,7 @@ pub mod validators;
 pub use auth_spec::AuthSpec;
 pub use catalog::Catalog;
 pub use kind::Kind;
+pub use policy::RoutePolicy;
 pub use profile::RouteProfile;
 pub use protocol::{McpConfig, Protocol};
 pub use repo::{Registration, RegistrationRepository};
@@ -75,6 +77,11 @@ pub enum RegistrationError {
     /// phase 1). Wire: 400 bad_request / `invalid_profile`.
     #[error("invalid profile: use generic or openai-codex-responses")]
     InvalidProfile,
+
+    /// Route policy not a known value (AGENT-281). Wire: 400 bad_request /
+    /// `invalid_policy`.
+    #[error("invalid policy: use databento-historical")]
+    InvalidPolicy,
 
     /// Broker spec unusable (brokered routes phase 3): bad header name,
     /// health probe or key kind, or `broker` used as a template.

@@ -16,13 +16,14 @@ mod egress;
 mod inspect;
 mod limit;
 mod oauth;
+mod policy;
 mod selection;
 mod upstream_urls;
 use oauth::resolve_oauth_token;
 
 use crate::app::AppState;
 use crate::config::{EgressMode, ToolConfig, ToolTimeouts};
-use crate::registrations::{AuthSpec, Registration, RouteProfile};
+use crate::registrations::{AuthSpec, Registration, RoutePolicy, RouteProfile};
 use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use crate::response_controls::{ApplyOutcome, ResponseControls, SizeCappedStream};
 
@@ -124,6 +125,8 @@ struct ProxyTarget {
     /// Brokered routes phase 1 — selects the Codex wire behaviours
     /// (G2 account header, G3/G5 body fixups, G4 headers).
     profile: RouteProfile,
+    /// AGENT-281 — which requests the route forwards at all.
+    policy: Option<RoutePolicy>,
     auth: ProxyAuth,
     /// Phase G — audit attribution for the credential applied:
     /// `"registration_default"` (no override active) or
@@ -350,6 +353,7 @@ impl ProxyTarget {
             egress: r.egress,
             upstream_ca_pem: r.upstream_ca_pem.clone(),
             profile: r.effective_profile(),
+            policy: r.policy,
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
@@ -381,6 +385,7 @@ impl ProxyTarget {
             egress: t.egress,
             upstream_ca_pem: None,
             profile: RouteProfile::infer(&t.upstream),
+            policy: None,
             auth,
             auth_source: "registration_default",
             oauth_session_label: None,
@@ -447,6 +452,20 @@ async fn proxy_request(
         }
         target
     };
+
+    // AGENT-281: a route policy refuses what the route may not forward,
+    // before rate limits, credentials or any upstream contact.
+    if let Some(policy) = target.policy
+        && let Err(refusal) = policy::admit(
+            policy,
+            &target.upstream,
+            &ctx.tool_name,
+            req.method(),
+            req.uri().path(),
+        )
+    {
+        return record_route_request_refused(&state.audit, &ctx, policy, refusal).await;
+    }
 
     // AGENT-266: per-agent rate limits, after admission and before any
     // credential is resolved or anything is sent upstream.
@@ -1359,6 +1378,36 @@ async fn record_body_read_error(
 /// 1 MiB cap. Tighter than the per-tool `body_limit_bytes`: this is
 /// the size at which locksmith refuses to inspect the body for
 /// fixup, even if `body_limit_bytes` would allow more.
+/// AGENT-281 — a route policy refused the request; nothing was sent.
+async fn record_route_request_refused(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    policy: RoutePolicy,
+    refusal: policy::Refusal,
+) -> Response {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "route_request_refused".to_string();
+    event.status = Some(403);
+    event.decision = Decision::Denied;
+    event.details = Some(json!({
+        "route_policy": policy.as_str(),
+        "refused": refusal.as_str(),
+    }));
+    audit_record(audit, event).await;
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": {
+                "message": format!("route policy {} does not allow this request", policy.as_str()),
+                "type": "forbidden",
+                "code": "route_request_refused",
+            }
+        })),
+    )
+        .into_response()
+}
+
 async fn record_codex_body_too_large(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,

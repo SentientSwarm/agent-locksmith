@@ -58,5 +58,7 @@ mod route_backend_api_test;
 mod route_backend_followups_test;
 #[path = "route_backend_switch_test.rs"]
 mod route_backend_switch_test;
+#[path = "route_policy_test.rs"]
+mod route_policy_test;
 #[path = "route_profile_test.rs"]
 mod route_profile_test;

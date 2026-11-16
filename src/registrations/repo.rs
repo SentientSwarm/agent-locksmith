@@ -38,6 +38,8 @@ pub struct Registration {
     /// Brokered routes phase 1 — explicit request profile; `None` infers
     /// from the upstream (see [`Self::effective_profile`]).
     pub profile: Option<super::RouteProfile>,
+    /// AGENT-281 — request policy; `None` forwards every request.
+    pub policy: Option<super::RoutePolicy>,
     /// Brokered routes phase 3 — `Some` when the active destination is an
     /// account broker (see [`super::broker`]).
     pub broker: Option<super::broker::BrokerSpec>,
@@ -82,6 +84,7 @@ impl Registration {
             metadata: Json::Object(serde_json::Map::new()),
             upstream_ca_pem: None,
             profile: None,
+            policy: None,
             broker: None,
             seed: false,
             disabled: false,
@@ -123,8 +126,8 @@ impl RegistrationRepository {
         sqlx::query(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json, policy) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&r.name)
         .bind(r.kind.as_str())
@@ -144,6 +147,7 @@ impl RegistrationRepository {
         .bind(r.upstream_ca_pem.as_deref())
         .bind(r.profile.map(super::RouteProfile::as_str))
         .bind(broker_json(r)?)
+        .bind(r.policy.map(super::RoutePolicy::as_str))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_err)?;
@@ -154,7 +158,7 @@ impl RegistrationRepository {
     pub async fn get(&self, name: &str) -> Result<Option<Registration>, RegistrationError> {
         let row = sqlx::query(
             "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
+                    body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json, policy \
              FROM registrations WHERE name = ?",
         )
         .bind(name)
@@ -172,7 +176,7 @@ impl RegistrationRepository {
         let rows = if let Some(k) = kind {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json, policy \
                  FROM registrations WHERE kind = ? ORDER BY name",
             )
             .bind(k.as_str())
@@ -181,7 +185,7 @@ impl RegistrationRepository {
         } else {
             sqlx::query(
                 "SELECT name, kind, description, upstream, auth_json, egress, timeouts_json, \
-                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json \
+                        body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json, policy \
                  FROM registrations ORDER BY name",
             )
             .fetch_all(&self.pool)
@@ -244,8 +248,8 @@ impl RegistrationRepository {
         let sql = format!(
             "INSERT INTO registrations \
              (name, kind, description, upstream, auth_json, egress, timeouts_json, \
-              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              body_limit_bytes, metadata_json, seed, disabled, created_at, updated_at, protocol, mcp_json, upstream_ca_pem, profile, broker_json, policy) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(name) DO UPDATE SET \
                 description = excluded.description, \
                 upstream = excluded.upstream, \
@@ -257,7 +261,7 @@ impl RegistrationRepository {
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
                 updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
-                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json{guard}",
+                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json, policy = excluded.policy{guard}",
         );
         let done = sqlx::query(&sql)
             .bind(&r.name)
@@ -284,6 +288,7 @@ impl RegistrationRepository {
             .bind(r.upstream_ca_pem.as_deref())
             .bind(r.profile.map(super::RouteProfile::as_str))
             .bind(broker_json(r)?)
+            .bind(r.policy.map(super::RoutePolicy::as_str))
             .execute(&self.pool)
             .await
             .map_err(map_sqlx_err)?;
@@ -421,6 +426,14 @@ pub(crate) fn row_to_registration_ref(
             // A database before migration 0024 has no column: infer.
             Err(sqlx::Error::ColumnNotFound(_)) => None,
             Err(e) => return Err(RegistrationError::Backend(format!("read profile: {e}"))),
+        },
+        policy: match row.try_get::<Option<String>, _>("policy") {
+            Ok(p) => p.as_deref().map(super::RoutePolicy::from_stored),
+            // A database before migration 0028 has no column: no policy.
+            // On a migrated database a reader that omits the column
+            // disagrees with the catalog, so admission fails closed.
+            Err(sqlx::Error::ColumnNotFound(_)) => None,
+            Err(e) => return Err(RegistrationError::Backend(format!("read policy: {e}"))),
         },
         broker: match row.try_get::<Option<String>, _>("broker_json") {
             Ok(b) => b

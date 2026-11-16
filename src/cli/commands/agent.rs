@@ -157,8 +157,12 @@ pub struct SetCredentialArgs {
     )]
     pub oauth_session: Option<String>,
     /// Read a bearer value from stdin and seal it; never pass values in argv.
-    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_ref"])]
+    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_ref","stored_header_stdin"])]
     pub stored_bearer_stdin: bool,
+    /// Read the full value of HEADER from stdin and seal it (for example
+    /// `Authorization` with `Basic <base64>`); never pass values in argv.
+    #[arg(long, value_name = "HEADER", conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_ref","stored_bearer_stdin","broker"])]
+    pub stored_header_stdin: Option<String>,
     /// Explicitly select an existing live sealed bearer reference.
     #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin"])]
     pub stored_bearer_ref: Option<String>,
@@ -292,9 +296,15 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
             print(&value, format);
         }
         AgentCmd::SetCredential(args) => {
-            if args.stored_bearer_stdin {
-                return super::native_mcp::ingest(client, format, &args.id, &args.registration)
-                    .await;
+            if args.stored_bearer_stdin || args.stored_header_stdin.is_some() {
+                return super::native_mcp::ingest(
+                    client,
+                    format,
+                    &args.id,
+                    &args.registration,
+                    args.stored_header_stdin.as_deref(),
+                )
+                .await;
             }
             let auth_spec = if let Some(label) = &args.oauth_session {
                 oauth::selection(client, &token, &args.registration, label).await?

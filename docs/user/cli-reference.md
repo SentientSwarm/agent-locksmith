@@ -202,6 +202,7 @@ validation and compatibility details.
 | `--description '...'` | Free-form description. |
 | `--upstream-ca-file <path>` | PEM trust anchors for this route only (`-` reads stdin). See "Per-route upstream CA" below. |
 | `--profile <generic\|openai-codex-responses>` | Request profile: which provider wire behaviour the route gets. See "Route profiles" below. |
+| `--policy databento-historical` | Request policy: which requests the route forwards at all. See "Route policies" below. |
 
 `enable` un-disables a previously-deleted seed row.
 
@@ -225,6 +226,47 @@ selections are kept.
 locksmith model put codex-pool --upstream http://127.0.0.1:43210 \
   --auth bearer=CODEX_POOL_KEY --egress direct --profile openai-codex-responses
 ```
+
+### Route policies
+
+A route's policy limits which requests it forwards. A refused request
+gets 403 `route_request_refused` and a denied `route_request_refused`
+audit row (`details.route_policy`, and `details.refused`: `path`,
+`method` or `policy`). Nothing is sent upstream and no credential is
+used. Without `--policy` a route forwards every request; omitting it on a
+later `put` removes the policy. `get` shows `policy`. Changing a policy
+does not change the destination, so grants and account selections are
+kept.
+
+- **`databento-historical`** forwards only `GET` and `POST` requests for
+  the Databento Historical metadata API: `/v0/metadata.<method>` for
+  `list_publishers`, `list_datasets`, `list_schemas`, `list_fields`,
+  `list_unit_prices`, `get_dataset_condition`, `get_dataset_range`,
+  `get_record_count`, `get_billable_size` and `get_cost`. Data, batch and
+  symbology requests are refused. The joined upstream and request path
+  must match exactly, so percent-encoding, dot segments and doubled
+  slashes are refused. An upstream that already ends in `/v0` takes
+  `/metadata.<method>` paths.
+
+Databento authenticates with HTTP Basic: the API key is the user name and
+the password is empty. Seal that as the agent's `Authorization` value for
+the route. The key is read without echo and never reaches argv:
+
+```bash
+locksmith tool put databento --upstream https://hist.databento.com \
+  --auth none --egress proxied --policy databento-historical
+locksmith agent modify "$AGENT_ID" --allowlist databento   # plus its other routes
+read -rs DATABENTO_KEY && printf 'Basic %s' "$(printf '%s:' "$DATABENTO_KEY" | base64 | tr -d '\n')" \
+  | locksmith agent set-credential "$AGENT_ID" databento --stored-header-stdin Authorization
+unset DATABENTO_KEY
+```
+
+`--stored-header-stdin HEADER` seals the whole value of `HEADER` from
+stdin, inner spaces included. `--stored-bearer-stdin` seals a bearer
+token, sent as `Authorization: Bearer <value>`.
+
+A build that finds a policy it does not know (one written by a newer
+build) refuses every request on that route.
 
 ### Route backends
 
