@@ -12,6 +12,10 @@
 - Rate-limit reloads run one at a time (AGENT-272), so two admin writes
   close together can no longer leave the proxy enforcing the older table
   until the next write.
+- Changing a route's `max_concurrent` keeps counting requests already in
+  flight (AGENT-272). It used to start a fresh count, so raising the cap
+  admitted a full new batch on top of the running ones and lowering it
+  admitted new work at once.
 - A request can no longer leave a route's upstream base path
   (AGENT-286). The path is decoded before the upstream URL is built, and
   the URL parser resolves dot segments and backslashes, so

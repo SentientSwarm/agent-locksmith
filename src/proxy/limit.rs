@@ -4,13 +4,13 @@
 
 use super::{RequestCtx, audit_record};
 use crate::app::AppState;
+use crate::ratelimit::Permit;
 use crate::repo::audit::{AuditRepository, Decision, EventClass};
 use axum::body::Body;
 use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Json, Response};
 use futures_util::StreamExt;
 use serde_json::json;
-use tokio::sync::OwnedSemaphorePermit;
 
 /// Admit the request or answer 429. Identity-less (legacy) requests are
 /// never limited: limits are per agent.
@@ -18,7 +18,7 @@ pub(super) async fn check(
     state: &AppState,
     ctx: &RequestCtx,
     identity: Option<&crate::auth_v2::AgentIdentity>,
-) -> Result<Option<OwnedSemaphorePermit>, Response> {
+) -> Result<Option<Permit>, Response> {
     let Some(identity) = identity else {
         return Ok(None);
     };
@@ -60,7 +60,7 @@ async fn refuse(
 }
 
 /// Keep `permit` until the response body is finished or dropped.
-pub(super) fn hold(resp: Response, permit: Option<OwnedSemaphorePermit>) -> Response {
+pub(super) fn hold(resp: Response, permit: Option<Permit>) -> Response {
     match permit {
         None => resp,
         Some(permit) => resp.map(|body| {

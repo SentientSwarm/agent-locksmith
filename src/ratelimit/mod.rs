@@ -12,9 +12,9 @@ pub mod repo;
 use arc_swap::ArcSwap;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub use repo::{RateLimitRepository, RateLimitRow};
 
@@ -44,7 +44,20 @@ struct Slot {
     limit: Limit,
     tokens: f64,
     at: Instant,
-    inflight: Option<Arc<Semaphore>>,
+    /// Requests admitted and not yet finished. One counter for the slot's
+    /// life, so a changed cap still counts what is already in flight
+    /// (AGENT-272); it counts even while the route has no cap.
+    inflight: Arc<AtomicUsize>,
+}
+
+/// One admitted request, held until its response body is dropped.
+#[derive(Debug)]
+pub struct Permit(Arc<AtomicUsize>);
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Slot {
@@ -53,28 +66,19 @@ impl Slot {
             limit,
             tokens: f64::from(limit.requests_per_minute),
             at: now,
-            inflight: semaphore(limit),
+            inflight: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// A changed limit starts a fresh bucket; a changed concurrency cap a
-    /// fresh semaphore (permits already out return to the old one).
+    /// A changed rate starts a fresh bucket. A changed concurrency cap
+    /// applies to the same in-flight count.
     fn adopt(&mut self, limit: Limit, now: Instant) {
         if self.limit.requests_per_minute != limit.requests_per_minute {
             self.tokens = f64::from(limit.requests_per_minute);
             self.at = now;
         }
-        if self.limit.max_concurrent != limit.max_concurrent {
-            self.inflight = semaphore(limit);
-        }
         self.limit = limit;
     }
-}
-
-fn semaphore(limit: Limit) -> Option<Arc<Semaphore>> {
-    limit
-        .max_concurrent
-        .map(|n| Arc::new(Semaphore::new(n as usize)))
 }
 
 impl RateLimiter {
@@ -90,17 +94,12 @@ impl RateLimiter {
     }
 
     /// Admit one request from `agent` on `route`. `Ok(Some(permit))`
-    /// holds a concurrency slot until the permit is dropped.
-    pub fn check(&self, agent: i64, route: &str) -> Result<Option<OwnedSemaphorePermit>, Limited> {
+    /// counts it as in flight until the permit is dropped.
+    pub fn check(&self, agent: i64, route: &str) -> Result<Option<Permit>, Limited> {
         self.check_at(agent, route, Instant::now())
     }
 
-    fn check_at(
-        &self,
-        agent: i64,
-        route: &str,
-        now: Instant,
-    ) -> Result<Option<OwnedSemaphorePermit>, Limited> {
+    fn check_at(&self, agent: i64, route: &str, now: Instant) -> Result<Option<Permit>, Limited> {
         let limits = self.limits.load();
         let Some(by_agent) = limits.get(route) else {
             return Ok(None);
@@ -113,18 +112,19 @@ impl RateLimiter {
             .entry((agent, route.to_string()))
             .or_insert_with(|| Slot::new(limit, now));
         slot.adopt(limit, now);
-        let permit = match &slot.inflight {
-            Some(sem) => match sem.clone().try_acquire_owned() {
-                Ok(p) => Some(p),
-                Err(_) => {
-                    return Err(Limited {
-                        retry_after_secs: 1,
-                        concurrency: true,
-                    });
-                }
-            },
-            None => None,
-        };
+        // Under the slots lock nothing else admits on this slot, and the
+        // count only falls meanwhile, so check-then-add cannot over-admit.
+        if let Some(cap) = limit.max_concurrent
+            && slot.inflight.load(Ordering::Acquire) >= cap as usize
+        {
+            return Err(Limited {
+                retry_after_secs: 1,
+                concurrency: true,
+            });
+        }
+        slot.inflight.fetch_add(1, Ordering::AcqRel);
+        // Dropped on a rate refusal below, which undoes the count.
+        let permit = Some(Permit(slot.inflight.clone()));
         let rate = f64::from(limit.requests_per_minute) / 60.0;
         let elapsed = now.saturating_duration_since(slot.at).as_secs_f64();
         slot.tokens = (slot.tokens + elapsed * rate).min(f64::from(limit.requests_per_minute));
@@ -178,6 +178,61 @@ impl RateLimits {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn cap(n: u32) -> Limit {
+        Limit {
+            requests_per_minute: 1000,
+            max_concurrent: Some(n),
+        }
+    }
+
+    /// AGENT-272: changing the cap keeps counting requests already in
+    /// flight, so raising it admits only the difference and lowering it
+    /// admits nothing until enough finish.
+    #[test]
+    fn a_cap_change_keeps_counting_requests_in_flight() {
+        let l = RateLimiter::default();
+        let t0 = Instant::now();
+        l.replace([("r".to_string(), None, cap(2))]);
+        let held: Vec<_> = (0..2).map(|_| l.check_at(1, "r", t0).unwrap()).collect();
+        assert!(l.check_at(1, "r", t0).is_err());
+
+        l.replace([("r".to_string(), None, cap(3))]);
+        let third = l.check_at(1, "r", t0).unwrap();
+        assert!(
+            l.check_at(1, "r", t0).is_err(),
+            "raised cap admitted more than one"
+        );
+
+        l.replace([("r".to_string(), None, cap(2))]);
+        drop(third);
+        assert!(
+            l.check_at(1, "r", t0).is_err(),
+            "lowered cap admitted with 2 in flight"
+        );
+        drop(held);
+        assert!(l.check_at(1, "r", t0).is_ok());
+    }
+
+    /// Requests admitted while a route had no cap still count once one is set.
+    #[test]
+    fn requests_admitted_without_a_cap_count_once_one_is_set() {
+        let l = RateLimiter::default();
+        let t0 = Instant::now();
+        l.replace([(
+            "r".to_string(),
+            None,
+            Limit {
+                requests_per_minute: 1000,
+                max_concurrent: None,
+            },
+        )]);
+        let held = l.check_at(1, "r", t0).unwrap();
+        l.replace([("r".to_string(), None, cap(1))]);
+        assert!(l.check_at(1, "r", t0).is_err());
+        drop(held);
+        assert!(l.check_at(1, "r", t0).is_ok());
+    }
 
     /// AGENT-272: concurrent write-then-reload pairs must leave the
     /// limiter on the table's final state, whatever order they finish in.

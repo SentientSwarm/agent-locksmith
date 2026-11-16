@@ -434,7 +434,7 @@ async fn proxy_request(
     tool_name: String,
     path: String,
     req: Request<Body>,
-    permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
+    permit: &mut Option<crate::ratelimit::Permit>,
 ) -> Response {
     let mut ctx = RequestCtx::snapshot(&req, tool_name);
 
