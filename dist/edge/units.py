@@ -79,7 +79,7 @@ Type=simple
 User={comp.user}
 Group={comp.user}
 UMask=0077
-RuntimeDirectory={comp.name}
+RuntimeDirectory=locksmith-edge/{comp.name}
 RuntimeDirectoryMode=0750
 {env_file}ExecStart=/usr/bin/env {words} {unit_literal(comp.command)}
 WorkingDirectory={root}/{comp.name}
@@ -89,7 +89,7 @@ TimeoutStopSec=60
 KillMode=control-group
 {SANDBOX}
 MemoryDenyWriteExecute={"no" if comp.jit else "yes"}
-ReadWritePaths={root}/{comp.name} /run/{comp.name}
+ReadWritePaths={root}/{comp.name} /run/locksmith-edge/{comp.name}
 
 [Install]
 WantedBy=multi-user.target

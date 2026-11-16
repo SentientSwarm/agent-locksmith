@@ -75,7 +75,7 @@ class RenderTest(unittest.TestCase):
         return (out / UNITS / f"locksmith-edge-{component}.service").read_text()
 
     def test_sandbox_lines_present(self):
-        text = self.unit(self.out("edge-locksmith"), "locksmith")
+        text = self.unit(self.out("lab-locksmith"), "locksmith")
         lines = text.splitlines()
         for line in SANDBOX:
             self.assertIn(line, lines)
@@ -85,16 +85,16 @@ class RenderTest(unittest.TestCase):
             "ConditionPathExists=/srv/locksmith-edge/custody/locksmith.ready", lines
         )
         self.assertIn(
-            "ReadWritePaths=/srv/locksmith-edge/locksmith /run/locksmith", lines
+            "ReadWritePaths=/srv/locksmith-edge/locksmith /run/locksmith-edge/locksmith", lines
         )
 
     def test_jit_relaxes_only_memory_deny(self):
-        lines = self.unit(self.out("edge-inspector"), "inspector").splitlines()
+        lines = self.unit(self.out("lab-locksmith"), "inspector").splitlines()
         self.assertIn("MemoryDenyWriteExecute=no", lines)
         self.assertIn("NoNewPrivileges=yes", lines)
 
     def test_guard_runs_in_its_own_unit_without_the_environment_file(self):
-        out = self.out("edge-locksmith")
+        out = self.out("lab-locksmith")
         guard = (
             (out / UNITS / "locksmith-edge-locksmith-guard.service")
             .read_text()
@@ -103,7 +103,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("Type=oneshot", guard)
         self.assertIn(
             "ExecStart=/usr/bin/python3 -I /usr/local/sbin/locksmith-edge-state-check "
-            "edge-locksmith locksmith",
+            "lab-locksmith locksmith",
             guard,
         )
         for line in guard:
@@ -113,7 +113,7 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("[Install]", guard)
 
     def test_component_requires_and_follows_its_guard(self):
-        lines = self.unit(self.out("edge-locksmith"), "locksmith").splitlines()
+        lines = self.unit(self.out("lab-locksmith"), "locksmith").splitlines()
         self.assertIn(
             "Requires=locksmith-edge-input.service locksmith-edge-locksmith-guard.service",
             lines,
@@ -126,7 +126,7 @@ class RenderTest(unittest.TestCase):
         self.assertFalse([l for l in lines if l.startswith("ExecStartPre")])
 
     def test_no_unit_wide_environment(self):
-        for instance in ("edge-locksmith", "edge-inspector"):
+        for instance in ("lab-locksmith", "lab-pipelock"):
             out = self.out(instance)
             for unit in (out / UNITS).glob("*.service"):
                 for line in unit.read_text().splitlines():
@@ -135,19 +135,19 @@ class RenderTest(unittest.TestCase):
                     )
 
     def test_home_and_env_only_on_execstart(self):
-        text = self.unit(self.out("edge-inspector"), "inspector")
+        text = self.unit(self.out("lab-locksmith"), "inspector")
         exec_line = next(l for l in text.splitlines() if l.startswith("ExecStart="))
         self.assertIn('"HOME=/srv/locksmith-edge/inspector/home"', exec_line)
         self.assertIn('"HF_HUB_OFFLINE=1"', exec_line)
         self.assertTrue(exec_line.startswith("ExecStart=/usr/bin/env "))
 
     def test_environment_file_only_when_declared(self):
-        locksmith = self.unit(self.out("edge-locksmith"), "locksmith")
+        locksmith = self.unit(self.out("lab-locksmith"), "locksmith")
         self.assertIn(
             "EnvironmentFile=/srv/locksmith-edge/environment/locksmith.env",
             locksmith.splitlines(),
         )
-        pipelock = self.unit(self.out("edge-pipelock"), "pipelock")
+        pipelock = self.unit(self.out("lab-pipelock"), "pipelock")
         self.assertNotIn("EnvironmentFile=", pipelock)
 
     def test_specifiers_and_dollars_escaped(self):
@@ -162,7 +162,7 @@ class RenderTest(unittest.TestCase):
         existing = self.root / "live"
         existing.mkdir()
         with self.assertRaises(FileExistsError):
-            render.render(EXAMPLE, "edge-locksmith", existing)
+            render.render(EXAMPLE, "lab-locksmith", existing)
         self.assertEqual(list(existing.iterdir()), [])
 
     def test_unit_name_collision_refused_even_if_validation_is_bypassed(self):
@@ -174,27 +174,43 @@ class RenderTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             render.render(site, "site-a", self.root / "collide")
 
+    def test_runtime_directory_is_namespaced(self):
+        lines = self.unit(self.out("lab-locksmith"), "locksmith").splitlines()
+        self.assertIn("RuntimeDirectory=locksmith-edge/locksmith", lines)
+        self.assertIn(
+            "ReadWritePaths=/srv/locksmith-edge/locksmith /run/locksmith-edge/locksmith",
+            lines,
+        )
+        comp = sitefile.Component(name="systemd", user="app", command="/bin/true")
+        site = sitefile.Site(
+            state_root="/srv/edge",
+            instances=[sitefile.Instance(name="site-a", components=[comp])],
+        )
+        text = self.unit(self.out("site-a", site), "systemd")
+        self.assertNotIn("RuntimeDirectory=systemd\n", text)
+        self.assertNotIn(" /run/systemd", text)
+
     def test_unknown_instance(self):
         with self.assertRaises(KeyError):
             render.render(EXAMPLE, "nope", self.root / "nope")
         self.assertFalse((self.root / "nope").exists())
 
     def test_no_activation_artifacts(self):
-        out = self.out("edge-locksmith")
+        out = self.out("lab-locksmith")
         names = [p.name for p in out.rglob("*")]
         self.assertFalse([n for n in names if n.endswith(".wants")])
         self.assertFalse([n for n in names if n.endswith(".ready")])
         self.assertFalse((out / "srv").exists())
 
     def test_guard_copied_executable(self):
-        guard = self.out("edge-locksmith") / "usr/local/sbin/locksmith-edge-state-check"
+        guard = self.out("lab-locksmith") / "usr/local/sbin/locksmith-edge-state-check"
         self.assertEqual(guard.read_bytes(), (EDGE / "state_check.py").read_bytes())
         self.assertEqual(guard.stat().st_mode & 0o777, 0o755)
 
     def test_modes_ignore_operator_umask(self):
         old = os.umask(0o002)
         try:
-            out = self.out("edge-locksmith")
+            out = self.out("lab-locksmith")
         finally:
             os.umask(old)
         for path in [out, *out.rglob("*")]:
@@ -207,9 +223,11 @@ class RenderTest(unittest.TestCase):
             self.assertEqual(mode, expected, path)
 
     def test_nft_accepts_only_declared_sources(self):
-        nft = (self.out("edge-locksmith") / "etc/locksmith-edge/input.nft").read_text()
+        nft = (self.out("lab-locksmith") / "etc/locksmith-edge/input.nft").read_text()
         accepts = [l.strip() for l in nft.splitlines() if "saddr" in l]
-        self.assertEqual(accepts, ["ip saddr { 10.0.1.0/24 } tcp dport 9200 accept;"])
+        self.assertEqual(
+            accepts, ["ip saddr { 198.51.100.0/24 } tcp dport 9200 accept;"]
+        )
         self.assertIn("tcp dport { 9200 } reject;", nft)
         self.assertIn("table inet locksmith_edge_input {", nft)
         self.assertIn("delete table inet locksmith_edge_input", nft)
@@ -221,12 +239,18 @@ class RenderTest(unittest.TestCase):
         self.assertIn("ip6 saddr { 2001:db8::/32 } tcp dport 8080 accept;", nft)
 
     def test_nft_without_ingress_rejects_nothing(self):
-        nft = (self.out("edge-inspector") / "etc/locksmith-edge/input.nft").read_text()
+        site = sitefile.parse(
+            ESCAPES.replace(
+                'ingress = [{ port = 8080, from = ["10.0.0.0/24", "2001:db8::/32"] }]\n',
+                "",
+            )
+        )
+        nft = (self.out("site-a", site) / "etc/locksmith-edge/input.nft").read_text()
         self.assertNotIn("reject", nft)
         self.assertNotIn("saddr", nft)
 
     def test_input_service_loads_table(self):
-        out = self.out("edge-locksmith")
+        out = self.out("lab-locksmith")
         text = (out / UNITS / "locksmith-edge-input.service").read_text()
         self.assertIn("ExecStart=/usr/sbin/nft -f /etc/locksmith-edge/input.nft", text)
         unit = self.unit(out, "locksmith")

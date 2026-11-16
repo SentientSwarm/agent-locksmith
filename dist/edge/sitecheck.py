@@ -48,7 +48,10 @@ RESERVED_USERS = {
 }
 # Unit names render.py owns: locksmith-edge-input.service and each
 # component's locksmith-edge-<component>-guard.service.
-RESERVED_NAMES = {"input"}
+# custody and environment are the guard's directories in the state root.
+RESERVED_NAMES = {"input", "custody", "environment"}
+# The sandbox hides or replaces these (ProtectHome, PrivateTmp, /run, API fs).
+HIDDEN_ROOTS = ("/home", "/root", "/tmp", "/var/tmp", "/run", "/proc", "/sys", "/dev")
 RESERVED_SUFFIX = "-guard"
 
 
@@ -71,7 +74,14 @@ def cidr(value: object, where: str) -> str:
 def state_root(value: object) -> str:
     text = as_text(value, "[site] state_root")
     path = PurePosixPath(text)
-    if not PATH_RE.match(text) or ".." in path.parts or str(path) != text:
+    hidden = any(text == r or text.startswith(r + "/") for r in HIDDEN_ROOTS)
+    if (
+        not PATH_RE.fullmatch(text)
+        or ".." in path.parts
+        or str(path) != text
+        or text.startswith("//")
+        or hidden
+    ):
         raise SiteError(
             "[site] state_root must be a normalized absolute path other than /"
         )
@@ -85,6 +95,9 @@ def command(value: object, where: str) -> str:
     if text.endswith("\\"):
         # systemd would continue the line into the next directive.
         raise SiteError(f"{where}: command must not end with a backslash")
+    if ";" in text.split():
+        # systemd reads a lone ; as a second command.
+        raise SiteError(f"{where}: command must not contain a lone ;")
     return text
 
 
@@ -92,7 +105,7 @@ def env(value: object, where: str) -> dict[str, str]:
     table = as_table(value, f"{where} env")
     out: dict[str, str] = {}
     for key, val in table.items():
-        if not ENV_NAME_RE.match(key):
+        if not ENV_NAME_RE.fullmatch(key):
             raise SiteError(
                 f"{where}: env name {key!r} is not an upper-case identifier"
             )
@@ -103,7 +116,7 @@ def env(value: object, where: str) -> dict[str, str]:
 def user(value: object, where: str) -> str:
     if (
         not isinstance(value, str)
-        or not USER_RE.match(value)
+        or not USER_RE.fullmatch(value)
         or value in RESERVED_USERS
         or value.startswith("systemd-")
     ):
@@ -112,7 +125,7 @@ def user(value: object, where: str) -> str:
 
 
 def name(value: object, where: str) -> str:
-    if not isinstance(value, str) or not NAME_RE.match(value):
+    if not isinstance(value, str) or not NAME_RE.fullmatch(value):
         raise SiteError(f"{where}: name must match {NAME_RE.pattern}")
     if value in RESERVED_NAMES or value.endswith(RESERVED_SUFFIX):
         raise SiteError(f"{where}: name {value!r} is reserved for units render.py owns")
@@ -136,7 +149,7 @@ def cpu(value: object, where: str) -> int:
 
 
 def memory(value: object, where: str) -> str:
-    if not isinstance(value, str) or not MEMORY_RE.match(value):
+    if not isinstance(value, str) or not MEMORY_RE.fullmatch(value):
         raise SiteError(f"{where}: memory must look like 2GiB or 512MiB")
     return value
 

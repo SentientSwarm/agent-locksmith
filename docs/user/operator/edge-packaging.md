@@ -8,8 +8,9 @@ commands and inactive unit definitions. Nothing they produce starts a
 container or a service, and nothing ships a credential or model weights.
 
 The tools need Python 3.11 or later and only the standard library. The
-containers need `python3`, `nft` and `findmnt`; a stock Ubuntu 24.04
-container image has all three.
+containers need `python3`, `nft` and `findmnt`. If the image lacks `nft`,
+install it first (`apt-get install -y nftables`); without it the ingress
+unit fails and no component starts.
 
 ## 1. Write the site file
 
@@ -22,8 +23,8 @@ state_root = "/srv/locksmith-edge"   # each instance's state volume is mounted h
 require_zfs = true                   # refuse to start unless that mount is ZFS
 
 [[instance]]
-name = "edge-locksmith"
-address = "10.0.4.10"                # optional fixed address on eth0
+name = "lab-locksmith"
+address = "192.0.2.10"                # optional fixed address on eth0
 cpu = 2
 memory = "2GiB"
 
@@ -32,12 +33,14 @@ name = "locksmith"
 user = "locksmith"
 command = "/usr/local/bin/locksmithd --config /srv/locksmith-edge/locksmith/config.yaml"
 environment_file = true              # load /srv/locksmith-edge/environment/locksmith.env
-ingress = [{ port = 9200, from = ["10.0.1.0/24"] }]
+ingress = [{ port = 9200, from = ["198.51.100.0/24"] }]
 ```
 
 Each component also takes `jit = true`, which allows writable executable
 memory for runtimes that need it, such as Python with ONNX. It also takes
 `env = { NAME = "value" }` for extra variables on the service command.
+`env` values are written into the unit file, which is world-readable, so
+never put a secret there; use `environment_file` for secrets.
 
 The loader refuses:
 
@@ -85,7 +88,7 @@ before generating the script, pass `--existing inventory.json` with
 Render each instance into a directory that does not exist yet:
 
 ```bash
-python3 dist/edge/render.py site.toml edge-locksmith ./render/edge-locksmith
+python3 dist/edge/render.py site.toml lab-locksmith ./render/lab-locksmith
 ```
 
 The tree contains:
@@ -109,10 +112,10 @@ on a receipt you have not created. Copy the tree in as root, so every file
 is root-owned:
 
 ```bash
-sudo incus --project edge start edge-locksmith
-tar -C ./render/edge-locksmith -cf - etc usr | \
-  sudo incus --project edge exec edge-locksmith -- tar -xf - -C / --no-same-owner --no-overwrite-dir
-sudo incus --project edge exec edge-locksmith -- sh -c 'systemd-sysusers && systemctl daemon-reload'
+sudo incus --project edge start lab-locksmith
+tar -C ./render/lab-locksmith -cf - etc usr | \
+  sudo incus --project edge exec lab-locksmith -- tar -xf - -C / --no-same-owner --no-overwrite-dir
+sudo incus --project edge exec lab-locksmith -- sh -c 'systemd-sysusers && systemctl daemon-reload'
 ```
 
 Install the service binaries the commands name, such as `locksmithd` built
@@ -124,7 +127,7 @@ Inside the container, as root:
 
 ```bash
 R=/srv/locksmith-edge
-echo edge-locksmith > $R/.locksmith-edge-id        # must name this instance
+echo lab-locksmith > $R/.locksmith-edge-id        # must name this instance
 install -d -m 0755 $R/custody
 install -d -m 0700 -o locksmith -g locksmith $R/locksmith $R/locksmith/home
 install -d -m 0700 $R/environment                  # only if a component sets environment_file
@@ -147,26 +150,45 @@ models pinned in `dist/edge/models.toml` into an offline Hugging Face cache.
 It checks every file against its pinned SHA-256 or git blob SHA-1 before
 renaming the install into place.
 
-Run it inside the inspector's container, which needs to reach
+A classifier sidecar must run in Locksmith's container, as Locksmith's
+user: Locksmith reaches it only over a Unix socket and refuses a socket
+served by any other uid. The example site runs the `inspector` component
+in `lab-locksmith` as `locksmith`, listening on
+`/run/locksmith-edge/inspector/inspector.sock` (each component's runtime
+directory is `/run/locksmith-edge/<component>`). Point Locksmith at it:
+
+```yaml
+inspection:
+  sidecars:
+    - name: promptguard
+      socket: /run/locksmith-edge/inspector/inspector.sock
+      timeout_ms: 1000
+```
+
+Run the install inside that container, which needs to reach
 huggingface.co for this step. Create `$R/inspector` and
 `$R/inspector/home` first, owned by the inspector user, as in step 4.
 Then copy the tools in:
 
 ```bash
-sudo incus --project edge file push -r dist/edge edge-inspector/root/
+sudo incus --project edge file push -r dist/edge lab-locksmith/root/
 # Ungated (Apache-2.0), no token:
-sudo incus --project edge exec edge-inspector -- \
+sudo incus --project edge exec lab-locksmith -- \
   python3 /root/edge/install_model.py horizon-small --hf-home /srv/locksmith-edge/inspector/models
 
 # Gated (Llama 4 Community License): accept the licence on Hugging Face
 # first, with the account the token belongs to. -t gives the prompt a terminal.
-sudo incus --project edge exec -t edge-inspector -- \
+sudo incus --project edge exec -t lab-locksmith -- \
   python3 /root/edge/install_model.py promptguard2-86m --hf-home /srv/locksmith-edge/inspector/models \
   --token-prompt --accepted-by "<who accepted>"
 
-sudo incus --project edge exec edge-inspector -- sh -c \
-  'chown -R <inspector-user>: /srv/locksmith-edge/inspector/models && rm -r /root/edge'
+sudo incus --project edge exec lab-locksmith -- rm -r /root/edge
 ```
+
+Leave the models owned by root. The sidecar only reads them, and offline
+resolution works on a read-only cache, so a compromised sidecar cannot swap
+the weights. The installer refuses a symlinked `HF_HOME` or `hub`
+directory.
 
 - **The token stays out of argv.** It comes from `--token-prompt` (no echo)
   or `--token-file`, a file only you can read (`chmod 600`).
@@ -205,7 +227,7 @@ The receipt is your statement that this component's state is in place and
 that no other copy is running anywhere. Write it only after that is true:
 
 ```bash
-echo edge-locksmith:locksmith > $R/custody/locksmith.ready
+echo lab-locksmith:locksmith > $R/custody/locksmith.ready
 systemctl enable --now locksmith-edge-input.service locksmith-edge-locksmith.service
 ```
 

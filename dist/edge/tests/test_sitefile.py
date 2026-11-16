@@ -35,14 +35,25 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(site.state_root, "/srv/locksmith-edge")
         self.assertTrue(site.require_zfs)
         names = [i.name for i in site.instances]
-        self.assertEqual(names, ["edge-locksmith", "edge-pipelock", "edge-inspector"])
-        inspector = site.instances[2].components[0]
+        self.assertEqual(names, ["lab-locksmith", "lab-pipelock"])
+        inspector = site.instances[0].components[1]
         self.assertTrue(inspector.jit)
         self.assertEqual(inspector.env["HF_HUB_OFFLINE"], "1")
         locksmith = site.instances[0].components[0]
         self.assertTrue(locksmith.environment_file)
         self.assertEqual(locksmith.ingress[0].port, 9200)
-        self.assertEqual(locksmith.ingress[0].sources, ["10.0.1.0/24"])
+        self.assertEqual(locksmith.ingress[0].sources, ["198.51.100.0/24"])
+
+    def test_example_inspector_shares_locksmiths_container_and_user(self):
+        site = sitefile.load(EXAMPLE)
+        locksmith, inspector = site.instances[0].components
+        self.assertEqual(inspector.name, "inspector")
+        self.assertEqual(inspector.user, locksmith.user)
+        # The reference sidecar requires --socket; it must be under the
+        # inspector's own runtime directory, the only writable /run path.
+        reference = (EDGE.parent / "inspector/locksmith_inspector.py").read_text()
+        self.assertIn('"--socket", required=True', reference)
+        self.assertIn("--socket /run/locksmith-edge/inspector/", inspector.command)
 
     def test_minimal_defaults(self):
         site = sitefile.parse(MINIMAL)
@@ -231,6 +242,40 @@ command = "/usr/bin/true"
             self.assertRefused(
                 MINIMAL.replace('user = "locksmith"', f'user = "{bad}"'), "user"
             )
+
+    def test_trailing_newline_does_not_pass_a_pattern(self):
+        cases = [
+            ('user = "locksmith"', 'user = "root\\n"', "user"),
+            ('name = "locksmith"', 'name = "lock\\n"', "name"),
+            ('name = "site-a"', 'name = "site-a\\n"', "name"),
+        ]
+        for old, new, fragment in cases:
+            self.assertRefused(MINIMAL.replace(old, new), fragment)
+        self.assertRefused(with_component_line('env = { "A\\n" = "x" }'), "env")
+        text = MINIMAL.replace('name = "site-a"', 'name = "site-a"\nmemory = "2GiB\\n"')
+        self.assertRefused(text, "memory")
+
+    def test_state_subdirectory_names_reserved(self):
+        for bad in ("custody", "environment"):
+            self.assertRefused(
+                MINIMAL.replace('name = "locksmith"', f'name = "{bad}"'), "reserved"
+            )
+
+    def test_state_root_hidden_by_the_sandbox_refused(self):
+        for bad in (
+            "/home/edge",
+            "/root/edge",
+            "/tmp/edge",
+            "/var/tmp/edge",
+            "/run/edge",
+            "/proc/x",
+            "//srv/edge",
+        ):
+            self.assertRefused(MINIMAL.replace('"/srv/edge"', f'"{bad}"'), "state_root")
+
+    def test_lone_semicolon_in_command_refused(self):
+        text = MINIMAL.replace('config.yaml"', 'config.yaml ; /bin/sh"')
+        self.assertRefused(text, "command")
 
     def test_invalid_toml(self):
         self.assertRefused("[site\n", "TOML")

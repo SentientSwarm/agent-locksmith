@@ -1,6 +1,6 @@
 # Example site file for dist/edge. Copy it into your PRIVATE site repo
-# and replace every value. The names and private addresses below are
-# placeholders, not a real deployment.
+# and replace every value. The names and the RFC 5737 documentation
+# addresses below are placeholders, not a real deployment.
 
 [site]
 # Each instance's state lives on its own volume mounted here.
@@ -9,21 +9,31 @@ state_root = "/srv/locksmith-edge"
 require_zfs = true
 
 [[instance]]
-name = "edge-locksmith"
-address = "10.0.4.10"
+name = "lab-locksmith"
+address = "192.0.2.10"
 cpu = 2
-memory = "2GiB"
+memory = "4GiB"
 
 [[instance.component]]
 name = "locksmith"
 user = "locksmith"
 command = "/usr/local/bin/locksmithd --config /srv/locksmith-edge/locksmith/config.yaml"
 environment_file = true
-ingress = [{ port = 9200, from = ["10.0.1.0/24"] }]
+ingress = [{ port = 9200, from = ["198.51.100.0/24"] }]
+
+# A classifier sidecar must share Locksmith's container and user: Locksmith
+# reaches it only over a Unix socket and checks the peer's uid. Point
+# inspection.sidecars[].socket at the same path.
+[[instance.component]]
+name = "inspector"
+user = "locksmith"
+command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/locksmith_inspector.py --socket /run/locksmith-edge/inspector/inspector.sock"
+env = { HF_HOME = "/srv/locksmith-edge/inspector/models", HF_HUB_OFFLINE = "1" }
+jit = true
 
 [[instance]]
-name = "edge-pipelock"
-address = "10.0.4.11"
+name = "lab-pipelock"
+address = "192.0.2.11"
 cpu = 1
 memory = "1GiB"
 
@@ -31,17 +41,4 @@ memory = "1GiB"
 name = "pipelock"
 user = "pipelock"
 command = "/usr/local/bin/pipelock run --config /srv/locksmith-edge/pipelock/config.yaml"
-ingress = [{ port = 8888, from = ["10.0.4.10/32"] }]
-
-[[instance]]
-name = "edge-inspector"
-address = "10.0.4.12"
-cpu = 2
-memory = "2GiB"
-
-[[instance.component]]
-name = "inspector"
-user = "locksmith"
-command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/locksmith_inspector.py"
-env = { HF_HOME = "/srv/locksmith-edge/inspector/models", HF_HUB_OFFLINE = "1" }
-jit = true
+ingress = [{ port = 8888, from = ["192.0.2.10/32"] }]

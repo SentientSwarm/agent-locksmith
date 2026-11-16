@@ -4,7 +4,8 @@
 Runs as root in its own oneshot unit (locksmith-edge-<component>-guard),
 which the component requires, so the component's environment file never
 reaches it; python3 -I also ignores PYTHON* variables and user site-packages. The allowed components and the state root come
-from a root-owned components.json written by render.py, never from argv.
+from a root-owned components.json written by render.py, never from argv
+(only root can point --config elsewhere).
 It handles no credentials. Receipts attest the operator's completed custody
 ceremony; they cannot discover a remote copy by themselves.
 """

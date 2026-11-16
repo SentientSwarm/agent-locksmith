@@ -33,6 +33,7 @@ from catalog import (
     manifest,
     parse_catalog,
 )
+from hfhttp import _origin, _Redirects, check_token, read_token_file, redirect_allowed  # noqa: F401
 
 # Re-exported so callers and tests need only this module.
 __all__ = [
@@ -48,54 +49,6 @@ __all__ = [
 
 ENDPOINT = "https://huggingface.co"
 CHUNK = 1 << 20
-
-
-def read_token_file(path: Path) -> str:
-    info = path.stat()
-    if info.st_mode & 0o077:
-        raise InstallError(
-            f"{path} must not be readable by group or others (chmod 600)"
-        )
-    return check_token(path.read_text(encoding="utf-8"), str(path))
-
-
-def check_token(raw: str, source: str) -> str:
-    """One printable token, or an error that never repeats it."""
-    token = raw.strip()
-    if not token or any(c.isspace() or not c.isprintable() for c in token):
-        raise InstallError(f"{source} must contain one token")
-    return token
-
-
-def redirect_allowed(old: str, new: str) -> bool:
-    old_scheme, new_scheme = (
-        urllib.parse.urlsplit(old).scheme,
-        urllib.parse.urlsplit(new).scheme,
-    )
-    return new_scheme == "https" or (old_scheme == new_scheme == "http")
-
-
-def _origin(url: str) -> tuple[str, str, int | None]:
-    parts = urllib.parse.urlsplit(url)
-    return parts.scheme, (parts.hostname or "").lower(), parts.port
-
-
-class _Redirects(urllib.request.HTTPRedirectHandler):
-    """Carry the token across a redirect only back to the endpoint's own
-    origin (HF's resolve cache); never to the CDN or any other host."""
-
-    def __init__(self, endpoint: str, token: str | None):
-        super().__init__()
-        self._endpoint = _origin(endpoint)
-        self._token = token
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not redirect_allowed(req.full_url, newurl):
-            raise InstallError("refusing a redirect that downgrades from https")
-        new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and self._token and _origin(new.full_url) == self._endpoint:
-            new.add_unredirected_header("Authorization", f"Bearer {self._token}")
-        return new
 
 
 def _fetch(
@@ -149,6 +102,8 @@ def install(
             f"{model.repo} is gated: supply your own token with --token-file or --token-prompt"
         )
     hub = hf_home / "hub"
+    if hf_home.is_symlink() or hub.is_symlink():
+        raise InstallError(f"{hub} or its parent is a symlink; refusing to follow it")
     target = hub / ("models--" + model.repo.replace("/", "--"))
     if target.exists():
         raise InstallError(f"{target} exists; refusing to overwrite an installed model")

@@ -64,12 +64,13 @@ def _preflight(site: sitefile.Site, p: str, image: str, pool: str) -> list[str]:
         f'echo "project {p} limits.memory: $(incus project get {p} limits.memory)"',
     ]
     for inst in site.instances:
+        name, volume = q(inst.name), q(f"{inst.name}-state")
         lines += [
-            f"if incus --project {p} info {inst.name} >/dev/null 2>&1; then",
-            f"    echo 'instance {inst.name} already exists; inspect it manually' >&2; exit 1",
+            f"if incus --project {p} info {name} >/dev/null 2>&1; then",
+            f"    echo {q(f'instance {inst.name} already exists; inspect it manually')} >&2; exit 1",
             "fi",
-            f"if incus storage volume show {pool} {inst.name}-state --project {p} >/dev/null 2>&1; then",
-            f"    echo 'volume {inst.name}-state already exists; refusing to adopt state' >&2; exit 1",
+            f"if incus storage volume show {pool} {volume} --project {p} >/dev/null 2>&1; then",
+            f"    echo {q(f'volume {inst.name}-state already exists; refusing to adopt state')} >&2; exit 1",
             "fi",
         ]
     return lines

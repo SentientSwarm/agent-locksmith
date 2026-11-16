@@ -1,6 +1,7 @@
 """Tests for dist/edge/incus.py (reviewable Incus preparation commands)."""
 
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,7 @@ class IncusTest(unittest.TestCase):
     def test_stopped_hardened_instances(self):
         text = script()
         inits = [l for l in text.splitlines() if " init " in l]
-        self.assertEqual(len(inits), 3)
+        self.assertEqual(len(inits), 2)
         for line in inits:
             self.assertIn("boot.autostart=false", line)
             self.assertIn("security.nesting=false", line)
@@ -44,19 +45,19 @@ class IncusTest(unittest.TestCase):
     def test_per_instance_limits(self):
         text = script()
         locksmith = next(
-            l for l in text.splitlines() if " init " in l and "edge-locksmith" in l
+            l for l in text.splitlines() if " init " in l and "lab-locksmith" in l
         )
         self.assertIn("limits.cpu=2", locksmith)
-        self.assertIn("limits.memory=2GiB", locksmith)
+        self.assertIn("limits.memory=4GiB", locksmith)
         pipelock = next(
-            l for l in text.splitlines() if " init " in l and "edge-pipelock" in l
+            l for l in text.splitlines() if " init " in l and "lab-pipelock" in l
         )
         self.assertIn("limits.cpu=1", pipelock)
         self.assertIn("limits.memory=1GiB", pipelock)
 
     def test_dedicated_state_volume_per_instance(self):
         text = script()
-        for name in ("edge-locksmith", "edge-pipelock", "edge-inspector"):
+        for name in ("lab-locksmith", "lab-pipelock"):
             self.assertIn(
                 f"incus storage volume create tank {name}-state --project edge", text
             )
@@ -68,7 +69,7 @@ class IncusTest(unittest.TestCase):
 
     def test_volume_size_optional(self):
         self.assertIn(
-            "edge-locksmith-state --project edge size=64GiB",
+            "lab-locksmith-state --project edge size=64GiB",
             script(volume_size="64GiB"),
         )
         with self.assertRaises(incus.IncusError):
@@ -76,15 +77,15 @@ class IncusTest(unittest.TestCase):
 
     def test_fixed_address(self):
         self.assertIn(
-            "incus --project edge config device override edge-locksmith eth0 ipv4.address=10.0.4.10",
+            "incus --project edge config device override lab-locksmith eth0 ipv4.address=192.0.2.10",
             script(),
         )
 
     def test_guards_refuse_existing(self):
         text = script()
-        self.assertIn("incus --project edge info edge-locksmith >/dev/null 2>&1", text)
+        self.assertIn("incus --project edge info lab-locksmith >/dev/null 2>&1", text)
         self.assertIn(
-            "incus storage volume show tank edge-locksmith-state --project edge", text
+            "incus storage volume show tank lab-locksmith-state --project edge", text
         )
         self.assertIn("Type: container", text)
         # Every guard runs before the first change.
@@ -93,9 +94,9 @@ class IncusTest(unittest.TestCase):
 
     def test_inventory_conflict_refused(self):
         with self.assertRaises(incus.IncusError):
-            script(existing={"instances": ["edge-pipelock"], "volumes": []})
+            script(existing={"instances": ["lab-pipelock"], "volumes": []})
         with self.assertRaises(incus.IncusError):
-            script(existing={"instances": [], "volumes": ["edge-inspector-state"]})
+            script(existing={"instances": [], "volumes": ["lab-pipelock-state"]})
         script(existing={"instances": ["other"], "volumes": ["other-state"]})
 
     def test_bad_project_or_pool_refused(self):
@@ -118,6 +119,16 @@ class IncusTest(unittest.TestCase):
         self.assertIn("'ipv4.address=10.0.0.1;id'", text)
         self.assertIn("'limits.memory=1GiB;id'", text)
         self.assertIn("'path=/srv/x;id'", text)
+        bad = sitefile.Site(
+            state_root="/srv/x",
+            instances=[sitefile.Instance(name="edge-x;id", components=inst.components)],
+        )
+        preflight = incus.commands(bad, project="edge", image=IMAGE, pool="tank")
+        for line in preflight.splitlines():
+            if line.startswith("if incus"):
+                # The shell sees the whole name as one word.
+                words = shlex.split(line)
+                self.assertTrue({"edge-x;id", "edge-x;id-state"} & set(words), line)
 
     def test_script_parses(self):
         with tempfile.TemporaryDirectory(prefix="incus-test-") as tmp:
@@ -131,7 +142,7 @@ class IncusTest(unittest.TestCase):
     def test_cli_reads_inventory(self):
         with tempfile.TemporaryDirectory(prefix="incus-test-") as tmp:
             inv = Path(tmp) / "inv.json"
-            inv.write_text(json.dumps({"instances": ["edge-locksmith"], "volumes": []}))
+            inv.write_text(json.dumps({"instances": ["lab-locksmith"], "volumes": []}))
             result = subprocess.run(
                 [
                     sys.executable,
@@ -153,7 +164,7 @@ class IncusTest(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(result.returncode, 2)
-            self.assertIn("edge-locksmith", result.stderr)
+            self.assertIn("lab-locksmith", result.stderr)
             self.assertEqual(result.stdout, "")
 
     def test_module_cannot_execute_commands(self):

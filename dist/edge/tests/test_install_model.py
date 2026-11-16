@@ -271,6 +271,27 @@ class InstallTest(unittest.TestCase):
         self.assertIn("size", str(ctx.exception))
         self.assertFalse(self.repo_dir().exists())
 
+    def test_symlinked_hub_refused(self):
+        fx = self.fixture()
+        elsewhere = self.base / "elsewhere"
+        elsewhere.mkdir()
+        self.hf_home.mkdir()
+        (self.hf_home / "hub").symlink_to(elsewhere)
+        with self.assertRaises(install_model.InstallError):
+            self.install(fx)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+        self.assertEqual(fx.requests, [])
+
+    def test_default_port_counts_as_the_same_origin(self):
+        self.assertEqual(
+            install_model._origin("https://huggingface.co/x"),
+            install_model._origin("https://HuggingFace.co:443/y"),
+        )
+        self.assertNotEqual(
+            install_model._origin("https://huggingface.co/x"),
+            install_model._origin("https://huggingface.co:8443/y"),
+        )
+
     def test_existing_destination_refused(self):
         fx = self.fixture()
         self.repo_dir().mkdir(parents=True)
