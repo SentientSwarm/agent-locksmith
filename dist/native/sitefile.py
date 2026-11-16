@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 MEMORY_RE = re.compile(r"^[1-9][0-9]*(MiB|GiB)$")
 RESERVED_USERS = {"root", "nobody"}
 
@@ -166,7 +167,7 @@ def _cidr(value: object, where: str) -> str:
 def _state_root(value: object) -> str:
     text = _text(value, "[site] state_root")
     path = PurePosixPath(text)
-    if not path.is_absolute() or ".." in path.parts or str(path) != text or text == "/":
+    if not PATH_RE.match(text) or ".." in path.parts or str(path) != text:
         raise SiteError(
             "[site] state_root must be a normalized absolute path other than /"
         )

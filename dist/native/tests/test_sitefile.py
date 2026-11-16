@@ -111,6 +111,10 @@ command = "/usr/bin/true"
             MINIMAL.replace('"/srv/edge"', '"/srv/../etc"'), "state_root"
         )
 
+    def test_state_root_shell_characters(self):
+        for bad in ("/srv/edge state", "/srv/$(id)", "/srv/edge;x"):
+            self.assertRefused(MINIMAL.replace('"/srv/edge"', f'"{bad}"'), "state_root")
+
     def test_bad_cidr(self):
         self.assertRefused(
             with_component_line('ingress = [{ port = 9200, from = ["10.0.0.0/33"] }]'),
