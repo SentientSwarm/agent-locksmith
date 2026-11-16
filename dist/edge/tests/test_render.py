@@ -166,7 +166,11 @@ class RenderTest(unittest.TestCase):
             os.umask(old)
         for path in [out, *out.rglob("*")]:
             mode = path.stat().st_mode & 0o777
-            expected = 0o755 if path.is_dir() or path.name == "locksmith-edge-state-check" else 0o644
+            expected = (
+                0o755
+                if path.is_dir() or path.name == "locksmith-edge-state-check"
+                else 0o644
+            )
             self.assertEqual(mode, expected, path)
 
     def test_nft_accepts_only_declared_sources(self):
