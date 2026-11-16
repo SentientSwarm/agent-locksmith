@@ -328,9 +328,11 @@ only scanners are `injection` or sidecars defaults to `flag`. Sidecars do
 not run on streamed (SSE) responses, because a classifier scores whole
 texts, not a sliding window. A streamed response on a route with a
 sidecar is therefore an inspection error and follows `on_error`: under
-`fail_closed` it is blocked before anything is sent; under `fail_open`
-it streams with the other scanners and an `inspection_error` row names
-the sidecar. A `sidecar:` scanner naming no declared
+`fail_closed` the agent gets the response headers and then an error
+event, never upstream text; under `fail_open` it streams with the other
+scanners, and the stream's audit row (`inspection_error`, or
+`inspection_hit` when something was also found) carries the error in
+`details.error`. A `sidecar:` scanner naming no declared
 sidecar, an empty or invalid name, a relative socket path or a zero
 timeout fails config load.
 

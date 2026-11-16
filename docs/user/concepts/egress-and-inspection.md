@@ -38,6 +38,9 @@ egress:
   ("egress.mode `pipelock` requires egress_proxy").
 - `egress: direct` routes always connect straight to the upstream, in
   every mode. Use them only for LAN and loopback destinations.
+- Routes sent without a proxy (`direct`, and `proxied` under
+  `external`) ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the
+  daemon's environment, so they never reach a proxy that no route names.
 - `external` is a statement that something else enforces egress.
   Locksmith cannot check that claim. Choose it only where that control
   exists and allows no more than your proxied routes need.
@@ -168,8 +171,8 @@ positives a phrase list brings on pages that discuss prompt injection.
 - **Sidecars don't scan streamed (SSE) responses**, because a classifier
   scores whole texts. On a route with a sidecar, a streamed response is
   an inspection error. Under `fail_closed` it is blocked. Under
-  `fail_open` it streams with only the built-in scanners, so the phrase
-  list is all that applies.
+  `fail_open` it streams with only the built-in scanners, so for
+  prompt injection the phrase list is all that applies.
 - **The model weights are not shipped.** The operator accepts their
   licence when installing them; see `dist/inspector/README.md`.
 
