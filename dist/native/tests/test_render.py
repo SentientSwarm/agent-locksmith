@@ -152,6 +152,11 @@ class RenderTest(unittest.TestCase):
         self.assertFalse([n for n in names if n.endswith(".ready")])
         self.assertFalse((out / "srv").exists())
 
+    def test_guard_copied_executable(self):
+        guard = self.out("edge-locksmith") / "usr/local/sbin/locksmith-edge-state-check"
+        self.assertEqual(guard.read_bytes(), (NATIVE / "state_check.py").read_bytes())
+        self.assertEqual(guard.stat().st_mode & 0o777, 0o755)
+
     def test_nft_accepts_only_declared_sources(self):
         nft = (self.out("edge-locksmith") / "etc/locksmith-edge/input.nft").read_text()
         accepts = [l.strip() for l in nft.splitlines() if "saddr" in l]

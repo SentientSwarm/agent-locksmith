@@ -13,12 +13,13 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import shutil
 import sys
 from pathlib import Path
 
 # -I drops the script directory from sys.path; add back only that directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import sitefile  # noqa: E402
+import sitefile
 
 UNITS = "usr/local/lib/systemd/system"
 GUARD = "/usr/local/sbin/locksmith-edge-state-check"
@@ -185,6 +186,10 @@ def render(site: sitefile.Site, instance_name: str, output: Path) -> None:
         path = output / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+    guard = output / GUARD.lstrip("/")
+    guard.parent.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).with_name("state_check.py"), guard)
+    guard.chmod(0o755)
 
 
 def main() -> int:
