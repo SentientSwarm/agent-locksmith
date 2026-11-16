@@ -255,6 +255,29 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("reject", nft)
         self.assertNotIn("saddr", nft)
 
+    def test_nft_rejects_closed_ports_for_every_source(self):
+        site = sitefile.parse(
+            ESCAPES.replace(
+                'ingress = [{ port = 8080, from = ["10.0.0.0/24", "2001:db8::/32"] }]\n',
+                'ingress = [{ port = 8080, from = ["10.0.0.0/24", "2001:db8::/32"] }]\n'
+                "closed = [9201]\n",
+            )
+        )
+        nft = (self.out("site-a", site) / "etc/locksmith-edge/input.nft").read_text()
+        self.assertIn("tcp dport { 8080, 9201 } reject;", nft)
+        self.assertNotIn("dport 9201 accept", nft)
+
+    def test_nft_closed_only_component_rejects(self):
+        site = sitefile.parse(
+            ESCAPES.replace(
+                'ingress = [{ port = 8080, from = ["10.0.0.0/24", "2001:db8::/32"] }]\n',
+                "closed = [9201]\n",
+            )
+        )
+        nft = (self.out("site-a", site) / "etc/locksmith-edge/input.nft").read_text()
+        self.assertIn("tcp dport { 9201 } reject;", nft)
+        self.assertNotIn("saddr", nft)
+
     def test_input_service_loads_table(self):
         out = self.out("lab-locksmith")
         text = (out / UNITS / "locksmith-edge-input.service").read_text()

@@ -143,6 +143,41 @@ command = "/usr/bin/true"
             with_component_line("ingress = [{ port = 9200, from = [] }]"), "from"
         )
 
+    def test_closed_ports(self):
+        comp = sitefile.parse(with_component_line("closed = [9201, 9300]")).instances[0].components[0]
+        self.assertEqual(comp.closed, [9201, 9300])
+
+    def test_closed_defaults_empty(self):
+        self.assertEqual(sitefile.parse(MINIMAL).instances[0].components[0].closed, [])
+
+    def test_closed_bad_port(self):
+        for bad in ("[0]", "[70000]", "[true]", '["9201"]', "9201"):
+            self.assertRefused(with_component_line(f"closed = {bad}"), "closed")
+
+    def test_closed_duplicate(self):
+        self.assertRefused(with_component_line("closed = [9201, 9201]"), "closed")
+
+    def test_closed_port_also_ingress(self):
+        self.assertRefused(
+            with_component_line(
+                'ingress = [{ port = 9201, from = ["10.0.0.0/24"] }]\nclosed = [9201]'
+            ),
+            "both",
+        )
+
+    def test_closed_port_ingress_in_sibling_component(self):
+        self.assertRefused(
+            with_component_line("closed = [9201]")
+            + """
+[[instance.component]]
+name = "staging"
+user = "staging"
+command = "/usr/local/bin/locksmithd --config /srv/edge/staging/config.yaml"
+ingress = [{ port = 9201, from = ["10.0.0.0/24"] }]
+""",
+            "both",
+        )
+
     def test_bad_port(self):
         self.assertRefused(
             with_component_line('ingress = [{ port = 70000, from = ["10.0.0.0/24"] }]'),

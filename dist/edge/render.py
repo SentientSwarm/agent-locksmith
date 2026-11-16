@@ -30,6 +30,7 @@ def firewall(components: list[sitefile.Component]) -> str:
     rules = ["iifname lo accept", "ct state established,related accept"]
     ports: list[int] = []
     for comp in components:
+        ports.extend(comp.closed)
         for rule in comp.ingress:
             ports.append(rule.port)
             for family in ("ip", "ip6"):

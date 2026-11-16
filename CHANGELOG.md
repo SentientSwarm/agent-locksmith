@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Edge site files accept a component `closed = [port, ...]` list,
+  rejected for every source (for example an admin listener). Before, a
+  port could only be opened to CIDRs or left unfiltered, so a rendered
+  Locksmith with admin HTTPS on 9201 was reachable from the whole zone.
 - `PUT /admin/operator/rate-limits/{route}` refuses a native MCP or
   `infra` registration with 400 `route_not_limitable` (AGENT-272). Only
   the `/api/*` proxy enforces limits, so such a limit was listed and

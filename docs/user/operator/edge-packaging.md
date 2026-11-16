@@ -42,12 +42,19 @@ memory for runtimes that need it, such as Python with ONNX. It also takes
 `env` values are written into the unit file, which is world-readable, so
 never put a secret there; use `environment_file` for secrets.
 
+`closed = [9201]` rejects TCP on the listed ports for every source. Use it
+for a listener that only processes inside the container should reach, such
+as Locksmith's admin HTTPS when operators use `incus exec`. Ports a
+component neither declares in `ingress` nor lists in `closed` are not
+filtered, so close every port the component listens on that the zone must
+not reach. A port cannot be both `ingress` and `closed` in one instance.
+
 The loader refuses:
 
 - unknown keys and duplicate instance or component names;
 - a state root that is not a plain absolute path;
 - a component running as `root` or `nobody`;
-- bad CIDRs or ports;
+- bad CIDRs or ports, and a port that is both `ingress` and `closed`;
 - control characters in a command or variable.
 
 Run any tool on the file to check it.

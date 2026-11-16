@@ -25,6 +25,7 @@ COMPONENT_KEYS = {
     "jit",
     "env",
     "ingress",
+    "closed",
 }
 INGRESS_KEYS = {"port", "from"}
 
@@ -44,6 +45,9 @@ class Component:
     jit: bool = False
     env: dict[str, str] = field(default_factory=dict)
     ingress: list[Ingress] = field(default_factory=list)
+    # Ports rejected for every source, e.g. an admin listener reached only
+    # from inside the container.
+    closed: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,10 @@ def _instance(raw: object, index: int) -> Instance:
     ]
     if not comps:
         raise SiteError(f"{where}: at least one [[instance.component]] is required")
+    opened = {r.port for c in comps for r in c.ingress}
+    both = sorted(opened & {p for c in comps for p in c.closed})
+    if both:
+        raise SiteError(f"{where}: port {both[0]} is both ingress and closed")
     return Instance(
         name=name,
         components=comps,
@@ -117,6 +125,14 @@ def _component(raw: object, parent: str) -> Component:
     check.keys(table, COMPONENT_KEYS, f"{parent} component")
     name = check.name(table.get("name"), f"{parent} component name")
     where = f"component {name}"
+    ingress = [
+        _ingress(r, where)
+        for r in check.as_list(table.get("ingress", []), f"{where} ingress")
+    ]
+    closed = _closed(table.get("closed", []), where)
+    both = sorted({r.port for r in ingress} & set(closed))
+    if both:
+        raise SiteError(f"{where}: port {both[0]} is both ingress and closed")
     return Component(
         name=name,
         user=check.user(table.get("user"), where),
@@ -126,11 +142,18 @@ def _component(raw: object, parent: str) -> Component:
         ),
         jit=check.as_bool(table.get("jit", False), f"{where} jit"),
         env=check.env(table.get("env", {}), where),
-        ingress=[
-            _ingress(r, where)
-            for r in check.as_list(table.get("ingress", []), f"{where} ingress")
-        ],
+        ingress=ingress,
+        closed=closed,
     )
+
+
+def _closed(raw: object, where: str) -> list[int]:
+    ports = check.as_list(raw, f"{where} closed")
+    for port in ports:
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise SiteError(f"{where}: closed port must be an integer 1-65535")
+    check.unique(ports, f"{where}: duplicate closed port")
+    return list(ports)
 
 
 def _ingress(raw: object, where: str) -> Ingress:
