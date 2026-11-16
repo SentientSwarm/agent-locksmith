@@ -234,7 +234,7 @@ src/
 tests/                     integration tests: *_suite.rs group files by path; standalone binaries in Cargo.toml
 benches/audit_write_bench  criterion bench — validates A-2 / INF-26 audit throughput
 migrations/                SQLite schema (embedded into the binary)
-seed/catalog.yaml          Phase E.7: bundled default registrations (16 entries at v2.1.0)
+seed/catalog.yaml          Phase E.7: bundled default registrations (15 entries at catalog 2.3.0)
 dist/systemd/              hardened unit template (NoNewPrivileges, ProtectSystem=strict, …)
 dist/examples/             smallstep mTLS + sealed-secrets worked examples
 docs/user/                 User docs (concepts, agent-integration recipes)

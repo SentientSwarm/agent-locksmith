@@ -138,14 +138,16 @@ providers:
     api_key: "${LOCKSMITH_TOKEN}"
 
 # Hermes' alignment / prompt-guard / code-shield scanners. Disabled
-# by default in this template — locksmith's inline inspection
-# scans brokered traffic at the network boundary. Operators who want
-# hermes-side in-process scanning AS WELL can enable them here.
+# in this template on the assumption that the operator configured
+# locksmith inspection (`inspection.routes`, plus a `sidecar:` scanner
+# for classifier-grade prompt-injection detection) for these routes.
+# Locksmith inspection is off unless configured: without it, enable
+# these scanners, or nothing scans this agent's traffic.
 scanners:
   alignment_check:
     enabled: false
   prompt_guard:
-    enabled: false                  # owned by locksmith inline inspection
+    enabled: false                  # only if locksmith inspection is configured
   code_shield:
     enabled: false                  # same reasoning
 EOF
@@ -378,9 +380,11 @@ profiles).
   `*_BASE_URL` env vars (path B). Provider-config doesn't cover all
   hermes SDK sub-clients in v1.0.
 - **Hermes' alignment_check scanner**: independent of locksmith's
-  inline inspection. You can run both, one, or neither. Most operators
-  rely on locksmith's inspection at the proxy boundary and disable
-  hermes-side in-process scanners.
+  inline inspection, which is off until you configure
+  `inspection.routes` (see
+  [egress and inspection](../concepts/egress-and-inspection.md)). You
+  can run both, one, or neither. Disable the hermes-side scanners only
+  for routes locksmith actually inspects.
 - **Tool registration auto-derivation**: hermes' tool catalog is
   hermes-side; locksmith's is locksmith-side. A v0.3+ enhancement
   will make hermes auto-discover from locksmith's `/tools` and

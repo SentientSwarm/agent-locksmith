@@ -174,7 +174,7 @@ egress_proxy: "http://127.0.0.1:8888"
 The seed catalog at `/etc/locksmith/seed/catalog.yaml` (baked into the
 docker image) populates the registrations table on first boot. Operators
 provide credentials via env vars (or the layer8-proxy-site sealed-creds
-flow); no per-tool YAML required for the 16 default providers.
+flow); no per-tool YAML required for the 15 default providers.
 
 ### Run (standalone)
 

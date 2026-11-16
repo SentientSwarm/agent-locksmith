@@ -322,6 +322,28 @@ async fn ts165b_shipped_catalog_parses() {
     );
 }
 
+// ─── AGENT-256: a catalog that drops an entry keeps its row ───────────────
+#[tokio::test]
+async fn bundled_catalog_upgrade_keeps_the_retired_lf_scan_row() {
+    let (_dir, repo) = fresh().await;
+    seed_loader::apply_catalog(&repo, SEED_V200).await.unwrap();
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("seed/catalog.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    seed_loader::apply_catalog(&repo, &yaml).await.unwrap();
+
+    assert_eq!(
+        repo.get_seed_version().await.unwrap().as_deref(),
+        Some("2.3.0")
+    );
+    let all = repo.list(None).await.unwrap();
+    let lf = all
+        .iter()
+        .find(|r| r.name == "lf-scan")
+        .expect("upgrade must not delete the retired lf-scan row");
+    assert_eq!(lf.kind, Kind::Infra);
+    assert!(lf.seed && !lf.disabled, "row is left exactly as seeded");
+}
+
 // ─── TS-165c: empty / missing catalog is non-fatal ─────────────────────────
 #[tokio::test]
 async fn ts165c_missing_file_is_skip() {

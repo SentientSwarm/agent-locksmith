@@ -17,7 +17,7 @@ fn bundled_catalog_path() -> PathBuf {
 
 // ─── TS-230: bundled seed catalog parses + version is 2.1.0+ ───────────────
 #[tokio::test]
-async fn ts230_bundled_seed_catalog_loads_at_version_2_1_0() {
+async fn ts230_bundled_seed_catalog_loads_at_current_version() {
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("locksmith.db"))
         .await

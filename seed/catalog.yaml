@@ -20,8 +20,8 @@
 # static auth shapes (none / header / bearer) plus OAuth. It ships no
 # infra entry: the lf-scan sidecar was retired in catalog 2.3.0
 # (AGENT-256). Removing an entry never deletes an existing row, so
-# deployments that seeded lf-scan keep it until an operator runs
-# `locksmith infra delete lf-scan`.
+# deployments that seeded lf-scan keep it; `locksmith infra delete
+# lf-scan` disables the seeded row.
 #
 # Authoritative classification rationale: see
 #   agents-stack/docs/plans/2026-05-06-v2.0.0-catalog-seed.md

@@ -182,8 +182,10 @@
 
 - The seed catalog (2.3.0) no longer ships the `lf-scan` sidecar
   (AGENT-256); inline inspection replaces it. Removing a seed entry never
-  deletes a row, so a deployment that seeded it keeps the registration
-  until an operator runs `locksmith infra delete lf-scan`.
+  deletes a row, so a deployment that seeded it keeps the registration.
+  `locksmith infra delete lf-scan` disables a seeded row (it stays
+  listed); to remove it entirely, `locksmith infra put` it first so it
+  becomes operator-owned, then delete it.
 - Agents now receive upstream redirects instead of their final response.
   Redirects to the route's own upstream point back at Locksmith, so
   clients that follow redirects (`curl -L`, most HTTP libraries) see no
