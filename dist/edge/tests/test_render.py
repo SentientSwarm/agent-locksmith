@@ -1,6 +1,7 @@
 """Tests for dist/edge/render.py (inactive unit, firewall and sysusers render)."""
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -156,6 +157,17 @@ class RenderTest(unittest.TestCase):
         guard = self.out("edge-locksmith") / "usr/local/sbin/locksmith-edge-state-check"
         self.assertEqual(guard.read_bytes(), (EDGE / "state_check.py").read_bytes())
         self.assertEqual(guard.stat().st_mode & 0o777, 0o755)
+
+    def test_modes_ignore_operator_umask(self):
+        old = os.umask(0o002)
+        try:
+            out = self.out("edge-locksmith")
+        finally:
+            os.umask(old)
+        for path in [out, *out.rglob("*")]:
+            mode = path.stat().st_mode & 0o777
+            expected = 0o755 if path.is_dir() or path.name == "locksmith-edge-state-check" else 0o644
+            self.assertEqual(mode, expected, path)
 
     def test_nft_accepts_only_declared_sources(self):
         nft = (self.out("edge-locksmith") / "etc/locksmith-edge/input.nft").read_text()

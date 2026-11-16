@@ -190,6 +190,13 @@ def render(site: sitefile.Site, instance_name: str, output: Path) -> None:
     guard.parent.mkdir(parents=True)
     shutil.copyfile(Path(__file__).with_name("state_check.py"), guard)
     guard.chmod(0o755)
+    # Fixed modes, whatever the operator's umask: the guard refuses a
+    # group- or world-writable components file or directory.
+    for path in [output, *output.rglob("*")]:
+        if path.is_dir() or path == guard:
+            path.chmod(0o755)
+        else:
+            path.chmod(0o644)
 
 
 def main() -> int:
