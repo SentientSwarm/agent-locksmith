@@ -4,6 +4,12 @@ This bundle prepares native services; it does not contain credentials, start a
 workload, or certify that migration is complete. The operator procedure is
 [the custody runbook](../../docs/operations/evo-edge-custody.md).
 
+**5a now:** Codex pool and teamclaude only. Other broker units stay masked;
+edge-locksmith and edge-pipelock stay STOPPED. Preserve existing production
+Locksmith broker addresses with temporary transport-only studio SSH relays.
+**5b after phases 8/10:** remaining proxy/scanner/hub custody, real zone
+endpoints, config push, agents cutover and retirement. Those are not 5a gates.
+
 | Container | Fixed address | Memory | Workloads |
 | --- | --- | --- | --- |
 | edge-locksmith | 10.250.4.10 | 2 GiB | prod 9200, staging 9300; admin operator-only |
@@ -21,6 +27,15 @@ install at container root. Repeat for the other two roles. It refuses an existin
 output directory. It creates no enabled unit links, credential files, custody
 receipts, users or runtime state. Keep the output **inactive** until the runbook
 gates pass. Installing files is not the same as starting the units.
+
+For 5a use `--studio-compat` on the edge-brokers render. It admits inbound
+10.250.4.1 to broker TCP 43210/3456 only, for SSH forwarding from the old studio
+loopback ports. It adds no outbound host/Docker allowance and does not expose
+scanner/hub. The default render has no such exception. `compat_launchd.py`
+renders those two inactive studio SSH jobs without loading them or reading
+credentials. Load each only after that source pool is stopped and its edge
+replacement serves; leave its original launchd pool job disabled. The current
+source production Locksmith/agent forwarding remains unchanged until 5b.
 
 Each unit requires `/srv/edge-state` to be a separately mounted ZFS filesystem
 with a root-owned `.edge-state-id` containing its container name. The operator
@@ -46,7 +61,7 @@ Validate kernel/container nft capability before activation. No egress restrictio
 is falsely claimed here: temporary direct dependencies remain until AGENT-255.
 
 The bundle does not yet implement cross-container Pipelock configuration push
-(AGENT-137/D-16). Do not report that requirement complete based on these units.
+(AGENT-137/D-16), a 5b requirement. Do not report it complete based on these units.
 It also does not resolve service relocation, token-monitor's secret, scanner
 model availability/peak memory, or native MCP child-process dependencies.
 

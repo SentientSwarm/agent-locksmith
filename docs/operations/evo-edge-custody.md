@@ -1,4 +1,4 @@
-# evo-x2-1 edge custody and cutover
+# evo-x2-1 edge custody: phase 5a brokers, phase 5b proxy cutover
 
 Prepared 2026-11-16 for herd-ops-claude and agent-locksmith. This is a staged
 execution runbook. **No pool has moved. No destination is serving.**
@@ -8,6 +8,26 @@ owns deployment and identity/token custody. Never restart herdr, edit
 `agentbr0`/`agents_guard`, alter agents VMs, or change herd/services/hokigai from
 this runbook. No secrets in messages, terminal output, Git, review artifacts or
 ordinary logs. Do not run commands with shell tracing.
+
+## Execution split (coordinator, 2026-11-16)
+
+**5a, now:** move only Codex pool and teamclaude into edge-brokers, with
+source-stop/verified-move/destination-start in that order for each pool. Open
+the agreed herd broker ingress and repoint herd VM pool tunnels after serving
+validation. Keep edge-locksmith and edge-pipelock **STOPPED**. Keep the existing
+Locksmith/Pipelock/scanner stack and agent forwarding path running. Scanner
+models, Locksmith binary CI, config push, Hermes/hokigai relocation and the
+agents-zone cutover are **5b gates, not prerequisites for broker 5a**.
+Token-monitor is deferred with the remaining ancillary stack; it must not delay
+the two pool moves or start merely because a broker receipt exists.
+
+**5b, after phases 8 and 10:** migrate the remaining proxy/scanner/hub custody
+and cut agents over only once Hermes and hokigai have real zone endpoints.
+Finish AGENT-137 config push, actual scanner/model validation, restrictive
+egress, and the remaining acceptance/retirement checks. Do not grant edge
+outbound access to evo's host or Docker addresses as a shortcut.
+
+This is a staged runbook, not notice that either phase is already serving.
 
 ## 1. Placement, reachability, unresolved gates
 
@@ -19,8 +39,10 @@ ordinary logs. Do not run commands with shell tracing.
 
 Budget: 2/1/3 GiB respectively, 2 CPUs each, project edge (3 containers /
 6 GiB), pool zfs. Each has a dedicated `edge-<role>-state` custom volume mounted
-at `/srv/edge-state`. Scanner model load/scan peak memory must fit the broker
-budget before cutover. A passing `/health` alone does not load scanner models.
+at `/srv/edge-state`. In 5a only the two pool units and their relays may be
+activated. The broker starts within its 3 GiB limit; verify both pools under
+load. In 5b scanner model load/scan peak memory must also fit that budget.
+A passing scanner `/health` alone does not load its models.
 
 Source inspection found Codex at `127.0.0.1:43210`, teamclaude at
 `127.0.0.1:3456` with 3 accounts, and token-monitor-hub at
@@ -40,13 +62,75 @@ Coordinator ACL requests, before declaring the respective clients usable:
 - herd 10.250.1.0/24 -> `.12` TCP 43210, 3456, 17321 only. No herd access to
   scanner, staging or admin. Coordinator will open these after local serving
   validation; report local serving separately from end-to-end herd validation.
-- `.10` -> `.12` TCP 43210, 3456, 9100. **The current edge ACL permits only
-  8888 within edge; this additional edge-to-edge dependency is a cutover gate.**
+- `.10` -> `.12` TCP 43210, 3456, 9100: **coordinator reports these narrow
+  rules live** (herd changes after 5f8f242). Verify during 5b; no proxy starts
+  or agents cutover is authorized by that ACL change.
 - `.10` -> `.11:8888`. Any AGENT-137 config-push transport needs its own
   reviewed narrow rule; no new admin port is invented here.
 - edge -> agents only for verified replacement endpoints. Coordinator supplied
   Piper `.0.254` and Rivet `.0.76`; these are not proof of which catalog
   listener they replace. Do not point Hermes ports at those IPs by inference.
+
+### 1a. Keep the current Locksmith broker addresses valid during 5a
+
+The plan chooses **old broker addresses stay valid**, with transport-only SSH
+relays on studio after each source pool is stopped and its destination is
+validated. Preserve the actual current production routes:
+
+```text
+existing prod Locksmith (studio Podman)
+  -> host.containers.internal:43210 / :3456 (unchanged registrations)
+  -> studio 127.0.0.1:43210 / :3456 (temporary SSH listeners)
+  -> SSH evo-x2-1 -> 10.250.4.12:43210 / :3456
+  -> edge loopback router / teamclaude (original authentication retained)
+```
+
+Read-only inspection found evo's native legacy Locksmith has only github,
+tavily and firecrawl YAML tools; agents-locksmith-forward is active and the
+production broker registrations are in studio's Locksmith DB. Therefore do
+not edit that legacy YAML or repoint every agent identity as if the old native
+daemon were the production broker router. Re-verify this inventory at cutover.
+
+SSH's destination connection originates on evo's gateway `10.250.4.1`.
+Render **5a broker** rules with `--studio-compat`: this opt-in adds only inbound
+gateway TCP 43210/3456 to the broker's container-local firewall. It does not
+admit gateway access to scanner/hub, change any host/bridge ACL or grant edge
+outbound access to host/Docker. The existing bridge gateway-ingress rule was
+already present; confirm actual source address/denials in the canary. Default
+rendering has no compatibility exception. Remove it in 5b after retiring the
+source proxy/relays, by re-rendering without the flag and atomically replacing
+the container's owned nft table.
+
+Render transport-only jobs on studio, but **do not load them yet**:
+
+```sh
+python3 dist/evo-edge/compat_launchd.py codex /new/path/com.sentientswarm.edge-compat.codex.plist
+python3 dist/evo-edge/compat_launchd.py teamclaude /new/path/com.sentientswarm.edge-compat.teamclaude.plist
+```
+
+After that component's destination serving/auth canary, install its plist in
+`~/Library/LaunchAgents/` and bootstrap only that compatibility label. The
+source pool's original job remains disabled/unloaded. The relay job is SSH
+transport only; it reads no CODEX_HOME, pool files or provider tokens. It uses
+the existing studio-to-evo SSH identity/host trust, binds only 127.0.0.1, and
+fails if the old local port is still occupied. No `-g`, LAN bind, key copying or
+provider-credential import. Validate from the still-running prod Locksmith
+container with its normal authenticated route, including a streamed request,
+not merely from studio's shell. No rerouting to evo's old user tunnel ports:
+the SSH destination is explicitly `.4.12`, avoiding a tunnel loop back to studio.
+
+```sh
+# On studio, ONLY after edge Codex is serving and the source pool is stopped:
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.sentientswarm.edge-compat.codex.plist"
+# Separately, ONLY after the later teamclaude move and its serving canary:
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.sentientswarm.edge-compat.teamclaude.plist"
+```
+
+These temporary credential-free network relays and the old proxy stack remain
+on studio until 5b; they are not moved pool custody. The final studio-only-
+inference objective follows completion of 5b and the other owning phases.
+
+### 1b. Deferred proxy dependencies (5b only)
 
 Temporary direct catalog dependencies on prod (inventory, not proof each is
 healthy): brokers; lf-scan; studio LM Studio 1234; Linear/Slack HTTPS;
@@ -54,8 +138,8 @@ spark-1/2 ComfyUI 8188; babynator-4 HTTPS; Open Design 7456/7457;
 evo Hermes 8642,8651-8654 and hokigai 8787. Internet/LAN egress is presently
 allowed but **evo's own LAN/tailnet IPs are explicitly rejected**, as are
 10/8 destinations without exceptions. Get authoritative replacement addresses
-and narrow ACL rules from the owning zones; the coordinator's broad LAN
-allowance does not override those rejects. Rewrite host.docker.internal and
+and narrow ACL rules from the owning zones in phases 8 and 10; the coordinator
+will not open host/Docker exceptions. Rewrite host.docker.internal and
 host.containers.internal to actual destinations. Never route agents directly
 to studio as a workaround. Locksmith alone may reach LM Studio on studio.
 
@@ -64,8 +148,8 @@ catalog rows before installing a restrictive per-NIC egress ACL. After AGENT-255
 and successful routing through Pipelock, deny direct egress except Pipelock and
 the expressly required bridge DNS. Verify DNS cannot become a bypass.
 
-AGENT-137/D-16 cross-container config push is **not implemented by this
-inactive bundle**. Policy export exists (`locksmith egress policy --pipelock`)
+AGENT-137/D-16 cross-container config push is a **5b gate, not implemented by
+this inactive bundle**. Policy export exists (`locksmith egress policy --pipelock`)
 but is not a push protocol. Implement/verify atomic validated delivery,
 Pipelock reload behaviour and rollback before claiming that requirement done.
 
@@ -92,8 +176,12 @@ Render each role to a new local directory (not an existing runtime directory):
 ```sh
 python3 dist/evo-edge/render.py edge-locksmith /new/path/edge-locksmith
 python3 dist/evo-edge/render.py edge-pipelock /new/path/edge-pipelock
-python3 dist/evo-edge/render.py edge-brokers /new/path/edge-brokers
+python3 dist/evo-edge/render.py edge-brokers /new/path/edge-brokers --studio-compat
 ```
+
+For 5a install only the edge-brokers definitions, with token-monitor and lf-scan
+still masked and without their receipts. Do not start the other two containers.
+Render proxy definitions now only for review, not installation/activation.
 
 Install these files as container root only in the coordinated outage, after the
 relevant source is stopped. Unit definitions are in `/usr/local/lib/systemd/system`;
@@ -108,18 +196,23 @@ Booting an empty OS for package installation after source stop does not authoriz
 starting any credentialed unit. Do not install packages whose maintainer scripts
 start pool software. No credentialed workload starts on evo while its source runs.
 
-Packages: Python 3, util-linux (`findmnt`), nftables, rsync, CA roots; Node 24
-for brokers. Install native AMD64 Locksmith/Pipelock at selected validated
+**5a packages:** Python 3, util-linux (`findmnt`), nftables, rsync, CA roots;
+Node 24 and the exact installed Codex multi-auth/teamclaude revisions. Install
+those two packages at `/opt/codex-multi-auth` and `/opt/teamclaude` with Linux
+dependencies, not macOS node_modules. No Locksmith or scanner build blocks 5a.
+Read-only package metadata currently reports codex-multi-auth **2.25.0**
+and @karpeleslab/teamclaude **1.1.27**. Preserve any installed source patches;
+matching the version string alone does not attest matching code bytes.
+
+**5b packages:** install native AMD64 Locksmith/Pipelock at selected validated
 revisions, with build identity recorded; source prod/staging are Locksmith
 3.0.0 at add28a62c7dd539bb08068b98f2e77aee54f8c9d, Pipelock 2.3.0.
 Do not opportunistically upgrade them during a custody move. Staging has bind-
 mounted binary overrides: verify their own build identity rather than trusting
 its OCI tag. Native MCP launches may also require node/python/uv tool runtimes.
-Full binary CI/build-identity checks remain deployment gates.
+Full binary CI/build-identity checks remain 5b proxy-deployment gates.
 
-Install the exact Codex multi-auth and teamclaude revisions already used on
-studio under `/opt/codex-multi-auth` and `/opt/teamclaude`. Build/install Linux
-dependencies; never move macOS `node_modules` or executables. Place token-monitor
+In 5b, place token-monitor
 code at `/opt/token-monitor` and scanner code/venv at `/opt/lf-scan`. Preserve
 existing package lockfiles and scanner dependency versions, including the
 Hugging Face compatibility pin; exercise scans, not just health. Do not carry
@@ -163,11 +256,16 @@ writable mappings for their runtimes; this is deliberate, not Rust/Go policy.
    then unload/disable the source router. Herd Codex will be down in between.
 3. Move/start edge Codex and validate authentication/streaming/refresh. The
    coordinator changes the herd tunnels/endpoints and tests both VMs.
+   Restore the old Codex address with the transport-only compatibility job and
+   validate the existing production Locksmith route before the next pool move.
 4. **Teamclaude move control:** an independent Codex seat on a herd VM through
    the newly validated edge router, expected agent-locksmith-codex. Claude
    agents, including herd-ops-claude, cannot control their own model outage.
 5. Stop teamclaude and its clients, move its custody, start/validate edge
-   teamclaude. Coordinator repoints the VM Claude clients and verifies recovery.
+   teamclaude. Restore its old address with the separate compatibility job.
+   Coordinator repoints the VM Claude clients and verifies recovery.
+6. Report 5a accepted independently. No agent ACL/forwarder cutover, proxy
+   retirement, source layer8 shutdown, scanner move or hub move happens in 5a.
 
 No timeout or absence of a reply counts as a passed drain. No source pool may
 restart after its credential transfer. Rollback is another stop-and-move of
@@ -341,7 +439,7 @@ without revealing identities/tokens. Coordinator repoints both VM Claude paths,
 proves recovery and only then enables persistence. Never restore the old JSON
 to recover a failed rotated token.
 
-## 7. Locksmith, Pipelock, scanner and hub state
+## 7. Deferred to 5b: Locksmith, Pipelock, scanner and hub state
 
 The native services need the actual custody data, not just source YAML:
 
@@ -397,9 +495,33 @@ preserve required nonoverlapping identities through a reviewed operator import.
 Do not overwrite the migrated prod DB with this older host state, or enable
 its inline-key config in the new container.
 
-## 8. Acceptance, coordinator handoff and retirement
+## 8. Separate acceptance, coordinator handoff and retirement
 
-Agent-locksmith sends **local edge serving** only after:
+### 5a broker serving and acceptance
+
+Send **local broker serving** per component after its correct native package,
+mounted state/custody receipt, original account count/auth identity, missing/bad
+auth rejection, streamed request and controlled serialized refresh pass. Verify
+the broker resource budget and no source pool helpers/refreshers or canonical
+credential files remain. No scanner, hub, proxy binaries or config push are
+part of this report. Keep those units masked; keep both proxy containers stopped.
+
+Coordinator opens the agreed herd ingress (43210/3456; reserve 17321 until the
+hub actually moves), repoints VM pool tunnels and verifies both herd VMs. Prove
+the control Codex seat uses edge before teamclaude drain. Activate only the
+corresponding studio compatibility relay after each destination canary and
+prove current prod Locksmith's codex-pool/claude routes still work. Leave all
+existing agent addresses, identities, forwarding, prod/staging proxy, Pipelock,
+scanner, hub and external guard unchanged. These source services are needed
+until 5b. Only the source **pool jobs** are retired in 5a.
+
+Report **5a end-to-end accepted** after both VM pools and compatibility routes
+are validated and source pools remain stopped. Do not call 5b complete.
+
+### 5b proxy serving, agents cutover and retirement
+
+After phases 8 and 10 provide real endpoints, agent-locksmith sends **local
+proxy edge serving** only after:
 
 - Expected native versions, dedicated users, readonly filesystem hardening,
   correct persistent mounts, no nesting and no startup without custody receipts.
@@ -418,11 +540,13 @@ cannot reach studio LAN/tailnet or any broker/admin/scanner directly. Confirm
 the remaining **Locksmith-to-LM-Studio** exception works without granting
 agents a studio route. Report end-to-end acceptance separately.
 
-Only after that acceptance retire evo `locksmith.service`, `pipelock.service`
-and studio layer8/broker jobs/state per AGENT-258; remove obsolete forwarder
+Only after **5b** acceptance retire evo `locksmith.service`, `pipelock.service`
+and studio layer8 state per AGENT-258; remove obsolete forwarder
 through the coordinator. Remove old inline secret configs with the credential
 owner's retirement procedure, never print them. Do not remove the shared
-Podman VM, registry or external disk simply because layer8 moved. Keep only
+Podman VM, registry or external disk simply because layer8 moved. Stop/unload
+both studio compatibility jobs, remove their now-unneeded old-address listeners
+and remove the opt-in gateway broker ingress. Keep only
 nonsecret migration evidence in Git/vault. Quarantined stale credential backups
 must not become a rollback pool; handle their retirement privately.
 

@@ -81,6 +81,26 @@ class BundleTest(unittest.TestCase):
         self.assertIn("10.250.4.10 tcp dport { 43210, 3456, 9100 } accept", text)
         self.assertIn("tcp dport { 43210, 3456, 17321, 9100 } reject", text)
 
+    def test_5a_host_compatibility_ingress_is_broker_only(self):
+        text = module("render").firewall("edge-brokers", studio_compat=True)
+        rule = next(line for line in text.splitlines() if "10.250.4.1 " in line)
+        self.assertIn("tcp dport { 43210, 3456 } accept", rule)
+        self.assertNotIn("17321", rule)
+        self.assertNotIn("9100", rule)
+        self.assertNotIn("10.250.4.1 ", module("render").firewall("edge-brokers"))
+
+    def test_compatibility_job_is_transport_only_and_loopback_bound(self):
+        compat = module("compat_launchd")
+        for name, port in [("codex", 43210), ("teamclaude", 3456)]:
+            job = compat.definition(name)
+            args = job["ProgramArguments"]
+            self.assertEqual("/usr/bin/ssh", args[0])
+            self.assertIn(f"127.0.0.1:{port}:10.250.4.12:{port}", args)
+            self.assertIn("ExitOnForwardFailure=yes", args)
+            self.assertIn("BatchMode=yes", args)
+            self.assertNotIn("EnvironmentVariables", job)
+            self.assertNotIn("CODEX_HOME", str(job))
+
 
 class ProcessGateTest(unittest.TestCase):
     def test_native_agent_counts_as_refresher(self):

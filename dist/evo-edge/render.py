@@ -94,13 +94,17 @@ WantedBy=multi-user.target
 """
 
 
-def firewall(instance):
+def firewall(instance, studio_compat=False):
     # This table exists INSIDE a container. Never flush the host/other tables.
     rules = ["iifname lo accept", "ct state established,related accept"]
     if instance == "edge-brokers":
         rules += ["ip saddr 10.250.1.0/24 tcp dport { 43210, 3456, 17321 } accept",
-                  "ip saddr 10.250.4.10 tcp dport { 43210, 3456, 9100 } accept",
-                  "tcp dport { 43210, 3456, 17321, 9100 } reject"]
+                  "ip saddr 10.250.4.10 tcp dport { 43210, 3456, 9100 } accept"]
+        if studio_compat:
+            # Temporary phase 5a SSH forwarding from studio through evo's host.
+            # Inbound only; this does not grant edge egress to the host/Docker.
+            rules += ["ip saddr 10.250.4.1 tcp dport { 43210, 3456 } accept"]
+        rules += ["tcp dport { 43210, 3456, 17321, 9100 } reject"]
     elif instance == "edge-locksmith":
         rules += ["ip saddr { 10.250.0.0/24, 10.250.1.0/24 } tcp dport 9200 accept",
                   "tcp dport { 9200, 9201, 9300 } reject"]
@@ -110,7 +114,9 @@ def firewall(instance):
     return "destroy table inet edge_input\ntable inet edge_input {\n chain input {\n  type filter hook input priority 0; policy accept;\n  " + ";\n  ".join(rules) + ";\n }\n}\n"
 
 
-def render(output, instance):
+def render(output, instance, studio_compat=False):
+    if studio_compat and instance != "edge-brokers":
+        raise ValueError("studio compatibility is only applicable to edge-brokers")
     # Refuse overwriting a previous render, especially a populated runtime tree.
     output.mkdir(parents=True, exist_ok=False)
     def write(relative, text):
@@ -120,7 +126,7 @@ def render(output, instance):
     # Leave /etc/systemd/system available for /dev/null masks and overrides.
     units = "usr/local/lib/systemd/system"
     write("etc/edge-instance", instance + "\n")
-    write("etc/edge-input.nft", firewall(instance))
+    write("etc/edge-input.nft", firewall(instance, studio_compat))
     write(f"{units}/edge-input.service", """[Unit]
 Description=Container-local edge ingress restrictions
 DefaultDependencies=no
@@ -146,7 +152,7 @@ WantedBy=multi-user.target
         for component, port in [("codex", 43210), ("teamclaude", 3456)]:
             # Different local addresses allow the same external/internal port.
             write(f"{units}/edge-{component}-relay.socket", f"""[Unit]
-Description=Herd-only {component} relay socket
+Description=Authenticated {component} relay (source-restricted by edge-input)
 After=edge-input.service
 Requires=edge-input.service
 ConditionPathExists={ROOT}/custody/{component}.ready
@@ -184,8 +190,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("instance", choices=IP)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--studio-compat", action="store_true",
+                        help="phase 5a only: admit evo gateway to broker ports for old-address SSH relays")
     args = parser.parse_args()
-    render(args.output, args.instance)
+    if args.studio_compat and args.instance != "edge-brokers":
+        parser.error("--studio-compat requires edge-brokers")
+    render(args.output, args.instance, args.studio_compat)
     print(f"inactive definitions rendered for {args.instance}; no state, receipts or activation")
 
 
