@@ -27,7 +27,7 @@ egress:
 
 | Mode | How `proxied` routes leave | Who enforces the host allowlist |
 |---|---|---|
-| `pipelock` | Through `egress_proxy`. HTTPS upstreams tunnel with `CONNECT`; HTTP upstreams are sent to the proxy as absolute-form requests. | Pipelock |
+| `pipelock` | Through `egress_proxy`. HTTPS upstreams tunnel with `CONNECT`; HTTP upstreams are sent to the proxy as absolute-form requests. | Pipelock, but only in its `strict` mode (see below) |
 | `external` | Straight to the upstream. | The surrounding infrastructure: a firewall, a Kubernetes NetworkPolicy, a cloud egress gateway |
 | none | Not at all. Each request fails with 503 `egress_proxy_unconfigured` and writes an `egress_unenforced` security audit event. | Nobody, so Locksmith refuses |
 
@@ -48,6 +48,17 @@ egress:
   Locksmith cannot check that claim. Choose it only where that control
   exists and allows no more than your proxied routes need.
 
+### Pipelock must run in `strict` mode to enforce an allowlist
+
+Pipelock's `balanced` mode is its default, and the one the layer8-proxy
+bundle ships. In `balanced` mode every host is reachable unless it is on
+Pipelock's blocklist, and `api_allowlist` only exempts hosts from that
+blocklist. Only `mode: strict` turns `api_allowlist` into the list of
+hosts that may be reached. Without `strict`, `pipelock` mode still gives
+you Pipelock's blocklist, its checks on what it can see (for HTTPS
+without TLS interception, only the host name) and its own egress record,
+but it does not limit where a proxied route can go.
+
 ### Keep Pipelock's allowlist in step with the routes
 
 ```bash
@@ -57,6 +68,7 @@ locksmith egress policy --pipelock      # a Pipelock api_allowlist fragment
 
 The policy lists every host reached by an enabled `proxied` route, so
 generate Pipelock's allowlist from it rather than maintaining two lists.
+It is the destination gate only under `mode: strict`.
 Re-run it after adding, re-pointing or disabling a route. The proxy URL
 is never returned. See [CLI reference: egress policy](../cli-reference.md#egress-policy).
 
@@ -65,7 +77,7 @@ is never returned. See [CLI reference: egress policy](../cli-reference.md#egress
 With `external`, or with routes marked `direct`:
 
 - No allowlist enforced outside Locksmith, unless your network supplies
-  one. A route edited to point at a new host reaches it immediately.
+  one (the same holds for Pipelock outside `strict` mode). A route edited to point at a new host reaches it immediately.
 - No egress record independent of Locksmith's own audit log.
 - `locksmith egress policy --pipelock` is still useful as the list of
   hosts that your own controls should allow.
