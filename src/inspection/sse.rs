@@ -206,6 +206,28 @@ fn json(event: &SseEvent) -> Option<Value> {
     serde_json::from_str(event.data.as_deref()?).ok()
 }
 
+/// The event's protocol scheme, from its `type` or its event name.
+pub fn scheme(event: &SseEvent) -> Option<lanes::Scheme> {
+    let value = json(event)?;
+    lanes::scheme_of(&kind(event, &value)?)
+}
+
+/// The event's name and its data's `type` both name protocol events, but
+/// different ones: a client dispatching on one reads it differently from
+/// one dispatching on the other.
+pub fn names_disagree(event: &SseEvent) -> bool {
+    let Some(name) = event.event.as_deref() else {
+        return false;
+    };
+    let Some(value) = json(event) else {
+        return false;
+    };
+    let Some(kind) = value.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    kind != name && lanes::scheme_of(kind).is_some() && lanes::scheme_of(name).is_some()
+}
+
 fn kind(event: &SseEvent, value: &Value) -> Option<String> {
     value
         .get("type")
@@ -242,12 +264,17 @@ const METADATA: &[&str] = &[
 /// one field, plus its decoded view when it looks like JSON. `[DONE]` and
 /// data-less events carry none.
 pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
-    extract_within(event, usize::MAX).unwrap_or_default()
+    extract_within(event, usize::MAX, scheme(event)).unwrap_or_default()
 }
 
 /// [`extract`], or `None` when the fields' text and locations together
 /// pass `limit` bytes (deep paths can outweigh the event many times).
-pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
+/// `scheme` is the stream's protocol, which names outputs' lane tags.
+pub fn extract_within(
+    event: &SseEvent,
+    limit: usize,
+    scheme: Option<lanes::Scheme>,
+) -> Option<Vec<TextSpan>> {
     let Some(data) = event.data.as_deref() else {
         return Some(Vec::new());
     };
@@ -275,8 +302,9 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
         return Some(out);
     };
     let kind = kind(event, &value);
-    let chat = value.get("choices").is_some_and(Value::is_array);
-    let tags = lanes::tags(kind.as_deref(), &value);
+    let chat = value.get("choices").is_some_and(Value::is_array)
+        && kind.as_deref().and_then(lanes::scheme_of).is_none();
+    let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
         ..Walk::default()
@@ -293,8 +321,13 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
             lane: path
                 .and_then(|path| stream_path(kind.as_deref(), chat, &path))
                 .map(|path| Lane {
+                    // A choice is named by its `#index` in the path.
+                    tags: if path.starts_with("/choices/") {
+                        Vec::new()
+                    } else {
+                        tags.clone()
+                    },
                     path,
-                    tags: tags.clone(),
                 }),
             text,
         })
@@ -316,8 +349,13 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
 
 /// The lane path of a field later events extend, or `None` for one
 /// complete in its event.
+/// `chat`: the event is a chat chunk (it has a `choices` array and names
+/// no other protocol's event type). A choice's fields are judged as chat
+/// whatever the event says; its other fields come whole in a chat chunk
+/// and are judged by the event's type otherwise, so neither an empty
+/// `choices` nor a `type` turns off another protocol's windows.
 fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
-    if chat {
+    if path.starts_with("/choices/") {
         // A choice's `delta` (chat) or `text` (completions). `logprobs`
         // and content-filter results are scanned per chunk; an event the
         // text's cut reaches loses its `logprobs` (see `rewrite`).
@@ -331,6 +369,9 @@ fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
             return None;
         }
         return (field.starts_with("delta/") || field == "text").then(|| path.to_string());
+    }
+    if chat {
+        return None;
     }
     match kind {
         Some(k) if k.starts_with("response.") => {
@@ -435,13 +476,14 @@ impl Walk {
     }
 }
 
-/// The lanes this event finishes (`[DONE]` finishes all).
-pub fn closes(event: &SseEvent) -> Vec<Close> {
+/// The lanes this event finishes (`[DONE]` finishes all), in a stream of
+/// `scheme`.
+pub fn closes(event: &SseEvent, scheme: Option<lanes::Scheme>) -> Vec<Close> {
     if event.data.as_deref() == Some("[DONE]") {
         return vec![Close::All];
     }
     match json(event) {
-        Some(value) => lanes::closes(kind(event, &value).as_deref(), &value),
+        Some(value) => lanes::closes(kind(event, &value).as_deref(), scheme, &value),
         None => Vec::new(),
     }
 }

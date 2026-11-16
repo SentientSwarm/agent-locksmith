@@ -207,11 +207,17 @@ would spell the text the cut removed.
 Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
 `index` inside `choices`, each Anthropic content block by its `index`,
-each Responses output, content part and reasoning summary by
-`output_index`, `content_index` and `summary_index`. Only the indexes
-the event's protocol uses count, so an upstream cannot split one output
-across windows by adding or varying others (a top-level `index` on a
-chat chunk names nothing). So a match split across one output's deltas
+each Responses content part by `output_index` and `content_index`, each
+reasoning summary by `output_index` and `summary_index`, and any other
+Responses output (a call's arguments) by `output_index`. A stream's
+protocol is fixed by its first protocol event, and only the indexes its
+clients use for that event's type count, so an upstream cannot split one
+output across windows by adding or varying others (a top-level `index`
+on a chat chunk names nothing, and an empty `choices` on another
+protocol's event changes nothing). An event naming another protocol, or
+whose event name and `type` name different events, could be read two
+ways: under `fail_closed` the stream is blocked, under `fail_open` an
+`inspection_hold_overflow` row is written. So a match split across one output's deltas
 is found however the outputs interleave. Each window keeps the last `max_match_len - 1` bytes
 of its output, measured both raw and after folding, so a match split
 across any number of deltas is found once. A window scans once the text

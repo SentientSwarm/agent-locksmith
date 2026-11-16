@@ -41,22 +41,50 @@ fn index(value: &Value) -> Option<i64> {
     }
 }
 
-/// The tags an event's top-level indexes give, counting only the indexes
-/// its protocol uses to name an output: Responses `output_index`,
-/// `content_index` and `summary_index`, an Anthropic block's `index`. A
-/// chat chunk names its outputs inside `choices`, and other protocols
-/// name none, so their top-level indexes give no tags (an upstream can't
-/// split one output across windows by varying them).
-pub fn tags(kind: Option<&str>, value: &Value) -> Vec<(&'static str, i64)> {
-    if value.get("choices").is_some_and(Value::is_array) {
-        return Vec::new();
+/// A protocol that names its outputs with top-level indexes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    /// OpenAI Responses: `output_index`, `content_index`, `summary_index`.
+    Responses,
+    /// Anthropic Messages: a content block's `index`.
+    Anthropic,
+}
+
+/// The scheme an event type belongs to.
+pub fn scheme_of(kind: &str) -> Option<Scheme> {
+    if kind.starts_with("response.") {
+        Some(Scheme::Responses)
+    } else if kind == "ping" || kind.starts_with("message_") || kind.starts_with("content_block_") {
+        Some(Scheme::Anthropic)
+    } else {
+        None
     }
-    let fields: &[&str] = match kind {
-        Some(k) if k.starts_with("response.") => {
-            &["output_index", "content_index", "summary_index"]
+}
+
+/// The tags an event's top-level indexes give, counting only the indexes
+/// the stream's protocol (`scheme`, fixed per stream) uses to name the
+/// output of an event of type `kind`, as its clients rebuild it: Responses
+/// content parts by output and content index, reasoning summaries by
+/// output and summary index, anything else by output index; Anthropic
+/// blocks by `index`. Other protocols name none (a chat choice is named
+/// inside `choices`), so an upstream can't split one output across
+/// windows by adding or varying indexes its clients ignore.
+pub fn tags(scheme: Option<Scheme>, kind: Option<&str>, value: &Value) -> Vec<(&'static str, i64)> {
+    let kind = kind.unwrap_or("");
+    let fields: &[&str] = match scheme {
+        Some(Scheme::Responses) if kind.contains("reasoning_summary") => {
+            &["output_index", "summary_index"]
         }
-        Some(k) if k.starts_with("content_block_") => &["index"],
-        _ => &[],
+        Some(Scheme::Responses)
+            if ["output_text", "refusal", "reasoning_text", "content_part"]
+                .iter()
+                .any(|part| kind.contains(part)) =>
+        {
+            &["output_index", "content_index"]
+        }
+        Some(Scheme::Responses) => &["output_index"],
+        Some(Scheme::Anthropic) => &["index"],
+        None => &[],
     };
     TAGS.iter()
         .filter(|(field, _)| fields.contains(field))
@@ -95,15 +123,15 @@ impl Close {
 }
 
 /// The lanes `value` (an event's `data`, of type `kind`) finishes.
-pub fn closes(kind: Option<&str>, value: &Value) -> Vec<Close> {
+pub fn closes(kind: Option<&str>, scheme: Option<Scheme>, value: &Value) -> Vec<Close> {
     let mut out = Vec::new();
     match kind {
         Some("message_stop" | "response.completed" | "response.failed" | "response.incomplete") => {
             out.push(Close::All)
         }
-        Some("content_block_stop") => out.push(Close::Tagged(tags(kind, value))),
+        Some("content_block_stop") => out.push(Close::Tagged(tags(scheme, kind, value))),
         Some(k) if k.starts_with("response.") && k.ends_with(".done") => {
-            out.push(Close::Tagged(tags(kind, value)))
+            out.push(Close::Tagged(tags(scheme, kind, value)))
         }
         _ => {}
     }
@@ -227,7 +255,7 @@ mod tests {
     #[test]
     fn closes_match_their_outputs() {
         let chat = json!({"choices":[{"index":1,"finish_reason":"stop","delta":{}}]});
-        let close = closes(None, &chat);
+        let close = closes(None, None, &chat);
         let lane = |path: &str| Lane {
             path: path.into(),
             tags: vec![],
@@ -235,7 +263,7 @@ mod tests {
         assert!(close[0].covers(&lane("/choices/#1/delta/content")));
         assert!(!close[0].covers(&lane("/choices/#10/delta/content")));
         let stop = json!({"type":"content_block_stop","index":2});
-        let close = closes(Some("content_block_stop"), &stop);
+        let close = closes(Some("content_block_stop"), Some(Scheme::Anthropic), &stop);
         let block = Lane {
             path: "/delta/text".into(),
             tags: vec![("i", 2)],

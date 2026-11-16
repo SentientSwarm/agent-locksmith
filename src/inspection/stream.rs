@@ -128,6 +128,8 @@ pub struct StreamInspector {
     lane_bytes: usize,
     /// Short texts scanned alone and found clean.
     clean: HashSet<String>,
+    /// The protocol scheme the stream's first protocol event named.
+    scheme: Option<super::lanes::Scheme>,
 }
 
 impl StreamInspector {
@@ -153,6 +155,7 @@ impl StreamInspector {
             wholes: 0,
             lane_bytes: 0,
             clean: HashSet::new(),
+            scheme: None,
         }
     }
 
@@ -291,7 +294,10 @@ impl StreamInspector {
         }
         let mut fields = Vec::new();
         let mut hits = Vec::new();
-        let Some(spans) = sse::extract_within(&event, self.max_held) else {
+        if !self.fix_scheme(&event, step) {
+            return;
+        }
+        let Some(spans) = sse::extract_within(&event, self.max_held, self.scheme) else {
             return self.oversized(Some(event), step);
         };
         if spans
@@ -349,7 +355,7 @@ impl StreamInspector {
         if self.over_cap(step) {
             return;
         }
-        let closes = sse::closes(&event);
+        let closes = sse::closes(&event, self.scheme);
         let verdict = self.judge(&hits, step);
         if step.ended {
             return;
@@ -379,6 +385,26 @@ impl StreamInspector {
         if !step.ended {
             self.release(step);
         }
+    }
+
+    /// Fix the stream's protocol scheme on its first event that names one.
+    /// An event naming another (or whose name and `type` disagree) could be
+    /// read two ways by clients: false when that blocked the stream.
+    fn fix_scheme(&mut self, event: &SseEvent, step: &mut Step) -> bool {
+        let found = sse::scheme(event);
+        let changed = matches!((self.scheme, found), (Some(a), Some(b)) if a != b);
+        if changed || sse::names_disagree(event) {
+            if self.on_error == OnError::FailClosed {
+                self.report.error = Some("stream event names another protocol".into());
+                self.block(step);
+                return false;
+            }
+            self.hold_overflowed = true;
+        }
+        if self.scheme.is_none() {
+            self.scheme = found;
+        }
+        true
     }
 
     /// Scan a field complete in its event on its own; its id, or `None`
@@ -1906,6 +1932,131 @@ mod tests {
         let (out, i) = run(&closed(1 << 20, Verdict::Block), &anthropic);
         assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
         assert_eq!(i.report().hits.len(), 1, "{:?}", i.report());
+    }
+
+    #[test]
+    fn an_event_whose_name_and_type_disagree_fails_closed() {
+        let k = key();
+        // A client dispatching on the event name joins the second piece
+        // to block 0; one reading `type` would not.
+        let first = ev(
+            "content_block_delta",
+            serde_json::json!({"index": 0,
+            "delta": {"type": "text_delta", "text": &k[..20]}}),
+        );
+        let odd = format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::json!({
+            "type": "message_delta", "index": 0, "delta": {"type": "text_delta", "text": &k[20..]}})
+        );
+        let events = [first, odd, ev("message_stop", serde_json::json!({}))];
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+        assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+        assert!(i.report().error.is_some() || !i.report().hits.is_empty());
+    }
+
+    #[test]
+    fn a_stream_that_changes_protocol_fails_closed() {
+        let k = key();
+        let events = [
+            ev(
+                "content_block_delta",
+                serde_json::json!({"index": 0,
+                "delta": {"type": "text_delta", "text": &k[..20]}}),
+            ),
+            ev(
+                "response.output_text.delta",
+                serde_json::json!({"output_index": 0,
+                "content_index": 0, "delta": &k[20..]}),
+            ),
+            ev("message_stop", serde_json::json!({})),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+        assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+        assert!(
+            i.report()
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("protocol"),
+            "{:?}",
+            i.report()
+        );
+    }
+
+    #[test]
+    fn an_index_a_responses_event_does_not_use_does_not_split_it() {
+        let k = key();
+        let text: Vec<String> = k
+            .chars()
+            .enumerate()
+            .map(|(n, c)| {
+                ev(
+                    "response.output_text.delta",
+                    serde_json::json!({"output_index": 0,
+                "content_index": 0, "summary_index": n % 2, "delta": c.to_string()}),
+                )
+            })
+            .chain(std::iter::once(ev(
+                "response.completed",
+                serde_json::json!({"response": {}}),
+            )))
+            .collect();
+        let args: Vec<String> = k
+            .chars()
+            .enumerate()
+            .map(|(n, c)| {
+                ev(
+                    "response.function_call_arguments.delta",
+                    serde_json::json!({
+                "output_index": 1, "content_index": n % 2, "delta": c.to_string()}),
+                )
+            })
+            .chain(std::iter::once(ev(
+                "response.completed",
+                serde_json::json!({"response": {}}),
+            )))
+            .collect();
+        for events in [text, args] {
+            let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+            assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+            assert_eq!(i.report().hits.len(), 1, "{:?}", i.report());
+        }
+    }
+
+    #[test]
+    fn an_empty_choices_array_does_not_turn_off_windows() {
+        let k = key();
+        let anthropic: Vec<String> = k
+            .chars()
+            .map(|c| {
+                ev(
+                    "content_block_delta",
+                    serde_json::json!({"index": 0, "choices": [],
+                "delta": {"type": "text_delta", "text": c.to_string()}}),
+                )
+            })
+            .chain(std::iter::once(ev("message_stop", serde_json::json!({}))))
+            .collect();
+        let responses: Vec<String> = k
+            .chars()
+            .map(|c| {
+                ev(
+                    "response.output_text.delta",
+                    serde_json::json!({"output_index": 0,
+                "content_index": 0, "choices": [], "delta": c.to_string()}),
+                )
+            })
+            .chain(std::iter::once(ev(
+                "response.completed",
+                serde_json::json!({"response": {}}),
+            )))
+            .collect();
+        for events in [anthropic, responses] {
+            let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+            assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+            assert_eq!(i.report().hits.len(), 1, "{:?}", i.report());
+        }
     }
 
     #[test]

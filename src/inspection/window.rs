@@ -209,6 +209,10 @@ fn overlaps(spans: &BTreeMap<usize, usize>, start: usize, end: usize) -> bool {
 
 /// Add `[start, end)` to `spans`, merging the spans it overlaps.
 fn insert(spans: &mut BTreeMap<usize, usize>, mut start: usize, mut end: usize) {
+    if start >= end {
+        // An empty span covers nothing (and would replace one at `start`).
+        return;
+    }
     while let Some((&a, &b)) = spans.range(..end).next_back() {
         if b <= start {
             break;
