@@ -77,7 +77,8 @@ is never returned. See [CLI reference: egress policy](../cli-reference.md#egress
 With `external`, or with routes marked `direct`:
 
 - No allowlist enforced outside Locksmith, unless your network supplies
-  one (the same holds for Pipelock outside `strict` mode). A route edited to point at a new host reaches it immediately.
+  one (the same holds for Pipelock outside `strict` mode). A route
+  edited to point at a new host reaches it immediately.
 - No egress record independent of Locksmith's own audit log.
 - `locksmith egress policy --pipelock` is still useful as the list of
   hosts that your own controls should allow.

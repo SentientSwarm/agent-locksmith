@@ -19,6 +19,20 @@
   install) now gets 503 on them. Set `egress_proxy` to enforce egress
   through a proxy, or `egress: { mode: external }` to keep connecting
   directly when the surrounding infrastructure enforces egress.
+- Locksmith no longer sends traffic to a proxy set in its environment
+  (AGENT-277). reqwest honours `HTTP_PROXY`, `HTTPS_PROXY` and
+  `ALL_PROXY` for any client built without an explicit proxy, so
+  `egress: direct` routes, `proxied` routes under `egress.mode:
+  external`, OAuth logins and refreshes and CRL fetches all followed a
+  proxy the daemon's environment named, credentials included. Every
+  client the daemon builds now ignores those variables; only
+  `egress_proxy` routes traffic through a proxy.
+
+  **Upgrade note:** a deployment that set `HTTPS_PROXY` on `locksmithd`
+  so OAuth or CRL calls could leave a proxy-only network must now allow
+  the OAuth token and device-authorization hosts and the CRL
+  distribution points directly. Routes that need a proxy use
+  `egress: proxied` with `egress_proxy`.
 - The proxy no longer follows upstream redirects. A followed redirect to
   another host carried the route's key with it when the key used a
   custom header name such as `x-api-key`, so an upstream with an open
