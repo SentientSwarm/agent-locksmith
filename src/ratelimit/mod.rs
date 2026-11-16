@@ -150,11 +150,23 @@ impl RateLimiter {
 pub struct RateLimits {
     pub repo: RateLimitRepository,
     pub limiter: Arc<RateLimiter>,
+    /// AGENT-272 — one reload at a time, so a slower reload cannot
+    /// publish a table older than one already published.
+    reload_lock: tokio::sync::Mutex<()>,
 }
 
 impl RateLimits {
+    pub fn new(repo: RateLimitRepository, limiter: Arc<RateLimiter>) -> Self {
+        Self {
+            repo,
+            limiter,
+            reload_lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
     /// Load every row into the limiter.
     pub async fn reload(&self) -> Result<(), sqlx::Error> {
+        let _one_at_a_time = self.reload_lock.lock().await;
         let rows = self.repo.list().await?;
         self.limiter
             .replace(rows.into_iter().map(|r| (r.route, r.agent_id, r.limit)));
@@ -166,6 +178,41 @@ impl RateLimits {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// AGENT-272: concurrent write-then-reload pairs must leave the
+    /// limiter on the table's final state, whatever order they finish in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_reloads_publish_the_latest_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::migrations::open_and_migrate(&dir.path().join("rl.db"))
+            .await
+            .unwrap();
+        let limits = Arc::new(RateLimits::new(
+            RateLimitRepository::new(pool),
+            Arc::new(RateLimiter::default()),
+        ));
+        for round in 0..20 {
+            let tasks: Vec<_> = (1..=16u32)
+                .map(|rpm| {
+                    let limits = limits.clone();
+                    tokio::spawn(async move {
+                        let limit = Limit {
+                            requests_per_minute: rpm,
+                            max_concurrent: None,
+                        };
+                        limits.repo.set("r", None, limit, 0).await.unwrap();
+                        limits.reload().await.unwrap();
+                    })
+                })
+                .collect();
+            for t in tasks {
+                t.await.unwrap();
+            }
+            let stored = limits.repo.get("r", None).await.unwrap().unwrap();
+            let published = limits.limiter.limits.load()["r"][&None];
+            assert_eq!(published, stored, "round {round}");
+        }
+    }
 
     fn limiter(rpm: u32, concurrent: Option<u32>) -> RateLimiter {
         let l = RateLimiter::default();

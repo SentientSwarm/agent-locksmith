@@ -78,10 +78,10 @@ pub async fn setup() -> H {
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer.clone();
     let health = BrokerHealth::default();
     let limiter = Arc::new(agent_locksmith::ratelimit::RateLimiter::default());
-    let rate_limits = Arc::new(agent_locksmith::ratelimit::RateLimits {
-        repo: agent_locksmith::ratelimit::RateLimitRepository::new(pool.clone()),
-        limiter: limiter.clone(),
-    });
+    let rate_limits = Arc::new(agent_locksmith::ratelimit::RateLimits::new(
+        agent_locksmith::ratelimit::RateLimitRepository::new(pool.clone()),
+        limiter.clone(),
+    ));
     let uds = UdsState {
         broker_health: health.clone(),
         admin: Arc::new(

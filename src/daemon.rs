@@ -1293,10 +1293,10 @@ async fn build_admin_substrate(
     }
     // AGENT-266 — rate limits load before traffic and are shared with the
     // proxy through the admin service.
-    let rate_limits = Arc::new(crate::ratelimit::RateLimits {
-        repo: crate::ratelimit::RateLimitRepository::new(pool.clone()),
-        limiter: Arc::new(crate::ratelimit::RateLimiter::default()),
-    });
+    let rate_limits = Arc::new(crate::ratelimit::RateLimits::new(
+        crate::ratelimit::RateLimitRepository::new(pool.clone()),
+        Arc::new(crate::ratelimit::RateLimiter::default()),
+    ));
     rate_limits
         .reload()
         .await

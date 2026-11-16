@@ -9,6 +9,9 @@
   the `/api/*` proxy enforces limits, so such a limit was listed and
   audited but never applied. Limits already stored for those routes stay
   listed and still do nothing; delete them.
+- Rate-limit reloads run one at a time (AGENT-272), so two admin writes
+  close together can no longer leave the proxy enforcing the older table
+  until the next write.
 - A request can no longer leave a route's upstream base path
   (AGENT-286). The path is decoded before the upstream URL is built, and
   the URL parser resolves dot segments and backslashes, so
