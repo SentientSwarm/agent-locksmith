@@ -1,25 +1,40 @@
 //! AGENT-265 — inspecting a server-sent event stream as it passes.
 //!
-//! Events are parsed as they arrive and their text fields fed, in order,
-//! to one [`TextWindow`]. Under `pass` or `flag` every event is forwarded
-//! the moment it is complete; hits are only audited. Under `redact` or
-//! `block` an event is held until no future match can reach back into its
-//! text (its text ends before the window's `base`), so a secret split
+//! Events are parsed as they arrive. Each text field goes, in order, to
+//! the window of the output it belongs to (its lane: a chat choice, a tool
+//! call, a content block; see [`super::lanes`]), so a match split across
+//! one output's deltas stays contiguous however outputs interleave. Under
+//! `pass` or `flag` every event is forwarded the moment it is complete;
+//! hits are only audited. Under `redact` or `block` an event is held until
+//! no future match can reach back into its text (each field's text ends
+//! before its lane's `base`, or its lane is finished), so a secret split
 //! across many deltas is caught before any part of it is sent. A redact
 //! rewrites the held events' text fields (the marker in the event where
 //! the match starts, the rest removed); a block drops what is held, sends
 //! one protocol-shaped error event, and ends the stream. Every string in
-//! an event's JSON (aggregates as well as deltas) is scanned.
+//! an event's JSON (aggregates as well as deltas) is scanned, except
+//! protocol metadata.
 //!
 //! An event longer than `max_scan_bytes`, or held text or events past it,
 //! can't be judged in bounds: under `fail_closed` the stream is blocked;
 //! under `fail_open` the oldest held event is released early, or (an
 //! oversized event) the rest of the stream passes through unscanned.
 
+use super::lanes::{Close, Lane};
 use super::sse::{self, Protocol, SseEvent, SseParser, TextSpan};
 use super::window::{TextWindow, WindowHit};
-use super::{Direction, DirectionPolicy, HitRecord, MAX_AUDITED_HITS, OnError, Report, Verdict};
-use std::collections::{HashSet, VecDeque};
+use super::{
+    Direction, DirectionPolicy, HitRecord, MAX_AUDITED_HITS, OnError, Report, Scanner, Verdict,
+};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+/// Distinct hits remembered for deduplication; past it, new hits are
+/// counted as dropped without being remembered.
+const MAX_SEEN: usize = 4 * MAX_AUDITED_HITS;
+
+/// Outputs given their own window; more share one, so memory is bounded.
+const MAX_LANES: usize = 16;
 
 /// What to send the agent after one push, and whether the stream is over.
 #[derive(Debug, Default)]
@@ -32,18 +47,38 @@ pub struct Step {
 /// cut where a match starts.
 type Cuts = Vec<(usize, usize, Option<String>)>;
 
+/// A text field of a held event: the span, its lane's index and where its
+/// text starts in that lane.
+struct Field {
+    span: TextSpan,
+    lane: usize,
+    start: usize,
+}
+
 struct Held {
     event: SseEvent,
-    /// Each text field with its absolute start in the stream's text.
-    spans: Vec<(TextSpan, usize)>,
+    fields: Vec<Field>,
     cuts: Vec<Cuts>,
-    /// Stream text offset at the end of this event.
-    pos: usize,
+}
+
+struct LaneState {
+    lane: Lane,
+    window: TextWindow,
+    /// The protocol said this output is finished: nothing more extends it.
+    done: bool,
+}
+
+/// A hit with the lane it was found in.
+struct LaneHit {
+    lane: usize,
+    hit: WindowHit,
 }
 
 pub struct StreamInspector {
     parser: SseParser,
-    window: TextWindow,
+    scanners: Vec<Arc<dyn Scanner>>,
+    lanes: Vec<LaneState>,
+    by_lane: HashMap<Lane, usize>,
     on_hit: Verdict,
     on_error: OnError,
     hold: bool,
@@ -53,8 +88,9 @@ pub struct StreamInspector {
     protocol: Protocol,
     report: Report,
     seen: HashSet<(String, String, String)>,
-    /// Where each recorded hit lies, parallel to `report.hits`.
-    recorded: Vec<(usize, usize, bool)>,
+    /// Where each recorded hit lies (lane, start, end, flag-only),
+    /// parallel to `report.hits`.
+    recorded: Vec<(usize, usize, usize, bool)>,
     ended: bool,
     hold_overflowed: bool,
     /// Past an oversized event under `fail_open`: forward bytes as is.
@@ -65,7 +101,9 @@ impl StreamInspector {
     pub fn new(policy: &DirectionPolicy) -> Self {
         Self {
             parser: SseParser::with_cap(policy.max_scan_bytes),
-            window: TextWindow::new(policy.scanners.clone(), policy.max_scan_bytes),
+            scanners: policy.scanners.clone(),
+            lanes: Vec::new(),
+            by_lane: HashMap::new(),
             on_hit: policy.on_hit,
             on_error: policy.on_error,
             hold: policy.on_hit >= Verdict::Redact,
@@ -86,9 +124,9 @@ impl StreamInspector {
         &self.report
     }
 
-    /// The window or the held events overflowed their cap at least once.
+    /// A window or the held events overflowed their cap at least once.
     pub fn hold_overflowed(&self) -> bool {
-        self.hold_overflowed || self.window.overflowed()
+        self.hold_overflowed || self.lanes.iter().any(|l| l.window.overflowed())
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Step {
@@ -126,12 +164,12 @@ impl StreamInspector {
             step.out.push(render(&h));
         }
         if let Some(rest) = self.parser.finish() {
-            step.out.push(rest);
+            step.out.push(rest.raw);
         }
         self.passthrough = true;
     }
 
-    /// The upstream ended: send everything still held.
+    /// The upstream ended: judge what is left, then send what is held.
     pub fn finish(&mut self) -> Step {
         let mut step = Step::default();
         if self.ended {
@@ -141,11 +179,14 @@ impl StreamInspector {
         if !self.passthrough {
             // An unterminated last event is still an event: judge it.
             if let Some(rest) = self.parser.finish() {
-                self.event(sse::parse(rest), &mut step);
-                if step.ended {
-                    self.ended = true;
-                    return step;
-                }
+                self.event(rest, &mut step);
+            }
+            if !step.ended {
+                self.close(&[Close::All], &mut step);
+            }
+            if step.ended {
+                self.ended = true;
+                return step;
             }
         }
         while let Some(h) = self.held.pop_front() {
@@ -156,55 +197,159 @@ impl StreamInspector {
         step
     }
 
+    /// The lane `lane`'s index, made on first use.
+    fn lane(&mut self, lane: &Lane) -> usize {
+        if let Some(&i) = self.by_lane.get(lane) {
+            return i;
+        }
+        let shared = Lane {
+            path: "*".into(),
+            tags: Vec::new(),
+        };
+        let lane = if self.lanes.len() + 1 >= MAX_LANES {
+            &shared
+        } else {
+            lane
+        };
+        if let Some(&i) = self.by_lane.get(lane) {
+            return i;
+        }
+        self.lanes.push(LaneState {
+            lane: lane.clone(),
+            window: TextWindow::new(self.scanners.clone(), self.max_held),
+            done: false,
+        });
+        let i = self.lanes.len() - 1;
+        self.by_lane.insert(lane.clone(), i);
+        i
+    }
+
     fn event(&mut self, event: SseEvent, step: &mut Step) {
         if let Some(p) = sse::protocol(&event) {
             self.protocol = p;
         }
-        let mut spans = Vec::new();
+        let mut fields = Vec::new();
         let mut hits = Vec::new();
         for span in sse::extract(&event) {
-            let start = self.window.end();
-            match self.window.push(&span.text) {
-                Ok(found) => hits.extend(found),
-                Err(e) => {
-                    self.report.error = Some(e.0);
-                    if self.on_error == OnError::FailClosed {
-                        return self.block(step);
-                    }
-                }
+            let lane = self.lane(&span.lane);
+            let state = &mut self.lanes[lane];
+            state.done = false;
+            let start = state.window.end();
+            let found = state.window.push(&span.text);
+            if !self.scanned(lane, found, &mut hits, step) {
+                return;
             }
-            if self.window.overflowed() && self.on_error == OnError::FailClosed {
-                self.report.error = Some("stream text held past max_scan_bytes".into());
-                return self.block(step);
-            }
-            spans.push((span, start));
+            fields.push(Field { span, lane, start });
         }
-        let verdict = self.record(&hits);
-        if verdict == Verdict::Block {
-            return self.block(step);
+        if self.over_cap(step) {
+            return;
+        }
+        let closes = sse::closes(&event);
+        let verdict = self.judge(&hits, step);
+        if step.ended {
+            return;
         }
         if !self.hold {
             step.out.push(event.raw);
+            self.close(&closes, step);
             return;
         }
         self.held_bytes += event.raw.len();
-        let cuts = vec![Cuts::new(); spans.len()];
+        let cuts = vec![Cuts::new(); fields.len()];
         self.held.push_back(Held {
             event,
-            spans,
+            fields,
             cuts,
-            pos: self.window.end(),
         });
         if verdict == Verdict::Redact {
-            let redact: Vec<&WindowHit> = hits
-                .iter()
-                .filter(|h| self.verdict_of(h) == Verdict::Redact)
-                .collect();
-            for hit in redact {
-                self.cut(hit);
+            self.cut_all(&hits);
+        }
+        self.close(&closes, step);
+        if !step.ended {
+            self.release(step);
+        }
+    }
+
+    /// Take one window result; false when the stream was blocked.
+    fn scanned(
+        &mut self,
+        lane: usize,
+        found: Result<Vec<WindowHit>, super::ScanError>,
+        hits: &mut Vec<LaneHit>,
+        step: &mut Step,
+    ) -> bool {
+        match found {
+            Ok(found) => hits.extend(found.into_iter().map(|hit| LaneHit { lane, hit })),
+            Err(e) => {
+                self.report.error = Some(e.0);
+                if self.on_error == OnError::FailClosed {
+                    self.block(step);
+                    return false;
+                }
             }
         }
-        self.release(step);
+        if self.lanes[lane].window.overflowed() && self.on_error == OnError::FailClosed {
+            self.report.error = Some("stream text held past max_scan_bytes".into());
+            self.block(step);
+            return false;
+        }
+        true
+    }
+
+    /// All lanes together hold more text than `max_scan_bytes`.
+    fn over_cap(&mut self, step: &mut Step) -> bool {
+        let held: usize = self.lanes.iter().map(|l| l.window.held()).sum();
+        if held <= self.max_held {
+            return false;
+        }
+        self.hold_overflowed = true;
+        if self.on_error == OnError::FailClosed {
+            self.report.error = Some("stream text held past max_scan_bytes".into());
+            self.block(step);
+            return true;
+        }
+        false
+    }
+
+    /// Record `hits`; block when one calls for it. The strongest verdict.
+    fn judge(&mut self, hits: &[LaneHit], step: &mut Step) -> Verdict {
+        let verdict = self.record(hits);
+        if verdict == Verdict::Block {
+            self.block(step);
+        }
+        verdict
+    }
+
+    /// Mark every redact-level hit for removal in the events it covers.
+    fn cut_all(&mut self, hits: &[LaneHit]) {
+        for h in hits {
+            if self.verdict_of(&h.hit) == Verdict::Redact {
+                self.cut(h);
+            }
+        }
+    }
+
+    /// Finish the lanes `closes` covers: scan what they hold unscanned
+    /// and judge it, so their held events can go.
+    fn close(&mut self, closes: &[Close], step: &mut Step) {
+        if closes.is_empty() {
+            return;
+        }
+        let mut hits = Vec::new();
+        for lane in 0..self.lanes.len() {
+            if !closes.iter().any(|c| c.covers(&self.lanes[lane].lane)) {
+                continue;
+            }
+            let found = self.lanes[lane].window.flush();
+            if !self.scanned(lane, found, &mut hits, step) {
+                return;
+            }
+            self.lanes[lane].done = true;
+        }
+        let verdict = self.judge(&hits, step);
+        if !step.ended && verdict == Verdict::Redact {
+            self.cut_all(&hits);
+        }
     }
 
     fn verdict_of(&self, hit: &WindowHit) -> Verdict {
@@ -219,43 +364,48 @@ impl StreamInspector {
     /// A flag-only hit seen on a partial match (entropy over the first
     /// characters of a key) gives way to the named rule that later covers
     /// it, as it would in a buffered scan.
-    fn record(&mut self, hits: &[WindowHit]) -> Verdict {
+    fn record(&mut self, hits: &[LaneHit]) -> Verdict {
         let mut verdict = Verdict::Pass;
-        for hit in hits {
+        for LaneHit { lane, hit } in hits {
             let v = self.verdict_of(hit);
             verdict = verdict.max(v);
             if !hit.flag_only {
-                self.drop_superseded(hit);
+                self.drop_superseded(*lane, hit);
             } else if self
                 .recorded
                 .iter()
-                .any(|&(a, b, _)| a < hit.end && hit.start < b)
+                .any(|&(l, a, b, _)| l == *lane && a < hit.end && hit.start < b)
             {
                 continue;
             }
             let key = (hit.scanner.clone(), hit.rule.clone(), hit.sha256.clone());
-            if hit.new && self.seen.insert(key) {
-                self.report.verdict = self.report.verdict.max(v);
-                if self.report.hits.len() < MAX_AUDITED_HITS {
-                    self.report.hits.push(HitRecord {
-                        scanner: hit.scanner.clone(),
-                        rule: hit.rule.clone(),
-                        sha256: hit.sha256.clone(),
-                    });
-                    self.recorded.push((hit.start, hit.end, hit.flag_only));
-                } else {
-                    self.report.dropped_hits += 1;
-                }
+            if !hit.new || self.seen.contains(&key) {
+                continue;
+            }
+            if self.seen.len() < MAX_SEEN {
+                self.seen.insert(key);
+            }
+            self.report.verdict = self.report.verdict.max(v);
+            if self.report.hits.len() < MAX_AUDITED_HITS {
+                self.report.hits.push(HitRecord {
+                    scanner: hit.scanner.clone(),
+                    rule: hit.rule.clone(),
+                    sha256: hit.sha256.clone(),
+                });
+                self.recorded
+                    .push((*lane, hit.start, hit.end, hit.flag_only));
+            } else {
+                self.report.dropped_hits += 1;
             }
         }
         verdict
     }
 
-    fn drop_superseded(&mut self, hit: &WindowHit) {
+    fn drop_superseded(&mut self, lane: usize, hit: &WindowHit) {
         let mut i = 0;
         while i < self.recorded.len() {
-            let (a, b, flag_only) = self.recorded[i];
-            if flag_only && a < hit.end && hit.start < b {
+            let (l, a, b, flag_only) = self.recorded[i];
+            if l == lane && flag_only && a < hit.end && hit.start < b {
                 self.recorded.remove(i);
                 self.report.hits.remove(i);
             } else {
@@ -271,25 +421,34 @@ impl StreamInspector {
         step.ended = true;
     }
 
-    /// Mark `hit`'s span for removal in every held event it covers.
-    fn cut(&mut self, hit: &WindowHit) {
+    /// Mark `hit`'s span for removal in every held field of its lane.
+    fn cut(&mut self, h: &LaneHit) {
+        let hit = &h.hit;
         let marker = hit.new.then(|| format!("[REDACTED:{}]", hit.scanner));
         for held in &mut self.held {
-            for (i, (span, a)) in held.spans.iter().enumerate() {
-                let b = a + span.text.len();
-                if hit.start < b && *a < hit.end {
-                    let first = (*a..b).contains(&hit.start);
-                    let local = (hit.start.max(*a) - a, hit.end.min(b) - a);
+            for (i, f) in held.fields.iter().enumerate() {
+                let (a, b) = (f.start, f.start + f.span.text.len());
+                if f.lane == h.lane && hit.start < b && a < hit.end {
+                    let first = (a..b).contains(&hit.start);
+                    let local = (hit.start.max(a) - a, hit.end.min(b) - a);
                     held.cuts[i].push((local.0, local.1, marker.clone().filter(|_| first)));
                 }
             }
         }
     }
 
+    /// Can no future match reach back into `h`?
+    fn safe(&self, h: &Held) -> bool {
+        h.fields.iter().all(|f| {
+            let lane = &self.lanes[f.lane];
+            lane.done || f.start + f.span.text.len() <= lane.window.base()
+        })
+    }
+
     /// Send held events no future match can reach, oldest first.
     fn release(&mut self, step: &mut Step) {
         while let Some(front) = self.held.front() {
-            let safe = front.pos <= self.window.base();
+            let safe = self.safe(front);
             let over = self.held_bytes > self.max_held;
             if !safe && !over {
                 break;
@@ -312,11 +471,11 @@ fn render(h: &Held) -> Vec<u8> {
         return h.event.raw.clone();
     }
     let edits: Vec<(String, String)> = h
-        .spans
+        .fields
         .iter()
         .zip(&h.cuts)
         .filter(|(_, cuts)| !cuts.is_empty())
-        .map(|((span, _), cuts)| (span.pointer.clone(), apply_cuts(&span.text, cuts)))
+        .map(|(f, cuts)| (f.span.pointer.clone(), apply_cuts(&f.span.text, cuts)))
         .collect();
     sse::rewrite(&h.event, &edits)
 }
@@ -429,13 +588,7 @@ mod tests {
             (anthropic, PING),
         ] {
             let (out, i) = run(&policy(Verdict::Redact), &stream(event, tail));
-            for start in 0..=k.len() - 8 {
-                assert!(
-                    !out.contains(&k[start..start + 8]),
-                    "leaked {:?} in {out}",
-                    &k[start..start + 8]
-                );
-            }
+            assert!(!leaked(&out), "leaked part of {k} in {out}");
             assert!(out.contains("[REDACTED:dlp]"), "{out}");
             assert!(out.contains("and that is all."));
             assert_eq!(i.report().hits.len(), 1, "counted once");
@@ -558,6 +711,159 @@ mod tests {
         let out = String::from_utf8(out.concat()).unwrap();
         assert!(!out.contains(&k[..12]), "{out}");
         assert!(out.contains("[REDACTED:dlp]"));
+    }
+
+    /// The text a client rebuilds from `out`, one string per output.
+    fn client_texts(out: &str) -> Vec<String> {
+        use serde_json::Value;
+        let mut lanes = std::collections::BTreeMap::<String, String>::new();
+        let mut add = |k: String, t: Option<&str>| {
+            if let Some(t) = t {
+                lanes.entry(k).or_default().push_str(t);
+            }
+        };
+        for e in sse::SseParser::default().push(out.as_bytes()) {
+            let Some(v) = e
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<Value>(d).ok())
+            else {
+                continue;
+            };
+            for c in v["choices"].as_array().into_iter().flatten() {
+                add(format!("c{}", c["index"]), c["delta"]["content"].as_str());
+                for t in c["delta"]["tool_calls"].as_array().into_iter().flatten() {
+                    let k = format!("t{}.{}", c["index"], t["index"]);
+                    add(k, t["function"]["arguments"].as_str());
+                }
+            }
+            add("r".into(), v["delta"].as_str());
+            add(format!("a{}", v["index"]), v["delta"]["text"].as_str());
+            add("done".into(), v["text"].as_str());
+        }
+        lanes.into_values().collect()
+    }
+
+    /// Does any 8 characters of the key reach the agent, as sent or as a
+    /// client rebuilds it?
+    fn leaked(out: &str) -> bool {
+        let k = key();
+        let mut texts = client_texts(out);
+        texts.push(out.to_string());
+        texts
+            .iter()
+            .any(|t| (0..=k.len() - 8).any(|i| t.contains(&k[i..i + 8])))
+    }
+
+    fn chat_n(choice: usize, d: &str) -> String {
+        format!(
+            "data: {{\"choices\":[{{\"index\":{choice},\"delta\":{{\"content\":{}}}}}]}}\n\n",
+            q(d)
+        )
+    }
+
+    #[test]
+    fn interleaved_choices_keep_their_own_window() {
+        let k = key();
+        let mut events = vec![chat_n(0, "key: "), chat_n(1, "other: ")];
+        for c in k.chars() {
+            events.push(chat_n(0, &c.to_string()));
+            events.push(chat_n(1, "ok "));
+        }
+        events.push(DONE.to_string());
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(i.report().hits.len(), 1);
+    }
+
+    #[test]
+    fn interleaved_tool_calls_are_keyed_by_their_index() {
+        let call = |n: usize, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{n},\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        let mut events = Vec::new();
+        for c in key().chars() {
+            events.push(call(0, &c.to_string()));
+            events.push(call(1, "{}"));
+        }
+        events.push(DONE.to_string());
+        let (out, _) = run(&policy(Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+    }
+
+    #[test]
+    fn padding_fields_do_not_split_a_match() {
+        let mut events = Vec::new();
+        for (n, c) in key().chars().enumerate() {
+            events.push(format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}}}}],\"obfuscation\":\"pad{n}x\",\"service_tier\":\"default\"}}\n\n",
+                q(&c.to_string())
+            ));
+        }
+        events.push(DONE.to_string());
+        let (out, _) = run(&policy(Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+    }
+
+    #[test]
+    fn a_finished_block_is_released_before_the_stream_ends() {
+        let mut i = StreamInspector::new(&policy(Verdict::Redact));
+        let mut out = i.push(anthropic("short answer").as_bytes()).out;
+        let stop =
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        out.extend(i.push(stop.as_bytes()).out);
+        let out = String::from_utf8(out.concat()).unwrap();
+        assert!(
+            out.contains("short answer"),
+            "held after its block ended: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_key_cannot_hide_a_value() {
+        let event = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{},\"content\":\"safe\"}}}}]}}\n\n",
+            q(&key())
+        );
+        let (out, i) = run(&policy(Verdict::Block), &[event, DONE.to_string()]);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn a_bom_before_the_first_event_is_ignored() {
+        let first = format!("\u{FEFF}{}", chat(&key()));
+        let (out, i) = run(&policy(Verdict::Block), &[first, DONE.to_string()]);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn a_complete_event_past_the_cap_fails_closed() {
+        // Little text, so only the event's size can trip the cap.
+        let pad = vec!["0"; 2500].join(",");
+        let event = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"hi\"}}}}],\"pad\":[{pad}]}}\n\n"
+        );
+        let mut i = StreamInspector::new(&closed(1024, Verdict::Flag));
+        let step = i.push(event.as_bytes());
+        assert!(step.ended, "oversized complete event was forwarded");
+        let out = String::from_utf8(step.out.concat()).unwrap();
+        assert!(out.contains("inspection_blocked") && !out.contains("0,0,0"));
+    }
+
+    #[test]
+    fn deduplication_state_is_bounded() {
+        let mut i = StreamInspector::new(&policy(Verdict::Flag));
+        for n in 0..5000 {
+            i.push(chat(&format!("AKIA{n:016} ")).as_bytes());
+        }
+        i.finish();
+        assert!(i.seen.len() <= 4 * MAX_AUDITED_HITS, "{}", i.seen.len());
+        assert!(i.report().dropped_hits > 0);
     }
 
     /// Cost per event and time to first forwarded byte, for the design

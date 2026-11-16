@@ -166,33 +166,50 @@ a match.
 ## Streamed responses
 
 A server-sent event stream (AGENT-265) is parsed event by event (CRLF,
-LF and lone CR line endings). Every JSON string in an event's `data` is
-scanned, aggregates as well as deltas, except protocol metadata (`type`,
-`id`, `object`, `model`, `role`, `finish_reason`, `stop_reason`,
-`system_fingerprint`, `status`, `item_id`, `call_id`, `response_id`).
-Data that is not JSON is scanned whole. The text goes, in order, through
-one sliding window that keeps the last `max_match_len - 1` characters,
-measured both raw and after folding, so a match split across any number
-of deltas is found once.
+LF and lone CR line endings; one leading UTF-8 BOM is ignored, as clients
+ignore it). Every JSON string in an event's `data` is scanned, aggregates
+as well as deltas, except protocol metadata (`type`, `id`, `object`,
+`model`, `role`, `finish_reason`, `stop_reason`, `system_fingerprint`,
+`status`, `item_id`, `call_id`, `response_id`, the `obfuscation` padding,
+`service_tier`, and `instructions`, the agent's own prompt echoed back).
+Data that is not JSON, or JSON that repeats a key (whose earlier value a
+parsed view would hide), is scanned whole.
+
+Each string goes to the window of the output it belongs to, the way a
+client rebuilds the stream: each chat choice and each tool call by its
+`index`, each Anthropic content block, each Responses output and content
+part. So a match split across one output's deltas is found however the
+outputs interleave. Each window keeps the last `max_match_len - 1` bytes
+of its output, measured both raw and after folding, so a match split
+across any number of deltas is found once. A window scans once the text
+it has not scanned reaches an eighth of what it holds, so padding that
+keeps the window long cannot make scanning quadratic. Up to 15 outputs
+get their own window; any more share one.
 
 How the stream is forwarded depends on `on_hit`:
 
 - **`pass` or `flag`**: each event is forwarded the moment it is
   complete. Hits are only audited.
 - **`redact` or `block`**: an event is held until no later match can
-  reach back into its text. A redact rewrites the held events' text (the
-  marker where the match starts, the rest of the match removed) before
-  any of it is sent. A block drops what is held, sends one error event
-  shaped for the stream's protocol (OpenAI or Anthropic, with code
-  `inspection_blocked`) and ends the stream.
+  reach back into its text, or until the protocol says its output is
+  finished (a chat `finish_reason`, Anthropic `content_block_stop` or
+  `message_stop`, a Responses `.done` event, `[DONE]`). A redact
+  rewrites the held events' text (the marker where the match starts, the
+  rest of the match removed) before any of it is sent. A block drops
+  what is held, sends one error event shaped for the stream's protocol
+  (OpenAI or Anthropic, with code `inspection_blocked`) and ends the
+  stream. If the agent disconnects, the upstream is closed at once.
 
 An event longer than `max_scan_bytes`, or held text or events past it,
 can't be judged within bounds. Under `fail_closed` the stream is blocked.
-Under `fail_open` the oldest held event is released early or, for an
-oversized event, the rest of the stream passes through unscanned; either
-way an `inspection_hold_overflow` row is written. An unterminated final
-event is scanned when the upstream closes. A content-encoded stream
-follows `on_error`, as a buffered body does.
+Under `fail_open`, held text or events past the bound are released early
+and an `inspection_hold_overflow` row is written; an oversized event and
+the rest of the stream pass through unscanned, audited
+`inspection_skipped` with reason `oversize`. An unterminated final event
+is scanned when the upstream closes. A content-encoded stream follows
+`on_error`, as a buffered body does. When the route also has response
+`redaction_patterns`, the inspected stream is buffered whole and the
+patterns run on it, as for any response with redaction patterns.
 
 Cost, measured in a release build on macOS ARM64 with the built-in
 scanners over 2000 one-word chat deltas: about 53 µs of scanning per
@@ -215,7 +232,7 @@ something:
 | `inspection_hit` | At least one hit. `decision` is `denied` for a block. |
 | `inspection_skipped` | Not scanned: `reason` is `oversize`, `not_text`, `encoded` or `streaming`. |
 | `inspection_error` | A scanner failed and nothing was found. |
-| `inspection_hold_overflow` | A streamed response's held text passed `max_scan_bytes` under `fail_open`, so some text was released or passed unscanned. |
+| `inspection_hold_overflow` | A streamed response's held text or events passed `max_scan_bytes` under `fail_open`, so some text was released before it could be judged. |
 
 Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.

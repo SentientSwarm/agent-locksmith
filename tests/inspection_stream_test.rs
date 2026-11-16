@@ -159,3 +159,37 @@ async fn flag_forwards_the_first_event_before_the_second_is_sent() {
     }
     assert!(String::from_utf8_lossy(&rest).contains("[DONE]"));
 }
+
+#[tokio::test]
+async fn route_redaction_patterns_still_apply_to_an_inspected_stream() {
+    let mut events = vec![chat("ticket CASE-778899 opened")];
+    events.push("data: [DONE]\n\n".into());
+    let url = upstream(events, None).await;
+    let cfg = agent_locksmith::config::parse_config_str(&format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "out"
+    description: "Inspected route with response controls"
+    upstream: "{url}"
+    response:
+      redaction_patterns:
+        - id: case_id
+          regex: "CASE-[0-9]{{6}}"
+inspection:
+{}
+"#,
+        policy("flag")
+    ))
+    .unwrap();
+    let h = harness(cfg).await;
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .json(&serde_json::json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(!resp.text().contains("CASE-778899"), "{}", resp.text());
+}

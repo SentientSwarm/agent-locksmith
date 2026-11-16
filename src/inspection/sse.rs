@@ -5,6 +5,7 @@
 //! from the streaming shapes of the OpenAI chat and Responses APIs and
 //! the Anthropic Messages API; anything else carries no text.
 
+use super::lanes::{self, Close, Lane};
 use serde_json::Value;
 
 /// One event: its raw bytes (terminator included) and parsed fields.
@@ -15,10 +16,12 @@ pub struct SseEvent {
     pub data: Option<String>,
 }
 
-/// A text field inside an event's JSON `data`, by JSON pointer.
+/// A text field inside an event's JSON `data`, by JSON pointer, and the
+/// output (lane) it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextSpan {
     pub pointer: String,
+    pub lane: Lane,
     pub text: String,
 }
 
@@ -30,14 +33,17 @@ pub enum Protocol {
 }
 
 /// Splits a byte stream into events (lines end in CRLF, LF or a lone CR;
-/// a blank line ends an event). Past `cap` buffered bytes with no event
-/// boundary, the parser reports `overflowed`.
+/// a blank line ends an event). An event longer than `cap` bytes, complete
+/// or not, is left unparsed and the parser reports `overflowed`. One
+/// UTF-8 BOM at the start of the stream is ignored, as clients do.
 pub struct SseParser {
     buf: Vec<u8>,
     /// Start of the first line not yet known to be complete.
     line_start: usize,
     cap: usize,
     overflowed: bool,
+    /// No event has been emitted yet, so a leading BOM is the stream's.
+    first: bool,
 }
 
 impl Default for SseParser {
@@ -53,16 +59,24 @@ impl SseParser {
             line_start: 0,
             cap,
             overflowed: false,
+            first: true,
         }
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
         self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
-        while let Some(end) = self.event_end() {
+        while !self.overflowed {
+            let Some(end) = self.event_end() else {
+                break;
+            };
+            if end > self.cap {
+                self.overflowed = true;
+                break;
+            }
             let raw: Vec<u8> = self.buf.drain(..end).collect();
             self.line_start = 0;
-            out.push(parse(raw));
+            out.push(self.emit(raw));
         }
         if self.buf.len() > self.cap {
             self.overflowed = true;
@@ -70,14 +84,24 @@ impl SseParser {
         out
     }
 
+    fn emit(&mut self, raw: Vec<u8>) -> SseEvent {
+        let bom = std::mem::take(&mut self.first) && raw.starts_with(BOM);
+        parse_from(raw, if bom { BOM.len() } else { 0 })
+    }
+
     pub fn overflowed(&self) -> bool {
         self.overflowed
     }
 
-    /// Bytes of an unterminated final event, if any.
-    pub fn finish(&mut self) -> Option<Vec<u8>> {
+    /// Whatever is buffered: an unterminated final event, or past an
+    /// overflow the unparsed rest. Its `raw` is the bytes as received.
+    pub fn finish(&mut self) -> Option<SseEvent> {
         self.line_start = 0;
-        (!self.buf.is_empty()).then(|| std::mem::take(&mut self.buf))
+        if self.buf.is_empty() {
+            return None;
+        }
+        let raw = std::mem::take(&mut self.buf);
+        Some(self.emit(raw))
     }
 
     /// End (exclusive) of the first complete event, resuming at the first
@@ -104,9 +128,16 @@ impl SseParser {
     }
 }
 
+const BOM: &[u8] = "\u{FEFF}".as_bytes();
+
 /// An event from raw bytes (also an unterminated final one).
 pub fn parse(raw: Vec<u8>) -> SseEvent {
-    let text = String::from_utf8_lossy(&raw)
+    parse_from(raw, 0)
+}
+
+/// Parse `raw` from byte `skip` on, keeping all of `raw` to forward.
+fn parse_from(raw: Vec<u8>, skip: usize) -> SseEvent {
+    let text = String::from_utf8_lossy(&raw[skip..])
         .replace("\r\n", "\n")
         .replace('\r', "\n");
     let mut event = None;
@@ -155,40 +186,70 @@ const METADATA: &[&str] = &[
     "item_id",
     "call_id",
     "response_id",
+    // Random padding (`stream_options.include_obfuscation`), the service
+    // tier, and the agent's own instructions echoed back.
+    "obfuscation",
+    "service_tier",
+    "instructions",
 ];
 
 /// The text this event carries: every string in its JSON `data` except
-/// metadata (delta and aggregate shapes alike), or a non-JSON `data`
-/// whole (pointer `""`). `[DONE]` and data-less events carry none.
+/// metadata (delta and aggregate shapes alike), each in its output's
+/// lane. Data that is not JSON, or JSON that repeats a key (whose earlier
+/// value a parsed view would hide), is scanned whole (pointer `""`).
+/// `[DONE]` and data-less events carry none.
 pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
     let Some(data) = event.data.as_deref() else {
         return Vec::new();
     };
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
+    let parsed = serde_json::from_str::<Value>(data)
+        .ok()
+        .filter(|_| !lanes::has_duplicate_keys(data));
+    let Some(value) = parsed else {
         let text = data.to_string();
         return if text.is_empty() || text == "[DONE]" {
             Vec::new()
         } else {
             vec![TextSpan {
                 pointer: String::new(),
+                lane: Lane {
+                    path: String::new(),
+                    tags: Vec::new(),
+                },
                 text,
             }]
         };
     };
+    let tags = lanes::tags(&value);
     let mut out = Vec::new();
-    leaves(&value, String::new(), &mut out);
+    leaves(&value, (String::new(), String::new()), &tags, &mut out);
     out
 }
 
-fn leaves(value: &Value, pointer: String, out: &mut Vec<TextSpan>) {
+/// `at` is (JSON pointer, lane path).
+fn leaves(
+    value: &Value,
+    at: (String, String),
+    tags: &[(&'static str, i64)],
+    out: &mut Vec<TextSpan>,
+) {
+    let (pointer, path) = at;
     match value {
         Value::String(text) => out.push(TextSpan {
             pointer,
+            lane: Lane {
+                path,
+                tags: tags.to_vec(),
+            },
             text: text.clone(),
         }),
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
-                leaves(item, format!("{pointer}/{i}"), out);
+                let next = (
+                    format!("{pointer}/{i}"),
+                    format!("{path}/{}", lanes::element(item, i)),
+                );
+                leaves(item, next, tags, out);
             }
         }
         Value::Object(map) => {
@@ -197,10 +258,22 @@ fn leaves(value: &Value, pointer: String, out: &mut Vec<TextSpan>) {
                     continue;
                 }
                 let token = key.replace('~', "~0").replace('/', "~1");
-                leaves(item, format!("{pointer}/{token}"), out);
+                let next = (format!("{pointer}/{token}"), format!("{path}/{token}"));
+                leaves(item, next, tags, out);
             }
         }
         _ => {}
+    }
+}
+
+/// The lanes this event finishes (`[DONE]` finishes all).
+pub fn closes(event: &SseEvent) -> Vec<Close> {
+    if event.data.as_deref() == Some("[DONE]") {
+        return vec![Close::All];
+    }
+    match json(event) {
+        Some(value) => lanes::closes(kind(event, &value).as_deref(), &value),
+        None => Vec::new(),
     }
 }
 
@@ -222,11 +295,13 @@ pub fn protocol(event: &SseEvent) -> Option<Protocol> {
 /// Re-serialise `event` with each pointer's text replaced (pointer `""`:
 /// the whole non-JSON `data`).
 pub fn rewrite(event: &SseEvent, edits: &[(String, String)]) -> Vec<u8> {
-    let Some(mut value) = json(event) else {
-        let Some((_, text)) = edits.iter().find(|(p, _)| p.is_empty()) else {
-            return event.raw.clone();
-        };
+    // Pointer "" is data scanned whole (not JSON, or JSON with a repeated
+    // key): it is rewritten as text.
+    if let Some((_, text)) = edits.iter().find(|(p, _)| p.is_empty()) {
         return data_lines(event, text.split('\n').map(str::to_string).collect());
+    }
+    let Some(mut value) = json(event) else {
+        return event.raw.clone();
     };
     for (pointer, text) in edits {
         if let Some(slot) = value.pointer_mut(pointer) {
@@ -238,10 +313,14 @@ pub fn rewrite(event: &SseEvent, edits: &[(String, String)]) -> Vec<u8> {
 
 /// The event's non-data lines in order, with its data lines replaced.
 fn data_lines(event: &SseEvent, data: Vec<String>) -> Vec<u8> {
-    let raw = String::from_utf8_lossy(&event.raw)
+    let bom = event.raw.starts_with(BOM);
+    let raw = String::from_utf8_lossy(&event.raw[if bom { BOM.len() } else { 0 }..])
         .replace("\r\n", "\n")
         .replace('\r', "\n");
     let mut out = String::new();
+    if bom {
+        out.push('\u{FEFF}');
+    }
     let mut data = Some(data);
     for line in raw.split('\n') {
         if line.starts_with("data:") {
@@ -293,7 +372,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].raw, b"data: {\"a\":1}\n\n");
         assert_eq!(events[1].data.as_deref(), Some("[DONE]"));
-        assert_eq!(p.finish(), Some(b"da".to_vec()));
+        assert_eq!(p.finish().map(|e| e.raw), Some(b"da".to_vec()));
     }
 
     #[test]

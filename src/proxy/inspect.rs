@@ -239,7 +239,14 @@ async fn drive(
     base: AuditEvent,
 ) {
     loop {
-        let (step, failure) = match upstream.next().await {
+        // Held events may send nothing for a while, so a disconnect is
+        // noticed here rather than only when a send fails.
+        let next = tokio::select! {
+            biased;
+            _ = tx.closed() => break,
+            next = upstream.next() => next,
+        };
+        let (step, failure) = match next {
             Some(Ok(chunk)) => (inspector.push(&chunk), None),
             Some(Err(e)) => (inspector.finish(), Some(e)),
             None => (inspector.finish(), None),
@@ -463,6 +470,34 @@ mod tests {
             h.append(CONTENT_ENCODING, HeaderValue::from_bytes(v).unwrap());
         }
         super::encoded(&h)
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_agent_ends_a_held_stream() {
+        let policy = DirectionPolicy {
+            scanners: vec![std::sync::Arc::new(crate::inspection::dlp::Dlp)],
+            on_hit: Verdict::Redact,
+            on_error: inspection::OnError::FailOpen,
+            max_scan_bytes: 1 << 20,
+        };
+        let first = futures_util::stream::once(async {
+            Ok::<Bytes, reqwest::Error>(Bytes::from_static(b"data: {\"x\":\"held\"}\n\n"))
+        });
+        let upstream: UpstreamStream = Box::pin(first.chain(futures_util::stream::pending()));
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let task = tokio::spawn(drive(
+            StreamInspector::new(&policy),
+            upstream,
+            tx,
+            None,
+            AuditEvent::default(),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(rx);
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("drive kept the upstream open after the agent left")
+            .unwrap();
     }
 
     #[test]

@@ -9,6 +9,13 @@
 //! `base()` is final. The tail is capped at `cap` raw bytes; past the cap
 //! (whitespace or invisible padding that folds to nothing) the window
 //! overflows and a match padded that far can be missed.
+//!
+//! Rescanning the whole tail on every push would cost the tail's length
+//! per push, quadratic when padding keeps the tail long. So a push scans
+//! only once the unscanned text is at least an eighth of what is held,
+//! which keeps the total scanned to a small multiple of the stream;
+//! `flush` scans the rest. Text is final only once scanned, so `base`
+//! never passes unscanned text.
 
 use super::{Direction, ScanError, Scanner, normalize, sha256_hex};
 use std::sync::Arc;
@@ -33,6 +40,8 @@ pub struct TextWindow {
     cap: usize,
     buf: String,
     base: usize,
+    /// Bytes of `buf` already scanned.
+    scanned: usize,
     overflowed: bool,
     /// Hits already reported, as (scanner, rule, start, end).
     reported: Vec<(String, String, usize, usize)>,
@@ -51,6 +60,7 @@ impl TextWindow {
             cap,
             buf: String::new(),
             base: 0,
+            scanned: 0,
             overflowed: false,
             reported: Vec::new(),
         }
@@ -70,9 +80,33 @@ impl TextWindow {
         self.overflowed
     }
 
+    /// Bytes of text held.
+    pub fn held(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Append `text`; scan when enough is unscanned. Hits are reported
+    /// once, by the scan that first sees them end in new text.
     pub fn push(&mut self, text: &str) -> Result<Vec<WindowHit>, ScanError> {
-        let old_end = self.buf.len();
         self.buf.push_str(text);
+        let unscanned = self.buf.len() - self.scanned;
+        if unscanned == 0 || (unscanned * 8 < self.buf.len() && self.buf.len() <= self.cap) {
+            return Ok(Vec::new());
+        }
+        self.scan()
+    }
+
+    /// Scan whatever is still unscanned.
+    pub fn flush(&mut self) -> Result<Vec<WindowHit>, ScanError> {
+        if self.scanned == self.buf.len() {
+            return Ok(Vec::new());
+        }
+        self.scan()
+    }
+
+    fn scan(&mut self) -> Result<Vec<WindowHit>, ScanError> {
+        let old_end = self.scanned;
+        self.scanned = self.buf.len();
         let mut out = Vec::new();
         for scanner in &self.scanners {
             for hit in scanner.scan(&self.buf, Direction::Response)? {
@@ -117,6 +151,7 @@ impl TextWindow {
         }
         self.buf.drain(..cut);
         self.base += cut;
+        self.scanned -= cut;
         let base = self.base;
         self.reported.retain(|(.., end)| *end > base);
     }
@@ -210,5 +245,50 @@ mod tests {
         }
         assert!(w.end() - w.base() <= 1000);
         assert!(w.overflowed());
+    }
+
+    /// Counts the bytes it is asked to scan.
+    struct Counting(std::sync::atomic::AtomicUsize);
+
+    impl Scanner for Counting {
+        fn id(&self) -> &str {
+            "counting"
+        }
+        fn max_match_len(&self) -> usize {
+            64
+        }
+        fn scan(&self, text: &str, _: Direction) -> Result<Vec<super::super::Hit>, ScanError> {
+            self.0
+                .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn padding_does_not_make_scanning_quadratic() {
+        let counting = Arc::new(Counting(Default::default()));
+        let mut w = TextWindow::new(vec![counting.clone()], 1 << 20);
+        let pushed = 50_000;
+        for _ in 0..pushed {
+            w.push(" ").unwrap();
+        }
+        w.flush().unwrap();
+        let scanned = counting.0.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            scanned <= 20 * pushed,
+            "scanned {scanned} bytes for {pushed}"
+        );
+    }
+
+    #[test]
+    fn flush_reports_a_match_still_unscanned() {
+        let mut w = literal("SECRET42", 1 << 20);
+        let mut hits = Vec::new();
+        for _ in 0..200 {
+            hits.extend(w.push("abcdefgh ").unwrap());
+        }
+        hits.extend(w.push("SECRET42").unwrap());
+        hits.extend(w.flush().unwrap());
+        assert_eq!(hits.len(), 1, "{hits:?}");
     }
 }

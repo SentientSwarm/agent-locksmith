@@ -239,7 +239,7 @@ fn overlaps(hits: &[Hit], start: usize, end: usize) -> bool {
     hits.iter().any(|h| h.start < end && start < h.end)
 }
 
-pub(super) struct Dlp;
+pub(crate) struct Dlp;
 
 impl Scanner for Dlp {
     fn id(&self) -> &str {

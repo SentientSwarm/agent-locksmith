@@ -10,8 +10,9 @@
 //! See `docs/development/inspection.md`.
 
 pub mod config;
-mod dlp;
+pub(crate) mod dlp;
 mod injection;
+pub mod lanes;
 mod literal;
 mod normalize;
 pub mod sse;

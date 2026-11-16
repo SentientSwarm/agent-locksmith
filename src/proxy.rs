@@ -1025,7 +1025,8 @@ async fn handle_upstream_response(
     // are inspected as they pass. Other streamed shapes (ndjson) are not
     // scanned yet and are audited as skipped.
     let mut resp = Some(resp);
-    let mut unscanned: Option<inspect::UpstreamStream> = None; // or inspected as it streams
+    // The body to send when inspection read or wrapped the upstream's.
+    let mut body_override: Option<inspect::UpstreamStream> = None;
     if let Some(policy) = inspect::response_policy(&state, &ctx.tool_name) {
         if inspect::is_event_stream(upstream_content_type.as_deref()) {
             let upstream = resp.take().expect("unread");
@@ -1039,7 +1040,7 @@ async fn handle_upstream_response(
             )
             .await
             {
-                Ok(inspected) => unscanned = Some(inspected),
+                Ok(inspected) => body_override = Some(inspected),
                 Err(blocked) => return blocked,
             }
         } else if inspect::is_streamed(upstream_content_type.as_deref()) {
@@ -1076,55 +1077,48 @@ async fn handle_upstream_response(
                         let once = futures_util::stream::once(async move {
                             Ok::<Bytes, reqwest::Error>(Bytes::from(body))
                         });
-                        unscanned = Some(Box::pin(once));
+                        body_override = Some(Box::pin(once));
                     }
                 },
-                // Unscanned, but the route's redaction patterns still need
-                // the whole body: buffer the rest and run them.
-                inspect::Buffered::Unscanned(stream)
-                    if rc.as_ref().is_some_and(rc_should_buffer) =>
-                {
-                    let bytes = match collect_limited(stream, UNSCANNED_CONTROLS_LIMIT).await {
-                        Ok(bytes) => bytes,
-                        Err(Unread::Failed(e)) => {
-                            return record_upstream_body_read_error(
-                                &state.audit,
-                                ctx,
-                                upstream_host,
-                                e,
-                            )
-                            .await;
-                        }
-                        Err(Unread::TooLarge(observed)) => {
-                            return record_response_size_exceeded_buffered(
-                                &state.audit,
-                                ctx,
-                                upstream_host,
-                                observed,
-                                UNSCANNED_CONTROLS_LIMIT as u64,
-                            )
-                            .await;
-                        }
-                    };
-                    return respond_with_controls(
-                        rc.as_ref().expect("guarded"),
-                        &state.audit,
-                        ctx,
-                        target,
-                        upstream_host,
-                        upstream_status,
-                        upstream_content_type,
-                        response_headers,
-                        bytes,
-                    )
-                    .await;
-                }
-                // Otherwise it streams like any response, size cap included.
-                inspect::Buffered::Unscanned(stream) => unscanned = Some(stream),
+                // It streams like any response; response controls below.
+                inspect::Buffered::Unscanned(stream) => body_override = Some(stream),
             }
         }
     }
-    let body_stream: inspect::UpstreamStream = match unscanned {
+    let body_stream: inspect::UpstreamStream = match body_override {
+        // The route's redaction patterns need the whole body, inspected
+        // or not: buffer it and run them.
+        Some(stream) if rc.as_ref().is_some_and(rc_should_buffer) => {
+            let bytes = match collect_limited(stream, UNSCANNED_CONTROLS_LIMIT).await {
+                Ok(bytes) => bytes,
+                Err(Unread::Failed(e)) => {
+                    return record_upstream_body_read_error(&state.audit, ctx, upstream_host, e)
+                        .await;
+                }
+                Err(Unread::TooLarge(observed)) => {
+                    return record_response_size_exceeded_buffered(
+                        &state.audit,
+                        ctx,
+                        upstream_host,
+                        observed,
+                        UNSCANNED_CONTROLS_LIMIT as u64,
+                    )
+                    .await;
+                }
+            };
+            return respond_with_controls(
+                rc.as_ref().expect("guarded"),
+                &state.audit,
+                ctx,
+                target,
+                upstream_host,
+                upstream_status,
+                upstream_content_type,
+                response_headers,
+                bytes,
+            )
+            .await;
+        }
         Some(stream) => stream,
         None => {
             // Inspection reads the response only when it returns.
