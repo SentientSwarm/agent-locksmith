@@ -1,0 +1,47 @@
+# Example site file for dist/native. Copy it into your PRIVATE site repo
+# and replace every value. The names and private addresses below are
+# placeholders, not a real deployment.
+
+[site]
+# Each instance's state lives on its own volume mounted here.
+state_root = "/srv/locksmith-edge"
+# Refuse to start a component unless state_root is a separate ZFS mount.
+require_zfs = true
+
+[[instance]]
+name = "edge-locksmith"
+address = "10.0.4.10"
+cpu = 2
+memory = "2GiB"
+
+[[instance.component]]
+name = "locksmith"
+user = "locksmith"
+command = "/usr/local/bin/locksmithd --config /srv/locksmith-edge/locksmith/config.yaml"
+environment_file = true
+ingress = [{ port = 9200, from = ["10.0.1.0/24"] }]
+
+[[instance]]
+name = "edge-pipelock"
+address = "10.0.4.11"
+cpu = 1
+memory = "1GiB"
+
+[[instance.component]]
+name = "pipelock"
+user = "pipelock"
+command = "/usr/local/bin/pipelock run --config /srv/locksmith-edge/pipelock/config.yaml"
+ingress = [{ port = 8888, from = ["10.0.4.10/32"] }]
+
+[[instance]]
+name = "edge-inspector"
+address = "10.0.4.12"
+cpu = 2
+memory = "2GiB"
+
+[[instance.component]]
+name = "inspector"
+user = "locksmith"
+command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/locksmith_inspector.py"
+env = { HF_HOME = "/srv/locksmith-edge/inspector/models", HF_HUB_OFFLINE = "1" }
+jit = true
