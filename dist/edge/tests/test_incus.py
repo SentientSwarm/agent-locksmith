@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 EDGE = Path(__file__).resolve().parent.parent
@@ -106,6 +107,10 @@ class IncusTest(unittest.TestCase):
             script(pool="$(id)")
         with self.assertRaises(incus.IncusError):
             script(image="images:x y")
+        # A trailing newline would split a preflight check into two commands.
+        for kwargs in ({"project": "edge\n"}, {"pool": "tank\n"}, {"image": IMAGE + "\n"}):
+            with self.assertRaises(incus.IncusError, msg=str(kwargs)):
+                script(**kwargs)
 
     def test_values_are_shell_quoted_even_if_validation_is_bypassed(self):
         inst = sitefile.Instance(
@@ -115,6 +120,11 @@ class IncusTest(unittest.TestCase):
             memory="1GiB;id",
         )
         site = sitefile.Site(state_root="/srv/x;id", instances=[inst])
+        with patch.object(incus, "_checked", lambda pattern, value, what: value):
+            raw = incus.commands(site, project="edge;id", image=IMAGE, pool="tank;id")
+        self.assertIn("--project 'edge;id'", raw)
+        self.assertIn("--storage 'tank;id'", raw)
+        self.assertNotIn(" edge;id ", raw)
         text = incus.commands(site, project="edge", image=IMAGE, pool="tank")
         self.assertIn("'ipv4.address=10.0.0.1;id'", text)
         self.assertIn("'limits.memory=1GiB;id'", text)

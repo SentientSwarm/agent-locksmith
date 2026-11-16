@@ -28,7 +28,7 @@ ingress = [{ port = 9200, from = ["198.51.100.0/24"] }]
 name = "inspector"
 user = "locksmith"
 command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/locksmith_inspector.py --socket /run/locksmith-edge/inspector/inspector.sock"
-env = { HF_HOME = "/srv/locksmith-edge/inspector/models", HF_HUB_OFFLINE = "1" }
+env = { HF_HOME = "/srv/locksmith-edge/models/inspector", HF_HUB_OFFLINE = "1" }
 jit = true
 
 [[instance]]

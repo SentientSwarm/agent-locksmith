@@ -134,9 +134,9 @@ install -d -m 0700 $R/environment                  # only if a component sets en
 install -m 0600 /dev/null $R/environment/locksmith.env
 ```
 
-`$R` itself, `.locksmith-edge-id`, `custody/` and `environment/` stay
-root-owned and not group- or world-writable. Each component can write only
-`$R/<component>` and `/run/<component>`.
+`$R` itself, `.locksmith-edge-id`, `custody/`, `environment/` and (step 5)
+`models/` stay root-owned and not group- or world-writable. Each component
+can write only `$R/<component>` and `/run/locksmith-edge/<component>`.
 
 Put the Locksmith config under `$R/locksmith/`. Put its sealing keys in
 `locksmith.env`, through an editor or a pipe and never on a command line.
@@ -155,7 +155,16 @@ user: Locksmith reaches it only over a Unix socket and refuses a socket
 served by any other uid. The example site runs the `inspector` component
 in `lab-locksmith` as `locksmith`, listening on
 `/run/locksmith-edge/inspector/inspector.sock` (each component's runtime
-directory is `/run/locksmith-edge/<component>`). Point Locksmith at it:
+directory is `/run/locksmith-edge/<component>`).
+
+**The sidecar is inside Locksmith's trust boundary.** Running as the same
+user, it can read Locksmith's state directory (read-only for it, not
+hidden), and an exploit in the classifier, which parses untrusted text,
+runs with that access. `locksmithd` marks itself non-dumpable at startup,
+so the sidecar cannot read the daemon's environment or memory, where the
+sealing keys live; the sealed values in its database stay sealed. Run only
+a sidecar you would trust with Locksmith's own files. Point Locksmith at
+it:
 
 ```yaml
 inspection:
@@ -167,28 +176,32 @@ inspection:
 
 Run the install inside that container, which needs to reach
 huggingface.co for this step. Create `$R/inspector` and
-`$R/inspector/home` first, owned by the inspector user, as in step 4.
-Then copy the tools in:
+`$R/inspector/home` first, owned by the inspector user, as in step 4. The
+model cache goes in `$R/models/inspector`, **outside** the inspector's own
+state directory: renaming a directory needs write access only on its
+parent, so a cache under `$R/inspector` could be swapped by the sidecar.
+The installer creates the cache root-owned and readable (`0755`/`0644`,
+whatever your umask) and refuses a cache under any directory that is not
+root-owned or is group- or world-writable. Then copy the tools in:
 
 ```bash
 sudo incus --project edge file push -r dist/edge lab-locksmith/root/
 # Ungated (Apache-2.0), no token:
 sudo incus --project edge exec lab-locksmith -- \
-  python3 /root/edge/install_model.py horizon-small --hf-home /srv/locksmith-edge/inspector/models
+  python3 /root/edge/install_model.py horizon-small --hf-home /srv/locksmith-edge/models/inspector
 
 # Gated (Llama 4 Community License): accept the licence on Hugging Face
 # first, with the account the token belongs to. -t gives the prompt a terminal.
 sudo incus --project edge exec -t lab-locksmith -- \
-  python3 /root/edge/install_model.py promptguard2-86m --hf-home /srv/locksmith-edge/inspector/models \
+  python3 /root/edge/install_model.py promptguard2-86m --hf-home /srv/locksmith-edge/models/inspector \
   --token-prompt --accepted-by "<who accepted>"
 
 sudo incus --project edge exec lab-locksmith -- rm -r /root/edge
 ```
 
 Leave the models owned by root. The sidecar only reads them, and offline
-resolution works on a read-only cache, so a compromised sidecar cannot swap
-the weights. The installer refuses a symlinked `HF_HOME` or `hub`
-directory.
+resolution works on a read-only cache. The installer also refuses a
+symlinked `HF_HOME` or `hub` directory.
 
 - **The token stays out of argv.** It comes from `--token-prompt` (no echo)
   or `--token-file`, a file only you can read (`chmod 600`).
@@ -226,10 +239,18 @@ unless:
 The receipt is your statement that this component's state is in place and
 that no other copy is running anywhere. Write it only after that is true:
 
+Write one receipt per component. The example site runs two in
+`lab-locksmith`:
+
 ```bash
 echo lab-locksmith:locksmith > $R/custody/locksmith.ready
-systemctl enable --now locksmith-edge-input.service locksmith-edge-locksmith.service
+echo lab-locksmith:inspector > $R/custody/inspector.ready
+systemctl enable --now locksmith-edge-input.service \
+  locksmith-edge-locksmith.service locksmith-edge-inspector.service
 ```
+
+Inspection fails closed by default, so routes that use the sidecar refuse
+requests until `locksmith-edge-inspector.service` is running.
 
 A refusal is logged as `locksmith-edge startup refused: <reason>` in the
 guard unit's journal (`journalctl -u locksmith-edge-locksmith-guard`). Remove the receipt to stop the unit from being started

@@ -26,6 +26,18 @@
   script, double-struck and similar letters and digits, plus the
   letterlike symbols in that range) to ASCII, and drops combining marks,
   so `𝐢𝐠𝐧𝐨𝐫𝐞` and `i\u0301gnore` read as `ignore` (AGENT-270).
+- A process running as Locksmith's own user can no longer read
+  `locksmithd`'s environment or memory (AGENT-285). A classifier sidecar
+  shares that user so Locksmith can check the socket's peer uid, which
+  also let it read `/proc/<pid>/environ`, where the sealing keys are.
+  `locksmithd` now marks itself non-dumpable at startup on Linux, which
+  also disables its core dumps.
+- The edge model installer (`dist/edge/install_model.py`) now refuses a
+  cache under a directory that is not root-owned or is group- or
+  world-writable, so a service-owned parent cannot be used to swap the
+  weights. It also makes the cache readable whatever the installer's
+  umask. The guide and example site now keep the cache in
+  `$R/models/<component>` and start the inspector component (AGENT-285).
 - Route traffic on `egress: proxied` routes no longer goes direct when
   the egress proxy is missing or broken (AGENT-259). Before, an unset
   `egress_proxy`, a URL that didn't parse, or a client that failed to

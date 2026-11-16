@@ -256,7 +256,7 @@ command = "/usr/bin/true"
         self.assertRefused(text, "memory")
 
     def test_state_subdirectory_names_reserved(self):
-        for bad in ("custody", "environment"):
+        for bad in ("custody", "environment", "models"):
             self.assertRefused(
                 MINIMAL.replace('name = "locksmith"', f'name = "{bad}"'), "reserved"
             )

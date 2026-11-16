@@ -15,7 +15,10 @@ from __future__ import annotations
 import argparse
 import getpass
 import hashlib
+import http.client
+import os
 import shutil
+import stat
 import sys
 import tempfile
 import urllib.error
@@ -51,6 +54,43 @@ ENDPOINT = "https://huggingface.co"
 CHUNK = 1 << 20
 
 
+def _check_parents(path: Path, owners: frozenset[int]) -> None:
+    """Refuse a cache that anyone but root (or the installer) could replace.
+
+    Renaming a directory needs write access only on its parent, so a
+    service-owned or shared-writable ancestor would let the inspector swap
+    the weights for its own. Sticky directories such as /tmp are allowed.
+    """
+    for parent in [path, *path.parents]:
+        try:
+            info = parent.stat()
+        except FileNotFoundError:
+            continue
+        if info.st_uid not in owners:
+            raise InstallError(
+                f"{parent} is owned by uid {info.st_uid}; install the model cache under "
+                "directories only root can change, outside any service's state directory"
+            )
+        if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+            raise InstallError(
+                f"{parent} is group- or world-writable; install the model cache under "
+                "directories only root can change"
+            )
+
+
+def _publishable(repo: Path) -> None:
+    """Make the install readable by the service whatever the installer's umask."""
+    for path in [repo, *repo.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def _mkdir_readable(path: Path) -> None:
+    missing = [p for p in [path, *path.parents] if not p.exists()]
+    for directory in reversed(missing):
+        directory.mkdir()
+        directory.chmod(0o755)
+
+
 def _fetch(
     opener, url: str, token: str | None, dest: Path, spec: ModelFile, gated: bool
 ) -> None:
@@ -78,6 +118,9 @@ def _fetch(
         raise InstallError(f"{spec.path}: HTTP {err.code}") from None
     except urllib.error.URLError as err:
         raise InstallError(f"{spec.path}: cannot download ({err.reason})") from None
+    except (http.client.HTTPException, ValueError) as err:
+        # A dropped connection or a malformed redirect; name the type only.
+        raise InstallError(f"{spec.path}: download failed ({type(err).__name__})") from None
     if count != spec.size:
         raise InstallError(f"{spec.path}: size {count} does not match the catalog")
     ok = (
@@ -96,18 +139,22 @@ def install(
     token: str | None,
     endpoint: str = ENDPOINT,
     accepted_by: str = "unrecorded",
+    trusted_owners: frozenset[int] | None = None,
 ) -> Path:
     if model.gated and not token:
         raise InstallError(
             f"{model.repo} is gated: supply your own token with --token-file or --token-prompt"
         )
+    owners = trusted_owners if trusted_owners is not None else frozenset({0, os.geteuid()})
+    _check_parents(hf_home.absolute(), owners)
     hub = hf_home / "hub"
     if hf_home.is_symlink() or hub.is_symlink():
         raise InstallError(f"{hub} or its parent is a symlink; refusing to follow it")
     target = hub / ("models--" + model.repo.replace("/", "--"))
     if target.exists():
         raise InstallError(f"{target} exists; refusing to overwrite an installed model")
-    hub.mkdir(parents=True, exist_ok=True)
+    _mkdir_readable(hf_home)
+    _mkdir_readable(hub)
     staging = Path(tempfile.mkdtemp(prefix=".locksmith-install-", dir=hub))
     try:
         repo = staging / target.name
@@ -124,6 +171,7 @@ def install(
         (repo / "refs").mkdir()
         (repo / "refs" / "main").write_text(model.revision)
         (repo / "locksmith-manifest.json").write_text(manifest(model, accepted_by))
+        _publishable(repo)
         if target.exists():
             raise InstallError(
                 f"{target} appeared during the install; leaving it alone"

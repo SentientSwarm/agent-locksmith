@@ -31,7 +31,7 @@ class IncusError(ValueError):
 
 
 def _checked(pattern: re.Pattern, value: str, what: str) -> str:
-    if not isinstance(value, str) or not pattern.match(value):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
         raise IncusError(f"invalid {what} {value!r}")
     return value
 
@@ -59,9 +59,9 @@ def _preflight(site: sitefile.Site, p: str, image: str, pool: str) -> list[str]:
         "fi",
         f"containers=$(incus project get {p} limits.containers)",
         f"if [[ -z $containers || $containers -lt {count} ]]; then",
-        f"    echo 'project {p} must set limits.containers to at least {count}' >&2; exit 1",
+        f"    echo project {p} 'must set limits.containers to at least {count}' >&2; exit 1",
         "fi",
-        f'echo "project {p} limits.memory: $(incus project get {p} limits.memory)"',
+        f'echo project {p} limits.memory: "$(incus project get {p} limits.memory)"',
     ]
     for inst in site.instances:
         name, volume = q(inst.name), q(f"{inst.name}-state")
@@ -119,8 +119,9 @@ def commands(
     volume_size: str | None = None,
     existing: dict | None = None,
 ) -> str:
-    p = _checked(NAME_RE, project, "project")
-    pool = _checked(NAME_RE, pool, "storage pool")
+    # Quoted once here; every helper interpolates these already-quoted words.
+    p = shlex.quote(_checked(NAME_RE, project, "project"))
+    pool = shlex.quote(_checked(NAME_RE, pool, "storage pool"))
     image = _checked(IMAGE_RE, image, "image")
     if volume_size is not None:
         _checked(SIZE_RE, volume_size, "volume size")

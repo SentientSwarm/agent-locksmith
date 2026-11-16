@@ -48,8 +48,9 @@ RESERVED_USERS = {
 }
 # Unit names render.py owns: locksmith-edge-input.service and each
 # component's locksmith-edge-<component>-guard.service.
-# custody and environment are the guard's directories in the state root.
-RESERVED_NAMES = {"input", "custody", "environment"}
+# custody and environment are the guard's directories in the state root;
+# models holds root-owned model caches the services can only read.
+RESERVED_NAMES = {"input", "custody", "environment", "models"}
 # The sandbox hides or replaces these (ProtectHome, PrivateTmp, /run, API fs).
 HIDDEN_ROOTS = ("/home", "/root", "/tmp", "/var/tmp", "/run", "/proc", "/sys", "/dev")
 RESERVED_SUFFIX = "-guard"

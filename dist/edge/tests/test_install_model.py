@@ -282,6 +282,81 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(list(elsewhere.iterdir()), [])
         self.assertEqual(fx.requests, [])
 
+    def test_install_is_readable_by_the_service_under_umask_077(self):
+        # The installer runs as root; the inspector reads the cache as its own user.
+        fx = self.fixture()
+        self.hf_home = self.base / "models" / "inspector"  # parents made too
+        old = os.umask(0o077)
+        try:
+            self.install(fx)
+        finally:
+            os.umask(old)
+        for path in [self.base / "models", self.hf_home, self.hf_home / "hub",
+                     self.repo_dir(), *self.repo_dir().rglob("*")]:
+            mode = path.stat().st_mode & 0o777
+            want = 0o755 if path.is_dir() else 0o644
+            self.assertEqual(mode, want, str(path))
+
+    def test_cache_under_a_writable_parent_refused(self):
+        # Whoever can write a parent can rename the cache away and plant other weights.
+        fx = self.fixture()
+        parent = self.base / "shared"
+        parent.mkdir()
+        parent.chmod(0o777)
+        self.hf_home = parent / "hf"
+        with self.assertRaises(install_model.InstallError) as ctx:
+            self.install(fx)
+        self.assertIn(str(parent), str(ctx.exception))
+        self.assertFalse(self.hf_home.exists())
+        self.assertEqual(fx.requests, [])
+
+    def test_cache_under_a_parent_owned_by_another_user_refused(self):
+        # Stands in for a service-owned state directory such as $R/inspector.
+        fx = self.fixture()
+        model = install_model.parse_catalog(catalog_text(gated=False))["test-model"]
+        stranger = os.geteuid() + 12345
+        with self.assertRaises(install_model.InstallError) as ctx:
+            install_model.install(
+                model,
+                self.hf_home,
+                token=None,
+                endpoint=fx.url(fx.origin),
+                trusted_owners=frozenset({stranger}),
+            )
+        self.assertIn(str(self.base), str(ctx.exception))
+        self.assertFalse(self.hf_home.exists())
+        self.assertEqual(fx.requests, [])
+
+    def test_interrupted_or_malformed_download_is_a_clean_error(self):
+        import http.client
+
+        spec = install_model.ModelFile(path="w.bin", size=4, sha256="0" * 64, git_sha1=None)
+
+        class Short:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n):
+                raise http.client.IncompleteRead(b"ab", 2)
+
+        class Opener:
+            def __init__(self, result):
+                self.result = result
+
+            def open(self, request, timeout):
+                if isinstance(self.result, Exception):
+                    raise self.result
+                return self.result
+
+        for opener in (Opener(Short()), Opener(ValueError("Port out of range 0-65535"))):
+            with self.assertRaises(install_model.InstallError):
+                install_model._fetch(
+                    opener, "https://huggingface.co/x", None, self.base / "w.partial", spec, False
+                )
+
     def test_default_port_counts_as_the_same_origin(self):
         self.assertEqual(
             install_model._origin("https://huggingface.co/x"),
