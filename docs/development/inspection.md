@@ -184,7 +184,12 @@ of its output, measured both raw and after folding, so a match split
 across any number of deltas is found once. A window scans once the text
 it has not scanned reaches an eighth of what it holds, so padding that
 keeps the window long cannot make scanning quadratic. Up to 15 outputs
-get their own window; any more share one.
+get their own window. Past that, or when text arrives for an output the
+protocol already said was finished, a match could be missed: under
+`fail_closed` the stream is blocked, under `fail_open` the outputs share
+one window (or the finished one reopens) and an `inspection_hold_overflow`
+row is written. An `index` is read as clients read it: an integer, a
+whole-number float or a numeric string.
 
 How the stream is forwarded depends on `on_hit`:
 

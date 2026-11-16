@@ -197,22 +197,28 @@ impl StreamInspector {
         step
     }
 
-    /// The lane `lane`'s index, made on first use.
-    fn lane(&mut self, lane: &Lane) -> usize {
+    /// The lane `lane`'s index, made on first use. Past `MAX_LANES`, new
+    /// outputs share one window, which can split a match: that is an
+    /// overflow (`None` under `fail_closed`).
+    fn lane(&mut self, lane: &Lane) -> Option<usize> {
         if let Some(&i) = self.by_lane.get(lane) {
-            return i;
+            return Some(i);
         }
         let shared = Lane {
             path: "*".into(),
             tags: Vec::new(),
         };
         let lane = if self.lanes.len() + 1 >= MAX_LANES {
+            if self.on_error == OnError::FailClosed {
+                return None;
+            }
+            self.hold_overflowed = true;
             &shared
         } else {
             lane
         };
         if let Some(&i) = self.by_lane.get(lane) {
-            return i;
+            return Some(i);
         }
         self.lanes.push(LaneState {
             lane: lane.clone(),
@@ -221,7 +227,7 @@ impl StreamInspector {
         });
         let i = self.lanes.len() - 1;
         self.by_lane.insert(lane.clone(), i);
-        i
+        Some(i)
     }
 
     fn event(&mut self, event: SseEvent, step: &mut Step) {
@@ -231,9 +237,21 @@ impl StreamInspector {
         let mut fields = Vec::new();
         let mut hits = Vec::new();
         for span in sse::extract(&event) {
-            let lane = self.lane(&span.lane);
+            let Some(lane) = self.lane(&span.lane) else {
+                self.report.error = Some("more stream outputs than can be inspected".into());
+                return self.block(step);
+            };
             let state = &mut self.lanes[lane];
-            state.done = false;
+            if state.done {
+                // Its output was said to be finished, and its held events
+                // may already be out: a match spanning the two is missed.
+                if self.on_error == OnError::FailClosed {
+                    self.report.error = Some("stream text after its output finished".into());
+                    return self.block(step);
+                }
+                self.hold_overflowed = true;
+                state.done = false;
+            }
             let start = state.window.end();
             let found = state.window.push(&span.text);
             if !self.scanned(lane, found, &mut hits, step) {
@@ -864,6 +882,47 @@ mod tests {
         i.finish();
         assert!(i.seen.len() <= 4 * MAX_AUDITED_HITS, "{}", i.seen.len());
         assert!(i.report().dropped_hits > 0);
+    }
+
+    #[test]
+    fn text_after_a_finished_output_fails_closed() {
+        let stop =
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        let k = key();
+        let events = [
+            anthropic(&k[..10]),
+            stop.to_string(),
+            anthropic(&k[10..]),
+            PING.to_string(),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn running_out_of_lanes_fails_closed() {
+        let events: Vec<String> = (0..40).map(|n| chat_n(n, "hi ")).collect();
+        let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains("inspection_blocked") && i.hold_overflowed());
+    }
+
+    #[test]
+    fn an_index_written_as_a_float_or_string_is_the_same_output() {
+        let k = key();
+        let mut events = Vec::new();
+        for (n, c) in k.chars().enumerate() {
+            let index = ["0", "0.0", "\"0\""][n % 3];
+            events.push(format!(
+                "data: {{\"choices\":[{{\"index\":{index},\"delta\":{{\"content\":{}}}}}]}}\n\n",
+                q(&c.to_string())
+            ));
+        }
+        events.push(DONE.to_string());
+        let (_, i) = run(&policy(Verdict::Flag), &events);
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
     }
 
     /// Cost per event and time to first forwarded byte, for the design

@@ -28,16 +28,28 @@ const TAGS: [(&str, &str); 3] = [
     ("content_index", "c"),
 ];
 
+/// An index as a lenient client reads it: an integer, an integer-valued
+/// float, or a string holding one.
+fn index(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 /// The tags an event's top-level indexes give.
 pub fn tags(value: &Value) -> Vec<(&'static str, i64)> {
     TAGS.iter()
-        .filter_map(|(field, tag)| value.get(*field)?.as_i64().map(|n| (*tag, n)))
+        .filter_map(|(field, tag)| index(value.get(*field)?).map(|n| (*tag, n)))
         .collect()
 }
 
 /// The path segment for array element `i`: its `index`, when it has one.
 pub fn element(item: &Value, i: usize) -> String {
-    match item.get("index").and_then(Value::as_i64) {
+    match item.get("index").and_then(index) {
         Some(n) => format!("#{n}"),
         None => i.to_string(),
     }
