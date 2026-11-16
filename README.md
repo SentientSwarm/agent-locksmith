@@ -383,7 +383,8 @@ For the canonical deployment story:
 - **User docs (locksmith-side)**:
   - [`docs/user/concepts/`](docs/user/concepts) — kind taxonomy, error
     envelope, agent identity + ACL, trust boundary, per-agent
-    credentials + OAuth labels.
+    credentials + OAuth labels, and
+    [egress modes and content inspection](docs/user/concepts/egress-and-inspection.md).
   - [`docs/user/agent-integration/`](docs/user/agent-integration) —
     wiring agents (hermes, openclaw) into a layer8-proxy deployment.
   - [`docs/user/cli-reference.md`](docs/user/cli-reference.md) —

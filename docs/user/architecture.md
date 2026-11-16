@@ -96,6 +96,9 @@ When an agent calls `POST /api/anthropic/v1/messages` with
 11. Emit one AuditEvent → SQLite + (optional) JSONL mirror.
 ```
 
+See [egress and inspection](concepts/egress-and-inspection.md) for what
+each egress mode enforces and what content inspection can and cannot catch.
+
 Steps 1–11 happen per request. The audit row is the operator's
 single source of truth for who-called-what-when. `/tools`, `/models` and
 personalized `/skill` show current finite eligibility and runtime activation.
