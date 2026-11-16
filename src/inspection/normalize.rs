@@ -5,11 +5,6 @@
 //! whitespace becomes one space, and everything is lower-cased. Offsets map back to
 //! the original text so a hit can be redacted where it really is.
 
-/// Longest run of invisible characters that is dropped. A longer run is
-/// kept (and breaks any phrase it sits in): the scanner reports it on its
-/// own, which keeps every match within a fixed number of original bytes.
-pub(super) const MAX_DROPPED_RUN: usize = 4;
-
 /// Characters that render as nothing and are dropped before matching:
 /// zero-width and joiner characters, soft hyphen, bidi controls,
 /// invisible operators, fillers, variation selectors and TAG characters.
@@ -88,26 +83,10 @@ fn push(out: &mut String, map: &mut Vec<usize>, at: usize, c: char) {
 pub(super) fn fold(text: &str) -> (String, Vec<usize>) {
     let mut out = String::with_capacity(text.len());
     let mut map = Vec::with_capacity(text.len());
-    let mut run: Vec<(usize, char)> = Vec::new();
     let mut after_space = false;
-    // A kept run of invisible characters ends any whitespace run.
-    let flush = |run: &mut Vec<(usize, char)>, out: &mut String, map: &mut Vec<usize>| {
-        let kept = run.len() > MAX_DROPPED_RUN;
-        if kept {
-            for &(at, c) in run.iter() {
-                push(out, map, at, c);
-            }
-        }
-        run.clear();
-        kept
-    };
     for (at, c) in text.char_indices() {
         if is_invisible(c) {
-            run.push((at, c));
             continue;
-        }
-        if flush(&mut run, &mut out, &mut map) {
-            after_space = false;
         }
         let folded = fold_char(c);
         if folded == ' ' {
@@ -122,7 +101,6 @@ pub(super) fn fold(text: &str) -> (String, Vec<usize>) {
             push(&mut out, &mut map, at, lower);
         }
     }
-    flush(&mut run, &mut out, &mut map);
     (out, map)
 }
 
@@ -145,11 +123,9 @@ mod tests {
     }
 
     #[test]
-    fn long_invisible_runs_are_kept() {
-        let padded = format!("a{}b", "\u{200B}".repeat(5));
-        assert_eq!(fold(&padded).0, padded);
-        let short = format!("a{}b", "\u{200B}".repeat(4));
-        assert_eq!(fold(&short).0, "ab");
+    fn invisible_runs_of_any_length_are_dropped() {
+        let padded = format!("a{}b", "\u{200B}".repeat(50));
+        assert_eq!(fold(&padded).0, "ab");
     }
 
     #[test]

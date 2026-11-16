@@ -81,10 +81,12 @@ Rules: `ignore_instructions`, `disregard_above`, `role_reassignment`
 `system_override`, `mode_switch`, `do_anything_now`, `new_instructions`,
 `reveal_prompt`, `no_restrictions`, `from_now_on`, `system_tag`,
 `exfiltrate` (`send the credentials to`), `conceal_from_user` and
-`hidden_command`. A run of five or more invisible characters is not
-dropped (it would hide a phrase from a bounded window) and is reported as
-`invisible_run`; any TAG character (U+E0000 to U+E007F, used to smuggle
-invisible ASCII) is reported as `tag_characters`.
+`hidden_command`. A phrase hit covers its padding, so `redact` removes the
+whole phrase. Five or more invisible characters in a row are also
+reported as `invisible_run`, and any run of TAG characters (U+E0000 to
+U+E007F, used to smuggle invisible ASCII) as `tag_characters`; both
+cover the whole run. `max_match_len` for this scanner bounds folded text,
+so a streaming window must carry that much folded text.
 
 A phrase list catches copied, common attacks, not novel ones. A policy
 whose only scanner is `injection` defaults to `on_hit: flag` in both

@@ -86,6 +86,8 @@ pub trait Scanner: Send + Sync {
     fn id(&self) -> &str;
     /// Upper bound on the length (in bytes) of anything this scanner can
     /// match. Streaming scanning keeps this much overlap between windows.
+    /// A scanner that folds its input (`injection`) bounds the folded
+    /// text; its window must carry that much folded text.
     fn max_match_len(&self) -> usize;
     fn scan(&self, text: &str, direction: Direction) -> Result<Vec<Hit>, ScanError>;
 }
