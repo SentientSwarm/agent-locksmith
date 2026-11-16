@@ -1,7 +1,6 @@
 //! Phase E.7 — first-boot seed catalog loader.
 //!
-//! TS-160..TS-165. See artifact at
-//! `~/.kz-eng-mp/devloop/agents-stack/loop-states/phase-e-catalog-substrate-artifact.md`.
+//! TS-160..TS-165. Test IDs come from the Phase E catalog-substrate plan.
 
 use agent_locksmith::migrations::open_and_migrate;
 use agent_locksmith::registrations::{Kind, RegistrationRepository, seed_loader};

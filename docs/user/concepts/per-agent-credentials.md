@@ -42,7 +42,7 @@ agent             registration       explicit binding                       effe
 agent-a           lmstudio           bearer=SHARED_LM_KEY                   shared account X
 agent-b           lmstudio           bearer=SHARED_LM_KEY                   shared account X
 third-agent       lmstudio           bearer=OTHER_LM_KEY                    account Y
-unbound-agent    lmstudio           (absent)                               denied
+unbound-agent     lmstudio           (absent)                               denied
 ```
 
 Replacing a binding affects the next admission. Clearing it denies the next
@@ -210,8 +210,8 @@ Per-agent OAuth uses two pieces:
    locksmith agent set-credential "$OPENCLAW_AGENT_ID" codex --oauth-session openclaw
    ```
 
-Now `agent-a`'s requests resolve `oauth_sessions(codex,
-"hermes")` and `agent-b`'s resolve
+Now the hermes agent (`agent-a`) resolves `oauth_sessions(codex,
+"hermes")` and the openclaw agent (`agent-b`) resolves
 `oauth_sessions(codex, "openclaw")`.
 
 ## The OAuth single-grant trap

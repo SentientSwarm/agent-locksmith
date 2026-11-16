@@ -1,7 +1,6 @@
 //! Phase E.1 — Kind enum + AuthSpec + name validators.
 //!
-//! TS-100..TS-106. See artifact at
-//! `~/.kz-eng-mp/devloop/agents-stack/loop-states/phase-e-catalog-substrate-artifact.md`.
+//! TS-100..TS-106. Test IDs come from the Phase E catalog-substrate plan.
 
 use agent_locksmith::registrations::{AuthSpec, Kind, RegistrationError, validate_name};
 

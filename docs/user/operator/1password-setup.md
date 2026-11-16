@@ -96,7 +96,7 @@ The full reference matrix lives in `agents-stack/docs/spec/v0.3.0-1password-inte
 |---|---|---|
 | Environment | `<product>-<host>` | `openclaw-host-a` |
 | Service Account | `<host>-<product>` | `host-a-openclaw` |
-| Keychain entry | `OP_SERVICE_ACCOUNT_TOKEN_<HOST>_<PRODUCT>` (upper, hyphens → `_`) | `OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW` |
+| Keychain entry | `OP_SERVICE_ACCOUNT_TOKEN_<HOST>_<PRODUCT>` (upper, hyphens → `_`) | `OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW` |
 
 The host prefix on Keychain entries preserves global uniqueness across operator-personal hosts that may sync via iCloud Keychain. Production deploy hosts have isolated Keychains (no iCloud sync) per ADR-0006 D9.
 
@@ -148,13 +148,13 @@ Copy the recipe printed by `provision-host-sa.sh` and run it on the target host 
 # On host-a (or via ssh host-a 'TOKEN=...; security add-...')
 TOKEN='ops_eyJzaWdu...full-token-here'   # paste the full token
 security add-generic-password \
-    -s OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW \
+    -s OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW \
     -a your-email@example.com \
     -w "$TOKEN"
 unset TOKEN
 
 # Verify
-T="$(security find-generic-password -s OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW -w 2>/dev/null)"
+T="$(security find-generic-password -s OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW -w 2>/dev/null)"
 echo "stored length: ${#T}"   # expect ~700
 unset T
 ```
@@ -168,7 +168,7 @@ Add (or copy from `site.cfg.example`):
 ```bash
 # In <product>-site/site.cfg on the target host:
 op_environment_id=<env-id-from-step-4.1>
-op_keychain_service=OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW
+op_keychain_service=OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW
 
 # Linux hosts only (macOS uses Keychain via op_keychain_service):
 # op_token_file=$HOME/.config/op/openclaw.token
@@ -218,7 +218,7 @@ The script does **not** delete the source `.env` — once you've validated the r
 # In a scratch directory (or the actual site dir)
 mkdir -p /tmp/render-test && cd /tmp/render-test
 echo "op_environment_id=<env-id>" > site.cfg
-echo "op_keychain_service=OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW" >> site.cfg
+echo "op_keychain_service=OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW" >> site.cfg
 
 SITE_DIR=/tmp/render-test \
     ~/.../layer8-proxy/examples/site/scripts/render-env-from-1password.sh

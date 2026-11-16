@@ -1,7 +1,6 @@
 //! Phase E.2 — registrations table migration + repo CRUD.
 //!
-//! TS-110..TS-117. See artifact at
-//! `~/.kz-eng-mp/devloop/agents-stack/loop-states/phase-e-catalog-substrate-artifact.md`.
+//! TS-110..TS-117. Test IDs come from the Phase E catalog-substrate plan.
 
 use agent_locksmith::migrations::open_and_migrate;
 use agent_locksmith::registrations::{AuthSpec, Kind, Registration, RegistrationRepository};

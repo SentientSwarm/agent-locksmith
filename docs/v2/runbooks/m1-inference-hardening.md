@@ -74,7 +74,7 @@ To exercise Ollama or LM Studio:
 Override the host via env var:
 
 ```bash
-OLLAMA_HOST=192.168.1.10:11434 cargo test --test proxy_suite inference_matrix_local_test::
+OLLAMA_HOST=192.0.2.10:11434 cargo test --test proxy_suite inference_matrix_local_test::
 ```
 
 ---

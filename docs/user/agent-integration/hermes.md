@@ -102,7 +102,7 @@ cd ~/hermes-site
 ```bash
 cat > site.cfg <<'EOF'
 # Site identity for the agent host.
-site_name=mini-m1
+site_name=host-a
 host=$(hostname)
 
 # Endpoint of the layer8-proxy stack.

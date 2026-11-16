@@ -1,7 +1,6 @@
 //! Phase E.3 — admin endpoints `/admin/operator/{tools,models,infra}/<name>`.
 //!
-//! TS-120..TS-129. See artifact at
-//! `~/.kz-eng-mp/devloop/agents-stack/loop-states/phase-e-catalog-substrate-artifact.md`.
+//! TS-120..TS-129. Test IDs come from the Phase E catalog-substrate plan.
 
 use agent_locksmith::admin::AdminService;
 use agent_locksmith::admin::uds::{UdsState, build_router};
