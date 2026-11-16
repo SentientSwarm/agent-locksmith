@@ -558,6 +558,13 @@ pub async fn proxy_handler(
         &ctx.tool_name,
     );
     let mut headers = req.headers().clone();
+    // AGENT-262 — the decoded path and query leave with the request too,
+    // so request inspection judges them alongside the body.
+    let uri_text: Vec<String> = [Some(req.uri().path()), req.uri().query()]
+        .into_iter()
+        .flatten()
+        .map(crate::inspection::percent_decode)
+        .collect();
     // AGENT-262 — an inspected response must arrive uncompressed to be
     // scanned, so the agent's Accept-Encoding is not forwarded.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {
@@ -571,12 +578,10 @@ pub async fn proxy_handler(
     };
     // AGENT-262 — inspect what the agent sent before anything leaves.
     let body_bytes = match inspect::request_policy(&state, &ctx.tool_name) {
-        Some(policy) => {
-            match inspect::request(policy, &state.audit, &ctx, &headers, body_bytes).await {
-                Ok(b) => b,
-                Err(blocked) => return blocked,
-            }
-        }
+        Some(_) => match inspect::request(&state, &ctx, &headers, body_bytes, uri_text).await {
+            Ok(b) => b,
+            Err(blocked) => return blocked,
+        },
         None => body_bytes,
     };
 
@@ -991,50 +996,57 @@ async fn handle_upstream_response(
     }
     // AGENT-262 — buffered response inspection. Streamed responses are
     // not scanned yet; they are audited as skipped.
+    let mut resp = Some(resp);
+    let mut unscanned: Option<inspect::UpstreamStream> = None;
     if let Some(policy) = inspect::response_policy(&state, &ctx.tool_name) {
-        if inspect::is_event_stream(upstream_content_type.as_deref()) {
+        if inspect::is_streamed(upstream_content_type.as_deref()) {
             inspect::record_stream_skipped(&state.audit, ctx).await;
         } else {
-            return match inspect::response(policy, &state, ctx, target, resp).await {
-                inspect::Buffered::Respond(r) => r,
-                inspect::Buffered::Body(body) => match rc.as_ref() {
-                    Some(rc) => {
-                        respond_with_controls(
-                            rc,
-                            &state.audit,
-                            ctx,
-                            target,
-                            upstream_host,
-                            upstream_status,
-                            upstream_content_type,
-                            response_headers,
-                            body,
-                        )
-                        .await
-                    }
-                    None => {
-                        record_proxy_request_success(
-                            &state.audit,
-                            ctx,
-                            target,
-                            upstream_host,
-                            upstream_status,
-                        )
-                        .await;
-                        let mut response = Response::new(Body::from(body));
-                        *response.status_mut() = status;
-                        *response.headers_mut() = response_headers;
-                        response
-                    }
-                },
-                // Unscanned, but the route's response controls still
-                // apply: buffer the rest and run them.
-                inspect::Buffered::Unscanned(body) if rc.is_some() => {
-                    let Ok(bytes) = axum::body::to_bytes(body, UNSCANNED_CONTROLS_LIMIT).await
+            let resp = resp.take().expect("unread");
+            match inspect::response(policy, &state, ctx, target, resp).await {
+                inspect::Buffered::Respond(r) => return r,
+                inspect::Buffered::Body(body) => {
+                    return match rc.as_ref() {
+                        Some(rc) => {
+                            respond_with_controls(
+                                rc,
+                                &state.audit,
+                                ctx,
+                                target,
+                                upstream_host,
+                                upstream_status,
+                                upstream_content_type,
+                                response_headers,
+                                body,
+                            )
+                            .await
+                        }
+                        None => {
+                            record_proxy_request_success(
+                                &state.audit,
+                                ctx,
+                                target,
+                                upstream_host,
+                                upstream_status,
+                            )
+                            .await;
+                            let mut response = Response::new(Body::from(body));
+                            *response.status_mut() = status;
+                            *response.headers_mut() = response_headers;
+                            response
+                        }
+                    };
+                }
+                // Unscanned, but the route's redaction patterns still need
+                // the whole body: buffer the rest and run them.
+                inspect::Buffered::Unscanned(stream)
+                    if rc.as_ref().is_some_and(rc_should_buffer) =>
+                {
+                    let Some(bytes) = collect_limited(stream, UNSCANNED_CONTROLS_LIMIT).await
                     else {
                         return inspect::upstream_read_failed();
                     };
-                    respond_with_controls(
+                    return respond_with_controls(
                         rc.as_ref().expect("guarded"),
                         &state.audit,
                         ctx,
@@ -1043,48 +1055,40 @@ async fn handle_upstream_response(
                         upstream_status,
                         upstream_content_type,
                         response_headers,
-                        bytes.to_vec(),
-                    )
-                    .await
-                }
-                inspect::Buffered::Unscanned(body) => {
-                    record_proxy_request_success(
-                        &state.audit,
-                        ctx,
-                        target,
-                        upstream_host,
-                        upstream_status,
+                        bytes,
                     )
                     .await;
-                    let mut response = Response::new(body);
-                    *response.status_mut() = status;
-                    *response.headers_mut() = response_headers;
-                    response
                 }
+                // Otherwise it streams like any response, size cap included.
+                inspect::Buffered::Unscanned(stream) => unscanned = Some(stream),
+            }
+        }
+    }
+    let body_stream: inspect::UpstreamStream = match unscanned {
+        Some(stream) => stream,
+        None => {
+            // Inspection reads the response only when it returns.
+            let Some(resp) = resp else {
+                return inspect::upstream_read_failed();
             };
+            // Tool has redaction patterns ⇒ buffer + apply non-streaming.
+            if let Some(rc) = rc.as_ref().filter(|rc| rc_should_buffer(rc)) {
+                return apply_buffered_response_controls(
+                    rc,
+                    &state.audit,
+                    ctx,
+                    target,
+                    upstream_host,
+                    upstream_status,
+                    upstream_content_type,
+                    response_headers,
+                    resp,
+                )
+                .await;
+            }
+            Box::pin(resp.bytes_stream())
         }
-    }
-    if let Some(rc) = rc.as_ref() {
-        // Tool has redaction patterns ⇒ buffer + apply non-streaming.
-        // Tools that need streaming + redaction compose with D-18
-        // in-process scanners (LlamaFirewall) — see m7-response-controls
-        // runbook.
-        if rc_should_buffer(rc) {
-            return apply_buffered_response_controls(
-                rc,
-                &state.audit,
-                ctx,
-                target,
-                upstream_host,
-                upstream_status,
-                upstream_content_type,
-                response_headers,
-                resp,
-            )
-            .await;
-        }
-    }
-
+    };
     record_proxy_request_success(
         &state.audit,
         ctx,
@@ -1106,10 +1110,10 @@ async fn handle_upstream_response(
                 upstream_status,
                 cap,
             );
-            let wrapped = SizeCappedStream::new(resp.bytes_stream(), Some(cap), on_truncate);
+            let wrapped = SizeCappedStream::new(body_stream, Some(cap), on_truncate);
             Body::from_stream(wrapped)
         }
-        None => Body::from_stream(resp.bytes_stream()),
+        None => Body::from_stream(body_stream),
     };
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -1117,9 +1121,22 @@ async fn handle_upstream_response(
     response
 }
 
-/// Upper bound on a response buffered for response controls after it
+/// Upper bound on a response buffered for redaction patterns after it
 /// was too large to inspect.
 const UNSCANNED_CONTROLS_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Read the rest of `stream`, or `None` past `limit` or on a read error.
+async fn collect_limited(mut stream: inspect::UpstreamStream, limit: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    use futures_util::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.ok()?);
+        if out.len() > limit {
+            return None;
+        }
+    }
+    Some(out)
+}
 
 /// Strip hop-by-hop headers (the body is rebuilt as an axum stream
 /// downstream, so axum/hyper sets these afresh).

@@ -9,13 +9,13 @@ use crate::inspection::{
 use crate::repo::audit::{AuditRepository, Decision, EventClass};
 use axum::{
     Json,
-    body::Body,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
 use serde_json::json;
+use std::time::Duration;
 
 /// The request policy for this route, if any.
 pub(super) fn request_policy<'a>(state: &'a AppState, route: &str) -> Option<&'a DirectionPolicy> {
@@ -27,25 +27,35 @@ pub(super) fn response_policy<'a>(state: &'a AppState, route: &str) -> Option<&'
     state.inspection.policy(route)?.response.as_ref()
 }
 
-/// Inspect the request body. `Ok` carries the body to send (rewritten
-/// when redacted); `Err` is the 403 to return instead.
+/// Inspect the request body, with the decoded path and query as text
+/// that is judged but never rewritten. `Ok` carries the body to send
+/// (rewritten when redacted); `Err` is the 403 to return instead.
 pub(super) async fn request(
-    policy: &DirectionPolicy,
-    audit: &Option<AuditRepository>,
+    state: &AppState,
     ctx: &RequestCtx,
     headers: &HeaderMap,
     body: Bytes,
+    extra: Vec<String>,
 ) -> Result<Bytes, Response> {
-    match inspection::apply(policy, Direction::Request, meta(headers), &body) {
+    let outcome = judge(
+        state,
+        &ctx.tool_name,
+        Direction::Request,
+        headers,
+        body.clone(),
+        extra,
+    )
+    .await;
+    match outcome {
         Outcome::Forward {
             body: rewritten,
             report,
         } => {
-            record(audit, ctx, &report, None).await;
+            record(&state.audit, ctx, &report, None).await;
             Ok(rewritten.map(Bytes::from).unwrap_or(body))
         }
         Outcome::Block { report } => {
-            record(audit, ctx, &report, Some(403)).await;
+            record(&state.audit, ctx, &report, Some(403)).await;
             Err(blocked(
                 StatusCode::FORBIDDEN,
                 "request blocked by inspection",
@@ -54,12 +64,65 @@ pub(super) async fn request(
     }
 }
 
-fn meta(headers: &HeaderMap) -> BodyMeta<'_> {
-    BodyMeta {
-        content_type: headers
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok()),
-        encoded: encoded(headers),
+/// How long one body may be scanned before `on_error` decides.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run `f` off the async workers; `None` if it outlives `timeout` or
+/// panics. A timed-out scan keeps its blocking thread until it ends.
+async fn run_blocking<T: Send + 'static>(
+    timeout: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
+        Ok(Ok(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// Inspect `body` under the route's policy for `direction`, on a
+/// blocking thread with a deadline.
+async fn judge(
+    state: &AppState,
+    route: &str,
+    direction: Direction,
+    headers: &HeaderMap,
+    body: Bytes,
+    extra: Vec<String>,
+) -> Outcome {
+    let inspection = state.inspection.clone();
+    let owned_route = route.to_string();
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let encoded = encoded(headers);
+    let scan = move || {
+        let policy = direction_policy(&inspection, &owned_route, direction)
+            .expect("judged routes have a policy");
+        let meta = BodyMeta {
+            content_type: content_type.as_deref(),
+            encoded,
+        };
+        inspection::apply_with(policy, direction, meta, &body, &extra)
+    };
+    match run_blocking(SCAN_TIMEOUT, scan).await {
+        Some(outcome) => outcome,
+        None => match direction_policy(&state.inspection, route, direction) {
+            Some(policy) => inspection::timed_out(policy, direction),
+            None => inspection::timed_out(&inspection::DirectionPolicy::closed(), direction),
+        },
+    }
+}
+
+fn direction_policy<'a>(
+    inspection: &'a inspection::Inspection,
+    route: &str,
+    direction: Direction,
+) -> Option<&'a DirectionPolicy> {
+    let route = inspection.policy(route)?;
+    match direction {
+        Direction::Request => route.request.as_ref(),
+        Direction::Response => route.response.as_ref(),
     }
 }
 
@@ -76,6 +139,23 @@ fn encoded(headers: &HeaderMap) -> bool {
                 .map(str::trim)
                 .any(|t| !t.is_empty() && !t.eq_ignore_ascii_case("identity")),
             Err(_) => true,
+        })
+}
+
+/// Is this response streamed (SSE or newline-delimited JSON)? Streamed
+/// responses are not buffered for inspection.
+pub(super) fn is_streamed(content_type: Option<&str>) -> bool {
+    is_event_stream(content_type)
+        || content_type.is_some_and(|c| {
+            c.split(';').next().is_some_and(|t| {
+                matches!(
+                    t.trim().to_ascii_lowercase().as_str(),
+                    "application/x-ndjson"
+                        | "application/jsonl"
+                        | "application/x-jsonlines"
+                        | "application/stream+json"
+                )
+            })
         })
 }
 
@@ -100,13 +180,17 @@ pub(super) async fn record_stream_skipped(audit: &Option<AuditRepository>, ctx: 
     record(audit, ctx, &report, None).await;
 }
 
+/// An upstream body as a stream of chunks.
+pub(super) type UpstreamStream =
+    std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
+
 /// What a buffered response inspection decided.
 pub(super) enum Buffered {
     /// Send this body (inspected, possibly rewritten).
     Body(Vec<u8>),
-    /// Too large to scan under `fail_open`: send the prefix that was read
-    /// followed by the rest of the stream, unscanned.
-    Unscanned(Body),
+    /// Too large to scan under `fail_open`: the prefix that was read
+    /// followed by the rest of the upstream stream, unscanned.
+    Unscanned(UpstreamStream),
     /// Send this response instead (a block, or a body read failure).
     Respond(Response),
 }
@@ -121,7 +205,10 @@ pub(super) async fn response(
 ) -> Buffered {
     let audit = &state.audit;
     let headers = resp.headers().clone();
-    let meta = meta(&headers);
+    let meta = BodyMeta {
+        content_type: None,
+        encoded: encoded(&headers),
+    };
     let mut stream = resp.bytes_stream();
     let mut prefix: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -144,15 +231,25 @@ pub(super) async fn response(
                     let head = futures_util::stream::once(async move {
                         Ok::<Bytes, reqwest::Error>(Bytes::from(prefix))
                     });
-                    Buffered::Unscanned(Body::from_stream(head.chain(stream)))
+                    Buffered::Unscanned(Box::pin(head.chain(stream)))
                 }
             };
         }
     }
-    match inspection::apply(policy, Direction::Response, meta, &prefix) {
+    let prefix = Bytes::from(prefix);
+    let outcome = judge(
+        state,
+        &ctx.tool_name,
+        Direction::Response,
+        &headers,
+        prefix.clone(),
+        Vec::new(),
+    )
+    .await;
+    match outcome {
         Outcome::Forward { body, report } => {
             record(audit, ctx, &report, None).await;
-            Buffered::Body(body.unwrap_or(prefix))
+            Buffered::Body(body.unwrap_or_else(|| prefix.to_vec()))
         }
         Outcome::Block { report } => {
             record(audit, ctx, &report, Some(502)).await;
@@ -237,7 +334,7 @@ mod tests {
         for v in values {
             h.append(CONTENT_ENCODING, HeaderValue::from_bytes(v).unwrap());
         }
-        meta(&h).encoded
+        super::encoded(&h)
     }
 
     #[test]
@@ -248,5 +345,22 @@ mod tests {
         assert!(encoded(&[b"identity", b"gzip"]), "a second header value");
         assert!(encoded(&[b"identity, br"]), "a comma-separated token");
         assert!(encoded(&[b"\xffgzip"]), "an unreadable value fails closed");
+    }
+
+    #[tokio::test]
+    async fn a_slow_scan_gives_up_at_the_deadline() {
+        let slow = run_blocking(Duration::from_millis(20), || {
+            std::thread::sleep(Duration::from_millis(300));
+            1
+        });
+        assert_eq!(slow.await, None);
+        assert_eq!(run_blocking(Duration::from_secs(5), || 2).await, Some(2));
+    }
+
+    #[test]
+    fn ndjson_counts_as_streamed() {
+        assert!(is_streamed(Some("application/x-ndjson")));
+        assert!(is_streamed(Some("text/event-stream; charset=utf-8")));
+        assert!(!is_streamed(Some("application/json")));
     }
 }

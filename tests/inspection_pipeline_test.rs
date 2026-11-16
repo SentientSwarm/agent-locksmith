@@ -486,3 +486,84 @@ async fn injection_alone_defaults_to_flag_on_requests() {
     assert_eq!(up.received_requests().await.unwrap().len(), 1);
     assert_eq!(h.inspection_rows().await[0].2["verdict"], "flag");
 }
+
+#[tokio::test]
+async fn oversize_unscanned_response_keeps_streaming_size_cap() {
+    // Size-only controls stream with a truncation marker; inspection that
+    // gives up on an oversized body must not turn that into buffering.
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_string("z".repeat(5000)),
+        )
+        .mount(&up)
+        .await;
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "out"
+    description: "Inspected route"
+    upstream: "{}"
+    response:
+      max_size_bytes: 3000
+inspection:
+  routes:
+    - route: out
+      response:
+        scanners: ["literal:{CANARY}"]
+        max_scan_bytes: 1024
+"#,
+        up.uri()
+    );
+    let h = harness(parse_config_str(&yaml).unwrap()).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 200);
+    let text = resp.text();
+    assert!(
+        text.ends_with(agent_locksmith::response_controls::STREAM_TRUNCATION_MARKER),
+        "lost the streaming truncation marker: {} bytes",
+        text.len()
+    );
+}
+
+#[tokio::test]
+async fn query_string_is_inspected() {
+    let up = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&up)
+        .await;
+    let h = harness(config(&up.uri(), &request_policy("block"))).await;
+    let resp = h
+        .server
+        .get(&format!("/api/out/search?q=x%20{CANARY}"))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ndjson_responses_stream_unscanned() {
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("{{\"t\":\"{CANARY}\"}}\n"), "application/x-ndjson"),
+        )
+        .mount(&up)
+        .await;
+    let policy = format!(
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n        on_hit: block\n"
+    );
+    let h = harness(config(&up.uri(), &policy)).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 200);
+    let rows = h.inspection_rows().await;
+    assert_eq!(rows[0].0, "inspection_skipped");
+    assert_eq!(rows[0].2["reason"], "streaming");
+}

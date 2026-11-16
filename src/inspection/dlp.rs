@@ -35,6 +35,8 @@ struct Rule {
     max_len: usize,
     /// Extra test on the reported span.
     check: Option<fn(&str) -> bool>,
+    /// Grows a match past what the pattern matched (text, match end).
+    extend: Option<fn(&str, usize) -> usize>,
 }
 
 fn rule(id: &'static str, pattern: &str, max_len: usize, check: Option<fn(&str) -> bool>) -> Rule {
@@ -43,7 +45,55 @@ fn rule(id: &'static str, pattern: &str, max_len: usize, check: Option<fn(&str) 
         re: Regex::new(pattern).expect("dlp rule compiles"),
         max_len,
         check,
+        extend: None,
     }
+}
+
+/// Longest PEM body (between the BEGIN and END lines) redacted as one key.
+const PEM_BODY_MAX: usize = 8192;
+const PEM_HEADER_MAX: usize = 47;
+
+static PEM_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?-u)-----END [A-Z ]{0,20}PRIVATE KEY-----").expect("compiles"));
+
+/// The whole PEM block after a BEGIN line: through the END line, or, with
+/// no END in reach, through the base64 and RFC 1421 header lines that
+/// follow. Redacting only the BEGIN line would leave the key.
+fn pem_extend(text: &str, header_end: usize) -> usize {
+    let rest = &text[header_end..];
+    let mut limit = rest.len().min(PEM_BODY_MAX);
+    while !rest.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    let window = &rest[..limit];
+    if let Some(m) = PEM_END.find(window) {
+        return header_end + m.end();
+    }
+    let mut end = 0;
+    let mut offset = 0;
+    let mut after_header = false;
+    for (i, line) in window.split('\n').enumerate() {
+        let t = line.trim_end_matches('\r');
+        let base64 = !t.is_empty()
+            && t.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b));
+        let header = t.starts_with("Proc-Type:") || t.starts_with("DEK-Info:");
+        if base64 || header {
+            end = offset + t.len();
+            after_header = header;
+        } else {
+            // The rest of the BEGIN line, or the blank line after RFC 1421
+            // headers, is skipped; anything else ends the block.
+            let skippable = (i == 0 && t.trim().is_empty()) || (t.is_empty() && after_header);
+            if skippable {
+                offset += line.len() + 1;
+                continue;
+            }
+            break;
+        }
+        offset += line.len() + 1;
+    }
+    header_end + end
 }
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
@@ -85,12 +135,15 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             107,
             None,
         ),
-        rule(
-            "private_key",
-            r"(?-u)-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----",
-            47,
-            None,
-        ),
+        Rule {
+            extend: Some(pem_extend),
+            ..rule(
+                "private_key",
+                r"(?-u)-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----",
+                PEM_HEADER_MAX + PEM_BODY_MAX,
+                None,
+            )
+        },
         rule(
             "jwt",
             r"(?-u)\beyJ[A-Za-z0-9_-]{5,2048}\.[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,1024}",
@@ -153,7 +206,8 @@ fn rule_hits(text: &str) -> Vec<(&'static str, usize, usize)> {
         for caps in r.re.captures_iter(text) {
             let m = caps.get(1).or_else(|| caps.get(0)).expect("group 0");
             if m.len() <= r.max_len && r.check.is_none_or(|c| c(m.as_str())) {
-                out.push((r.id, m.start(), m.end()));
+                let end = r.extend.map_or(m.end(), |grow| grow(text, m.end()));
+                out.push((r.id, m.start(), end));
             }
         }
     }
@@ -357,7 +411,7 @@ mod tests {
         let mut g = Gen(7);
         // `g` is `g`: the token only exists after JSON unescaping.
         let body = format!(
-            r#"{{"msg":"line one\ntoken=ghp_{}\t(end)"}}"#,
+            r#"{{"msg":"line one\ntoken=\u0067hp_{}\t(end)"}}"#,
             g.chars(AN, 36)
         );
         assert_eq!(json_rules(&body), vec!["github_token"]);
@@ -379,5 +433,128 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(plain);
         assert!(encoded.len() > 4096);
         assert!(scan(&encoded).is_empty());
+    }
+
+    #[test]
+    fn whole_pem_block_is_one_hit() {
+        let mut g = Gen(17);
+        let body: Vec<String> = (0..6).map(|_| g.chars(AN, 64)).collect();
+        for (kind, headers) in [
+            ("RSA ", ""),
+            (
+                "RSA ",
+                "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABCDEF0123456789\n\n",
+            ),
+            ("", ""),
+        ] {
+            let block = format!(
+                "-----BEGIN {kind}PRIVATE KEY-----\n{headers}{}\n-----END {kind}PRIVATE KEY-----",
+                body.join("\n")
+            );
+            let text = format!("key:\n{block}\nand more prose");
+            let h: Vec<_> = scan(&text)
+                .into_iter()
+                .filter(|h| h.rule == "private_key")
+                .collect();
+            assert_eq!(h.len(), 1, "{kind}{headers}");
+            assert_eq!(&text[h[0].start..h[0].end], block);
+            assert!(
+                scan(&text).iter().all(|x| x.rule == "private_key"),
+                "extra hits"
+            );
+        }
+    }
+
+    #[test]
+    fn pem_without_end_covers_the_body_lines() {
+        let mut g = Gen(19);
+        let body = format!("{}\n{}", g.chars(AN, 64), g.chars(AN, 40));
+        let text = format!("-----BEGIN PRIVATE KEY-----\n{body}\n\nAfter the cut.");
+        let h = &scan(&text)[0];
+        assert_eq!(h.rule, "private_key");
+        assert_eq!(
+            &text[h.start..h.end],
+            format!("-----BEGIN PRIVATE KEY-----\n{body}")
+        );
+    }
+
+    fn outcome(content_type: &str, body: &[u8], on_hit: Verdict) -> Outcome {
+        let policy = DirectionPolicy {
+            on_hit,
+            ..block_policy()
+        };
+        let meta = BodyMeta {
+            content_type: Some(content_type),
+            encoded: false,
+        };
+        apply(&policy, Direction::Request, meta, body)
+    }
+
+    fn token(seed: u64) -> String {
+        format!("ghp_{}", Gen(seed).chars(AN, 36))
+    }
+
+    #[test]
+    fn invalid_utf8_does_not_hide_a_secret() {
+        let mut body = format!(r#"{{"q":"{}"}}"#, token(23)).into_bytes();
+        body.push(0xFF);
+        assert!(matches!(
+            outcome("application/json", &body, Verdict::Block),
+            Outcome::Block { .. }
+        ));
+    }
+
+    #[test]
+    fn escaped_key_in_unparseable_json_is_found() {
+        // Trailing bytes make serde_json reject the body (Go's decoder
+        // accepts it); the key is only visible after unescaping.
+        let t = token(29);
+        let body = format!("{{\"q\":\"\\u0067{}\"}} trailing", &t[1..]);
+        assert!(body.contains("\\u0067hp_"));
+        assert!(serde_json::from_str::<serde_json::Value>(&body).is_err());
+        assert!(matches!(
+            outcome("application/json", body.as_bytes(), Verdict::Block),
+            Outcome::Block { .. }
+        ));
+    }
+
+    #[test]
+    fn shadowed_duplicate_key_is_scanned() {
+        let body = format!(r#"{{"q":"{}","q":"hi"}}"#, token(31));
+        assert!(matches!(
+            outcome("application/json", body.as_bytes(), Verdict::Block),
+            Outcome::Block { .. }
+        ));
+        // It can't be redacted where the parser can't see it: block.
+        assert!(matches!(
+            outcome("application/json", body.as_bytes(), Verdict::Redact),
+            Outcome::Block { report } if report.verdict == Verdict::Block
+        ));
+    }
+
+    #[test]
+    fn form_encoded_key_is_found() {
+        let t = token(37);
+        let body = format!("a=1&q=gh%70{}&b=2", &t[3..]);
+        assert!(matches!(
+            outcome(
+                "application/x-www-form-urlencoded",
+                body.as_bytes(),
+                Verdict::Block
+            ),
+            Outcome::Block { .. }
+        ));
+    }
+
+    #[test]
+    fn plain_json_redaction_still_rewrites() {
+        let body = format!(r#"{{"q":"use {} now"}}"#, token(41));
+        let Outcome::Forward {
+            body: Some(out), ..
+        } = outcome("application/json", body.as_bytes(), Verdict::Redact)
+        else {
+            panic!("expected a rewrite");
+        };
+        assert!(String::from_utf8(out).unwrap().contains("[REDACTED:dlp]"));
     }
 }

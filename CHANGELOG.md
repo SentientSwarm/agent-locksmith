@@ -46,8 +46,11 @@
 - Content inspection (AGENT-262). An `inspection:` config block gives a
   route request and response scanners with a verdict on a hit (`pass`,
   `flag`, `redact` or `block`) and a choice of failing open or closed.
-  Request bodies are scanned before anything is sent upstream, and
-  buffered responses before anything reaches the agent. Each inspection
+  Request bodies, paths and query strings are scanned before anything
+  is sent upstream, and buffered responses before anything reaches the
+  agent. Raw bytes are scanned as well as parsed JSON, so invalid UTF-8,
+  unparseable JSON and duplicate keys don't hide a match; streamed
+  (SSE, ndjson) responses are not scanned yet. Each inspection
   that finds, skips or fails something writes an `inspection_*` security
   audit event carrying rule ids and SHA-256 hashes, never the matched
   text. Scanners: `literal:<text>` and `dlp` (AGENT-263), Locksmith's

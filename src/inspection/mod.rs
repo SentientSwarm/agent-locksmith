@@ -16,8 +16,10 @@ mod literal;
 mod normalize;
 mod text;
 
+pub(crate) use text::percent_decode;
+
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub use config::InspectionConfig;
@@ -196,6 +198,26 @@ pub enum Outcome {
     },
 }
 
+/// The outcome for a scan that did not finish in time.
+pub fn timed_out(policy: &DirectionPolicy, direction: Direction) -> Outcome {
+    let mut report = Report::new(direction);
+    report.error = Some("scan timed out".into());
+    unjudged(policy, report)
+}
+
+impl DirectionPolicy {
+    /// A policy with no scanners that fails closed: the fallback when a
+    /// route's policy can't be found for a scan that failed.
+    pub fn closed() -> Self {
+        Self {
+            scanners: Vec::new(),
+            on_hit: Verdict::Block,
+            on_error: OnError::FailClosed,
+            max_scan_bytes: 0,
+        }
+    }
+}
+
 /// Fail closed or open on a body the scanners could not judge.
 fn unjudged(policy: &DirectionPolicy, report: Report) -> Outcome {
     match policy.on_error {
@@ -233,6 +255,80 @@ pub fn apply(
     meta: BodyMeta<'_>,
     body: &[u8],
 ) -> Outcome {
+    apply_with(policy, direction, meta, body, &[])
+}
+
+/// Hits found so far, keyed so the raw views don't count a hit twice.
+type Seen = HashSet<(String, String, String)>;
+
+/// A span one scanner matched, and whether its hit was new.
+struct ScanSpan {
+    start: usize,
+    end: usize,
+    scanner: String,
+    verdict: Verdict,
+    new: bool,
+}
+
+/// Run every scanner over `text`; returns the spans to rewrite.
+fn scan_text(
+    policy: &DirectionPolicy,
+    direction: Direction,
+    text: &str,
+    report: &mut Report,
+    seen: &mut Seen,
+) -> Vec<ScanSpan> {
+    let mut spans = Vec::new();
+    for scanner in &policy.scanners {
+        let hits = match scanner.scan(text, direction) {
+            Ok(hits) => hits,
+            Err(e) => {
+                report.error = Some(format!("{}: {e}", scanner.id()));
+                continue;
+            }
+        };
+        for hit in hits {
+            let Some(matched) = text.get(hit.start..hit.end) else {
+                report.error = Some(format!("{}: hit outside the text", scanner.id()));
+                continue;
+            };
+            let verdict = if hit.flag_only {
+                policy.on_hit.min(Verdict::Flag)
+            } else {
+                policy.on_hit
+            };
+            let sha256 = sha256_hex(matched);
+            let key = (scanner.id().to_string(), hit.rule.clone(), sha256.clone());
+            let new = seen.insert(key);
+            if new {
+                report.verdict = report.verdict.max(verdict);
+                report.hits.push(HitRecord {
+                    scanner: scanner.id().to_string(),
+                    rule: hit.rule.clone(),
+                    sha256,
+                });
+            }
+            spans.push(ScanSpan {
+                start: hit.start,
+                end: hit.end,
+                scanner: scanner.id().to_string(),
+                verdict,
+                new,
+            });
+        }
+    }
+    spans
+}
+
+/// Inspect `body`, plus `extra` text that travels with it (a request's
+/// decoded path and query), which can be judged but not rewritten.
+pub fn apply_with(
+    policy: &DirectionPolicy,
+    direction: Direction,
+    meta: BodyMeta<'_>,
+    body: &[u8],
+    extra: &[String],
+) -> Outcome {
     let mut report = Report::new(direction);
     if body.len() > policy.max_scan_bytes {
         report.skipped = Some(SkipReason::Oversize);
@@ -244,57 +340,52 @@ pub fn apply(
         report.skipped = Some(SkipReason::Encoded);
         return unjudged(policy, report);
     }
-    let content_type = meta.content_type;
-    // Binary bodies are not text the scanners understand; they pass
-    // (audited) whatever `on_error` says, so uploads are never blocked.
-    let Ok(doc) = text::Document::parse(content_type, body) else {
-        report.skipped = Some(SkipReason::NotText);
-        return Outcome::Forward { body: None, report };
-    };
-    let segments = doc.segments();
-    let mut spans: HashMap<usize, Vec<(usize, usize, String)>> = HashMap::new();
+    let doc = text::Document::parse(meta.content_type, body).ok();
+    let mut seen = Seen::new();
+    let mut spans: text::Spans = HashMap::new();
+    let segments = doc
+        .as_ref()
+        .map(text::Document::segments)
+        .unwrap_or_default();
     for (index, segment) in segments.iter().enumerate() {
-        for scanner in &policy.scanners {
-            match scanner.scan(segment, direction) {
-                Ok(hits) => {
-                    for hit in hits {
-                        let Some(matched) = segment.get(hit.start..hit.end) else {
-                            continue;
-                        };
-                        let verdict = if hit.flag_only {
-                            policy.on_hit.min(Verdict::Flag)
-                        } else {
-                            policy.on_hit
-                        };
-                        report.verdict = report.verdict.max(verdict);
-                        report.hits.push(HitRecord {
-                            scanner: scanner.id().to_string(),
-                            rule: hit.rule.clone(),
-                            sha256: sha256_hex(matched),
-                        });
-                        if verdict == Verdict::Redact || verdict == Verdict::Block {
-                            spans.entry(index).or_default().push((
-                                hit.start,
-                                hit.end,
-                                scanner.id().to_string(),
-                            ));
-                        }
-                    }
-                }
-                Err(e) => report.error = Some(format!("{}: {e}", scanner.id())),
+        for f in scan_text(policy, direction, segment, &mut report, &mut seen) {
+            if f.verdict >= Verdict::Redact {
+                spans
+                    .entry(index)
+                    .or_default()
+                    .push((f.start, f.end, f.scanner));
             }
         }
+    }
+    // What parsing hides (invalid UTF-8, escapes in unparseable JSON,
+    // shadowed duplicate keys, form encoding) and what travels outside
+    // the body is judged too. It can't be rewritten in place, so a
+    // redaction it needs becomes a block.
+    let mut unredactable = false;
+    let mut views = text::raw_views(meta.content_type, body);
+    views.retain(|v| segments.len() != 1 || segments[0] != *v);
+    views.extend(extra.iter().cloned());
+    for view in &views {
+        let found = scan_text(policy, direction, view, &mut report, &mut seen);
+        unredactable |= found.iter().any(|f| f.new && f.verdict >= Verdict::Redact);
     }
     if report.error.is_some() && policy.on_error == OnError::FailClosed {
         return unjudged(policy, report);
     }
-    match report.verdict {
-        Verdict::Block => Outcome::Block { report },
-        Verdict::Redact => Outcome::Forward {
+    if report.verdict == Verdict::Redact && (unredactable || doc.is_none()) {
+        report.verdict = Verdict::Block;
+    }
+    if doc.is_none() && report.hits.is_empty() {
+        // Binary with nothing text-shaped in it: forwarded, audited.
+        report.skipped = Some(SkipReason::NotText);
+    }
+    match (report.verdict, doc) {
+        (Verdict::Block, _) => Outcome::Block { report },
+        (Verdict::Redact, Some(doc)) => Outcome::Forward {
             body: Some(doc.redact(&spans)),
             report,
         },
-        Verdict::Pass | Verdict::Flag => Outcome::Forward { body: None, report },
+        _ => Outcome::Forward { body: None, report },
     }
 }
 
