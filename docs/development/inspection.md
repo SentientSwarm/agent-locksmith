@@ -68,10 +68,11 @@ matched, so a 50 KiB inline image is neither decoded nor flagged.
 
 ### `injection` rules
 
-AGENT-264. Text is folded first: zero-width characters (U+200B to
-U+200D, U+2060, U+FEFF) are dropped, Cyrillic and Greek look-alikes and
-fullwidth ASCII fold to ASCII, whitespace becomes a space, and case is
-lowered. Hits are reported at their original byte offsets, so `redact`
+AGENT-264. Text is folded first: invisible format characters (zero-width
+and joiners, soft hyphen, bidi controls, invisible operators, fillers,
+variation selectors, TAG characters) are dropped, Cyrillic and Greek
+look-alikes and fullwidth ASCII fold to ASCII, each whitespace run
+becomes one space, and case is lowered. Hits are reported at their original byte offsets, so `redact`
 removes what was really sent.
 
 Rules: `ignore_instructions`, `disregard_above`, `role_reassignment`
@@ -82,7 +83,8 @@ Rules: `ignore_instructions`, `disregard_above`, `role_reassignment`
 `exfiltrate` (`send the credentials to`), `conceal_from_user` and
 `hidden_command`. A run of five or more invisible characters is not
 dropped (it would hide a phrase from a bounded window) and is reported as
-`invisible_run`.
+`invisible_run`; any TAG character (U+E0000 to U+E007F, used to smuggle
+invisible ASCII) is reported as `tag_characters`.
 
 A phrase list catches copied, common attacks, not novel ones. A policy
 whose only scanner is `injection` defaults to `on_hit: flag` in both

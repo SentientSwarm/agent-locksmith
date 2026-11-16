@@ -363,8 +363,8 @@ locksmith agent set-credential "$AGENT_ID" codex --broker
 ### Egress policy
 
 ```bash
-locksmith egress policy             # JSON: mode, hosts and the routes behind each
-locksmith egress policy --pipelock  # Pipelock api_allowlist fragment
+locksmith egress policy --format json  # mode, hosts and the routes behind each
+locksmith egress policy --pipelock     # Pipelock api_allowlist fragment
 ```
 
 `GET /admin/operator/egress/policy` lists every host that an enabled
