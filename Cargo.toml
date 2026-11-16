@@ -137,6 +137,10 @@ name = "build_identity_test"
 path = "tests/build_identity_test.rs"
 
 [[test]]
+name = "process_hardening_test"
+path = "tests/process_hardening_test.rs"
+
+[[test]]
 name = "cli_e2e_test"
 path = "tests/cli_e2e_test.rs"
 

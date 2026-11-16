@@ -44,7 +44,7 @@ Filters are substring matches, so `admin_https_test::` also runs
 `cli_admin_https_test::`, and `proxy_test::` also runs
 `credential_store_proxy_test::` and `op_credential_proxy_test::`.
 
-Thirty files stay as their own binaries: those that start real daemon, CLI
+Thirty-two files stay as their own binaries: those that start real daemon, CLI
 or SDK processes (in one binary, about fifty of them would start at once and
 their startup deadlines would compete), those that change environment
 variables or the process umask, re-run their own executable, resolve

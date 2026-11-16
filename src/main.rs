@@ -19,6 +19,12 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    // Before anything reads a secret: same-uid processes (the classifier
+    // sidecar) must not read this process's environment or memory.
+    if let Err(e) = agent_locksmith::process_hardening::deny_same_uid_inspection() {
+        eprintln!("Failed to mark the process non-dumpable: {e}");
+        std::process::exit(1);
+    }
     let cli = Cli::parse();
     if cli.build_info {
         println!("{}", agent_locksmith::build_info::document("locksmithd"));

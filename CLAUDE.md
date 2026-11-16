@@ -141,7 +141,7 @@ SQLite migrations under `migrations/` are embedded and applied on daemon startup
 - **`locksmithd`** (`src/main.rs`) — the daemon. Loads YAML config, wires telemetry + shutdown coordinator, calls `daemon::run`.
 - **`locksmith`** (`src/cli/main.rs`) — operator + agent self-service CLI. Talks to the daemon over the admin UDS or admin HTTPS. Subcommands: `agent`, `bootstrap`, `bootstrap-operator` (offline; mints operator credential), `tool` / `model` / `infra` (catalog management — Phase E.4), `oauth` (Phase F.4), `audit`, `export`, `mtls`, `status`, `rotate`. Exit codes are SPEC §4.7.2 (0/1/2/3/4/5).
 
-Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/`: six grouped suite binaries plus 30 standalone ones (see `docs/development/local-ci.md#test-binaries`; `autotests = false`, so a new file must be added to a suite or `Cargo.toml`).
+Library code (everything in `src/lib.rs`) is shared between both binaries and the integration tests in `tests/`: six grouped suite binaries plus 32 standalone ones (see `docs/development/local-ci.md#test-binaries`; `autotests = false`, so a new file must be added to a suite or `Cargo.toml`).
 
 ## Runtime architecture
 

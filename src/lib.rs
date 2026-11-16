@@ -16,6 +16,7 @@ pub mod migrations;
 pub mod mtls;
 pub mod oauth;
 pub mod operational_log_sink;
+pub mod process_hardening;
 pub mod proxy;
 pub mod ratelimit;
 pub mod registrations;
