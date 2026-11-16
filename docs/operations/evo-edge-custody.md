@@ -1,7 +1,9 @@
 # evo-x2-1 edge custody: phase 5a brokers, phase 5b proxy cutover
 
 Prepared 2026-11-16 for herd-ops-claude and agent-locksmith. This is a staged
-execution runbook. **No pool has moved. No destination is serving.**
+execution runbook. **No pool has moved. No destination broker is serving.**
+The broker OS has completed credential-free firewall preflight; bounded test
+TCP listeners are separate from broker activation.
 John authorized the migration and downtime; the coordinator owns space movement,
 source Codex drain, agent/herd endpoint changes and zone ACLs. Agent-locksmith
 owns deployment and identity/token custody. Never restart herdr, edit
@@ -96,13 +98,19 @@ Render **5a broker** rules with `--studio-compat`: this opt-in adds only inbound
 gateway TCP 43210/3456 to the broker's container-local firewall. It does not
 admit gateway access to scanner/hub, change any host/bridge ACL or grant edge
 outbound access to host/Docker. The existing bridge gateway-ingress rule was
-already present. **This is not a trusted source identity.** Read-only inspection
-on 2026-11-16 found active `inet incus` postrouting NAT chains
-`pstrt.agentbr0`, `pstrt.herdbr0`, `pstrt.svcbr0`, `pstrt.hokbr0` with
-source-subnet / destination-outside-subnet masquerade and no output-interface
-restriction. Traffic allowed through the coordinator's forward filters can
-therefore arrive at edge as `.4.1`. Do not claim that original-zone addresses
-survive NAT or that this exception alone isolates agents.
+already present. Read-only inspection of the **complete** `inet incus`
+postrouting chains on 2026-11-16 confirms that each zone has an earlier
+`ip saddr <zone> oifname @bridges accept` rule, before its internet masquerade.
+`@bridges` contains `svcbr0`, `hokbr0`, `herdbr0`, `edgebr0`, `incusbr0` and
+`agentbr0`. Therefore traffic between these bridges retains its real zone
+source address; bridge ACLs see that address too. The earlier analysis that
+looked only at masquerade rules omitted this exemption and was wrong.
+
+Gateway `.4.1` admits evo host processes and host Docker traffic masqueraded by
+Docker; it does not identify the studio SSH relay alone. The coordinator accepts
+that temporary scope for 5a until host Docker retirement in phase 11. Keep the
+provider's original authentication and the negative canaries below. No host or
+zone rule changes are authorized here.
 
 **Pending pre-transfer gate, owned jointly with the coordinator:** before any
 source pool outage or credential transfer, use a credential-free broker TCP
@@ -110,15 +118,20 @@ canary with the intended container firewall. The coordinator must demonstrate:
 
 - Direct evo SSH-destination connections to `.12:43210` and `:3456` succeed.
 - A real agents-zone client cannot establish TCP to either broker port, even
-  through the gateway/NAT path. An HTTP 401 is a failure of this isolation test.
+  with its real zone source address. An HTTP 401 is a failure of this isolation test.
 - A credential-free peer with real edge source `.10` cannot connect either.
   Keep edge-locksmith stopped: the coordinator supplies an isolated disposable
   same-bridge canary while `.10` is unused; do not start the proxy to test it.
 - Both intended herd VM paths work when the coordinator opens their narrow
-  ingress. Check the actual observed source addresses, rather than assuming
-  the `10.250.1.0/24` rule was what admitted a masqueraded request.
+  ingress. Confirm the observed herd source addresses agree with the
+  bridge-to-bridge NAT exemption.
 
-These canaries require actual listeners: a closed port proves nothing. Record
+On 2026-11-16 the credential-free broker listeners accepted evo gateway
+connections to both ports and explicitly rejected a temporary same-bridge
+`.10` namespace client on both ports. That client's process, veth and namespace
+were removed and absence checked. **Real herd and agents-zone canaries remain
+pending with the coordinator.** These canaries require actual listeners: a
+closed port proves nothing. Record
 source/destination/port and pass/refuse only; use bounded credential-free
 listeners, stop them and confirm their processes/listeners are gone afterward.
 If a denied source reaches the canary, **hold the move**: the coordinator must
@@ -212,17 +225,15 @@ For 5a install only the edge-brokers definitions, with token-monitor and lf-scan
 still masked and without their receipts. Do not start the other two containers.
 Render proxy definitions now only for review, not installation/activation.
 
-The current instruction keeps the broker OS stopped until source stop. This
-means the requested **pre-outage** kernel/network preflight is still pending:
-the coordinator must schedule a credential-free empty-OS preflight before the
-outage (all application units masked, no credentials/receipts), or defer the
-outage until an equivalent isolated container test is available. Do not quietly
-move this validation into the credential outage or claim host `nft --check`
-proved container kernel support. Keep both proxy containers stopped.
+The coordinator authorized a **credential-free empty-OS preflight** on
+2026-11-16 before the pool outage: every application unit must be masked, with
+no credentials or receipts. Booting that OS is separate from starting a pool;
+no destination pool may run while its source runs. Start with edge-brokers for
+5a, leaving the two proxy containers stopped. Do not move validation into the
+credential outage or claim host `nft --check` proves container kernel support.
 
-Install these files as container root during that agreed empty-OS preflight;
-otherwise installation remains after source stop and migration is held pending
-preflight. Unit definitions are in `/usr/local/lib/systemd/system`;
+Install these files as container root during that empty-OS preflight. Unit
+definitions are in `/usr/local/lib/systemd/system`;
 reserve `/etc/systemd/system` for masks and overrides. Before installation,
 `systemctl mask` every `edge-*.service` and `edge-*.socket` basename in the role,
 then install the rendered tree and run `systemctl daemon-reload`. Confirm the
@@ -302,14 +313,25 @@ nft list table inet edge_input >/dev/null
 Both real applications must succeed with no kernel/permission errors before
 any custody outage. A version string or `--check` alone is insufficient. If
 unsupported, hold migration and review a compatible atomic table replacement;
-do not remove the firewall dependency. This test has **not** run; all three
-containers remain stopped. Complete the network canaries above with the same
-rules before stopping a source pool. These rules must never be installed on
+do not remove the firewall dependency. **5a result, 2026-11-16:** edge-brokers
+booted with all eight application/socket units masked before boot, then passed
+both real applications using nftables 1.0.9; the firewall remained active on a
+later assertion, with zero restarts. Its separately mounted ZFS custody volume
+is empty, and every application/socket is masked and inactive. The two proxy
+containers remain stopped; their actual preflight is deferred to 5b. Complete
+the outstanding network canaries above before stopping a source pool. These rules must never be installed on
 evo itself. Verify the socket-proxyd executable path exists. Keep the caller-owned zone ACL
 separate from these container rules. The Node/Python units permit executable
 writable mappings for their runtimes; this is deliberate, not Rust/Go policy.
 
 ## 3. Drain order and control seats (coordinator)
+
+**Do not begin a source outage or move custody until M2/M4 preflight gates pass:**
+real allowed/denied-source TCP canaries against actual credential-free listeners,
+and two successful real in-container nft table applications. Empty-OS preflight
+is authorized with every application masked and no credentials/receipts; it is
+not a passed gate until evidence is recorded. Review approval is also required
+before any credentialed activation.
 
 1. Move the remaining studio spaces (agentic-border, toiyaba, hermes-agents,
    kz-tenant-inference, agent-locksmith) to kz-herd `10.250.1.10` or swarm-herd
@@ -350,7 +372,8 @@ python3 dist/evo-edge/drain_check.py codex
 
 `bootout` is expected to succeed the first time; if the job was already removed,
 inspect that condition rather than blindly swallowing every failure. The gate
-must exit 0 and print PASS. It verifies the job is both unloaded and disabled;
+must exit 0 and print PASS. It verifies the job is unloaded and disabled
+(modern `=> disabled` or legacy `=> true`, never `enabled`/`false`);
 all visible users' native Codex/omp/opencode clients, Node multi-auth/router
 scripts (including extensionless shims, relative paths and `--import=`) and
 rotation helpers are gone; nothing holds `.codex-terminal-pool` or
@@ -451,11 +474,16 @@ no pool files are staged on evo's ordinary host filesystem:
 
 ```sh
 set -eu
-rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
+# A symlink is not moved custody: stop and resolve each referent privately.
+# Assignment preserves find's error status under set -e; never suppress errors.
+link_scan=$(find /Users/jxstanford/.codex-terminal-pool/multi-auth \
+  /Users/jxstanford/.config/agent-pools -type l -print -quit)
+test -z "$link_scan"
+rsync -a --no-links --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
   --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
   /Users/jxstanford/.codex-terminal-pool/multi-auth/ \
   evo-x2-1:/srv/edge-state/codex/home/.codex-terminal-pool/multi-auth/
-rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
+rsync -a --no-links --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
   --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
   /Users/jxstanford/.config/agent-pools/ \
   evo-x2-1:/srv/edge-state/codex/agent-pools/
@@ -465,16 +493,21 @@ Move the separately inventoried top-level auth/accounts files too. The following
 uses narrow basenames in CODEX_HOME only (including their backups), never a
 home-directory wildcard. Reconcile any destination already present first; a
 skipped source is a failure, not a completed move. Resolve inventoried symlink
-referents separately before this regular-file pass.
+referents separately before this pass. The loop refuses symlinks, including
+broken ones, and `--no-links` is a second defense. Source absence remains a
+mandatory gate; a skipped link never counts as a transferred credential.
 
 ```sh
 bash <<'MOVE_TOP_AUTH'
 set -euo pipefail
 while IFS= read -r -d '' credential_file; do
-  rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
+  test ! -L "$credential_file"
+  test -f "$credential_file"
+  rsync -a --no-links --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
     --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
     "$credential_file" evo-x2-1:/srv/edge-state/codex/home/.codex-terminal-pool/
-done < <(find /Users/jxstanford/.codex-terminal-pool -maxdepth 1 -type f \
+done < <(find /Users/jxstanford/.codex-terminal-pool -maxdepth 1 \
+  \( -type f -o -type l \) \
   \( -name auth.json -o -name accounts.json -o -name 'auth.json.*' -o -name 'accounts.json.*' \) -print0)
 MOVE_TOP_AUTH
 ```
@@ -512,11 +545,18 @@ systemctl start edge-codex.service
 systemctl is-active --quiet edge-codex.service
 systemctl start edge-codex-relay.socket
 systemctl is-active --quiet edge-codex-relay.socket
+sleep 5
+systemctl is-active --quiet edge-input.service
+systemctl is-active --quiet edge-codex.service
+systemctl is-active --quiet edge-codex-relay.socket
+test "$(systemctl show --property=NRestarts --value edge-codex.service)" = 0
 ```
 
 Run the shell with `set -e` so a failed assertion stops the ceremony. A zero
 `systemctl start` exit status alone is insufficient: `ConditionPathExists`
-can skip a unit successfully. Start/assert the firewall before either pool or
+can skip a unit successfully. A Type=simple process can also crash just after
+start: recheck after the bounded wait and confirm no restart during observation.
+Serving/auth/streaming validation still follows. Start/assert the firewall before either pool or
 relay. The relay has only `After=` ordering for the pool and cannot activate it.
 Check both `127.0.0.1:43210` and `.12:43210`, authentication rejection and one
 authenticated streamed request using a private credential file, never a token
@@ -550,12 +590,88 @@ services as credential holders. Stop any compatibility relay for this component
 before a subsequent drain. Inventory the actual
 `TEAMROUTER_CONFIG` / legacy `TEAMCLAUDE_CONFIG` path first. Inspection found
 `/Users/jxstanford/.config/teamclaude.json`; the renamed
-`.config/teamrouter.json` takes precedence if later created. Move the selected
-config, state/quota siblings, private certificates/keys and credential-bearing
-backups using the same rsync remove-source-files protocol. Certificates sit
-beside the config: inspect filenames in installed `src/mitm.js`, including
-`teamclaude-ca.pem`, `teamclaude-leaf.pem`, `teamclaude-leaf.key` and CA private
-keys. Retain trust identity; never generate a replacement CA silently.
+`.config/teamrouter.json` takes precedence if later created. Move the selected config, state/quota siblings, private certificates/key and
+credential-bearing backups using the same reconciliation protocol. Installed
+`src/mitm.js` persists exactly `teamclaude-ca.pem`, `teamclaude-leaf.pem` and
+`teamclaude-leaf.key` beside the selected config. Its CA private key is never
+persisted; do not invent one or silently regenerate the chain. Any historical
+CA key or extra credential copy found by the private inventory also needs custody.
+
+After the complete private inventory and source drain PASS, run on studio:
+
+```sh
+bash <<'MOVE_TEAMCLAUDE'
+set -euo pipefail
+# Confirm these against the stopped job's actual environment/selection first.
+# If teamrouter.json won precedence, change this variable to that exact path.
+selected_config=/Users/jxstanford/.config/teamclaude.json
+config_dir=${selected_config%/*}
+config_stem=${selected_config%.json}
+team_dest=evo-x2-1:/srv/edge-state/teamclaude
+
+test -f "$selected_config"
+test ! -L "$selected_config"
+move_team_file() {
+  local source_file=$1 destination_name=$2
+  test ! -L "$source_file"  # also refuses broken links
+  if test -e "$source_file"; then
+    test -f "$source_file"
+    rsync -a --no-links --checksum --remove-source-files --ignore-existing \
+      --no-owner --no-group --quiet \
+      --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
+      "$source_file" "$team_dest/$destination_name"
+    test ! -e "$source_file"  # skipped/duplicate source is NOT a completed MOVE
+    test ! -L "$source_file"
+  fi
+}
+
+# The config is MOVED directly to its selected destination filename.
+move_team_file "$selected_config" teamclaude.json
+move_team_file "$config_stem.state.json" teamclaude.state.json
+move_team_file "$config_stem.quota-series.json" teamclaude.quota-series.json
+move_team_file "$config_dir/teamclaude-ca.pem" teamclaude-ca.pem
+move_team_file "$config_dir/teamclaude-leaf.pem" teamclaude-leaf.pem
+move_team_file "$config_dir/teamclaude-leaf.key" teamclaude-leaf.key
+# Historical key, only if the private inventory found one; current code has none.
+move_team_file "$config_dir/teamclaude-ca.key" teamclaude-ca.key
+
+# Narrow backup names only. Inventory any other credential-bearing names
+# separately; do not conclude this list proves there are none.
+while IFS= read -r -d '' backup_file; do
+  move_team_file "$backup_file" "${backup_file##*/}"
+done < <(find "$config_dir" -maxdepth 1 \( -type f -o -type l \) \
+  \( -name 'teamclaude.json.*' -o -name 'teamrouter.json.*' \
+     -o -name 'teamclaude.state.json.*' -o -name 'teamrouter.state.json.*' \
+     -o -name 'teamclaude.quota-series.json.*' -o -name 'teamrouter.quota-series.json.*' \
+     -o -name 'teamclaude-ca.pem.*' -o -name 'teamclaude-leaf.pem.*' \
+     -o -name 'teamclaude-leaf.key.*' -o -name 'teamclaude-ca.key.*' \) -print0)
+MOVE_TEAMCLAUDE
+```
+
+This block does not make a second active config or follow symlinks. If both
+legacy and renamed configs exist, privately inventory and move the unselected
+one as protected historical custody too, never leave a credential copy on studio.
+Any extra inventoried path requires the same exact-file move and absence checks.
+If a source link is found, stop before transferring that path, resolve its
+referent into the private inventory, and review the destination mapping.
+`--no-links` must never be removed to make an error disappear.
+
+Before issuing a receipt, reconcile the teamclaude inventory exactly as in §5:
+
+- Source-only files move only to verified absent destinations. Identical files
+  on both sides require private equality verification and source removal.
+- Differing files on both sides keep both brokers off for credential-owner
+  reconciliation. Do not overwrite or choose by mtime.
+- Destination-only files must belong to this transfer; any missing-both file
+  is an incomplete move. Verify the selected config's three accounts privately.
+- Match source absence and destination presence for every selected config,
+  state/quota sibling, certificate/leaf key, historical key and backup. Optional
+  absence in the command block is acceptable only when the inventory attests it.
+- Preserve the complete existing certificate chain and privately validate its
+  validity/coverage before starting; the package can regenerate an unsuitable
+  chain at startup. Do not silently accept a changed trust identity.
+- Re-run the source process/file/listener gate with the full same path inventory.
+  Keep both pools off until every conflict/link/copy is resolved.
 
 Destination selected config is `/srv/edge-state/teamclaude/teamclaude.json`,
 fixed by TEAMROUTER_CONFIG. It must retain all three accounts, account IDs,
@@ -741,5 +857,10 @@ Claude clients, component-specific listeners, file-holder refusal and failed
 inspection visibility. Test temporary roots are bounded and cleaned automatically.
 Host/container-specific systemd, actual nft kernel application, network negative
 canaries, package/model and credential/refresh acceptance remain pending.
-NAT isolation and the pre-outage empty-OS preflight are explicit activation
-blockers; no live drain, transfer or destination activation has occurred.
+The 5a broker kernel preflight passed: two real nft applications, gateway
+positive tests and `.10` rejection passed with no custody present. Full-chain
+inspection confirms the inter-bridge NAT exemption. Real herd/agents-zone
+canaries remain activation gates with the coordinator; proxy container preflight
+is still deferred. Also covered by regression tests: modern launchctl disabled
+output, unrelated odd quotes and executable paths with spaces. No live source
+drain, credential transfer or destination broker activation has occurred.

@@ -32,10 +32,11 @@ For 5a use `--studio-compat` on the edge-brokers render. It admits inbound
 10.250.4.1 to broker TCP 43210/3456 only, for SSH forwarding from the old studio
 loopback ports. It adds no outbound host/Docker allowance and does not expose
 scanner/hub. The 5a render also omits the normal `.10` broker/scanner allowance.
-Incus currently masquerades cross-zone traffic: gateway ingress is not proof of
-trusted origin. **Hold migration until the coordinator passes real denied-client
+Incus exempts inter-bridge traffic before internet masquerade, preserving zone
+source addresses. Gateway ingress admits evo host processes and masqueraded
+host Docker traffic, a temporary scope accepted by the coordinator for 5a. **Hold migration until the coordinator passes real denied-client
 canaries and a real in-container nft application before the pool outage**; see
-the runbook for the pending empty-OS preflight. The default render has no such exception. `compat_launchd.py`
+the runbook for the authorized credential-free empty-OS preflight. The default render has no such exception. `compat_launchd.py`
 renders those two inactive studio SSH jobs without loading them or reading
 credentials. Load each only after that source pool is stopped and its edge
 replacement serves; leave its original launchd pool job disabled. The current

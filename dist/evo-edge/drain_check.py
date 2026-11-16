@@ -20,7 +20,7 @@ class GateError(Exception):
     """Visibility was incomplete; never report a passed drain."""
 
 
-def classify(command, component):
+def classify(command, component, executable=None):
     # Unique refresher families anywhere, including extensionless shims,
     # relative paths and Node --import=. Intentionally conservative.
     if component == "codex" and re.search(r"codex-multi-auth|runtime-rotation", command, re.I):
@@ -28,10 +28,11 @@ def classify(command, component):
     try:
         args = shlex.split(command)
     except ValueError:
-        return "unparseable-process"
+        # ps command text is not shell-quoted; unrelated apostrophes are normal.
+        args = command.split()
     if not args:
         return None
-    executable = Path(args[0]).name
+    executable = Path(executable if executable is not None else args[0]).name
     if component == "teamclaude" and executable in {"teamclaude", "teamrouter"}:
         return "pool-capable-helper"
     names = {"codex", "omp", "opencode"} if component == "codex" else {"claude"}
@@ -90,6 +91,20 @@ def resource_holders(component, home, custody_paths=()):
     return holders
 
 
+def process_executables():
+    # Read comm separately: it is the full executable path and may have spaces.
+    result = run_visible(["ps", "-axo", "pid=,comm="])
+    if result.returncode or result.stderr.strip() or not result.stdout.strip():
+        raise GateError("executable visibility unavailable")
+    names = {}
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or not fields[0].isdigit():
+            raise GateError("unrecognized executable result")
+        names[int(fields[0])] = fields[1]
+    return names
+
+
 def check_source(component, home, custody_paths=()):
     label = f"gui/{os.getuid()}/{JOBS[component]}"
     job = run_visible(["launchctl", "print", label])
@@ -99,12 +114,13 @@ def check_source(component, home, custody_paths=()):
     elif "Could not find service" not in job.stdout + job.stderr:
         raise GateError("source launchd visibility unavailable")
     disabled = run_visible(["launchctl", "print-disabled", f"gui/{os.getuid()}"])
-    if disabled.returncode or not re.search(r'"' + re.escape(JOBS[component]) + r'"\s*=>\s*true', disabled.stdout):
+    if disabled.returncode or not re.search(r'"' + re.escape(JOBS[component]) + r'"\s*=>\s*(?:disabled|true)(?=\s|$)', disabled.stdout):
         print("REFUSE: source launchd job is not confirmed disabled")
         blocked = True
     processes = run_visible(["ps", "-axo", "uid=,pid=,command="])
     if processes.returncode or processes.stderr.strip() or not processes.stdout.strip():
         raise GateError("process visibility unavailable")
+    executables = process_executables()
     for line in processes.stdout.splitlines():
         fields = line.strip().split(None, 2)
         if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
@@ -112,7 +128,7 @@ def check_source(component, home, custody_paths=()):
         _, pid, command = fields
         if int(pid) == os.getpid():
             continue
-        reason = classify(command, component)
+        reason = classify(command, component, executable=executables.get(int(pid)))
         if reason:
             if reason == "claude-client":
                 # A client is not a refresher. The operator still hands control

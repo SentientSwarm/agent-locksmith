@@ -126,6 +126,40 @@ class BundleTest(unittest.TestCase):
 
 
 class ProcessGateTest(unittest.TestCase):
+    def test_modern_and_legacy_disabled_labels_pass_but_enabled_refuses(self):
+        import contextlib
+        import io
+        import subprocess
+        from unittest.mock import patch
+        gate = module("drain_check")
+        for value, refused in [("disabled", False), ("true", False), ("enabled", True), ("false", True), ("disabled_extra", True)]:
+            replies = [
+                subprocess.CompletedProcess([], 1, "", "Could not find service"),
+                subprocess.CompletedProcess([], 0, f'"com.jxstanford.agent-pools.codex" => {value}', ""),
+                subprocess.CompletedProcess([], 0, "501 123 /usr/bin/sleep 1\n", ""),
+            ]
+            with patch.object(gate, "run_visible", side_effect=replies), patch.object(
+                    gate, "process_executables", return_value={123: "/usr/bin/sleep"}), patch.object(
+                    gate, "resource_holders", return_value={"listener": set(), "custody-open": set()}), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(refused, gate.check_source("codex", Path("/source")), value)
+
+    def test_unrelated_odd_quote_does_not_refuse_but_refresher_does(self):
+        gate = module("drain_check")
+        self.assertIsNone(gate.classify("/usr/bin/sleep John's job", "codex"))
+        self.assertIsNotNone(gate.classify("/usr/local/bin/codex John's job", "codex"))
+        self.assertIsNotNone(gate.classify("node codex-multi-auth John's job", "codex"))
+
+    def test_executable_path_with_spaces_uses_ps_comm(self):
+        import subprocess
+        from unittest.mock import patch
+        gate = module("drain_check")
+        with patch.object(gate, "run_visible", return_value=subprocess.CompletedProcess(
+                [], 0, "123 /Users/John Stanford/bin/codex\n", "")):
+            self.assertEqual({123: "/Users/John Stanford/bin/codex"}, gate.process_executables())
+        self.assertIsNotNone(gate.classify(
+            "/Users/John Stanford/bin/codex resume abc", "codex",
+            executable="/Users/John Stanford/bin/codex"))
+
     def test_extensionless_node_shim_is_refresher(self):
         self.assertIsNotNone(module("drain_check").classify(
             "node /opt/homebrew/bin/codex-multi-auth auth status", "codex"))
@@ -196,6 +230,7 @@ class ProcessGateTest(unittest.TestCase):
         ]
         for kind in ["listener", "custody-open"]:
             with patch.object(gate, "run_visible", side_effect=replies), patch.object(
+                    gate, "process_executables", return_value={}), patch.object(
                     gate, "resource_holders", return_value={kind: {987}}), contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertTrue(gate.check_source("codex", Path("/source")))
                 self.assertIn(f"pid=987 kind={kind}", output.getvalue())
@@ -213,6 +248,7 @@ class ProcessGateTest(unittest.TestCase):
             subprocess.CompletedProcess([], 0, "501 123 /usr/local/bin/claude --resume abc\n", ""),
         ]
         with patch.object(gate, "run_visible", side_effect=replies), patch.object(
+                gate, "process_executables", return_value={123: "/usr/local/bin/claude"}), patch.object(
                 gate, "resource_holders", return_value={"listener": set(), "custody-open": set()}), contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertFalse(gate.check_source("teamclaude", Path("/source"), [Path("/source/teamclaude.json")]))
             self.assertIn("INFO: pid=123 kind=claude-client", output.getvalue())
