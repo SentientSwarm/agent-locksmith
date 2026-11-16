@@ -229,6 +229,39 @@ pub fn names_disagree(event: &SseEvent) -> bool {
     kind != name && (lanes::scheme_of(kind).is_some() || lanes::scheme_of(name).is_some())
 }
 
+/// The event is a snapshot clients append later deltas to (Responses
+/// `response.created` / `in_progress` output, an `output_item.added`
+/// item's content or summary, Anthropic `message_start` content) and it
+/// already carries text there. Real streams open these empty; text in one
+/// is scanned alone, so a match split from it into the deltas is missed.
+pub fn seeds_output(event: &SseEvent) -> bool {
+    let Some(value) = json(event) else {
+        return false;
+    };
+    let roots: &[&str] = match kind(event, &value).as_deref() {
+        Some("response.created" | "response.in_progress") => &["/response/output"],
+        Some("response.output_item.added") => &["/item/content", "/item/summary"],
+        Some("message_start") => &["/message/content"],
+        _ => return false,
+    };
+    roots
+        .iter()
+        .filter_map(|root| value.pointer(root))
+        .any(has_text)
+}
+
+/// Any non-empty string anywhere in `value`.
+fn has_text(value: &Value) -> bool {
+    match value {
+        Value::String(s) => !s.is_empty(),
+        Value::Array(items) => items.iter().any(has_text),
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| !METADATA.contains(&k.as_str()) && has_text(v)),
+        _ => false,
+    }
+}
+
 fn kind(event: &SseEvent, value: &Value) -> Option<String> {
     value
         .get("type")

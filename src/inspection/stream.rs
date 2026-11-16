@@ -393,9 +393,13 @@ impl StreamInspector {
     fn fix_scheme(&mut self, event: &SseEvent, step: &mut Step) -> bool {
         let found = sse::scheme(event);
         let changed = matches!((self.scheme, found), (Some(a), Some(b)) if a != b);
-        if changed || sse::names_disagree(event) {
+        if changed || sse::names_disagree(event) || sse::seeds_output(event) {
             if self.on_error == OnError::FailClosed {
-                self.report.error = Some("stream event names another protocol".into());
+                self.report.error = Some(if changed || sse::names_disagree(event) {
+                    "stream event names another protocol".into()
+                } else {
+                    "stream snapshot already carries output text".into()
+                });
                 self.block(step);
                 return false;
             }
@@ -1641,6 +1645,46 @@ mod tests {
         let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
         assert!(!out.contains(&k[..12]), "{out}");
         assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    #[test]
+    fn a_snapshot_that_seeds_an_output_fails_closed() {
+        use serde_json::json;
+        let k = key();
+        let responses = vec![
+            ev(
+                "response.output_item.added",
+                json!({"output_index": 0, "item": {"type": "message",
+                "id": "m1", "role": "assistant",
+                "content": [{"type": "output_text", "text": &k[..12], "annotations": []}]}}),
+            ),
+            ev(
+                "response.output_text.delta",
+                json!({"output_index": 0, "content_index": 0, "delta": &k[12..]}),
+            ),
+            ev("response.completed", json!({"response": {}})),
+        ];
+        let anthropic = vec![
+            ev(
+                "message_start",
+                json!({"message": {"id": "m1", "role": "assistant",
+                "content": [{"type": "text", "text": &k[..12]}]}}),
+            ),
+            ev(
+                "content_block_delta",
+                json!({"index": 0,
+                "delta": {"type": "text_delta", "text": &k[12..]}}),
+            ),
+            ev("message_stop", json!({})),
+        ];
+        for events in [responses, anthropic] {
+            let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+            assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+            assert!(i.report().error.is_some(), "{:?}", i.report());
+            let (out, i) = run(&policy(Verdict::Flag), &events);
+            assert!(!out.contains("inspection_blocked"));
+            assert!(i.hold_overflowed(), "fail_open notes the seed");
+        }
     }
 
     #[test]

@@ -216,21 +216,25 @@ output across windows by adding or varying others (a top-level `index`
 on a chat chunk names nothing, and an empty `choices` on another
 protocol's event changes nothing). An event naming another protocol, or
 whose event name and `type` differ where either names a protocol event
-(the SSE default name `message` names none), could be read two ways: under `fail_closed` the stream is blocked, under `fail_open` an
-`inspection_hold_overflow` row is written. So a match split across one output's deltas
-is found however the outputs interleave. Each window keeps the last `max_match_len - 1` bytes
-of its output, measured both raw and after folding, so a match split
-across any number of deltas is found once. A window scans once the text
-it has not scanned reaches an eighth of what it holds, so padding that
-keeps the window long cannot make scanning quadratic. Up to 31
+(the SSE default name `message` names none), could be read two ways; and
+a snapshot clients append deltas to (Responses `response.created`
+output, an `output_item.added` item's content or summary, Anthropic
+`message_start` content) carrying text, which real streams send empty,
+would split a match from its deltas. Either way, under `fail_closed` the
+stream is blocked, under `fail_open` an `inspection_hold_overflow` row
+is written. So a match split across one output's deltas is found however
+the outputs interleave. Each window keeps the last `max_match_len - 1`
+bytes of its output, measured both raw and after folding, so a match
+split across any number of deltas is found once. A window scans once the
+text it has not scanned reaches an eighth of what it holds, so padding
+that keeps the window long cannot make scanning quadratic. Up to 31
 unfinished outputs (1023 in all) get their own window; a finished
 output's window drops its text. Past that, or when non-empty text
-arrives for an output the
-protocol already said was finished, a match could be missed: under
-`fail_closed` the stream is blocked, under `fail_open` the outputs share
-one window (or the finished one reopens) and an `inspection_hold_overflow`
-row is written. An `index` is read as clients read it: an integer, a
-whole-number float or a numeric string.
+arrives for an output the protocol already said was finished, a match
+could be missed: under `fail_closed` the stream is blocked, under
+`fail_open` the outputs share one window (or the finished one reopens)
+and an `inspection_hold_overflow` row is written. An `index` is read as
+clients read it: an integer, a whole-number float or a numeric string.
 
 How the stream is forwarded depends on `on_hit`:
 
