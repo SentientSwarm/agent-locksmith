@@ -63,11 +63,11 @@ logging:
 # ── Upstream TLS trust (optional) ──────────────────────────
 # locksmith's HTTP client uses rustls + webpki bundled roots, which
 # IGNORE the system trust store. To verify an HTTPS upstream behind a
-# private/internal CA (e.g. Kamiwaza's internal CA), name a PEM bundle
+# private/internal CA (e.g. an organisation's internal CA), name a PEM bundle
 # here — its cert(s) are ADDED to the built-in roots. Verification is
 # never disabled (there is no accept-invalid-certs knob, by design).
 # tls:
-#   upstream_ca_bundle: "/etc/locksmith/ca/kamiwaza-ca.pem"
+#   upstream_ca_bundle: "/etc/locksmith/ca/internal-ca.pem"
 
 # ── Operational-log stream (optional) ─────────────────────
 # Daemon-internal operational events (config reloads, OAuth-refresh

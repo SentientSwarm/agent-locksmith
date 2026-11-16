@@ -104,7 +104,7 @@ not a fresh-model-context or filesystem-isolation claim.
 ## Limits and release state
 
 Local synthetic services do not establish live provider, installed deployment,
-Kamiwaza/Tomo or cross-platform compatibility. There is no new federation,
+platform or cross-platform compatibility. There is no new federation,
 quota/pool system, executable plugin host, WebSocket or protocol adapter.
 Version 1 is a bounded descriptive contract, not JSON Schema or runtime payload
 validation. Existing HTTP stream forwarding is unchanged; clear/revoke affects

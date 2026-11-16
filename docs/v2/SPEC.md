@@ -29,7 +29,7 @@ The design treats the 12 resolved decisions in PRD §14.1 as binding — they an
 |---------|-----------|
 | Pipelock | Network egress controller; composes with Locksmith per D-16 |
 | LlamaFirewall (and similar cognitive scanners) | In-process scanning library; composes per D-18 |
-| Kamiwaza inference platform | One inference upstream among many; D-11, D-17 keep Locksmith provider-agnostic |
+| Enterprise inference platform | One inference upstream among many; D-11, D-17 keep Locksmith provider-agnostic |
 | openclaw-hardened | Proving-ground deployment; consumes Locksmith via Ansible |
 | LiteLLM proxy / vLLM / TGI | OpenAI-compatible inference proxies; treated as ordinary tool entries |
 
@@ -2858,7 +2858,7 @@ Locksmith remains a single Rust binary plus a SQLite file (R-N1). v2 introduces 
 
 **Scaling considerations:**
 
-- **Single-instance by design.** Locksmith is one process per host. There is no multi-instance HA story in v2 (rate limiter is in-memory, INF-6; ArcSwap is process-local). For the audiences in PRD §3 (hardened operators, homelab/small-team, Kamiwaza enterprise), this is sufficient — Locksmith is per-deployment, not a fleet-wide service. Multi-instance HA is a deferred concern (recorded as a future risk in Q7).
+- **Single-instance by design.** Locksmith is one process per host. There is no multi-instance HA story in v2 (rate limiter is in-memory, INF-6; ArcSwap is process-local). For the audiences in PRD §3 (hardened operators, homelab/small-team, enterprise), this is sufficient — Locksmith is per-deployment, not a fleet-wide service. Multi-instance HA is a deferred concern (recorded as a future risk in Q7).
 - **SQLite throughput.** WAL mode + `synchronous=NORMAL` supports ~10k writes/sec on commodity SSD. Audit-write rate at proxied-request volume (a typical agent does <100 calls/sec) sits well below this. Periodic `wal_checkpoint(TRUNCATE)` (`locksmith maintenance checkpoint`) keeps the WAL file from growing unbounded (INF-21).
 - **Streaming concurrency.** Per-agent and global caps (INF-18, Q-22) are the operator's lever. Default 50/1000 is sized for typical hardware (Linux default fd limits are 1024 or 65535; 1000 streaming responses leaves headroom).
 - **Connection pooling.** Per-tool reqwest client (INF-25) reuses TCP/TLS connections to upstreams within the connection pool defaults. Hot upstreams (Anthropic, OpenAI) reuse keep-alive across requests; cold upstreams pay one-time TLS handshake.
@@ -2879,7 +2879,7 @@ Locksmith's external surface is deliberately narrow:
 - **Upstream HTTP services** (one per tool entry; existing). Locksmith is an HTTP client; injects credentials per `auth.header`/`auth.value`; forwards everything else byte-for-byte. New in v2: streaming response handling (M1), per-tool body and timeout caps (M1), HTTP CONNECT proxy invocation when `egress: proxied` (M1, R-F13). No special integration code; new upstreams are config-only (D-17).
 - **Pipelock** (peer, optional). Interface: HTTP CONNECT proxy URL configured as `egress_proxy`. Locksmith opens a CONNECT tunnel for `egress: proxied` tools; Pipelock authorizes the destination. Pipelock cannot see credentials (Locksmith injects them inside the TLS-terminated upstream connection, D-16). Failure handling: 502 Bad Gateway with `egress_proxy_failure` audit event (INF-20).
 - **Cognitive scanners (LlamaFirewall, NeMo Guardrails, etc.)** (peer, in agent process). No interface; D-18 says these compose with Locksmith in parallel, not in series. Locksmith is unaware of their presence. *Not* an external dependency.
-- **Inference platforms (Kamiwaza, LiteLLM proxy, vLLM, TGI)** (peer, optional). Treated as ordinary tool entries. Whether they exist is the operator's choice; Locksmith does not require any inference platform. New in v2: streaming through these works (M1).
+- **Inference platforms (LiteLLM proxy, vLLM, TGI and similar)** (peer, optional). Treated as ordinary tool entries. Whether they exist is the operator's choice; Locksmith does not require any inference platform. New in v2: streaming through these works (M1).
 - **External CA** (M6, optional). For mTLS deployments, the operator runs a CA (smallstep, step-ca, internal PKI). Locksmith pulls the CA bundle from a configured file path; CRL via configured URL with periodic refresh (Q-10). Locksmith is *not* its own CA (PRD §M6 out-of-scope).
 - **Sealed-secret tooling** (M5, optional). For the file-sealed `SecretBackend`, the operator uses `systemd-creds`, `sd-creds`, or equivalent to encrypt the upstream credential file at deploy time. Locksmith decrypts at startup using a key from the host's TPM or systemd's credential store. Interface: a file path; the encryption tooling is the operator's choice.
 - **Log shipper (Loki, Splunk, Vector, Filebeat)** (peer, optional). For the JSONL audit sink. The shipper tails `audit.jsonl`; Locksmith writes; rotation handled by Locksmith. Interface: file system path, file rotation conventions, schema (mirror SQLite columns per PRD §14.1 #6).
@@ -3144,7 +3144,7 @@ T-shirt sizes are advisory and live in the separate `docs/v2/PLAN.md` artifact (
 | Integration | C-13 streaming | SSE chunks arrive within 100ms; long-running generation completes; body-limit enforcement; per-tool timeout enforcement |
 | Integration | Local upstreams | Fixture + Ollama + LM Studio pass the same streaming-test shape |
 | Integration | Cloud upstreams (local-only) | Anthropic, OpenAI streaming completes for representative prompt |
-| Manual | Kamiwaza | Per PRD M1 — environment-dependent; not automated |
+| Manual | Enterprise inference platform | Per PRD M1 — environment-dependent; not automated |
 
 ##### Documentation
 
@@ -3662,7 +3662,7 @@ The PRD's seven milestones (M1–M7) are the workstreams. Each is a deliverable 
 
 **Priority:** P1 | **Wave:** 1 | **Estimate:** S–M (per `docs/v2/PLAN.md` once produced)
 
-Make the existing M0 proxy correct for inference workloads. SSE/streaming passthrough, per-tool timeouts and body limits sufficient for multi-minute generation, the `cloud:` → `egress:` configuration rename, and a verification matrix covering Anthropic, OpenAI, Ollama, LM Studio, Kamiwaza, and a generic OpenAI-compatible local-proxy fixture.
+Make the existing M0 proxy correct for inference workloads. SSE/streaming passthrough, per-tool timeouts and body limits sufficient for multi-minute generation, the `cloud:` → `egress:` configuration rename, and a verification matrix covering Anthropic, OpenAI, Ollama, LM Studio, and a generic OpenAI-compatible local-proxy fixture.
 
 **Source UCs:** UC-6, UC-13.
 **Source requirements:** R-F12, R-F13, R-F18, R-N6.
@@ -3767,7 +3767,7 @@ The PRD already states each UC in narrative form. The Given/When/Then restatemen
 **THEN** the agent receives its real credential and the bootstrap token is consumed (cannot be reused regardless of policy, R-F11).
 
 #### UC-6: Inference traffic with credential separation
-**GIVEN** an agent calling a chat-completion endpoint (Anthropic, OpenAI, Kamiwaza, Ollama, LM Studio, or any OpenAI-compatible upstream)
+**GIVEN** an agent calling a chat-completion endpoint (Anthropic, OpenAI, Ollama, LM Studio, or any OpenAI-compatible upstream)
 **WHEN** the agent sends a streaming request through Locksmith
 **THEN** Locksmith injects the upstream credential, forwards the request byte-for-byte, passes SSE chunks through without buffering (R-N6), permits multi-minute generations under default config (R-F12), and the agent never sees the upstream API key.
 
@@ -4033,7 +4033,7 @@ WHEN the proxy handler completes a request
 THEN by default a single-row `INSERT` is performed synchronously on the request-completion path before returning to the agent. The audit row is canonical the moment the agent sees the response; there is no loss window on crash. The proxy handler exposes `audit_write_queue_depth` as a metric (which under synchronous mode is always 0); M3 ships a benchmark task that measures synchronous audit-write latency at 10, 100, and 1000 sustained req/s on commodity SSD. Async-batched mode (bounded mpsc channel, batched `INSERT`s every 100 rows or 100ms, SQLite still canonical) is the fallback enabled only if the benchmark shows >5ms (95th percentile) added proxy-hot-path latency *or* an operator observes sustained `audit_write_queue_depth > 0` after enabling async mode for diagnosis.
 
 **Documented scale envelope:**
-- SQLite as audit system-of-record is sized for **up to ~1000 sustained writes per second** on commodity hardware. The PRD's stated audiences (hardened single-agent, homelab, Kamiwaza-typical multi-agent) sit at 1–100 sustained writes/sec.
+- SQLite as audit system-of-record is sized for **up to ~1000 sustained writes per second** on commodity hardware. The PRD's stated audiences (hardened single-agent, homelab, enterprise multi-agent) sit at 1–100 sustained writes/sec.
 - Beyond ~1000 sustained writes/sec, the recommended pattern is to enable the JSONL secondary sink (PRD §14.1 #6) and ship to a downstream audit store (Loki, Splunk, ClickHouse, Vector pipeline). SQLite remains the recent-history queryable cache; the downstream store handles long-term retention and cross-instance fleet queries. This pattern aligns with D-11 / D-16: a scaled audit store is its own product; Locksmith composes with it via JSONL.
 - Class-aware retention (INF-19) and row-count safety cap keep the SQLite table operationally healthy even at the upper end of the envelope.
 

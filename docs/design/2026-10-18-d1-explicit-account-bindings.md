@@ -124,7 +124,7 @@ and a daemon restart, then change the registration template and verify no drift.
 
 ## Boundaries and handoff
 
-No Kamiwaza deployment, provider purchase/login, pool scheduler, SSO, UI, approval
+No enterprise-platform deployment, provider purchase/login, pool scheduler, SSO, UI, approval
 queue, multi-tenancy, protocol expansion, full connection-schema migration or D4
 cache-generation solution is needed. Keep one instance per security domain.
 

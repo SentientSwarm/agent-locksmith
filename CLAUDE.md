@@ -52,8 +52,8 @@ Recent phase shipments:
   `agents-stack/docs/spec/v0.4.0-agent-connectivity.md`.
 - **Upstream CA trust** (v2.7.0): optional `tls.upstream_ca_bundle`
   config adds a private/internal CA to reqwest's roots so locksmith can
-  verify HTTPS upstreams behind an internal CA. Enables the Kamiwaza MCP
-  passthrough (layer8-proxy `examples/site/scripts/kamiwaza-mcp-registrar.py`).
+  verify HTTPS upstreams behind an internal CA. Enables an internal MCP
+  passthrough (layer8-proxy MCP registrar script).
   Adds roots only; never disables verification.
 - **Query-string forwarding** (v2.7.1): `proxy_handler` re-attaches the
   inbound query string (`req.uri().query()`) to the upstream URL — axum's

@@ -49,7 +49,7 @@ Do not move code under v1/v2 directories. The split is for documentation only.
 M1 is "inference-ready hardening" — making the existing M0 proxy correct for inference workloads.
 
 **Acceptance contract** (from roadmap §5, M1):
-- Integration test matrix passing for: Anthropic Messages, OpenAI Chat Completions, Ollama, LM Studio, Kamiwaza inference endpoint, plus a generic OpenAI-compatible local proxy fixture (covers LiteLLM proxy, vLLM, TGI shape)
+- Integration test matrix passing for: Anthropic Messages, OpenAI Chat Completions, Ollama, LM Studio, an enterprise inference endpoint, plus a generic OpenAI-compatible local proxy fixture (covers LiteLLM proxy, vLLM, TGI shape)
 - Local-upstream tests (Ollama, LM Studio, fixture) run in default CI; cloud-provider tests gated on credential env vars
 - SSE first-byte latency through Locksmith within 100ms of upstream first-byte
 - Long-running (>5min) generations complete under default config
@@ -66,7 +66,7 @@ M1 is "inference-ready hardening" — making the existing M0 proxy correct for i
 4. Rename `cloud:` to `egress:` with values `direct` | `proxied`. Add backwards-compat: if a config has `cloud: true`, treat as `egress: proxied` and log a deprecation warning. Update `config.example.yaml`. Add a test that exercises both old and new field names.
 5. Add the local-upstream integration tests: a fixture upstream serving an OpenAI-compatible streaming response, real Ollama if available in CI, real LM Studio if available locally. These run in the default CI lane.
 6. Add real-provider integration tests gated on environment variables for credentials (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Skipped by default in CI but runnable locally and in a credentialed CI lane.
-7. Manual verification for Kamiwaza — environment-dependent and doesn't lend itself to public CI.
+7. Manual verification for enterprise inference platforms — environment-dependent and doesn't lend itself to public CI.
 
 **What's not in M1:**
 - Don't change the YAML config format beyond adding the new per-tool fields and the `cloud:` → `egress:` rename.

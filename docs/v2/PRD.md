@@ -31,9 +31,9 @@ The numbered identifiers in this document — UC-1 through UC-13, R-F1 through R
 
 Agent Locksmith is the credential and identity substrate for AI agents that need to call external services. It is a single Rust binary plus a SQLite file that sits between an agent and the upstream APIs the agent uses (REST tools, inference endpoints, internal services), holds the credentials, enforces per-agent authorization, and produces a governance-grade audit trail of every call. The agent never possesses the credentials it uses.
 
-Locksmith is deliberately narrow. It is not an LLM gateway, not a prompt-injection scanner, and not a network egress controller. Each of those problems is owned by an adjacent tool — Kamiwaza or LiteLLM proxy for inference routing, LlamaFirewall or similar for cognitive scanning, Pipelock for network egress. Locksmith composes with these as peers; it does not absorb them. This discipline is core to the product's identity.
+Locksmith is deliberately narrow. It is not an LLM gateway, not a prompt-injection scanner, and not a network egress controller. Each of those problems is owned by an adjacent tool — an enterprise inference platform or LiteLLM proxy for inference routing, LlamaFirewall or similar for cognitive scanning, Pipelock for network egress. Locksmith composes with these as peers; it does not absorb them. This discipline is core to the product's identity.
 
-The product serves three audiences with one codebase: hardened agent operators (the proving ground), homelab and small-team operators (the audience that validates Locksmith is genuinely standalone), and Kamiwaza enterprise deployments (the audience that validates Locksmith is enterprise-credible). The features personal users want (per-agent identity, scoped tools, audit) are the same features enterprise buyers ask about under different names (multi-tenancy, RBAC, compliance logs).
+The product serves three audiences with one codebase: hardened agent operators (the proving ground), homelab and small-team operators (the audience that validates Locksmith is genuinely standalone), and Enterprise deployments (the audience that validates Locksmith is enterprise-credible). The features personal users want (per-agent identity, scoped tools, audit) are the same features enterprise buyers ask about under different names (multi-tenancy, RBAC, compliance logs).
 
 v2 delivers seven milestones: M1 inference-ready hardening, M2 agent identity and admin substrate, M3 governance audit log, M4 admin HTTP API, M5 keys-at-rest hardening, M6 mTLS support, M7 response-side controls. M1 and M2 are specified at implementation depth; M3–M7 at intent and constraint depth.
 
@@ -55,13 +55,13 @@ Agent Locksmith v2 is a credential and identity substrate, delivered as a single
 
 State is partitioned. Tools and infrastructure live in YAML, GitOps-managed. Agents, bootstrap tokens, and audit records live in SQLite, daemon-managed. Operator credentials live in operator-only configuration (filesystem, not database) so the system is recoverable when the database is corrupted or missing.
 
-The product is wire-format-agnostic. Locksmith proxies whatever the agent sends to whatever the upstream expects, byte-for-byte. Provider compatibility — OpenAI Chat Completions, Anthropic Messages, Ollama, LM Studio, Kamiwaza, LiteLLM, vLLM, TGI — is a configuration concern, not a code concern. New providers and new wire dialects are absorbed by writing new YAML entries, not by writing Rust.
+The product is wire-format-agnostic. Locksmith proxies whatever the agent sends to whatever the upstream expects, byte-for-byte. Provider compatibility — OpenAI Chat Completions, Anthropic Messages, Ollama, LM Studio, LiteLLM, vLLM, TGI — is a configuration concern, not a code concern. New providers and new wire dialects are absorbed by writing new YAML entries, not by writing Rust.
 
 ### 2.3 What Locksmith is not
 
 This section is prominent because the product's discipline against scope creep is core to its identity.
 
-- **Not an LLM gateway.** That is the inference platform's territory — Kamiwaza for enterprise, LiteLLM proxy or similar for those who run one. Locksmith proxies to whichever inference endpoint exists and treats it as just another tool.
+- **Not an LLM gateway.** That is the inference platform's territory — an enterprise inference platform, LiteLLM proxy or similar for those who run one. Locksmith proxies to whichever inference endpoint exists and treats it as just another tool.
 - **Not a prompt-injection scanner.** That is LlamaFirewall's territory (and similar: NeMo Guardrails, Guardrails AI). Locksmith composes with cognitive scanners at a different boundary — they run in parallel inside the agent's process, while Locksmith operates as a separate network service. Neither is in the other's path.
 - **Not a network egress controller.** That is Pipelock's territory. Locksmith and Pipelock are layered defenses: Locksmith authenticates and credentials every outbound call regardless of destination; Pipelock controls egress for internet-bound traffic.
 
@@ -77,7 +77,7 @@ AI agents that take actions in the world — calling REST APIs, hitting inferenc
 4. **Manual rotation pain.** Rotating a credential means redeploying every agent that holds it. Long-running agents, in particular, force operators to choose between rotation hygiene and uptime.
 5. **Tight coupling to provider ecosystems.** Agents that hardcode provider SDKs and credential layouts cannot easily switch between cloud and local inference, between providers, or between regions.
 
-Adjacent tools partially address these — secret managers (Vault, AWS Secrets Manager) hold credentials at rest, inference platforms (Kamiwaza, LiteLLM) handle provider abstraction, network controllers (Pipelock) handle egress — but none of them provides the per-call, per-agent, identity-and-credential substrate that closes the loop. Operators today either accept the credential blast radius or build a bespoke proxy layer themselves.
+Adjacent tools partially address these — secret managers (Vault, AWS Secrets Manager) hold credentials at rest, inference platforms (enterprise inference platforms, LiteLLM) handle provider abstraction, network controllers (Pipelock) handle egress — but none of them provides the per-call, per-agent, identity-and-credential substrate that closes the loop. Operators today either accept the credential blast radius or build a bespoke proxy layer themselves.
 
 Agent Locksmith addresses this gap with a single binary that any HTTP-speaking agent can use, deployable in a homelab in five minutes and credible enough for enterprise governance.
 
@@ -85,8 +85,8 @@ Agent Locksmith addresses this gap with a single binary that any HTTP-speaking a
 
 ### 4.1 Business goals
 
-- Establish Agent Locksmith as the default credential and identity substrate for the three target audiences (hardened operators, homelab/small-team, Kamiwaza enterprise) without sacrificing the same-product positioning.
-- Validate enterprise-credibility through the Kamiwaza deployment path while remaining genuinely standalone for homelab and small-team operators.
+- Establish Agent Locksmith as the default credential and identity substrate for the three target audiences (hardened operators, homelab/small-team, enterprise) without sacrificing the same-product positioning.
+- Validate enterprise-credibility through an enterprise deployment path while remaining genuinely standalone for homelab and small-team operators.
 - Maintain composability with adjacent tools (Pipelock, LlamaFirewall, inference platforms) as a structural feature, not a marketing claim — Locksmith should remain useful as the surrounding ecosystem evolves.
 - Deliver v2 milestones in sequence (M1 through M7) with each milestone independently usable.
 
@@ -122,7 +122,7 @@ Three audiences served by one product. Same features under different names.
 
 - Hardened agent operators
 - Homelab and small-team operators
-- Kamiwaza enterprise deployers
+- Enterprise deployer
 - Compliance and audit reviewers (cross-cutting)
 - AI agents themselves (programmatic users)
 
@@ -148,7 +148,7 @@ Three audiences served by one product. Same features under different names.
 
 **Why this audience:** Validates that Locksmith is genuinely standalone. If it can only run inside `openclaw-hardened`, it isn't the substrate it claims to be.
 
-#### 5.2.3 Kamiwaza enterprise deployer
+#### 5.2.3 Enterprise deployer
 
 **Role:** Platform team deploying agent infrastructure inside an enterprise where credential hygiene, audit, and per-agent identity are governance requirements.
 
@@ -209,7 +209,7 @@ An operator wants to onboard a new agent without writing the credential into con
 
 ### UC-6: Inference traffic with credential separation
 
-An agent calls a chat completion endpoint (Anthropic, OpenAI, Kamiwaza, Ollama, LM Studio, or any other OpenAI-compatible upstream) through Locksmith. Streaming responses (SSE) pass through to the agent without buffering. Long generation times do not trip request timeouts. The agent never sees the upstream API key. Whether the upstream is a cloud provider or a local inference proxy, Locksmith's role is the same: inject the credential, route the request, audit the call.
+An agent calls a chat completion endpoint (Anthropic, OpenAI, Ollama, LM Studio, or any other OpenAI-compatible upstream) through Locksmith. Streaming responses (SSE) pass through to the agent without buffering. Long generation times do not trip request timeouts. The agent never sees the upstream API key. Whether the upstream is a cloud provider or a local inference proxy, Locksmith's role is the same: inject the credential, route the request, audit the call.
 
 ### UC-7: Tool discovery as a function of identity
 
@@ -277,7 +277,7 @@ Each requirement is identified by a stable ID (R-Fn) and traces to one or more u
 
 - **R-F17.** Locksmith supports pluggable secret backends for upstream credentials: environment variables (default), file-based sealed secrets, with a stable interface for additional backends (Vault, AWS Secrets Manager) added without core changes. *(Priority: must-have for M5. Traces to: UC-1, UC-9 (operational hardening).)*
 
-- **R-F18.** Locksmith does not inspect or interpret request payloads to make routing or policy decisions. The `model` field in a chat completion request, for example, is data Locksmith forwards but does not interpret. Per-model routing belongs in tools that already understand model semantics (LM Studio, LiteLLM proxy, Kamiwaza). Per-destination policy is achieved by configuring separate tool entries. *(Priority: must-have. Traces to: UC-6, UC-13. Architectural invariant; see D-11, D-15, D-17.)*
+- **R-F18.** Locksmith does not inspect or interpret request payloads to make routing or policy decisions. The `model` field in a chat completion request, for example, is data Locksmith forwards but does not interpret. Per-model routing belongs in tools that already understand model semantics (LM Studio, LiteLLM proxy and similar). Per-destination policy is achieved by configuring separate tool entries. *(Priority: must-have. Traces to: UC-6, UC-13. Architectural invariant; see D-11, D-15, D-17.)*
 
 ## 8. Non-functional requirements
 
@@ -349,9 +349,9 @@ The product surface is minimal and deliberately boring.
 
 ### 10.2 Business metrics
 
-- **Audience coverage.** All three audiences (hardened operators, homelab/small-team, Kamiwaza enterprise) deploy v2 in production using the same binary and the same product surface — no audience-specific forks.
+- **Audience coverage.** All three audiences (hardened operators, homelab/small-team, enterprise) deploy v2 in production using the same binary and the same product surface — no audience-specific forks.
 - **Composability adoption.** The `egress: proxied` flag and `egress_proxy:` config see use in deployments that also run Pipelock (composed deployment validates D-11, D-16).
-- **Inference verification matrix coverage.** M1 ships with passing integration tests against Anthropic, OpenAI, Ollama, LM Studio, Kamiwaza, and a generic OpenAI-compatible local proxy fixture.
+- **Inference verification matrix coverage.** M1 ships with passing integration tests against Anthropic, OpenAI, Ollama, LM Studio, and a generic OpenAI-compatible local proxy fixture.
 
 ### 10.3 Technical metrics
 
@@ -383,7 +383,7 @@ The roadmap and kickoff documents do not commit a team size. The product is stru
 - Per-tool configurable request and response timeouts (must accommodate multi-minute generation).
 - Per-tool configurable request body size limits.
 - Rename `cloud:` config field to `egress:` with values `direct` or `proxied`. Backwards-compatibility shim: if `cloud: true` is encountered, treat as `egress: proxied` and emit a deprecation warning. Document the new naming in the config example.
-- Verification matrix: Anthropic Messages API, OpenAI Chat Completions, Ollama, LM Studio, Kamiwaza inference endpoint, plus a "generic OpenAI-compatible local proxy" entry (test fixture serves the role; LiteLLM proxy, vLLM, TGI, etc. all fit this shape) — all working as `tools:` entries with credential injection.
+- Verification matrix: Anthropic Messages API, OpenAI Chat Completions, Ollama, LM Studio, an enterprise inference endpoint, plus a "generic OpenAI-compatible local proxy" entry (test fixture serves the role; LiteLLM proxy, vLLM, TGI, etc. all fit this shape) — all working as `tools:` entries with credential injection.
 - Integration test suite covering the matrix; tests against local upstreams (Ollama, LM Studio, fixture) run in default CI; tests against cloud providers gated on environment variables for credentials.
 
 **Out of scope:**
@@ -579,7 +579,7 @@ Locksmith's design assumes that the surrounding ecosystem provides several capab
 
 - **Pipelock (or equivalent network egress controller).** When `egress: proxied` is configured for a tool, Locksmith forwards the request through an HTTP CONNECT proxy. Pipelock is the canonical implementation of that proxy in the openclaw-hardened deployment, but any HTTP CONNECT proxy is supported. Locksmith does not implement domain allowlisting, DLP, or SSRF protection itself.
 - **LlamaFirewall (or equivalent cognitive scanner).** Cognitive scanning runs in-process inside the agent, not on the wire. Locksmith does not integrate with, front, or special-case cognitive scanners. The agent imports its scanner library and uses it according to that library's design; Locksmith handles outbound HTTP independently. Both run in parallel inside a hardened deployment, neither in the other's path.
-- **Inference platform (Kamiwaza for enterprise, LiteLLM proxy or similar for those who run one, or direct-to-provider).** Provider routing, fallback, retry, and budget logic live in the inference platform. Locksmith treats inference endpoints — whether a cloud provider or a dispatching proxy — as ordinary tool entries.
+- **Inference platform (an enterprise inference platform, LiteLLM proxy or similar for those who run one, or direct-to-provider).** Provider routing, fallback, retry, and budget logic live in the inference platform. Locksmith treats inference endpoints — whether a cloud provider or a dispatching proxy — as ordinary tool entries.
 - **Secret backend (in M5+).** Environment variables are the default backend. Sealed-secret files (decrypted via `systemd-creds` or equivalent) are the M5 deliverable. Vault and AWS Secrets Manager arrive as future backends conforming to the M5 trait without core changes.
 - **External CA (in M6).** Locksmith does not act as its own CA. mTLS deployments rely on an external CA (smallstep, step-ca, easy-rsa, internal PKI).
 
@@ -615,7 +615,7 @@ Beyond the per-milestone "out of scope" sections in §11, the following are expl
 
 - **MCP bridging.** Wait for a real use case. Locksmith's existing path-based proxy already covers credential-injection-for-HTTP-services. If MCP becomes dominant, future work might be Locksmith *as* an MCP server, not a bridge.
 - **Agent-to-agent (A2A) forwarding.** Different threat model. Agents authenticating to agents is meaningfully different from agents authenticating to upstream APIs. Possibly a sibling project.
-- **Inference routing, fallbacks, budgets, rate limiting.** Inference platform territory (Kamiwaza for enterprise, LiteLLM proxy or similar for those who run one). Locksmith proxies to whichever inference endpoint exists and does not implement gateway features.
+- **Inference routing, fallbacks, budgets, rate limiting.** Inference platform territory (an enterprise inference platform, LiteLLM proxy or similar for those who run one). Locksmith proxies to whichever inference endpoint exists and does not implement gateway features.
 - **Per-model routing or model-aware policy.** Locksmith does not inspect request payloads (R-F18, D-11). If destination policy needs to vary by model, configure separate tool entries per destination class.
 - **Cloud sync of agent state across deployments.** Solved by Ansible / GitOps for the audiences Locksmith targets. Re-solving would add a sync layer and a cloud service that doesn't fit the single-binary model.
 - **Web UI.** Genuinely useful, but the CLI and HTTP API cover capability. UI is a usability layer that can lag and possibly live as a sibling project.
@@ -635,7 +635,7 @@ Risks remain on the table for ongoing mitigation. The ambiguities surfaced durin
 These are the resolutions of the questions surfaced during PRD formalization. They bind downstream design unless explicitly re-litigated.
 
 1. **Calendar estimates live in a separate planning artifact.** Calendar and team-size estimates are not committed in this PRD. Indicative ranges and T-shirt sizes for M1–M7 live in `docs/v2/PLAN.md` (to be produced) so the PRD can stay clean while the plan can be re-baselined freely.
-2. **CI strategy for cloud-provider integration tests: local-only.** Cloud-provider integration tests (Anthropic, OpenAI, Kamiwaza) run only on engineer workstations with credentials supplied via local env vars. Default CI runs the local-upstream lane only (test fixtures, Ollama if present, LM Studio if present). Engineers run the cloud-provider matrix pre-PR. No credentialed CI lane in v2.
+2. **CI strategy for cloud-provider integration tests: local-only.** Cloud-provider integration tests (Anthropic, OpenAI, enterprise inference platforms) run only on engineer workstations with credentials supplied via local env vars. Default CI runs the local-upstream lane only (test fixtures, Ollama if present, LM Studio if present). Engineers run the cloud-provider matrix pre-PR. No credentialed CI lane in v2.
 3. **Bootstrap token transport in high-security deployments: bootstrap-only listener.** Locksmith exposes a separate, narrowly-scoped listener that performs server-TLS but does not require client mTLS, accepting only the `register` endpoint with a bootstrap token. Locked down by network policy (Tailscale, localhost-only, etc.) and turned off when not onboarding. The out-of-band cert-issuance pattern (operator issues bootstrap token *and* client cert via internal CA, agent presents both at first contact) is documented as the enterprise variant but not built as a Locksmith feature.
 4. **Operator credentials: per-operator named tokens, argon2-hashed in file.** Operator credentials are an array of records in operator-only configuration: `operators: [{name: alice, token_hash: argon2:..., scope: null}]`. Cleartext lives in each operator's password manager; only hashes are at rest. Rotation = mint a new token for one operator without disturbing others. Same argon2 parameters as agent tokens, for consistency. The reserved `scope` field (D-6) attaches here.
 5. **Migration tool: `sqlx` with `sqlx::migrate!`.** `sqlx` is the single SQL dependency for both query layer (compile-time-checked queries via `query!`/`query_as!`) and migrations (SQL files embedded at compile time). Decision binding for M2 onward; do not introduce `rusqlite` or `refinery`.
@@ -730,7 +730,7 @@ This appendix preserves the architectural decisions that produced this roadmap, 
 
 ### D-11: Composability over absorption
 
-**Decision:** Locksmith does not implement egress controls (Pipelock's job), prompt-injection scanning (LlamaFirewall's job), or LLM gateway functionality (the inference platform's job — Kamiwaza for enterprise, LiteLLM proxy or similar for those who run one).
+**Decision:** Locksmith does not implement egress controls (Pipelock's job), prompt-injection scanning (LlamaFirewall's job), or LLM gateway functionality (the inference platform's job — an enterprise inference platform, LiteLLM proxy or similar for those who run one).
 
 **Reasoning:** Each adjacent category has mature tools. Building shallow versions of them inside Locksmith dilutes the product and creates competition with tools that should be allies. The Pipelock integration via the per-tool `egress: proxied` flag and `egress_proxy:` config is the canonical example of how Locksmith composes.
 

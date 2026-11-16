@@ -106,14 +106,14 @@ listen:
   host: "127.0.0.1"
   port: 9200
 tls:
-  upstream_ca_bundle: "/etc/locksmith/ca/kamiwaza-ca.pem"
+  upstream_ca_bundle: "/etc/locksmith/ca/internal-ca.pem"
 tools: []
 "#;
     let config = parse_config_str(yaml).unwrap();
     let tls = config.tls.expect("tls section present");
     assert_eq!(
         tls.upstream_ca_bundle.as_deref(),
-        Some(std::path::Path::new("/etc/locksmith/ca/kamiwaza-ca.pem")),
+        Some(std::path::Path::new("/etc/locksmith/ca/internal-ca.pem")),
     );
 }
 

@@ -130,5 +130,5 @@ missing-binding diagnosis and deliberate operator repair guidance.
    retry and cleanup. Reviewer and QA evaluate the exact final revision.
 
 Tests use temporary state and synthetic local accounts. None establishes live
-provider or Kamiwaza compatibility. Record revision, environment, command, exit
+provider or enterprise-platform compatibility. Record revision, environment, command, exit
 and sanitized observations per [project completion](../development/project-completion.md).

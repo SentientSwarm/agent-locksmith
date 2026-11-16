@@ -79,6 +79,6 @@ executes lifecycle, reference X/X/Y, independent customer header/path, denial
 repair, restricted/unrestricted/empty migration, future-entry denial, activation
 failure/restart and next-admission revocation. Receiving counters distinguish
 zero dispatch from an upstream rejection. Synthetic local services do not
-establish live provider, Kamiwaza or installed-deployment compatibility.
+establish live provider, enterprise-platform or installed-deployment compatibility.
 The two baseline D4 failures in the older diagnostic are historical findings;
 they are not the acceptance oracle for this change.

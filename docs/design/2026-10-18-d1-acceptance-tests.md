@@ -81,7 +81,7 @@ regression matrix; component-only tests do not satisfy the smoke gate.
 Record delivered commit, target/environment, exact command, exit code, assertions
 and sanitized evidence. Missing prerequisites, skipped cases or a script that was
 only written are not a passing run. Local upstream doubles are sufficient for D1;
-they do not establish Kamiwaza or live-provider compatibility. Cleanup must stop
+they do not establish enterprise-platform or live-provider compatibility. Cleanup must stop
 fixture processes and remove temporary state without altering real deployments.
 
 Documentation changes must include the applicable per-agent credential concept,
@@ -107,7 +107,7 @@ the [shared completion gate](../development/project-completion.md) for later pro
   operator rehearsal includes actual daemon and CLI/admin boundary, not only
   in-process router tests. Each implementation issue includes its own tests.
 
-No live Kamiwaza or provider quota claim follows from these checks. Existing
+No live enterprise-platform or provider quota claim follows from these checks. Existing
 public no-auth ACL expansion and stale catalog activation remain separate D4
 findings. No global network enforcement, active-stream cancellation or pool replay
 safety claim is part of D1.

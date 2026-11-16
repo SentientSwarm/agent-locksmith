@@ -54,7 +54,7 @@ migration, actual process restart and cleanup. See the
 [troubleshooting](../operator/account-binding-troubleshooting.md).
 
 Local synthetic upstreams establish account isolation, not compatibility with
-live providers, Kamiwaza, remote deployments or provider grant policies. Existing
+live providers, enterprise platforms, remote deployments or provider grant policies. Existing
 focused tests cover env/header/bearer, stored, op and both OAuth mechanisms. Four
 optional provider tests can return early without their endpoints/credentials;
 reported passes are not provider coverage. At the D1 baseline, the local

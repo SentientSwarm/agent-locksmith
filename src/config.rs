@@ -24,8 +24,8 @@ pub struct AppConfig {
     pub inspection: Option<crate::inspection::InspectionConfig>,
     /// Upstream TLS trust (optional). Lets operators trust a private/
     /// internal CA for upstream verification — needed for HTTPS upstreams
-    /// behind an internal CA (e.g. Kamiwaza's "Kamiwaza Application
-    /// Intermediate CA"). reqwest is built with rustls + webpki bundled
+    /// behind an internal CA (e.g. an organisation's intermediate
+    /// CA). reqwest is built with rustls + webpki bundled
     /// roots, which ignore the system trust store, so a mounted CA only
     /// takes effect when named here. Adds to the built-in roots; never
     /// disables verification.
