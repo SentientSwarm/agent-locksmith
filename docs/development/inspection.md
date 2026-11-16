@@ -177,7 +177,8 @@ resolved; a redact-level hit only that view shows blocks, since no
 rewrite can reach it. Data shaped like JSON (starting with `{`, `[` or
 `"`) that does not parse (a number out of range, nesting past the
 parser's limit, a string left open), which a client may still decode,
-follows `on_error`: under `fail_closed` the stream is blocked. When JSON
+follows `on_error` with or without escapes: under `fail_closed` the
+stream is blocked. When JSON
 repeats a key, the values the parsed view hides are decoded and scanned
 too, since a client that keeps the first value reads them; a redact
 re-writes the event from its parsed view, which drops them. A hidden
@@ -205,8 +206,12 @@ would spell the text the cut removed.
 
 Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
-`index`, each Anthropic content block, each Responses output, content
-part and reasoning summary. So a match split across one output's deltas
+`index` inside `choices`, each Anthropic content block by its `index`,
+each Responses output, content part and reasoning summary by
+`output_index`, `content_index` and `summary_index`. Only the indexes
+the event's protocol uses count, so an upstream cannot split one output
+across windows by adding or varying others (a top-level `index` on a
+chat chunk names nothing). So a match split across one output's deltas
 is found however the outputs interleave. Each window keeps the last `max_match_len - 1` bytes
 of its output, measured both raw and after folding, so a match split
 across any number of deltas is found once. A window scans once the text

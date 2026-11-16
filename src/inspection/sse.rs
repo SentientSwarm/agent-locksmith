@@ -261,13 +261,13 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
             text: data.to_string(),
         }];
         // JSON the parser refuses (a number out of range, nesting too
-        // deep, a string left open) that a client may still decode, or
-        // text with escapes: its escapes hide nothing.
-        if data.contains('\\') {
+        // deep, a string left open) that a client may still decode, with
+        // or without escapes, or text with escapes: its escapes hide
+        // nothing, and JSON-shaped data can't be judged as text.
+        let json = data.trim_start().starts_with(['{', '[', '"']);
+        if json || data.contains('\\') {
             out.push(TextSpan {
-                place: Place::View {
-                    json: data.trim_start().starts_with(['{', '[', '"']),
-                },
+                place: Place::View { json },
                 lane: None,
                 text: super::text::json_unescape(data),
             });
@@ -276,7 +276,7 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
     };
     let kind = kind(event, &value);
     let chat = value.get("choices").is_some_and(Value::is_array);
-    let tags = lanes::tags(&value);
+    let tags = lanes::tags(kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
         ..Walk::default()

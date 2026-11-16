@@ -18,6 +18,7 @@
 //! never passes unscanned text.
 
 use super::{Direction, ScanError, Scanner, normalize, sha256_hex};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// A hit at absolute offsets in the stream's text.
@@ -43,8 +44,9 @@ pub struct TextWindow {
     /// Bytes of `buf` already scanned.
     scanned: usize,
     overflowed: bool,
-    /// Hits already reported, as (scanner, rule, start, end).
-    reported: Vec<(String, String, usize, usize)>,
+    /// Spans already reported per (scanner, rule): disjoint intervals
+    /// by start, so finding an overlap is a lookup, not a search.
+    reported: HashMap<(String, String), BTreeMap<usize, usize>>,
 }
 
 impl TextWindow {
@@ -62,7 +64,7 @@ impl TextWindow {
             base: 0,
             scanned: 0,
             overflowed: false,
-            reported: Vec::new(),
+            reported: HashMap::new(),
         }
     }
 
@@ -102,7 +104,7 @@ impl TextWindow {
         self.base += self.buf.len();
         self.buf = String::new();
         self.scanned = 0;
-        self.reported = Vec::new();
+        self.reported = HashMap::new();
     }
 
     /// Scan whatever is still unscanned.
@@ -127,12 +129,12 @@ impl TextWindow {
                 };
                 let (start, end) = (self.base + hit.start, self.base + hit.end);
                 let id = scanner.id().to_string();
-                let new = !self
+                let spans = self
                     .reported
-                    .iter()
-                    .any(|(s, r, a, b)| *s == id && *r == hit.rule && *a < end && start < *b);
-                self.reported
-                    .push((id.clone(), hit.rule.clone(), start, end));
+                    .entry((id.clone(), hit.rule.clone()))
+                    .or_default();
+                let new = !overlaps(spans, start, end);
+                insert(spans, start, end);
                 out.push(WindowHit {
                     scanner: id,
                     rule: hit.rule,
@@ -162,7 +164,15 @@ impl TextWindow {
         self.base += cut;
         self.scanned -= cut;
         let base = self.base;
-        self.reported.retain(|(.., end)| *end > base);
+        for spans in self.reported.values_mut() {
+            while let Some((&a, &b)) = spans.first_key_value() {
+                if b > base {
+                    break;
+                }
+                spans.remove(&a);
+            }
+        }
+        self.reported.retain(|_, spans| !spans.is_empty());
     }
 
     /// Start of the shortest tail at least `overlap` long, raw and folded.
@@ -186,6 +196,28 @@ impl TextWindow {
         }
         0
     }
+}
+
+/// Does `[start, end)` overlap any of the disjoint `spans`? Only the
+/// last span starting before `end` can: the earlier ones end before it.
+fn overlaps(spans: &BTreeMap<usize, usize>, start: usize, end: usize) -> bool {
+    spans
+        .range(..end)
+        .next_back()
+        .is_some_and(|(_, &b)| b > start)
+}
+
+/// Add `[start, end)` to `spans`, merging the spans it overlaps.
+fn insert(spans: &mut BTreeMap<usize, usize>, mut start: usize, mut end: usize) {
+    while let Some((&a, &b)) = spans.range(..end).next_back() {
+        if b <= start {
+            break;
+        }
+        spans.remove(&a);
+        start = start.min(a);
+        end = end.max(b);
+    }
+    spans.insert(start, end);
 }
 
 #[cfg(test)]

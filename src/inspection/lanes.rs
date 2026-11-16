@@ -41,9 +41,25 @@ fn index(value: &Value) -> Option<i64> {
     }
 }
 
-/// The tags an event's top-level indexes give.
-pub fn tags(value: &Value) -> Vec<(&'static str, i64)> {
+/// The tags an event's top-level indexes give, counting only the indexes
+/// its protocol uses to name an output: Responses `output_index`,
+/// `content_index` and `summary_index`, an Anthropic block's `index`. A
+/// chat chunk names its outputs inside `choices`, and other protocols
+/// name none, so their top-level indexes give no tags (an upstream can't
+/// split one output across windows by varying them).
+pub fn tags(kind: Option<&str>, value: &Value) -> Vec<(&'static str, i64)> {
+    if value.get("choices").is_some_and(Value::is_array) {
+        return Vec::new();
+    }
+    let fields: &[&str] = match kind {
+        Some(k) if k.starts_with("response.") => {
+            &["output_index", "content_index", "summary_index"]
+        }
+        Some(k) if k.starts_with("content_block_") => &["index"],
+        _ => &[],
+    };
     TAGS.iter()
+        .filter(|(field, _)| fields.contains(field))
         .filter_map(|(field, tag)| index(value.get(*field)?).map(|n| (*tag, n)))
         .collect()
 }
@@ -85,9 +101,9 @@ pub fn closes(kind: Option<&str>, value: &Value) -> Vec<Close> {
         Some("message_stop" | "response.completed" | "response.failed" | "response.incomplete") => {
             out.push(Close::All)
         }
-        Some("content_block_stop") => out.push(Close::Tagged(tags(value))),
+        Some("content_block_stop") => out.push(Close::Tagged(tags(kind, value))),
         Some(k) if k.starts_with("response.") && k.ends_with(".done") => {
-            out.push(Close::Tagged(tags(value)))
+            out.push(Close::Tagged(tags(kind, value)))
         }
         _ => {}
     }

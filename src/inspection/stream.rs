@@ -1872,6 +1872,76 @@ mod tests {
     }
 
     #[test]
+    fn a_changing_top_level_index_does_not_split_a_chat_choice() {
+        let k = key();
+        let events: Vec<String> = k
+            .chars()
+            .enumerate()
+            .map(|(n, c)| {
+                format!(
+                    "data: {}\n\n",
+                    serde_json::json!({"index": n % 2,
+                    "choices": [{"index": 0, "delta": {"content": c.to_string()}}]})
+                )
+            })
+            .chain(std::iter::once(DONE.to_string()))
+            .collect();
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+        assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report());
+        // Anthropic blocks are keyed by `index` only: an `output_index`
+        // does not split one.
+        let anthropic: Vec<String> = k
+            .chars()
+            .enumerate()
+            .map(|(n, c)| {
+                ev(
+                    "content_block_delta",
+                    serde_json::json!({"index": 0,
+                "output_index": n % 2, "delta": {"type": "text_delta", "text": c.to_string()}}),
+                )
+            })
+            .chain(std::iter::once(ev("message_stop", serde_json::json!({}))))
+            .collect();
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &anthropic);
+        assert!(out.contains("inspection_blocked") && !leaked(&out), "{out}");
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report());
+    }
+
+    #[test]
+    fn unparseable_json_without_escapes_fails_closed() {
+        let k = key();
+        let events: Vec<String> = k
+            .chars()
+            .map(|c| format!("data: {{\"x\":1e400,\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{c}\"}}}}]}}\n\n"))
+            .collect();
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(i.report().error.is_some());
+    }
+
+    #[test]
+    fn dense_hits_in_one_event_scan_in_linear_time() {
+        let canary = "CANARY42";
+        let scanner: Arc<dyn Scanner> =
+            Arc::new(super::super::literal::Literal::new(canary).unwrap());
+        let p = DirectionPolicy {
+            scanners: vec![scanner],
+            ..policy(Verdict::Flag)
+        };
+        let text = format!("{canary} ").repeat(60_000);
+        let event = format!("data: {}\n\n", serde_json::json!({"x": text}));
+        let started = std::time::Instant::now();
+        let (_, i) = run(&p, &[event]);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(!i.report().hits.is_empty());
+    }
+
+    #[test]
     fn a_repeated_key_fails_closed() {
         let event = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\",\"content\":\"b\"}}]}\n\n";
         let (out, i) = run(
