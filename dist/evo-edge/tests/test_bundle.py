@@ -22,11 +22,52 @@ class BundleTest(unittest.TestCase):
                 self.assertEqual([], list(output.rglob("*.wants")))
                 self.assertEqual([], list(output.rglob("*.ready")))
                 for component in render.SERVICES[instance]:
-                    unit = (output / f"etc/systemd/system/edge-{component}.service").read_text()
+                    unit = (output / f"usr/local/lib/systemd/system/edge-{component}.service").read_text()
                     self.assertIn(f"ConditionPathExists=/srv/edge-state/custody/{component}.ready", unit)
                     self.assertIn(f"edge-state-check {instance} {component}", unit)
                     self.assertIn("NoNewPrivileges=yes", unit)
                     self.assertIn("ProtectSystem=strict", unit)
+
+    def test_relays_support_early_boot_and_firewall_is_not_after_basic(self):
+        with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:
+            output = Path(root) / "broker"
+            module("render").render(output, "edge-brokers")
+            units = output / "usr/local/lib/systemd/system"
+            firewall = (units / "edge-input.service").read_text()
+            self.assertIn("DefaultDependencies=no", firewall)
+            self.assertIn("After=local-fs.target", firewall)
+            for name in ["codex", "teamclaude"]:
+                self.assertIn("FreeBind=yes", (units / f"edge-{name}-relay.socket").read_text())
+            self.assertFalse((output / "etc/systemd/system").exists())
+
+    def test_destination_paths_override_service_environment_files(self):
+        import os
+        import shlex
+        import subprocess
+        import json
+        render = module("render")
+        for component, variable, expected in [
+            ("codex", "CODEX_HOME", "/srv/edge-state/codex/home/.codex-terminal-pool"),
+            ("teamclaude", "TEAMROUTER_CONFIG", "/srv/edge-state/teamclaude/teamclaude.json"),
+        ]:
+            user, command, has_env = render.SERVICES["edge-brokers"][component]
+            text = render.service("edge-brokers", component, user, command, has_env)
+            start = next(line.removeprefix("ExecStart=") for line in text.splitlines() if line.startswith("ExecStart="))
+            argv = shlex.split(start)
+            # Run only env's final assignments, with a harmless Python getter
+            # in place of the real broker. No production process is started.
+            assignments = []
+            for arg in argv[1:]:
+                if "=" not in arg:
+                    break
+                assignments.append(arg)
+            result = subprocess.check_output(
+                [argv[0], *assignments, __import__('sys').executable, "-c",
+                 f"import os,json; print(json.dumps(os.environ[{variable!r}]))"],
+                env={**os.environ, variable: "/old/studio/path"}, text=True,
+                timeout=5,
+            )
+            self.assertEqual(expected, json.loads(result))
 
     def test_render_refuses_existing_tree(self):
         with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:

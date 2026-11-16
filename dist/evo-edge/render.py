@@ -26,15 +26,18 @@ SERVICES = {
 
 def service(instance, component, user, command, environment):
     extra = ""
+    assignments = [f"HOME={ROOT}/{component}/home"]
     if environment:
         extra += f"EnvironmentFile={ROOT}/{component}/service.env\n"
     if component == "codex":
-        extra += ("Environment=CODEX_HOME=/srv/edge-state/codex/home/.codex-terminal-pool\n"
-                  "Environment=CODEX_MULTI_AUTH_DIR=/srv/edge-state/codex/home/.codex-terminal-pool/multi-auth\n")
+        assignments += ["CODEX_HOME=/srv/edge-state/codex/home/.codex-terminal-pool",
+                        "CODEX_MULTI_AUTH_DIR=/srv/edge-state/codex/home/.codex-terminal-pool/multi-auth"]
     if component == "teamclaude":
-        extra += "Environment=TEAMROUTER_CONFIG=/srv/edge-state/teamclaude/teamclaude.json\n"
+        assignments += ["TEAMROUTER_CONFIG=/srv/edge-state/teamclaude/teamclaude.json"]
     if component == "lf-scan":
-        extra += "Environment=HF_HOME=/srv/edge-state/lf-scan/hf-cache\n"
+        assignments += ["HF_HOME=/srv/edge-state/lf-scan/hf-cache"]
+    if component == "token-monitor":
+        assignments += ["TOKEN_MONITOR_DATA_FILE=/srv/edge-state/token-monitor/devices.json"]
     jit = "no" if instance == "edge-brokers" else "yes"
     return f"""[Unit]
 Description=Edge {component} (custody-gated)
@@ -55,7 +58,7 @@ RuntimeDirectory={component}
 RuntimeDirectoryMode=0750
 Environment=HOME={ROOT}/{component}/home
 {extra}ExecStartPre=+/usr/local/sbin/edge-state-check {instance} {component}
-ExecStart={command}
+ExecStart=/usr/bin/env {' '.join(assignments)} {command}
 WorkingDirectory={ROOT}/{component}
 Restart=on-failure
 RestartSec=5
@@ -104,7 +107,7 @@ def firewall(instance):
     else:
         rules += ["ip saddr { 10.250.0.0/24, 10.250.1.0/24, 10.250.4.10 } tcp dport 8888 accept",
                   "tcp dport 8888 reject"]
-    return "table inet edge_input {\n chain input {\n  type filter hook input priority 0; policy accept;\n  " + ";\n  ".join(rules) + ";\n }\n}\n"
+    return "destroy table inet edge_input\ntable inet edge_input {\n chain input {\n  type filter hook input priority 0; policy accept;\n  " + ";\n  ".join(rules) + ";\n }\n}\n"
 
 
 def render(output, instance):
@@ -114,12 +117,17 @@ def render(output, instance):
         path = output / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-    units = "etc/systemd/system"
+    # Leave /etc/systemd/system available for /dev/null masks and overrides.
+    units = "usr/local/lib/systemd/system"
     write("etc/edge-instance", instance + "\n")
     write("etc/edge-input.nft", firewall(instance))
     write(f"{units}/edge-input.service", """[Unit]
 Description=Container-local edge ingress restrictions
-Before=network-online.target
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
@@ -145,6 +153,7 @@ ConditionPathExists={ROOT}/custody/{component}.ready
 
 [Socket]
 ListenStream=10.250.4.12:{port}
+FreeBind=yes
 NoDelay=true
 
 [Install]

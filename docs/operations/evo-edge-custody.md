@@ -96,8 +96,14 @@ python3 dist/evo-edge/render.py edge-brokers /new/path/edge-brokers
 ```
 
 Install these files as container root only in the coordinated outage, after the
-relevant source is stopped. They contain no application secrets or activation
-links. Keep units **disabled and masked** until their custody ceremony ends.
+relevant source is stopped. Unit definitions are in `/usr/local/lib/systemd/system`;
+reserve `/etc/systemd/system` for masks and overrides. Before installation,
+`systemctl mask` every `edge-*.service` and `edge-*.socket` basename in the role,
+then install the rendered tree and run `systemctl daemon-reload`. Confirm the
+mask links still point to `/dev/null`. The bundle contains no application secrets
+or activation links. Keep credentialed units **disabled and masked** until their
+custody ceremony ends; unmask/start only the container-local `edge-input.service`
+for firewall validation before that. Do not copy regular unit files over masks.
 Booting an empty OS for package installation after source stop does not authorize
 starting any credentialed unit. Do not install packages whose maintainer scripts
 start pool software. No credentialed workload starts on evo while its source runs.
@@ -131,8 +137,9 @@ The guard must fail before a receipt exists. Test missing/wrong ZFS mounts.
 Service state is under `/srv/edge-state/<component>`. Each environment-using
 unit requires `service.env` there (root-owned, 0600, created only by the private
 custody transfer, never from a Git template). Preserve only the required
-settings; omit macOS PATHs and runtime helper PIDs. Node variables such as
-CODEX_HOME and TEAMROUTER_CONFIG in the rendered units are authoritative.
+settings; omit macOS PATHs and runtime helper PIDs. Final `/usr/bin/env` assignments
+in ExecStart enforce HOME, CODEX_HOME/MULTI_AUTH_DIR, TEAMROUTER_CONFIG, HF_HOME
+and the hub data path even if a migrated EnvironmentFile contains old values.
 Token-monitor must use a transferred nonempty TOKEN_MONITOR_SECRET and
 TOKEN_MONITOR_DATA_FILE=/srv/edge-state/token-monitor/devices.json; without a
 secret its source code falls back to loopback and is not remotely serving.
