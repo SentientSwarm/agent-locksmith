@@ -76,7 +76,7 @@ async fn setup() -> Harness {
     // Two agents, both allowed to call `lmstudio`.
     let (h_pid, h_secret) = agents
         .create(
-            "hermes-mini-1",
+            "agent-a",
             None,
             Some(&["lmstudio".to_string()]),
             None,
@@ -87,7 +87,7 @@ async fn setup() -> Harness {
         .unwrap();
     let (o_pid, o_secret) = agents
         .create(
-            "openclaw-mini-1",
+            "agent-b",
             None,
             Some(&["lmstudio".to_string()]),
             None,
@@ -97,14 +97,14 @@ async fn setup() -> Harness {
         .await
         .unwrap();
     let h_id = agents
-        .get_by_name("hermes-mini-1")
+        .get_by_name("agent-a")
         .await
         .unwrap()
         .unwrap()
         .id;
 
     let o_id = agents
-        .get_by_name("openclaw-mini-1")
+        .get_by_name("agent-b")
         .await
         .unwrap()
         .unwrap()

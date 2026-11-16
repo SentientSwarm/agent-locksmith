@@ -49,7 +49,7 @@ The CLI then expects `LOCKSMITH_OP_TOKEN=lkop_<public_id>.<secret>` in its envir
 # Each agent gets its own bearer token, scoped to a specific tool list.
 LOCKSMITH_OP_TOKEN=$(./scripts/decrypt-creds.sh operator_token) \
   locksmith agent register \
-    --name "hermes-mini-m1" \
+    --name "agent-a" \
     --allowlist "lmstudio,tavily,github"
 
 # Output includes the wire token: lk_<public_id>.<secret>

@@ -14,7 +14,7 @@ This is the ship-critical agent integration recipe.
 - An agent registered in locksmith with `anthropic` (and any other
   providers hermes will call) in its allowlist:
   ```bash
-  locksmith agent register --name hermes-mini-m1 \
+  locksmith agent register --name agent-a \
       --allowlist anthropic,openai,lmstudio,ollama,tavily,github
   ```
 - The bearer token from `agent register` saved on the hermes host
@@ -158,7 +158,7 @@ EOF
 ```bash
 mkdir -p ~/.hermes
 chmod 700 ~/.hermes
-# Paste the bearer from `locksmith agent register --name hermes-mini-m1 ...`:
+# Paste the bearer from `locksmith agent register --name agent-a ...`:
 cat > ~/.hermes/locksmith.token <<'EOF'
 lk_yN2vR6jFKNYfIwNjFU2MSA.1TJlTmOgmswZYZx_aQHyjaNiugeJjudytNPFJgT9aqM
 EOF

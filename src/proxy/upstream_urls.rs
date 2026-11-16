@@ -207,14 +207,14 @@ mod tests {
     fn agent_base_needs_a_plain_host() {
         let mut h = HeaderMap::new();
         assert_eq!(agent_base(&h, false, "github"), None);
-        h.insert("host", HeaderValue::from_static("192.168.50.13:9200"));
+        h.insert("host", HeaderValue::from_static("192.0.2.13:9200"));
         assert_eq!(
             agent_base(&h, false, "github").unwrap(),
-            "http://192.168.50.13:9200/api/github"
+            "http://192.0.2.13:9200/api/github"
         );
         assert_eq!(
             agent_base(&h, true, "github").unwrap(),
-            "https://192.168.50.13:9200/api/github"
+            "https://192.0.2.13:9200/api/github"
         );
         h.insert("host", HeaderValue::from_static("agent_locksmith:9200"));
         assert_eq!(

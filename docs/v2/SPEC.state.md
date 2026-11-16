@@ -8,7 +8,7 @@
 - **Status:** Design complete; ready for review and execution
 - **Input sources:** `docs/v2/PRD.md`
 - **Output:** `docs/v2/SPEC.md`
-- **Codebase root:** `/Users/jxstanford/devel/sentientswarm/agent-locksmith`
+- **Codebase root:** `<repo>`
 
 ## Identifier policy
 

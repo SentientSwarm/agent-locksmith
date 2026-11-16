@@ -103,7 +103,7 @@ This section captures the M0 implementation as it stands at commit `f826694` on 
 
 | Repository | Branch | Commit | Date | Relevant Paths |
 |-----------|--------|--------|------|---------------|
-| `/Users/jxstanford/devel/sentientswarm/agent-locksmith` | `main` | `f826694` | 2026-03-14 | `src/`, `tests/`, `Cargo.toml`, `config.example.yaml` |
+| `<repo>` | `main` | `f826694` | 2026-03-14 | `src/`, `tests/`, `Cargo.toml`, `config.example.yaml` |
 
 The M0 implementation is small and tractable: 452 lines across 7 source modules, 8 integration test files. The compactness is deliberate — M0 ships a single-purpose proxy and nothing more.
 

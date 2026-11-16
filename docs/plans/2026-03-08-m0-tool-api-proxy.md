@@ -82,7 +82,7 @@ Copy the Config Format section from SPEC.md (lines 232-320) into this file.
 
 **Step 5: Verify it compiles**
 
-Run: `cd /Users/jxstanford/devel/openclaw-repos/secure-agent-proxy && cargo build`
+Run: `cd <repo> && cargo build`
 Expected: Compiles successfully, produces `target/debug/sap`
 
 **Step 6: Run the binary**

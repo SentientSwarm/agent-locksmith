@@ -337,8 +337,8 @@ tools:
 # ── A2A Peers (M4) ─────────────────────────────────────────
 # a2a:
 #   - name: "peer-agent"
-#     description: "evo-x2-2 agent"
-#     upstream: "https://192.168.50.21:18789"
+#     description: "LAN agent"
+#     upstream: "https://192.0.2.21:18789"
 #     auth:
 #       header: "Authorization"
 #       value: "Bearer ${PEER_AGENT_TOKEN}"

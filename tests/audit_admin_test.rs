@@ -359,7 +359,7 @@ async fn audit_query_surfaces_agent_name_for_proxy_rows() {
         .create_agent_as_operator(
             &op(),
             CreateAgentInput {
-                name: "hermes-mini-1".into(),
+                name: "agent-c".into(),
                 description: None,
                 allowlist: None,
                 denylist: None,
@@ -387,7 +387,7 @@ async fn audit_query_surfaces_agent_name_for_proxy_rows() {
     // table. agent_create writes the row before the agent identity is
     // separately queryable for THIS operator-side row, but the join
     // still resolves because the agent row was inserted first.
-    assert_eq!(row.agent_name.as_deref(), Some("hermes-mini-1"));
+    assert_eq!(row.agent_name.as_deref(), Some("agent-c"));
 }
 
 #[tokio::test]

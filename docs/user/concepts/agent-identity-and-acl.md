@@ -6,7 +6,7 @@ How locksmith authenticates an agent on every request and decides what tools it 
 
 When the operator runs `locksmith agent register`, the daemon creates a row in the agents table with:
 
-- **`name`** — human-readable label (`hermes-mini-m1`, `research-bot`, `verify-test`). Operator-chosen, must be unique.
+- **`name`** — human-readable label (`agent-a`, `research-bot`, `verify-test`). Operator-chosen, must be unique.
 - **`public_id`** — opaque identifier, appears in bearer tokens and audit rows. Daemon-generated.
 - **`allowlist`** — list of tool/model names the agent may call.
 - **`denylist`** — list of tool/model names the agent must not call (deny wins).

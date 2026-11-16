@@ -213,12 +213,12 @@ async fn setup(agent_name: &str) -> Harness {
 
 #[tokio::test]
 async fn g4_proxy_injects_openai_beta_and_originator_when_agent_omits_them() {
-    let h = setup("hermes-mini-1").await;
+    let h = setup("agent-a").await;
 
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/responses"))
         .and(header("openai-beta", "responses=experimental"))
-        .and(header("originator", "hermes-mini-1"))
+        .and(header("originator", "agent-a"))
         .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
         .mount(&h.mock)
         .await;
@@ -241,7 +241,7 @@ async fn g4_proxy_overrides_agent_supplied_openai_beta() {
     // some other endpoint); locksmith strips and forces the codex
     // value. wiremock matcher fails if a wrong/duplicated value
     // reaches upstream.
-    let h = setup("openclaw-mini-1").await;
+    let h = setup("agent-b").await;
 
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/responses"))
@@ -265,7 +265,7 @@ async fn g4_proxy_overrides_agent_supplied_openai_beta() {
 
 #[tokio::test]
 async fn g4_proxy_preserves_agent_supplied_originator() {
-    let h = setup("openclaw-mini-1").await;
+    let h = setup("agent-b").await;
 
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/responses"))
@@ -290,7 +290,7 @@ async fn g4_proxy_preserves_agent_supplied_originator() {
 
 #[tokio::test]
 async fn g4_proxy_skips_g4_headers_for_non_codex_upstream() {
-    let h = setup("hermes-mini-1").await;
+    let h = setup("agent-a").await;
 
     // Non-codex upstream — neither OpenAI-Beta nor originator
     // should be injected. Mock matcher rejects requests carrying
@@ -317,12 +317,12 @@ async fn g4_proxy_injects_g4_headers_on_non_responses_codex_paths() {
     // G4 fires on every codex upstream call, not just /responses.
     // (Compare to G3, which is /responses-only.) A hypothetical
     // /backend-api/codex/sessions call also gets the G4 headers.
-    let h = setup("hermes-mini-1").await;
+    let h = setup("agent-a").await;
 
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/sessions"))
         .and(header("openai-beta", "responses=experimental"))
-        .and(header("originator", "hermes-mini-1"))
+        .and(header("originator", "agent-a"))
         .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
         .mount(&h.mock)
         .await;

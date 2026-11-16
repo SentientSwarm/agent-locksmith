@@ -39,9 +39,9 @@ startup-resolved credential or send an unauthenticated upstream request.
 
 ```
 agent             registration       explicit binding                       effective
-hermes-mini-1     lmstudio           bearer=SHARED_LM_KEY                   shared account X
-openclaw-mini-1   lmstudio           bearer=SHARED_LM_KEY                   shared account X
-third-agent      lmstudio           bearer=OTHER_LM_KEY                    account Y
+agent-a           lmstudio           bearer=SHARED_LM_KEY                   shared account X
+agent-b           lmstudio           bearer=SHARED_LM_KEY                   shared account X
+third-agent       lmstudio           bearer=OTHER_LM_KEY                    account Y
 unbound-agent    lmstudio           (absent)                               denied
 ```
 
@@ -210,8 +210,8 @@ Per-agent OAuth uses two pieces:
    locksmith agent set-credential "$OPENCLAW_AGENT_ID" codex --oauth-session openclaw
    ```
 
-Now `hermes-mini-1`'s requests resolve `oauth_sessions(codex,
-"hermes")` and `openclaw-mini-1`'s resolve
+Now `agent-a`'s requests resolve `oauth_sessions(codex,
+"hermes")` and `agent-b`'s resolve
 `oauth_sessions(codex, "openclaw")`.
 
 ## The OAuth single-grant trap

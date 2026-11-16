@@ -74,9 +74,9 @@ When 1Password promotes Environments to the stable channel (no public timeline),
 
 Before creating anything in 1Password, sketch out:
 
-- **Hosts** you'll deploy to (e.g., `mini-1`, `studio-1`)
+- **Hosts** you'll deploy to (e.g., `host-a`, `host-b`)
 - **Products** running on each (e.g., `openclaw`, `hermes`, `layer8-proxy`)
-- **Test hosts** that need separate Environments (e.g., `jx-mbp-m5`)
+- **Test hosts** that need separate Environments (e.g., `test-host`)
 
 For each (host × product) tuple, you'll create:
 
@@ -94,8 +94,8 @@ The full reference matrix lives in `agents-stack/docs/spec/v0.3.0-1password-inte
 
 | Thing | Convention | Example |
 |---|---|---|
-| Environment | `<product>-<host>` | `openclaw-mini-1` |
-| Service Account | `<host>-<product>` | `mini-1-openclaw` |
+| Environment | `<product>-<host>` | `openclaw-host-a` |
+| Service Account | `<host>-<product>` | `host-a-openclaw` |
 | Keychain entry | `OP_SERVICE_ACCOUNT_TOKEN_<HOST>_<PRODUCT>` (upper, hyphens → `_`) | `OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW` |
 
 The host prefix on Keychain entries preserves global uniqueness across operator-personal hosts that may sync via iCloud Keychain. Production deploy hosts have isolated Keychains (no iCloud sync) per ADR-0006 D9.
@@ -111,7 +111,7 @@ For each (host × product) tuple:
 
 1. Open 1Password (desktop or web)
 2. Navigate: **Developer → Environments → + New**
-3. Name it per the convention (e.g., `openclaw-mini-1`)
+3. Name it per the convention (e.g., `openclaw-host-a`)
 4. Choose the vault that should hold it (e.g., `Operations`)
 5. **Capture the Environment ID** — visible in the URL or detail panel after creation. Looks like `37ahi3usek2ckxxipzk6pddi7a`.
 
@@ -123,7 +123,7 @@ From your operator's laptop (where you're signed into 1P):
 
 ```bash
 ./scripts/provision-host-sa.sh \
-    --host mini-1 \
+    --host host-a \
     --product openclaw \
     --environment <env-id-from-step-4.1> \
     --vault Operations \
@@ -134,7 +134,7 @@ The script:
 
 1. Verifies you're signed into 1P (`op whoami`)
 2. Verifies the Environment is accessible (`op environment read $id >/dev/null`)
-3. Creates a Service Account named `mini-1-openclaw` scoped to the Environment
+3. Creates a Service Account named `host-a-openclaw` scoped to the Environment
 4. Prints the SA token (one-time only — capture it now)
 5. Emits a deploy recipe with the correct host-prefixed Keychain entry name and the **non-interactive** `security add-generic-password -w "$TOKEN"` form
 
@@ -145,7 +145,7 @@ The script:
 Copy the recipe printed by `provision-host-sa.sh` and run it on the target host (or via SSH from your laptop):
 
 ```bash
-# On mini-1 (or via ssh mini-1 'TOKEN=...; security add-...')
+# On host-a (or via ssh host-a 'TOKEN=...; security add-...')
 TOKEN='ops_eyJzaWdu...full-token-here'   # paste the full token
 security add-generic-password \
     -s OP_SERVICE_ACCOUNT_TOKEN_MINI_1_OPENCLAW \
@@ -159,7 +159,7 @@ echo "stored length: ${#T}"   # expect ~700
 unset T
 ```
 
-> **Per-host isolation.** Production agent hosts should run with **isolated login keychains** (no iCloud Keychain sync). This means the SA token added on mini-1 stays on mini-1 — a compromise of one host doesn't leak tokens to others. Operator-personal hosts (laptop, test boxes) may sync at your discretion. See ADR-0006 D9.
+> **Per-host isolation.** Production agent hosts should run with **isolated login keychains** (no iCloud Keychain sync). This means the SA token added on host-a stays on host-a — a compromise of one host doesn't leak tokens to others. Operator-personal hosts (laptop, test boxes) may sync at your discretion. See ADR-0006 D9.
 
 ### 4.4 Configure site.cfg on the target host
 
@@ -374,7 +374,7 @@ By default, `security add-generic-password` writes to the **local login keychain
 - Login keychain items will sync to iCloud
 - The host-prefixed naming convention preserves global uniqueness across synced hosts
 
-For production agent hosts (`mini-1`, `studio-1`), **leave iCloud Keychain off**. Per-host isolation honors the per-(host × product) SA boundary; otherwise a compromise of any one host leaks all SA tokens.
+For production agent hosts (`host-a`, `host-b`), **leave iCloud Keychain off**. Per-host isolation honors the per-(host × product) SA boundary; otherwise a compromise of any one host leaks all SA tokens.
 
 ### .env mode is 0600
 
