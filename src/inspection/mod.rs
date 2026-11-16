@@ -11,7 +11,9 @@
 
 pub mod config;
 mod dlp;
+mod injection;
 mod literal;
+mod normalize;
 mod text;
 
 use sha2::{Digest, Sha256};

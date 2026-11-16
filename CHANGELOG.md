@@ -53,7 +53,9 @@
   text. Scanners: `literal:<text>` and `dlp` (AGENT-263), Locksmith's
   own credential rules (AWS, GitHub, Slack, OpenAI, Anthropic, Google,
   Stripe, PEM private keys, JWTs, bearer tokens, one level of base64)
-  plus a flag-only entropy heuristic. See
+  plus a flag-only entropy heuristic, and `injection` (AGENT-264),
+  prompt-injection phrasing matched after folding zero-width
+  characters, look-alike letters and case; it defaults to `flag`. See
   `docs/development/inspection.md`.
 - `egress.mode` (AGENT-261) declares who enforces `egress: proxied`
   routes: `pipelock` (every proxied route uses `egress_proxy`, which is

@@ -14,7 +14,8 @@
 //! ```
 //!
 //! Defaults: requests `block` / `fail_closed`; responses `flag` /
-//! `fail_open`; 1 MiB scan limit. Unknown scanners and duplicate routes
+//! `fail_open`; 1 MiB scan limit. A policy whose only scanner is
+//! `injection` defaults to `flag` in both directions. Unknown scanners and duplicate routes
 //! fail config load.
 
 use super::{DirectionPolicy, Inspection, OnError, RoutePolicy, Scanner, Verdict};
@@ -80,13 +81,26 @@ fn direction(
             .iter()
             .map(|id| scanner(id))
             .collect::<Result<_, _>>()?,
-        on_hit: cfg.on_hit.unwrap_or(on_hit),
+        on_hit: cfg.on_hit.unwrap_or(if advisory_only(&cfg.scanners) {
+            Verdict::Flag
+        } else {
+            on_hit
+        }),
         on_error: cfg.on_error.unwrap_or(on_error),
         max_scan_bytes: cfg.max_scan_bytes.unwrap_or(DEFAULT_MAX_SCAN_BYTES),
     }))
 }
 
+/// Phrase matching is too coarse to block on unasked: a policy of only
+/// `injection` defaults to `flag` in either direction.
+fn advisory_only(scanners: &[String]) -> bool {
+    scanners.iter().all(|s| s == "injection")
+}
+
 fn scanner(id: &str) -> Result<Arc<dyn Scanner>, String> {
+    if id == "injection" {
+        return Ok(Arc::new(super::injection::Injection));
+    }
     if id == "dlp" {
         return Ok(Arc::new(super::dlp::Dlp));
     }

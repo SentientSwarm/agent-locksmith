@@ -41,6 +41,7 @@ config load.
 |---|---|---|
 | `literal:<text>` | either | An exact string, such as a canary token. |
 | `dlp` | either (meant for requests) | Credentials and secrets; rules below. |
+| `injection` | either (meant for responses) | Prompt-injection phrasing; rules below. |
 
 ### `dlp` rules
 
@@ -64,6 +65,28 @@ Locksmith's own curated set (AGENT-263), not a port of another tool's.
 Each rule has a fixed maximum match length; the scanner's
 `max_match_len` is the largest (the base64 bound). Longer runs are not
 matched, so a 50 KiB inline image is neither decoded nor flagged.
+
+### `injection` rules
+
+AGENT-264. Text is folded first: zero-width characters (U+200B to
+U+200D, U+2060, U+FEFF) are dropped, Cyrillic and Greek look-alikes and
+fullwidth ASCII fold to ASCII, whitespace becomes a space, and case is
+lowered. Hits are reported at their original byte offsets, so `redact`
+removes what was really sent.
+
+Rules: `ignore_instructions`, `disregard_above`, `role_reassignment`
+(`you are now DAN`, not `you are now ready`), `system_prompt_label`,
+`chat_template_token` (`<|im_start|>`, `[INST]`, `<<SYS>>`),
+`system_override`, `mode_switch`, `do_anything_now`, `new_instructions`,
+`reveal_prompt`, `no_restrictions`, `from_now_on`, `system_tag`,
+`exfiltrate` (`send the credentials to`), `conceal_from_user` and
+`hidden_command`. A run of five or more invisible characters is not
+dropped (it would hide a phrase from a bounded window) and is reported as
+`invisible_run`.
+
+A phrase list catches copied, common attacks, not novel ones. A policy
+whose only scanner is `injection` defaults to `on_hit: flag` in both
+directions; set `on_hit` to block or redact deliberately.
 
 Each scanner reports hits as byte spans plus a rule id, and declares the
 longest match it can report (`max_match_len`), which streaming uses to
