@@ -63,7 +63,11 @@
   event is forwarded at once, under `redact` or `block` events are held
   until they are safe (about 8 KB of text with the built-in scanners)
   and a block ends the stream with a protocol-shaped error event.
-  Newline-delimited JSON streams are not scanned. Each inspection
+  Newline-delimited JSON streams are not scanned. `inspection.sidecars`
+  (AGENT-254) adds scanners behind a Unix socket, named
+  `sidecar:<name>`, served by a process running as Locksmith's own user;
+  `dist/inspector/` has a reference PromptGuard 2 / CodeShield sidecar
+  (weights not shipped). Each inspection
   that finds, skips or fails something writes an `inspection_*` security
   audit event carrying rule ids and SHA-256 hashes, never the matched
   text. Scanners: `literal:<text>` and `dlp` (AGENT-263), Locksmith's

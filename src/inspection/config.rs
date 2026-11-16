@@ -14,9 +14,17 @@
 //! ```
 //!
 //! Defaults: requests `block` / `fail_closed`; responses `flag` /
-//! `fail_open`; 1 MiB scan limit. A policy whose only scanner is
-//! `injection` defaults to `flag` in both directions. Unknown scanners and duplicate routes
-//! fail config load.
+//! `fail_open`; 1 MiB scan limit. A policy whose only scanners are
+//! `injection` or sidecars defaults to `flag` in both directions. Unknown
+//! scanners and duplicate routes fail config load.
+//!
+//! ```yaml
+//! inspection:
+//!   sidecars:                    # AGENT-254: scanners behind a Unix socket
+//!     - name: promptguard        # used as scanner `sidecar:promptguard`
+//!       socket: /run/locksmith-inspector/inspector.sock
+//!       timeout_ms: 1000         # default 1000
+//! ```
 
 use super::{DirectionPolicy, Inspection, OnError, RoutePolicy, Scanner, Verdict};
 use serde::Deserialize;
@@ -30,6 +38,58 @@ const DEFAULT_MAX_SCAN_BYTES: usize = 1024 * 1024;
 pub struct InspectionConfig {
     #[serde(default)]
     pub routes: Vec<RouteInspectionConfig>,
+    #[serde(default)]
+    pub sidecars: Vec<SidecarConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarConfig {
+    pub name: String,
+    pub socket: std::path::PathBuf,
+    pub timeout_ms: Option<u64>,
+}
+
+const DEFAULT_SIDECAR_TIMEOUT_MS: u64 = 1000;
+
+type Sidecars = HashMap<String, Arc<dyn Scanner>>;
+
+fn sidecars(cfg: Option<&InspectionConfig>) -> Result<Sidecars, String> {
+    let mut out = Sidecars::new();
+    for s in cfg.map(|c| c.sidecars.as_slice()).unwrap_or_default() {
+        let valid = !s.name.is_empty()
+            && s.name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+        if !valid {
+            return Err(format!(
+                "inspection sidecar name `{}` must be [a-z0-9_-]+",
+                s.name
+            ));
+        }
+        if !s.socket.is_absolute() {
+            return Err(format!(
+                "inspection sidecar `{}` socket must be an absolute path",
+                s.name
+            ));
+        }
+        let timeout = s.timeout_ms.unwrap_or(DEFAULT_SIDECAR_TIMEOUT_MS);
+        if timeout == 0 {
+            return Err(format!(
+                "inspection sidecar `{}` timeout_ms must be at least 1",
+                s.name
+            ));
+        }
+        let scanner = super::sidecar::Sidecar::new(
+            &s.name,
+            s.socket.clone(),
+            std::time::Duration::from_millis(timeout),
+        );
+        if out.insert(s.name.clone(), Arc::new(scanner)).is_some() {
+            return Err(format!("inspection sidecar `{}` is listed twice", s.name));
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,13 +111,24 @@ pub struct DirectionConfig {
 
 /// Compile the config into per-route policies.
 pub fn compile(cfg: Option<&InspectionConfig>) -> Result<Inspection, String> {
+    let sidecars = sidecars(cfg)?;
     let mut routes = HashMap::new();
     for r in cfg.map(|c| c.routes.as_slice()).unwrap_or_default() {
         let policy = RoutePolicy {
-            request: direction(r.request.as_ref(), Verdict::Block, OnError::FailClosed)
-                .map_err(|e| format!("inspection route `{}` request: {e}", r.route))?,
-            response: direction(r.response.as_ref(), Verdict::Flag, OnError::FailOpen)
-                .map_err(|e| format!("inspection route `{}` response: {e}", r.route))?,
+            request: direction(
+                r.request.as_ref(),
+                Verdict::Block,
+                OnError::FailClosed,
+                &sidecars,
+            )
+            .map_err(|e| format!("inspection route `{}` request: {e}", r.route))?,
+            response: direction(
+                r.response.as_ref(),
+                Verdict::Flag,
+                OnError::FailOpen,
+                &sidecars,
+            )
+            .map_err(|e| format!("inspection route `{}` response: {e}", r.route))?,
         };
         if routes.insert(r.route.clone(), policy).is_some() {
             return Err(format!("inspection route `{}` is listed twice", r.route));
@@ -70,6 +141,7 @@ fn direction(
     cfg: Option<&DirectionConfig>,
     on_hit: Verdict,
     on_error: OnError,
+    sidecars: &Sidecars,
 ) -> Result<Option<DirectionPolicy>, String> {
     let Some(cfg) = cfg else { return Ok(None) };
     if cfg.scanners.is_empty() {
@@ -79,7 +151,7 @@ fn direction(
         scanners: cfg
             .scanners
             .iter()
-            .map(|id| scanner(id))
+            .map(|id| scanner(id, sidecars))
             .collect::<Result<_, _>>()?,
         on_hit: cfg.on_hit.unwrap_or(if advisory_only(&cfg.scanners) {
             Verdict::Flag
@@ -91,13 +163,22 @@ fn direction(
     }))
 }
 
-/// Phrase matching is too coarse to block on unasked: a policy of only
-/// `injection` defaults to `flag` in either direction.
+/// Phrase matching and classifier scores are too coarse to block on
+/// unasked: a policy of only `injection` or sidecars defaults to `flag`
+/// in either direction.
 fn advisory_only(scanners: &[String]) -> bool {
-    scanners.iter().all(|s| s == "injection")
+    scanners
+        .iter()
+        .all(|s| s == "injection" || s.starts_with("sidecar:"))
 }
 
-fn scanner(id: &str) -> Result<Arc<dyn Scanner>, String> {
+fn scanner(id: &str, sidecars: &Sidecars) -> Result<Arc<dyn Scanner>, String> {
+    if let Some(name) = id.strip_prefix("sidecar:") {
+        return sidecars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("scanner `{id}` names no configured sidecar"));
+    }
     if id == "injection" {
         return Ok(Arc::new(super::injection::Injection));
     }

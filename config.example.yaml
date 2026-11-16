@@ -51,6 +51,10 @@ listen:
 #       response:
 #         scanners: ["literal:DO-NOT-SEND"]
 #         on_hit: redact
+#   sidecars:                 # ML scanners behind a Unix socket (dist/inspector/)
+#     - name: promptguard     # used in a policy as "sidecar:promptguard"
+#       socket: /run/locksmith-inspector/inspector.sock
+#       timeout_ms: 1000
 
 logging:
   level: "info"

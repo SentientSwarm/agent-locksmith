@@ -128,15 +128,44 @@ pub struct StreamInspector {
     lane_bytes: usize,
     /// Short texts scanned alone and found clean.
     clean: HashSet<String>,
+    /// A configured scanner can't judge streams and `on_error` is
+    /// `fail_closed`: the stream is blocked before anything is sent.
+    unjudged: bool,
     /// The protocol scheme the stream's first protocol event named.
     scheme: Option<super::lanes::Scheme>,
 }
 
 impl StreamInspector {
     pub fn new(policy: &DirectionPolicy) -> Self {
+        let mut inspector = Self::build(policy);
+        // A scanner that does not take part in streams (a sidecar scores
+        // whole texts, not a sliding tail) leaves this stream unjudged by
+        // it: that is an inspection error, so `on_error` decides.
+        let skipped: Vec<&str> = policy
+            .scanners
+            .iter()
+            .filter(|s| !s.streams())
+            .map(|s| s.id())
+            .collect();
+        if !skipped.is_empty() {
+            inspector.report.error = Some(format!(
+                "{} cannot inspect a streamed response",
+                skipped.join(", ")
+            ));
+            inspector.unjudged = policy.on_error == OnError::FailClosed;
+        }
+        inspector
+    }
+
+    fn build(policy: &DirectionPolicy) -> Self {
         Self {
             parser: SseParser::with_cap(policy.max_scan_bytes),
-            scanners: policy.scanners.clone(),
+            scanners: policy
+                .scanners
+                .iter()
+                .filter(|s| s.streams())
+                .cloned()
+                .collect(),
             lanes: Vec::new(),
             by_lane: HashMap::new(),
             on_hit: policy.on_hit,
@@ -155,6 +184,7 @@ impl StreamInspector {
             wholes: 0,
             lane_bytes: 0,
             clean: HashSet::new(),
+            unjudged: false,
             scheme: None,
         }
     }
@@ -172,6 +202,11 @@ impl StreamInspector {
         let mut step = Step::default();
         if self.ended {
             step.ended = true;
+            return step;
+        }
+        if self.unjudged {
+            self.block(&mut step);
+            self.ended = true;
             return step;
         }
         if self.passthrough {
@@ -224,6 +259,11 @@ impl StreamInspector {
         let mut step = Step::default();
         if self.ended {
             step.ended = true;
+            return step;
+        }
+        if self.unjudged {
+            self.block(&mut step);
+            self.ended = true;
             return step;
         }
         if !self.passthrough {
@@ -2195,6 +2235,60 @@ mod tests {
             started.elapsed()
         );
         assert!(!i.report().hits.is_empty());
+    }
+
+    /// A scanner that does not take part in streams (a sidecar).
+    struct Whole;
+    impl Scanner for Whole {
+        fn id(&self) -> &str {
+            "sidecar:x"
+        }
+        fn max_match_len(&self) -> usize {
+            0
+        }
+        fn streams(&self) -> bool {
+            false
+        }
+        fn scan(
+            &self,
+            _: &str,
+            _: Direction,
+        ) -> Result<Vec<super::super::Hit>, super::super::ScanError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn a_scanner_that_skips_streams_follows_on_error() {
+        let with = |on_error| DirectionPolicy {
+            scanners: vec![Arc::new(Dlp), Arc::new(Whole)],
+            on_error,
+            ..policy(Verdict::Redact)
+        };
+        let (out, i) = run(
+            &with(OnError::FailClosed),
+            &[chat("hello"), DONE.to_string()],
+        );
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(
+            i.report()
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("sidecar:x")
+        );
+        let (out, i) = run(&with(OnError::FailOpen), &[chat("hello"), DONE.to_string()]);
+        assert!(
+            out.contains("hello") && !out.contains("inspection_blocked"),
+            "{out}"
+        );
+        assert!(
+            i.report()
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("sidecar:x")
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ mod injection;
 pub mod lanes;
 mod literal;
 mod normalize;
+pub mod sidecar;
 pub mod sse;
 pub mod stream;
 mod text;
@@ -96,6 +97,11 @@ pub trait Scanner: Send + Sync {
     /// text; its window must carry that much folded text.
     fn max_match_len(&self) -> usize;
     fn scan(&self, text: &str, direction: Direction) -> Result<Vec<Hit>, ScanError>;
+    /// Does this scanner take part in streamed-response windows? A
+    /// classifier that scores whole texts (a sidecar) does not.
+    fn streams(&self) -> bool {
+        true
+    }
 }
 
 /// The compiled policy for one direction of one route.

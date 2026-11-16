@@ -297,5 +297,43 @@ The matched text itself is never recorded.
 
 ## Sidecars
 
-Reserved for ML scanners (PromptGuard 2, CodeShield) that run outside the
-Locksmith process over a Unix socket; see AGENT-254.
+ML scanners (PromptGuard 2, CodeShield) run outside the Locksmith
+process behind a Unix socket (AGENT-254). Declare each one under
+`inspection.sidecars` and name it in a policy as `sidecar:<name>`:
+
+```yaml
+inspection:
+  sidecars:
+    - name: promptguard
+      socket: /run/locksmith-inspector/inspector.sock   # absolute path
+      timeout_ms: 1000                                  # default 1000
+  routes:
+    - route: web-search
+      response:
+        scanners: [injection, "sidecar:promptguard"]
+```
+
+Each scan is one `POST /scan` over HTTP/1.1 on its own connection, with
+`{"direction", "text"}`, answered by `{"hits": [{"rule", "start", "end",
+"score"}]}` in UTF-8 byte offsets. Hits are audited under the scanner id
+`sidecar:<name>` like any built-in scanner's. A connection failure, a
+status other than 200, a malformed answer, a hit outside the text or a
+missed `timeout_ms` is a scanner error, and the route's `on_error`
+decides.
+
+Text sent to a sidecar may hold secrets, so Locksmith checks the uid of
+the process serving the socket (`SO_PEERCRED` on Linux, `getpeereid`
+elsewhere) and refuses any uid but its own (AGENT-150). A policy whose
+only scanners are `injection` or sidecars defaults to `flag`. Sidecars do
+not run on streamed (SSE) responses, because a classifier scores whole
+texts, not a sliding window. A streamed response on a route with a
+sidecar is therefore an inspection error and follows `on_error`: under
+`fail_closed` it is blocked before anything is sent; under `fail_open`
+it streams with the other scanners and an `inspection_error` row names
+the sidecar. A `sidecar:` scanner naming no declared
+sidecar, an empty or invalid name, a relative socket path or a zero
+timeout fails config load.
+
+`dist/inspector/` holds a reference sidecar built on LlamaFirewall, with
+its systemd unit and smoke test. The model weights are not shipped; see
+its README for the licence the operator accepts.
