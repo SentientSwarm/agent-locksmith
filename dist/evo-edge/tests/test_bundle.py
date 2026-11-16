@@ -1,0 +1,67 @@
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+
+
+def module(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).parents[1] / f"{name}.py")
+    result = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(result)
+    return result
+
+
+class BundleTest(unittest.TestCase):
+    def test_inactive_render_has_no_custody_or_enabled_units(self):
+        render = module("render")
+        with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:
+            for instance in render.IP:
+                output = Path(root) / instance
+                render.render(output, instance)
+                self.assertFalse((output / "srv").exists())
+                self.assertEqual([], list(output.rglob("*.wants")))
+                self.assertEqual([], list(output.rglob("*.ready")))
+                for component in render.SERVICES[instance]:
+                    unit = (output / f"etc/systemd/system/edge-{component}.service").read_text()
+                    self.assertIn(f"ConditionPathExists=/srv/edge-state/custody/{component}.ready", unit)
+                    self.assertIn(f"edge-state-check {instance} {component}", unit)
+                    self.assertIn("NoNewPrivileges=yes", unit)
+                    self.assertIn("ProtectSystem=strict", unit)
+
+    def test_render_refuses_existing_tree(self):
+        with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:
+            with self.assertRaises(FileExistsError):
+                module("render").render(Path(root), "edge-brokers")
+
+    def test_broker_firewall_excludes_herd_from_scanner(self):
+        text = module("render").firewall("edge-brokers")
+        allow_herd = next(line for line in text.splitlines() if "10.250.1.0/24" in line)
+        self.assertNotIn("9100", allow_herd)
+        self.assertIn("10.250.4.10 tcp dport { 43210, 3456, 9100 } accept", text)
+        self.assertIn("tcp dport { 43210, 3456, 17321, 9100 } reject", text)
+
+
+class ProcessGateTest(unittest.TestCase):
+    def test_native_agent_counts_as_refresher(self):
+        self.assertIsNotNone(module("drain_check").classify("/opt/homebrew/bin/codex resume abc", "codex"))
+
+    def test_live_multi_auth_helper_counts_as_refresher(self):
+        self.assertIsNotNone(module("drain_check").classify(
+            "/opt/homebrew/opt/node@24/bin/node /opt/homebrew/lib/node_modules/codex-multi-auth/scripts/codex.js", "codex"))
+
+    def test_claude_node_entry_counts_as_client(self):
+        self.assertIsNotNone(module("drain_check").classify(
+            "/usr/bin/node /opt/node_modules/@anthropic-ai/claude-code/cli.js", "teamclaude"))
+
+    def test_gate_does_not_match_quoted_shell_or_its_own_script(self):
+        gate = module("drain_check")
+        self.assertIsNone(gate.classify("/bin/zsh -c 'pgrep codex'", "codex"))
+        self.assertIsNone(gate.classify("python3 /repo/dist/evo-edge/drain_check.py codex", "codex"))
+
+    def test_teamclaude_broker_is_detected(self):
+        self.assertIsNotNone(module("drain_check").classify(
+            "/usr/bin/node /Users/jxstanford/.bun/bin/teamclaude server --headless", "teamclaude"))
+
+
+if __name__ == "__main__":
+    unittest.main()
