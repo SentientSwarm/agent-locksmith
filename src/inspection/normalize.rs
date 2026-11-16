@@ -23,6 +23,53 @@ pub(super) fn is_tag(c: char) -> bool {
     ('\u{E0000}'..='\u{E007F}').contains(&c)
 }
 
+/// Combining marks, dropped before matching so `i\u{301}gnore` reads
+/// as `ignore` (AGENT-270). Kept out of [`is_invisible`], which also
+/// drives the invisible-run detector, because marks are ordinary in
+/// decomposed text.
+pub(super) fn is_mark(c: char) -> bool {
+    matches!(c as u32,
+        0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF
+        | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
+/// Mathematical alphanumerics (bold, italic, script, fraktur,
+/// double-struck, sans-serif, monospace) and the letterlike symbols that
+/// fill that block's gaps, folded to ASCII (AGENT-270).
+fn math_letter(c: char) -> Option<char> {
+    let n = c as u32;
+    let ascii = |base: u8, off: u32| char::from(base + off as u8);
+    Some(match n {
+        0x1D400..=0x1D6A3 => {
+            let off = (n - 0x1D400) % 52;
+            if off < 26 {
+                ascii(b'A', off)
+            } else {
+                ascii(b'a', off - 26)
+            }
+        }
+        0x1D6A4 => 'i',
+        0x1D6A5 => 'j',
+        0x1D7CE..=0x1D7FF => ascii(b'0', (n - 0x1D7CE) % 10),
+        0x210A => 'g',
+        0x210B..=0x210E => 'h',
+        0x2110 | 0x2111 => 'i',
+        0x2112 | 0x2113 => 'l',
+        0x2115 => 'n',
+        0x2119 => 'p',
+        0x211A => 'q',
+        0x211B..=0x211D => 'r',
+        0x2124 | 0x2128 => 'z',
+        0x212C => 'b',
+        0x2102 | 0x212D => 'c',
+        0x212F | 0x2130 => 'e',
+        0x2131 => 'f',
+        0x2133 => 'm',
+        0x2134 => 'o',
+        _ => return None,
+    })
+}
+
 /// Look-alike letters folded to the ASCII letter they imitate.
 fn homoglyph(c: char) -> Option<char> {
     Some(match c {
@@ -69,13 +116,13 @@ fn fold_char(c: char) -> char {
     if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
         return char::from_u32(c as u32 - 0xFEE0).unwrap_or(c);
     }
-    homoglyph(c).unwrap_or(c)
+    homoglyph(c).or_else(|| math_letter(c)).unwrap_or(c)
 }
 
 /// Bytes `c` contributes to folded text, ignoring whitespace-run
 /// collapsing (the caller counts a run once).
 pub(super) fn folded_width(c: char) -> usize {
-    if is_invisible(c) {
+    if is_invisible(c) || is_mark(c) {
         return 0;
     }
     fold_char(c).to_lowercase().map(char::len_utf8).sum()
@@ -94,7 +141,7 @@ pub(super) fn fold(text: &str) -> (String, Vec<usize>) {
     let mut map = Vec::with_capacity(text.len());
     let mut after_space = false;
     for (at, c) in text.char_indices() {
-        if is_invisible(c) {
+        if is_invisible(c) || is_mark(c) {
             continue;
         }
         let folded = fold_char(c);
@@ -129,6 +176,28 @@ mod tests {
         // Cyrillic і and о, Greek Α, fullwidth Ｒ, then plain ASCII.
         assert_eq!(fold("\u{0456}gn\u{043E}\u{0391}\u{FF32}E").0, "ignoare");
         assert_eq!(fold("HeLLo\u{00A0}World").0, "hello world");
+    }
+
+    #[test]
+    fn math_alphanumerics_fold_to_ascii() {
+        // AGENT-270: bold, italic, script, fraktur, double-struck, sans,
+        // monospace letters and digits.
+        assert_eq!(
+            fold("\u{1D422}\u{1D420}\u{1D427}\u{1D428}\u{1D42B}\u{1D41E} \u{1D631}\u{1D633}\u{1D626}\u{1D637}").0,
+            "ignore prev"
+        );
+        assert_eq!(fold("\u{1D400}\u{1D6A3}\u{1D7CE}\u{1D7FF}").0, "az09");
+        assert_eq!(fold("\u{210E}\u{2102}\u{1D6A4}").0, "hci");
+        // Math Greek is not ASCII and stays as it is.
+        assert_eq!(fold("\u{1D6A8}").0, "\u{1D6A8}".to_lowercase());
+    }
+
+    #[test]
+    fn combining_marks_are_dropped_and_offsets_kept() {
+        let (norm, map) = fold("i\u{0307}g\u{0301}nore\u{20DD}");
+        assert_eq!(norm, "ignore");
+        assert_eq!(map, vec![0, 3, 6, 7, 8, 9]);
+        assert_eq!(folded_width('\u{0301}'), 0);
     }
 
     #[test]

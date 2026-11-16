@@ -12,6 +12,10 @@
   longer smuggle an uninspected query. The query is also judged with `+`
   kept literally. An inspection config that does not compile now stops
   startup instead of silently serving every route uninspected.
+- Injection scanning folds mathematical alphanumerics (bold, italic,
+  script, double-struck and similar letters and digits, plus the
+  letterlike symbols in that range) to ASCII, and drops combining marks,
+  so `𝐢𝐠𝐧𝐨𝐫𝐞` and `i\u0301gnore` read as `ignore` (AGENT-270).
 - Route traffic on `egress: proxied` routes no longer goes direct when
   the egress proxy is missing or broken (AGENT-259). Before, an unset
   `egress_proxy`, a URL that didn't parse, or a client that failed to
