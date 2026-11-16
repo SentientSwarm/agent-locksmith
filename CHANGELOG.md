@@ -26,13 +26,6 @@
   script, double-struck and similar letters and digits, plus the
   letterlike symbols in that range) to ASCII, and drops combining marks,
   so `𝐢𝐠𝐧𝐨𝐫𝐞` and `i\u0301gnore` read as `ignore` (AGENT-270).
-- A process running as Locksmith's own user can no longer read
-  `locksmithd`'s environment or memory (AGENT-285). A classifier sidecar
-  shares that user so Locksmith can check the socket's peer uid, which
-  also let it read `/proc/<pid>/environ`, where the sealing keys are.
-  `locksmithd` now marks itself non-dumpable on Linux before its runtime
-  starts, which also disables its core dumps, and the `op read` child it
-  runs for `op_*` credentials no longer inherits the sealing keys.
 - Keep the sealing keys away from processes running as Locksmith's own
   user (AGENT-285). A classifier sidecar shares that user so Locksmith
   can check the socket's peer uid, which also let it read
