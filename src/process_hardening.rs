@@ -21,18 +21,49 @@ pub fn deny_same_uid_inspection() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Environment variables only the daemon itself may hold.
-pub const DAEMON_SECRET_ENV: &[&str] = &[
-    crate::oauth::sealing::SEALING_KEY_ENV,
-    crate::secret::credential_sealing::CREDENTIAL_SEALING_KEY_ENV,
+use std::ffi::OsString;
+
+/// Variables a child may inherit, by exact name.
+const CHILD_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "LANG",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
 ];
 
-/// Strip [`DAEMON_SECRET_ENV`] from a child's environment. A child is
-/// dumpable again after exec, so a same-uid process could otherwise read
-/// the keys from it. Every command the daemon spawns goes through this.
-pub fn without_daemon_secrets(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    for key in DAEMON_SECRET_ENV {
-        cmd.env_remove(key);
-    }
-    cmd
+/// Variables a child may inherit, by prefix: 1Password's own settings and
+/// session token (`op` needs them), XDG directories and locale.
+const CHILD_ENV_PREFIXES: &[&str] = &["OP_", "XDG_", "LC_"];
+
+/// Filter an environment down to what a child may see. The daemon's
+/// environment holds the sealing keys and every env-backed upstream
+/// credential, and a child is dumpable again after exec, so a same-uid
+/// process could read whatever it inherits (AGENT-285).
+pub fn child_env(env: impl IntoIterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    env.into_iter()
+        .filter(|(key, _)| {
+            key.to_str().is_some_and(|k| {
+                CHILD_ENV.contains(&k) || CHILD_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
+            })
+        })
+        .collect()
+}
+
+/// Give a child only [`child_env`] of the daemon's environment. Every
+/// command the daemon spawns goes through this.
+pub fn isolated_child(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    cmd.env_clear().envs(child_env(std::env::vars_os()))
 }

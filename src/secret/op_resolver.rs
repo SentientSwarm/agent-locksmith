@@ -44,7 +44,7 @@ pub struct OpCliCommand;
 fn op_read_command(reference: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new("op");
     cmd.arg("read").arg(reference);
-    crate::process_hardening::without_daemon_secrets(&mut cmd);
+    crate::process_hardening::isolated_child(&mut cmd);
     cmd
 }
 
@@ -296,20 +296,42 @@ mod tests {
     }
 
     #[test]
+    fn op_child_env_is_an_allowlist() {
+        let env = [
+            ("PATH", "/usr/bin"),
+            ("HOME", "/srv/x/home"),
+            ("OP_SERVICE_ACCOUNT_TOKEN", "t"),
+            ("XDG_CONFIG_HOME", "/srv/x/cfg"),
+            ("LOCKSMITH_OAUTH_SEALING_KEY", "k"),
+            ("LOCKSMITH_CREDENTIAL_SEALING_KEY", "k"),
+            ("ANTHROPIC_API_KEY", "sk"),
+            ("GITHUB_TOKEN", "gh"),
+        ]
+        .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)));
+        let mut kept: Vec<String> = crate::process_hardening::child_env(env)
+            .into_iter()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        kept.sort();
+        assert_eq!(
+            kept,
+            [
+                "HOME",
+                "OP_SERVICE_ACCOUNT_TOKEN",
+                "PATH",
+                "XDG_CONFIG_HOME"
+            ]
+        );
+    }
+
+    #[test]
     fn op_child_does_not_inherit_the_sealing_keys() {
         // AGENT-285: a child is dumpable again after exec, so a same-uid
         // sidecar could read the keys from its environment.
         let cmd = op_read_command("op://v/item/field");
-        let removed: Vec<_> = cmd
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().into_owned())
-            .collect();
-        for key in [
-            "LOCKSMITH_OAUTH_SEALING_KEY",
-            "LOCKSMITH_CREDENTIAL_SEALING_KEY",
-        ] {
-            assert!(removed.iter().any(|k| k == key), "{key} reaches op");
+        for (key, _) in cmd.get_envs() {
+            let key = key.to_string_lossy();
+            assert!(!key.starts_with("LOCKSMITH_"), "{key} reaches op");
         }
         assert_eq!(cmd.get_program(), "op");
     }

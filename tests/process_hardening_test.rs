@@ -29,7 +29,7 @@ fn same_uid_processes_cannot_read_the_daemon_environment() {
     let fifo = dir.path().join("config.yaml");
     let path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-    let child = Kill(
+    let mut child = Kill(
         Command::new(env!("CARGO_BIN_EXE_locksmithd"))
             .arg("--config")
             .arg(&fifo)
@@ -44,7 +44,11 @@ fn same_uid_processes_cannot_read_the_daemon_environment() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match std::fs::read(&environ) {
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => break,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                // A zombie's files are refused too; the daemon must be live.
+                assert!(child.0.try_wait().unwrap().is_none(), "locksmithd exited");
+                break;
+            }
             Ok(_) | Err(_) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20))
             }
