@@ -8,9 +8,11 @@
   will read them (AGENT-270). axum decodes the path once before Locksmith
   builds the upstream URL and the upstream decodes it again, so a
   double-encoded `%2543` passed the scanners as `%43` and arrived as `C`.
-  Every decoding of the path is now judged, and a decoded `%3F` can no
-  longer smuggle an uninspected query. The query is also judged with `+`
-  kept literally. An inspection config that does not compile now stops
+  Every decoding of the path is now judged, from both the request and the
+  upstream URL as reqwest parses it. That parser deletes tab and newline
+  (`CAN%09ARY` left as `CANARY`) and turns a decoded `%3F` into a query,
+  so neither can split a match any more. The query is also judged with
+  `+` kept literally. An inspection config that does not compile now stops
   startup instead of silently serving every route uninspected.
 - Injection scanning folds mathematical alphanumerics (bold, italic,
   script, double-struck and similar letters and digits, plus the

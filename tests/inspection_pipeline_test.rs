@@ -604,6 +604,27 @@ async fn encoded_question_mark_cannot_smuggle_an_uninspected_query() {
     let resp = h.server.get("/api/out/search%3Fq=plus+canary").await;
     assert_eq!(resp.status_code(), 403);
     assert!(up.received_requests().await.unwrap().is_empty());
+    // A literal `+` in the path stays a plus for axum and the upstream.
+    let resp = h.server.get("/api/out/plus+canary").await;
+    assert_eq!(resp.status_code(), 200);
+}
+
+#[tokio::test]
+async fn control_characters_the_url_parser_drops_cannot_split_a_match() {
+    // AGENT-270: `%09`, `%0A` and `%0D` decode to characters the upstream
+    // URL parser deletes, so `CAN%09ARY` would leave as `CANARY`.
+    let up = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&up)
+        .await;
+    let h = harness(config(&up.uri(), &request_policy("block"))).await;
+    for split in ["%09", "%0A", "%0D"] {
+        let hidden = format!("{}{split}{}", &CANARY[..3], &CANARY[3..]);
+        let resp = h.server.get(&format!("/api/out/notes/{hidden}")).await;
+        assert_eq!(resp.status_code(), 403, "{split}");
+    }
+    assert!(up.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

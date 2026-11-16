@@ -403,6 +403,32 @@ pub async fn proxy_handler(
     limit::hold(resp, permit)
 }
 
+/// Every reading of the path and query that the scanners must judge
+/// (AGENT-262, AGENT-270): each percent-decoding of the request path and of
+/// the upstream URL's path as reqwest will parse it, and each query both as
+/// a form (`+` is a space) and with `+` kept. Order kept, duplicates dropped.
+fn request_line_views(uri: &axum::http::Uri, upstream_url: &str) -> Vec<String> {
+    let parsed = reqwest::Url::parse(upstream_url).ok();
+    let paths = [Some(uri.path()), parsed.as_ref().map(|u| u.path())];
+    let queries = [uri.query(), parsed.as_ref().and_then(|u| u.query())];
+    let mut views: Vec<String> = Vec::new();
+    let mut add = |view: String| {
+        if !views.contains(&view) {
+            views.push(view);
+        }
+    };
+    for path in paths.into_iter().flatten() {
+        crate::inspection::path_views(path)
+            .into_iter()
+            .for_each(&mut add);
+    }
+    for query in queries.into_iter().flatten() {
+        add(crate::inspection::percent_decode(query));
+        add(crate::inspection::percent_decode_path(query));
+    }
+    views
+}
+
 async fn proxy_request(
     state: Arc<AppState>,
     tool_name: String,
@@ -587,23 +613,11 @@ async fn proxy_request(
     );
     let mut headers = req.headers().clone();
     // AGENT-262 — the decoded path and query leave with the request too,
-    // so request inspection judges them alongside the body. AGENT-270:
-    // every decoding the upstream may apply to the path is judged, and the
-    // query both as a form (`+` is a space) and with `+` kept literally.
-    let query_views = req.uri().query().into_iter().flat_map(|q| {
-        let form = crate::inspection::percent_decode(q);
-        let literal = crate::inspection::percent_decode_path(q);
-        std::iter::once(form.clone()).chain((literal != form).then_some(literal))
-    });
-    // A decoded `%3F` ends the path early, so the upstream may read the
-    // rest as a form query: judge each path view that way too.
-    let path_views = crate::inspection::path_views(req.uri().path())
-        .into_iter()
-        .flat_map(|view| {
-            let form = crate::inspection::percent_decode(&view);
-            std::iter::once(view.clone()).chain((form != view).then_some(form))
-        });
-    let uri_text: Vec<String> = path_views.chain(query_views).collect();
+    // so request inspection judges them alongside the body. AGENT-270: judge
+    // them as the upstream reads them. The URL parser reqwest uses deletes
+    // tab and newline, turns a decoded `%3F` into a query and the like, so
+    // the views come from the parsed upstream URL as well as the request.
+    let uri_text = request_line_views(req.uri(), &upstream_url);
     // AGENT-262 — an inspected response must arrive uncompressed to be
     // scanned, so the agent's Accept-Encoding is not forwarded.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {
@@ -1834,6 +1848,21 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod request_path_responses_tests {
+
+    #[test]
+    fn request_line_views_follow_the_parsed_upstream_url_without_duplicates() {
+        let uri: axum::http::Uri = "/api/out/x%2543?q=a+b".parse().unwrap();
+        // The upstream URL as built from axum's decoded capture.
+        let views = super::request_line_views(&uri, "http://up/x%43?q=a+b");
+        assert_eq!(
+            views,
+            ["/api/out/x%43", "/api/out/xC", "/xC", "q=a b", "q=a+b"]
+        );
+        let uri: axum::http::Uri = "/api/out/CAN%09ARY".parse().unwrap();
+        let views = super::request_line_views(&uri, "http://up/CAN\tARY");
+        assert!(views.iter().any(|v| v == "/CANARY"), "{views:?}");
+    }
+
     use super::request_path_ends_with_responses;
 
     #[test]
