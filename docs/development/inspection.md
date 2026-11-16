@@ -40,6 +40,30 @@ config load.
 | Id | Direction | What it matches |
 |---|---|---|
 | `literal:<text>` | either | An exact string, such as a canary token. |
+| `dlp` | either (meant for requests) | Credentials and secrets; rules below. |
+
+### `dlp` rules
+
+Locksmith's own curated set (AGENT-263), not a port of another tool's.
+
+| Rule | Matches |
+|---|---|
+| `aws_access_key_id` | `AKIA` / `ASIA` plus 16 upper-case alphanumerics |
+| `github_token` | `ghp_`, `gho_`, `ghs_` and `github_pat_` tokens |
+| `slack_token` | `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-` |
+| `openai_key` | `sk-` and `sk-proj-` keys with digits and both letter cases |
+| `anthropic_key` | `sk-ant-` keys |
+| `google_api_key` | `AIza` plus 35 characters |
+| `stripe_live_key` | `sk_live_` keys |
+| `private_key` | A PEM `-----BEGIN ... PRIVATE KEY-----` header |
+| `jwt` | Three base64url segments whose header decodes to JSON with `alg` |
+| `bearer` | The token after `Bearer`: 40+ characters, at least 3 bits/char |
+| `base64:<rule>` | A 24 to 4096 character standard-base64 run whose decoded text (UTF-8, one level) matches a rule above; the span is the whole run |
+| `entropy` | A 32 to 128 character token run at 4.5 bits/char or more that no other rule covers. Flag-only |
+
+Each rule has a fixed maximum match length; the scanner's
+`max_match_len` is the largest (the base64 bound). Longer runs are not
+matched, so a 50 KiB inline image is neither decoded nor flagged.
 
 Each scanner reports hits as byte spans plus a rule id, and declares the
 longest match it can report (`max_match_len`), which streaming uses to

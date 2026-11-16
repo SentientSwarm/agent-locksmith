@@ -87,6 +87,9 @@ fn direction(
 }
 
 fn scanner(id: &str) -> Result<Arc<dyn Scanner>, String> {
+    if id == "dlp" {
+        return Ok(Arc::new(super::dlp::Dlp));
+    }
     if let Some(needle) = id.strip_prefix("literal:") {
         return Ok(Arc::new(super::literal::Literal::new(needle)?));
     }

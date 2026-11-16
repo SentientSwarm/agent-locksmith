@@ -50,7 +50,10 @@
   buffered responses before anything reaches the agent. Each inspection
   that finds, skips or fails something writes an `inspection_*` security
   audit event carrying rule ids and SHA-256 hashes, never the matched
-  text. The first scanner is `literal:<text>`. See
+  text. Scanners: `literal:<text>` and `dlp` (AGENT-263), Locksmith's
+  own credential rules (AWS, GitHub, Slack, OpenAI, Anthropic, Google,
+  Stripe, PEM private keys, JWTs, bearer tokens, one level of base64)
+  plus a flag-only entropy heuristic. See
   `docs/development/inspection.md`.
 - `egress.mode` (AGENT-261) declares who enforces `egress: proxied`
   routes: `pipelock` (every proxied route uses `egress_proxy`, which is

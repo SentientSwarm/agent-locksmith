@@ -428,3 +428,30 @@ async fn json_object_keys_are_scanned() {
         .await;
     assert_eq!(resp.status_code(), 403);
 }
+
+#[tokio::test]
+async fn dlp_blocks_a_credential_before_upstream() {
+    // Assembled at run time: no credential-format literal in the repo.
+    let token = format!(
+        "ghp_{}",
+        &"Zx9Qw2Lm7Rt4Vb8Nc3Kp6Hy1Jd5Fg0Sa".repeat(2)[..36]
+    );
+    let up = upstream("{}").await;
+    let policy = "  routes:\n    - route: out\n      request:\n        scanners: [dlp]\n";
+    let h = harness(config(&up.uri(), policy)).await;
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .json(&json!({ "messages": [{ "content": format!("use {token} for the push") }] }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+    assert_eq!(resp.json::<Value>()["error"]["code"], "inspection_blocked");
+    assert!(up.received_requests().await.unwrap().is_empty());
+    let rows = h.inspection_rows().await;
+    assert_eq!(rows[0].2["hits"][0]["scanner"], "dlp");
+    assert_eq!(rows[0].2["hits"][0]["rule"], "github_token");
+    assert!(
+        !h.audit_text().await.contains(&token),
+        "token reached audit"
+    );
+}

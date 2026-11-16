@@ -1,0 +1,21 @@
+# DLP false positives: none of these lines may produce a hit.
+request_id = 550e8400-e29b-41d4-a716-446655440000
+trace: 123e4567-e89b-12d3-a456-426614174000 parent f47ac10b-58cc-4372-a567-0e02b2c3d479
+commit 3e2989c7a1f04b6d8e5c2b9a0f1d3e4c5b6a7980 fixes the audit gap
+git checkout 8eafb30c4d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a
+sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+<img src="data:image/png;base64,iVBORw0KGgqaDPNStFrnYjAXel9MKP1RrK5Guuy7WRbZBLiZprTCpixrMRHQMOPlsT94OTmegbMAC4ZEn5RNT6FOVKi+Puu9lTjFPBzT415KbWCF0w7ZPI9jyws1J25/CYBG3+O53zBQzvoLq3k8Dj39uXOy/wB40IAE/Koy5YVjGnl7iy2OtZhSXimyVJUh/G/1HejV9k9Sr+OvGh2ocE6/7ZydMxd97CDhrCCQfVYqzbAULn9UtxZwaaMYQGhK5+w0bJZvNTKJxs1Nv7f8Z6U1QXrk1U/VOJYtnTvk//W9f2mwC14ENNjvGrFTvrJMS7UV84AlEEAt+hl/UdZRONFHmlPgOQ2cX/8uXozmvKzY9dBiQgg7/OAzdM93TmuC4EEx7rCVCHIne18w9FEUEoajKeiqF9eL40L2E8r6c/4QUXGWunquF/sTRYgEj7I5tsIa7xXgC2sYUc60tivqbFFHcOXhweyD+RoUXVniSN+ZbPVCsgLcvZ3OWTsmP8T9xiQmv+FhR1Q+cAYW9ShOnVrtkyxM9VD/TPBTnh2o1E0ea/C5OCk4pyVARzo1rV5Y5ndesqBfG56Z0fzlugUEjmp+7KgK97A25GXpVhtOH52k/K9CPmTF6jgjUsnJl2RY4LvOmxslPCATja4q8mE70qW2a6MqOnXyIzL2fWI4qw+eGg+3kYmQbuKbGmGzk76rZwAcHbB81wWvjVn9n2qn9MKX3Q2wOhzUu3NlEF4ifj7NX7ofGf19MRcsW4HwUaqyJ/zSwzp9inQDFc4DLy9V1bZ5sUlFZHDyN+I7rQbB743b3G+GeCRjJLTjwsa5vMPS736t72hxu3xY0HGJuNV9L6zKG0T4DpFgzL1tBkPoBzBqCZoryxcoe1H+c84OdT4W2BcYqONphBzBmZxaaiTB2MlirrPMqF+wTzE6FepgMEt5jlYRfU1I+Fe5qnNV/vCXpYRTyAPR9mYoZka6ZIWJ83Kx3nPNXTUbISVYVEufOkUWOsf41zr1F/T2DK+9WvQA/KKgtuhgO6rmuXsfhWFjINCS3gNVdZMzUv1paavZUN6SddvVMUVgpS70Jn5FK7oZsIWmjAHjXcPvIa2jjUy0Vp/rgcBXUA7ws2BTr2Pj5HGhD0YlA4T5DFbKOQ1QUro47L/4l+fVRPiS4R/dC9f+Qr+uDHP+/7q7dkDiO81PaCdeDnw0J7NQhIDbDsE=">
+let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+def compute_sha256_digest_for_payload(payload: bytes) -> str:
+const DEFAULT_MAX_SCAN_BYTES: usize = 1024 * 1024;
+https://example.com/api/v1/resources?page=2&per_page=50&sort=created_at
+/usr/local/lib/python3.12/site-packages/requests/adapters.py
+class AbstractSingletonProxyFactoryBeanConfigurationManager:
+see the sk-learn-compatible-estimator-interface docs
+The Bearer token format is described in RFC 6750 section 2.1.
+Authorization: Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Authorization: Bearer ${LOCKSMITH_AGENT_TOKEN}
+agent-locksmith-egress-and-content-inspection-f0ada6481885
+eyJustAString.withDots.inIt
+-----BEGIN CERTIFICATE-----
+-----BEGIN PUBLIC KEY-----

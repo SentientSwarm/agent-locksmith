@@ -10,6 +10,7 @@
 //! See `docs/development/inspection.md`.
 
 pub mod config;
+mod dlp;
 mod literal;
 mod text;
 

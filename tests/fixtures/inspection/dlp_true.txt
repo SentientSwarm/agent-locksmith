@@ -1,0 +1,25 @@
+# DLP true positives. Templates only: the test expands each placeholder
+# with generated characters, so no credential-format value lives in the repo.
+# Format: <rule><TAB><line>, where [[...]] marks the span the rule must report.
+# {UP:n} [A-Z0-9]  {AN:n} [A-Za-z0-9]  {ANU:n} [A-Za-z0-9_-]  {DIG:n} [0-9]
+# {D5} five dashes  {JWT} a JWT with an `alg` header
+aws_access_key_id	aws_access_key_id = [[AKIA{UP:16}]]
+aws_access_key_id	"AccessKeyId": "[[ASIA{UP:16}]]"
+github_token	export GITHUB_TOKEN=[[ghp_{AN:36}]]
+github_token	token [[gho_{AN:36}]] expires
+github_token	[[ghs_{AN:36}]]
+github_token	pat: [[github_pat_{AN:22}_{AN:59}]]
+slack_token	SLACK_BOT_TOKEN=[[xoxb-{DIG:12}-{DIG:13}-{AN:24}]]
+slack_token	[[xoxp-{DIG:11}-{DIG:12}-{AN:32}]]
+openai_key	OPENAI_API_KEY=[[sk-{AN:48}]]
+openai_key	key: [[sk-proj-{ANU:64}]]
+anthropic_key	ANTHROPIC_API_KEY=[[sk-ant-api03-{ANU:93}]]
+google_api_key	?key=[[AIza{ANU:35}]]&q=x
+stripe_live_key	stripe.api_key = "[[sk_live_{AN:24}]]"
+private_key	[[{D5}BEGIN RSA PRIVATE KEY{D5}]]
+private_key	[[{D5}BEGIN OPENSSH PRIVATE KEY{D5}]]
+private_key	[[{D5}BEGIN PRIVATE KEY{D5}]]
+jwt	cookie: session=[[{JWT}]]; Path=/
+bearer	Authorization: Bearer [[{AN:48}]]
+bearer	curl -H "Authorization: Bearer [[{ANU:40}.{AN:20}]]"
+entropy	secret = "[[{AN:40}]]"
