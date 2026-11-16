@@ -12,9 +12,9 @@
 //! across many deltas is caught before any part of it is sent. A redact
 //! rewrites the held events' text fields (the marker in the event where
 //! the match starts, the rest removed); a block drops what is held, sends
-//! one protocol-shaped error event, and ends the stream. Every string in
-//! an event's JSON (aggregates as well as deltas) is scanned, except
-//! protocol metadata.
+//! one protocol-shaped error event, and ends the stream. Every string and
+//! object key in an event's JSON (aggregates as well as deltas) is
+//! scanned.
 //!
 //! An event longer than `max_scan_bytes`, or held text or events past it,
 //! can't be judged in bounds: under `fail_closed` the stream is blocked;
@@ -42,6 +42,10 @@ const MAX_LANES: usize = 32;
 /// a finish is caught); more share one window.
 const MAX_OUTPUTS: usize = 1024;
 
+/// Clean texts remembered, and the longest remembered.
+const MAX_CLEAN: usize = 256;
+const MAX_CLEAN_TEXT: usize = 256;
+
 /// Ids at or past this name a field scanned alone, not a lane.
 const WHOLE: usize = 1 << 48;
 
@@ -68,6 +72,20 @@ struct Held {
     event: SseEvent,
     fields: Vec<Field>,
     cuts: Vec<Cuts>,
+    /// Bytes it keeps: the raw event and each field's copies.
+    cost: usize,
+}
+
+impl Field {
+    /// Bytes this field's copies keep: text, pointer and lane path.
+    fn cost(&self) -> usize {
+        let place = match &self.span.place {
+            sse::Place::Json(pointer) => pointer.len(),
+            sse::Place::Key { parent, key } => parent.len() + key.len(),
+            _ => 0,
+        };
+        self.span.text.len() + place + self.span.lane.as_ref().map_or(0, |l| l.path.len())
+    }
 }
 
 struct LaneState {
@@ -108,6 +126,8 @@ pub struct StreamInspector {
     wholes: usize,
     /// Bytes of lane paths remembered, held to `max_scan_bytes`.
     lane_bytes: usize,
+    /// Short texts scanned alone and found clean.
+    clean: HashSet<String>,
 }
 
 impl StreamInspector {
@@ -132,6 +152,7 @@ impl StreamInspector {
             passthrough: false,
             wholes: 0,
             lane_bytes: 0,
+            clean: HashSet::new(),
         }
     }
 
@@ -207,7 +228,8 @@ impl StreamInspector {
             if let Some(rest) = self.parser.finish() {
                 self.event(rest, &mut step);
             }
-            if !step.ended {
+            // Past an oversize last event the rest went out unscanned.
+            if !step.ended && !self.passthrough {
                 self.close(&[Close::All], &mut step);
             }
             if step.ended {
@@ -272,6 +294,11 @@ impl StreamInspector {
         let Some(spans) = sse::extract_within(&event, self.max_held) else {
             return self.oversized(Some(event), step);
         };
+        if spans.iter().any(|s| s.place == sse::Place::View) && self.on_error == OnError::FailClosed
+        {
+            self.report.error = Some("stream event data is JSON that does not parse".into());
+            return self.block(step);
+        }
         if spans.iter().any(|s| s.place == sse::Place::Hidden) {
             // A hidden value is scanned in its event only: one split
             // across events would be missed.
@@ -329,15 +356,20 @@ impl StreamInspector {
             self.close(&closes, step);
             return;
         }
-        self.held_bytes += event.raw.len();
+        let cost = event.raw.len() + fields.iter().map(Field::cost).sum::<usize>();
+        self.held_bytes += cost;
         let cuts = vec![Cuts::new(); fields.len()];
         self.held.push_back(Held {
             event,
             fields,
             cuts,
+            cost,
         });
         if verdict == Verdict::Redact {
             self.cut_all(&hits);
+            if self.unrewritable() {
+                return self.block(step);
+            }
         }
         self.close(&closes, step);
         if !step.ended {
@@ -355,12 +387,21 @@ impl StreamInspector {
     ) -> Option<usize> {
         let id = WHOLE + self.wholes;
         self.wholes += 1;
+        // Ids, model names and keys repeat in every event: a short text
+        // already found clean is clean again.
+        if self.clean.contains(&span.text) {
+            return Some(id);
+        }
         let mut window = TextWindow::new(self.scanners.clone(), self.max_held);
         let found = window.push(&span.text).and_then(|mut found| {
             found.extend(window.flush()?);
             Ok(found)
         });
         let overflowed = window.overflowed();
+        let clean = matches!(&found, Ok(f) if f.is_empty()) && !overflowed;
+        if clean && span.text.len() <= MAX_CLEAN_TEXT && self.clean.len() < MAX_CLEAN {
+            self.clean.insert(span.text.clone());
+        }
         self.scanned(id, found, overflowed, hits, step)
             .then_some(id)
     }
@@ -415,6 +456,16 @@ impl StreamInspector {
             self.block(step);
         }
         verdict
+    }
+
+    /// The newest held event has a cut no rewrite can make.
+    fn unrewritable(&self) -> bool {
+        self.held.back().is_some_and(|h| {
+            h.fields
+                .iter()
+                .zip(&h.cuts)
+                .any(|(f, cuts)| f.span.place == sse::Place::View && !cuts.is_empty())
+        })
     }
 
     /// Mark every redact-level hit for removal in the events it covers.
@@ -560,7 +611,7 @@ impl StreamInspector {
             }
             self.hold_overflowed |= !safe;
             let h = self.held.pop_front().expect("front exists");
-            self.held_bytes -= h.event.raw.len();
+            self.held_bytes -= h.cost;
             step.out.push(render(&h));
         }
     }
@@ -1394,43 +1445,135 @@ mod tests {
         acc.into_values().collect()
     }
 
+    /// The sampled tokens a client can rebuild from `out`'s logprobs: each
+    /// position's `token`, and the `top_logprobs` entry carrying the
+    /// sampled logprob (-0.1 here), each joined in order.
+    fn sampled_tokens(out: &str) -> [String; 2] {
+        fn walk(v: &serde_json::Value, acc: &mut [String; 2]) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    let token = m.get("token").and_then(|t| t.as_str());
+                    if let Some(t) = token {
+                        if m.contains_key("top_logprobs") {
+                            acc[0].push_str(t);
+                        } else if m.get("logprob").and_then(|l| l.as_f64()) == Some(-0.1) {
+                            acc[1].push_str(t);
+                        }
+                    }
+                    m.values().for_each(|x| walk(x, acc));
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, acc)),
+                _ => {}
+            }
+        }
+        let mut acc = [String::new(), String::new()];
+        for e in sse::SseParser::default().push(out.as_bytes()) {
+            if let Some(v) = e.data.as_deref().and_then(|d| serde_json::from_str(d).ok()) {
+                walk(&v, &mut acc);
+            }
+        }
+        acc
+    }
+
     #[test]
     fn logprob_tokens_of_a_redacted_match_do_not_leak() {
         use serde_json::json;
         let k = key();
-        let lp = |t: &str| {
-            json!([{"token": t, "logprob": -0.1, "bytes": t.as_bytes(),
-            "top_logprobs": [{"token": t, "logprob": -0.1, "bytes": t.as_bytes()},
-                {"token": "x", "logprob": -3.0}]}])
+        // The sampled token sits at a different rank at each position.
+        let entry = |n: usize, t: &str| {
+            let mut top = vec![json!({"token": "x", "logprob": -3.0, "bytes": [120]})];
+            top.insert(
+                n % 2,
+                json!({"token": t, "logprob": -0.1, "bytes": t.as_bytes()}),
+            );
+            json!({"token": t, "logprob": -0.1, "bytes": t.as_bytes(), "top_logprobs": top})
         };
-        let chat = |t: &str| {
+        let text: Vec<String> = std::iter::once("key: ".to_string())
+            .chain(k.chars().map(|c| c.to_string()))
+            .chain(std::iter::once(" end".to_string()))
+            .collect();
+        let all: Vec<_> = text.iter().enumerate().map(|(n, t)| entry(n, t)).collect();
+        let chat = |n: usize, t: &str| {
             format!(
                 "data: {}\n\n",
                 json!({"choices": [{"index": 0,
-            "delta": {"content": t}, "logprobs": {"content": lp(t)}}]})
+                "delta": {"content": t}, "logprobs": {"content": [entry(n, t)]}}]})
             )
         };
-        let resp = |t: &str| {
+        let resp = |n: usize, t: &str| {
             ev(
                 "response.output_text.delta",
-                json!({"output_index": 0, "content_index": 0, "delta": t, "logprobs": lp(t)}),
+                json!({"output_index": 0, "content_index": 0,
+                "delta": t, "logprobs": [entry(n, t)]}),
             )
         };
-        let shapes: [&dyn Fn(&str) -> String; 2] = [&chat, &resp];
-        for event in shapes {
-            let mut events = vec![event("key: ")];
-            events.extend(k.chars().map(|c| event(&c.to_string())));
-            events.push(event(" end"));
+        type Shape<'a> = &'a dyn Fn(usize, &str) -> String;
+        let shapes: [Shape; 2] = [&chat, &resp];
+        for (s, event) in shapes.iter().enumerate() {
+            let mut events: Vec<String> =
+                text.iter().enumerate().map(|(n, t)| event(n, t)).collect();
+            if s == 1 {
+                // The Responses snapshot repeats the text and every logprob.
+                events.push(ev(
+                    "response.output_text.done",
+                    json!({"output_index": 0,
+                    "content_index": 0, "text": text.concat(), "logprobs": all}),
+                ));
+            }
             events.push(DONE.to_string());
             let (out, _) = run(&policy(Verdict::Redact), &events);
             assert!(!leaked(&out), "{out}");
-            for t in logprob_texts(&out) {
+            let mut rebuilt = logprob_texts(&out).to_vec();
+            rebuilt.extend(sampled_tokens(&out));
+            for t in rebuilt {
                 assert!(
                     (0..=k.len() - 8).all(|i| !t.contains(&k[i..i + 8])),
                     "leaked via logprobs: {t}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn held_field_copies_count_toward_the_cap() {
+        // One byte of text keeps each event held; its other strings are
+        // scanned alone but their locations are kept while it is held.
+        let key = "k".repeat(200);
+        let items = vec!["\"x\""; 100].join(",");
+        let event = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"a\"}},\"{key}\":[{items}]}}]}}\n\n"
+        );
+        let mut i = StreamInspector::new(&closed(1 << 16, Verdict::Redact));
+        let ended = (0..10).any(|_| i.push(event.as_bytes()).ended);
+        assert!(ended, "held field copies were not counted");
+        assert!(
+            i.report()
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("held past")
+        );
+    }
+
+    #[test]
+    fn lane_paths_past_the_cap_fail_closed() {
+        // Each output finishes at once, so nothing is held: only the
+        // remembered lane paths grow.
+        let events: Vec<String> = (0..8)
+            .map(|n| {
+                let key = format!("{n}{}", "p".repeat(4096));
+                format!("data: {{\"choices\":[{{\"index\":{n},\"finish_reason\":\"stop\",\"delta\":{{\"{key}\":\"hi\"}}}}]}}\n\n")
+            })
+            .collect();
+        let (out, i) = run(&closed(20_000, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(
+            i.report()
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("outputs")
+        );
     }
 
     #[test]
@@ -1524,16 +1667,100 @@ mod tests {
         let big = format!(
             "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"{long}\":[{items}]}}}}]}}\n\n"
         );
-        let batch = [chat("one "), big, chat("two "), DONE.to_string()].concat();
+        // A held delta before, one after, and a partial event at the end:
+        // all of it goes out with this push, unheld.
+        let batch = [chat("one "), big, chat("two "), "data: {\"par".to_string()].concat();
         let mut i = StreamInspector::new(&policy(Verdict::Redact));
-        let mut out = i.push(batch.as_bytes()).out;
-        out.extend(i.push(chat("three").as_bytes()).out);
-        out.extend(i.finish().out);
-        assert_eq!(
-            String::from_utf8(out.concat()).unwrap(),
-            batch + &chat("three")
-        );
+        let first = String::from_utf8(i.push(batch.as_bytes()).out.concat()).unwrap();
+        assert_eq!(first, batch);
+        let rest = String::from_utf8(i.push(b"tial\"}\n\n").out.concat()).unwrap();
+        assert_eq!(rest, "tial\"}\n\n");
+        assert!(i.finish().out.is_empty());
         assert_eq!(i.report().skipped, Some(super::super::SkipReason::Oversize));
+    }
+
+    #[test]
+    fn an_oversize_last_event_under_fail_open_ends_without_a_block() {
+        let long = "k".repeat(4096);
+        let items = vec!["\"a\""; 2000].join(",");
+        let big =
+            format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"{long}\":[{items}]}}}}]}}");
+        let mut i = StreamInspector::new(&DirectionPolicy {
+            on_error: OnError::FailOpen,
+            ..policy(Verdict::Block)
+        });
+        // The key arrives too small to trigger a scan: it is still
+        // unscanned when the oversize last event ends the stream.
+        let mut out = i.push(chat(&"x ".repeat(500)).as_bytes()).out;
+        out.extend(i.push(chat(&key()).as_bytes()).out);
+        out.extend(i.push(big.as_bytes()).out);
+        out.extend(i.finish().out);
+        let out = String::from_utf8(out.concat()).unwrap();
+        assert!(
+            !out.contains("inspection_blocked"),
+            "{}",
+            &out[out.len().saturating_sub(300)..]
+        );
+        assert!(out.ends_with(&big));
+    }
+
+    #[test]
+    fn object_keys_are_scanned() {
+        use serde_json::json;
+        let k = key();
+        let events = vec![
+            ev(
+                "content_block_start",
+                json!({"index": 0, "content_block": {"type": "tool_use",
+                "id": "toolu_1", "name": "run", "input": {k.clone(): "safe"}}}),
+            ),
+            ev("content_block_stop", json!({"index": 0})),
+            ev("message_stop", json!({})),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &events);
+        assert!(
+            out.contains("inspection_blocked") && !out.contains(&k[..12]),
+            "{out}"
+        );
+        assert_eq!(i.report().verdict, Verdict::Block);
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..12]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+        for e in sse::SseParser::default().push(out.as_bytes()) {
+            serde_json::from_str::<serde_json::Value>(&e.data.unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn metadata_names_in_application_data_are_scanned() {
+        let k = key();
+        let event = format!(
+            "data: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0",
+            "result": {"instructions": format!("use {k}"), "status": format!("{k}")}})
+        );
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &[event]);
+        assert!(!out.contains(&k[..12]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    #[test]
+    fn undecodable_json_follows_on_error() {
+        let k = key();
+        // `1e400` is out of range, so the data does not parse, and the key
+        // is only visible once `\u0067` is decoded.
+        let event = format!("data: {{\"x\":1e400,\"t\":\"\\u0067{}\"}}\n\n", &k[1..]);
+        let (out, i) = run(
+            &closed(1 << 20, Verdict::Flag),
+            std::slice::from_ref(&event),
+        );
+        assert!(out.contains("inspection_blocked"), "fail_closed: {out}");
+        assert!(i.report().error.is_some());
+        for verdict in [Verdict::Redact, Verdict::Block] {
+            let (out, i) = run(&policy(verdict), std::slice::from_ref(&event));
+            assert!(!out.contains(&k[1..9]), "{verdict:?}: {out}");
+            assert_eq!(i.report().verdict, Verdict::Block);
+        }
     }
 
     #[test]

@@ -167,34 +167,39 @@ a match.
 
 A server-sent event stream (AGENT-265) is parsed event by event (CRLF,
 LF and lone CR line endings; one leading UTF-8 BOM is ignored, as clients
-ignore it). Every JSON string in an event's `data` is scanned, aggregates
-as well as deltas, except protocol metadata (`type`, `id`, `object`,
-`model`, `role`, `finish_reason`, `stop_reason`, `system_fingerprint`,
-`status`, `item_id`, `call_id`, `response_id`, the `obfuscation` padding,
-`service_tier`, and `instructions`, the agent's own prompt echoed back).
-Inside a tool's `input` or `arguments` object those names are the tool's
-own fields and are scanned like any other.
-Empty strings are skipped. Data that is not JSON is scanned as one
-string. When JSON repeats a key, the values the parsed view hides are
-decoded and scanned too, since a client that keeps the first value reads
-them; a redact re-writes the event from its parsed view, which drops
-them. A hidden value is scanned within its event only, so under
-`fail_closed` an event that repeats a key blocks the stream, and under
-`fail_open` it writes an `inspection_hold_overflow` row.
+ignore it). As in a buffered body, every JSON string and every object key
+in an event's `data` is scanned, aggregates as well as deltas; a redact
+renames a key, numbering a name already taken. Empty strings are
+skipped. Short texts found clean (ids, model names, keys) are remembered
+for the stream and not scanned again. Data that is not JSON is scanned
+as one string. Data shaped like JSON that does not parse (a number out
+of range, nesting past the parser's limit), which a client may still
+decode, follows `on_error`: under `fail_closed` the stream is blocked;
+under `fail_open` its text is also scanned with escapes resolved, and a
+redact-level hit there blocks, since no rewrite can reach it. When JSON
+repeats a key, the values the parsed view hides are decoded and scanned
+too, since a client that keeps the first value reads them; a redact
+re-writes the event from its parsed view, which drops them. A hidden
+value is scanned within its event only, so under `fail_closed` an event
+that repeats a key blocks the stream, and under `fail_open` it writes an
+`inspection_hold_overflow` row.
 
 A string complete in its own event (a snapshot) is scanned alone and
 never waits for later text: every Responses event except a `*.delta`
 (`response.created`, `.added`, `.done`, `response.completed` and the
-rest), Anthropic `message_start`, `message_delta` and `message_stop`,
-and a chat chunk's fields outside a choice's `delta` (Azure content
-filter results, `usage`). Only fields later events extend go to a
-window: a chat or completions choice's `delta` and `text`, a Responses
-`*.delta`, an Anthropic block's text, thinking and tool input, the
-opening text clients start them from (`content_block_start`, a Responses
-`.added` part's text or call's arguments), and logprob tokens, which
-spell the same text one token at a time (each `top_logprobs` rank is its
-own output). A rewritten event's logprob `bytes` arrays are set to
-`null`, since they would spell the text a cut removed.
+rest), Anthropic `message_start`, `message_delta` and `message_stop`, a
+chat chunk's fields outside a choice's `delta` (`logprobs`, Azure content
+filter results, `usage`), and anything named as protocol metadata
+(`type`, `id`, `object`, `model`, `role`, `finish_reason`,
+`stop_reason`, `system_fingerprint`, `status`, `item_id`, `call_id`,
+`response_id`, `obfuscation`, `service_tier`, `instructions`). Only
+fields later events extend go to a window: a chat or completions
+choice's `delta` and `text`, a Responses `*.delta`, an Anthropic block's
+text, thinking and tool input, and the opening text clients start them
+from (`content_block_start`, a Responses `.added` part's text or call's
+arguments). An event a redaction rewrites loses its `logprobs` (`null`,
+or `[]` where it is a list): its tokens, their bytes and alternatives
+would spell the text the cut removed.
 
 Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
@@ -229,8 +234,9 @@ How the stream is forwarded depends on `on_hit`:
   stream. If the agent disconnects, the upstream is closed at once.
 
 An event longer than `max_scan_bytes`, one whose strings and their JSON
-locations together pass it (long keys repeated over many values), or
-held text or events past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
+locations together pass it (long keys repeated over many values), held
+text or events past it (counting each held field's copies, not just the
+raw event), or lane paths past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
 Under `fail_open`, held text or events past the bound are released early
 and an `inspection_hold_overflow` row is written; an oversized event and
 the rest of the stream pass through unscanned, audited
@@ -241,14 +247,15 @@ is scanned when the upstream closes. A content-encoded stream follows
 patterns run on it, as for any response with redaction patterns.
 
 Cost, measured in a release build on macOS ARM64 with the built-in
-scanners over 2000 one-word chat deltas: about 53 µs of scanning per
-event under either verdict. Under `flag` the first event is forwarded
-after 0.5 ms. Under `redact` each event waits until the overlap behind
-it has arrived. With the built-in scanners the overlap is about 8 KB of
-text, set by the longest PEM block `dlp` matches, so the first byte
-reached the agent after event 1039. In a live stream that delay is the
-time the upstream takes to send another 8 KB, not scanning time. Routes
-that need the lowest time to first token should use `flag`. Re-run:
+scanners over 2000 one-word chat deltas (while other builds ran): about
+4 to 12 µs of scanning per event. Under `flag` each event is forwarded
+as soon as it is scanned. Under `redact` each event waits until the
+overlap behind it has arrived. With the built-in scanners the overlap is
+about 8 KB of text, set by the longest PEM block `dlp` matches, so the
+first byte reached the agent after event 1150. In a live stream that
+delay is the time the upstream takes to send another 8 KB, not scanning
+time. Routes that need the lowest time to first token should use
+`flag`. Re-run:
 `cargo test --release --lib measure_stream -- --ignored --nocapture`.
 
 ## Audit
