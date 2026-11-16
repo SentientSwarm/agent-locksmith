@@ -72,6 +72,15 @@ fn fold_char(c: char) -> char {
     homoglyph(c).unwrap_or(c)
 }
 
+/// Bytes `c` contributes to folded text, ignoring whitespace-run
+/// collapsing (the caller counts a run once).
+pub(super) fn folded_width(c: char) -> usize {
+    if is_invisible(c) {
+        return 0;
+    }
+    fold_char(c).to_lowercase().map(char::len_utf8).sum()
+}
+
 fn push(out: &mut String, map: &mut Vec<usize>, at: usize, c: char) {
     let before = out.len();
     out.push(c);

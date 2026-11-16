@@ -57,8 +57,13 @@
   Request bodies, paths and query strings are scanned before anything
   is sent upstream, and buffered responses before anything reaches the
   agent. Raw bytes are scanned as well as parsed JSON, so invalid UTF-8,
-  unparseable JSON and duplicate keys don't hide a match; streamed
-  (SSE, ndjson) responses are not scanned yet. Each inspection
+  unparseable JSON and duplicate keys don't hide a match. Server-sent
+  event streams are scanned as they pass (AGENT-265) through a sliding
+  window, so a match split across deltas is found: under `flag` each
+  event is forwarded at once, under `redact` or `block` events are held
+  until they are safe (about 8 KB of text with the built-in scanners)
+  and a block ends the stream with a protocol-shaped error event.
+  Newline-delimited JSON streams are not scanned. Each inspection
   that finds, skips or fails something writes an `inspection_*` security
   audit event carrying rule ids and SHA-256 hashes, never the matched
   text. Scanners: `literal:<text>` and `dlp` (AGENT-263), Locksmith's

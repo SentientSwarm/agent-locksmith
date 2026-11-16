@@ -1021,12 +1021,28 @@ async fn handle_upstream_response(
             .await;
         }
     }
-    // AGENT-262 — buffered response inspection. Streamed responses are
-    // not scanned yet; they are audited as skipped.
+    // AGENT-262 — buffered response inspection; AGENT-265 — SSE streams
+    // are inspected as they pass. Other streamed shapes (ndjson) are not
+    // scanned yet and are audited as skipped.
     let mut resp = Some(resp);
-    let mut unscanned: Option<inspect::UpstreamStream> = None;
+    let mut unscanned: Option<inspect::UpstreamStream> = None; // or inspected as it streams
     if let Some(policy) = inspect::response_policy(&state, &ctx.tool_name) {
-        if inspect::is_streamed(upstream_content_type.as_deref()) {
+        if inspect::is_event_stream(upstream_content_type.as_deref()) {
+            let upstream = resp.take().expect("unread");
+            let headers = upstream.headers().clone();
+            match inspect::stream(
+                policy,
+                &state,
+                ctx,
+                &headers,
+                Box::pin(upstream.bytes_stream()),
+            )
+            .await
+            {
+                Ok(inspected) => unscanned = Some(inspected),
+                Err(blocked) => return blocked,
+            }
+        } else if inspect::is_streamed(upstream_content_type.as_deref()) {
             if let Some(refused) = inspect::stream_unscanned(policy, &state.audit, ctx).await {
                 return refused;
             }

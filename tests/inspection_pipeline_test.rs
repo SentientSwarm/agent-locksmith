@@ -54,7 +54,27 @@ inspection:
     .unwrap()
 }
 
+/// The router plus what a test needs to call and audit it.
+pub struct Built {
+    pub app: axum::Router,
+    pub pool: sqlx::SqlitePool,
+    pub dir: TempDir,
+    /// The agent's `Authorization` header value.
+    pub auth: String,
+}
+
 pub async fn harness(config: AppConfig) -> H {
+    let b = build(config).await;
+    let mut server = TestServer::new(b.app);
+    server.add_header("authorization", &b.auth);
+    H {
+        server,
+        pool: b.pool,
+        _dir: b.dir,
+    }
+}
+
+pub async fn build(config: AppConfig) -> Built {
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("inspect.db"))
         .await
@@ -107,15 +127,11 @@ pub async fn harness(config: AppConfig) -> H {
         None,
         None,
     );
-    let mut server = TestServer::new(app);
-    server.add_header(
-        "authorization",
-        &format!("Bearer lk_{pid}.{}", token.expose_secret()),
-    );
-    H {
-        server,
+    Built {
+        app,
         pool,
-        _dir: dir,
+        dir,
+        auth: format!("Bearer lk_{pid}.{}", token.expose_secret()),
     }
 }
 

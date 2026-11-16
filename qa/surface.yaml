@@ -1300,6 +1300,8 @@ behaviours:
   summary: The dlp scanner finds credential formats and audits rule ids and hashes, never values
 - id: beh.inspection.injection
   summary: The injection scanner flags folded prompt-injection phrasing and forwards the body unchanged
+- id: beh.inspection.stream
+  summary: Server-sent event responses are scanned as they pass; a match split across deltas is redacted before the agent sees it
 - id: beh.ratelimit
   summary: Per-agent, per-route limits answer 429 rate_limited with Retry-After before the upstream; writes apply live
 - id: beh.egress.proxied

@@ -147,12 +147,13 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   blocked under `fail_closed`. A large response is read only up to the
   limit; under `fail_open` the rest is forwarded unscanned, and the
   route's response controls (size cap, redaction) still apply to it.
-- **Streamed responses** (`text/event-stream`, and newline-delimited
-  JSON: `application/x-ndjson`, `application/jsonl`,
-  `application/x-jsonlines`, `application/stream+json`) are not buffered.
-  They are audited `inspection_skipped` with reason `streaming` and,
-  under `on_error: fail_closed`, refused with 502 `inspection_blocked`,
-  until streamed scanning lands (AGENT-265).
+- **Server-sent event streams** (`text/event-stream`) are scanned as they
+  pass; see [Streamed responses](#streamed-responses).
+- **Newline-delimited JSON streams** (`application/x-ndjson`,
+  `application/jsonl`, `application/x-jsonlines`,
+  `application/stream+json`) are not scanned. They are audited
+  `inspection_skipped` with reason `streaming` and, under
+  `on_error: fail_closed`, refused with 502 `inspection_blocked`.
 
 Scanning runs on a blocking thread with a 5 second deadline; a scan that
 misses it (`scan timed out`) or panics (`scan failed`) is an
@@ -161,6 +162,48 @@ misses it (`scan timed out`) or panics (`scan failed`) is an
 A request is scanned as the agent sent it, before Locksmith adds the
 route's credential or any profile fixup, so Locksmith's own key is never
 a match.
+
+## Streamed responses
+
+A server-sent event stream (AGENT-265) is parsed event by event (CRLF,
+LF and lone CR line endings). Every JSON string in an event's `data` is
+scanned, aggregates as well as deltas, except protocol metadata (`type`,
+`id`, `object`, `model`, `role`, `finish_reason`, `stop_reason`,
+`system_fingerprint`, `status`, `item_id`, `call_id`, `response_id`).
+Data that is not JSON is scanned whole. The text goes, in order, through
+one sliding window that keeps the last `max_match_len - 1` characters,
+measured both raw and after folding, so a match split across any number
+of deltas is found once.
+
+How the stream is forwarded depends on `on_hit`:
+
+- **`pass` or `flag`**: each event is forwarded the moment it is
+  complete. Hits are only audited.
+- **`redact` or `block`**: an event is held until no later match can
+  reach back into its text. A redact rewrites the held events' text (the
+  marker where the match starts, the rest of the match removed) before
+  any of it is sent. A block drops what is held, sends one error event
+  shaped for the stream's protocol (OpenAI or Anthropic, with code
+  `inspection_blocked`) and ends the stream.
+
+An event longer than `max_scan_bytes`, or held text or events past it,
+can't be judged within bounds. Under `fail_closed` the stream is blocked.
+Under `fail_open` the oldest held event is released early or, for an
+oversized event, the rest of the stream passes through unscanned; either
+way an `inspection_hold_overflow` row is written. An unterminated final
+event is scanned when the upstream closes. A content-encoded stream
+follows `on_error`, as a buffered body does.
+
+Cost, measured in a release build on macOS ARM64 with the built-in
+scanners over 2000 one-word chat deltas: about 53 µs of scanning per
+event under either verdict. Under `flag` the first event is forwarded
+after 0.5 ms. Under `redact` each event waits until the overlap behind
+it has arrived. With the built-in scanners the overlap is about 8 KB of
+text, set by the longest PEM block `dlp` matches, so the first byte
+reached the agent after event 1039. In a live stream that delay is the
+time the upstream takes to send another 8 KB, not scanning time. Routes
+that need the lowest time to first token should use `flag`. Re-run:
+`cargo test --release --lib measure_stream -- --ignored --nocapture`.
 
 ## Audit
 
@@ -172,6 +215,7 @@ something:
 | `inspection_hit` | At least one hit. `decision` is `denied` for a block. |
 | `inspection_skipped` | Not scanned: `reason` is `oversize`, `not_text`, `encoded` or `streaming`. |
 | `inspection_error` | A scanner failed and nothing was found. |
+| `inspection_hold_overflow` | A streamed response's held text passed `max_scan_bytes` under `fail_open`, so some text was released or passed unscanned. |
 
 Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.

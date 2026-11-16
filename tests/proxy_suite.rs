@@ -28,6 +28,8 @@ mod identityless_isolation_test;
 mod inference_matrix_local_test;
 #[path = "inspection_pipeline_test.rs"]
 mod inspection_pipeline_test;
+#[path = "inspection_stream_test.rs"]
+mod inspection_stream_test;
 #[path = "integration_test.rs"]
 mod integration_test;
 #[path = "m2_integration_test.rs"]

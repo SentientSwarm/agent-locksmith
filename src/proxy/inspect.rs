@@ -3,10 +3,11 @@
 
 use super::{ProxyTarget, RequestCtx, audit_record};
 use crate::app::AppState;
+use crate::inspection::stream::StreamInspector;
 use crate::inspection::{
     self, BodyMeta, Direction, DirectionPolicy, Outcome, Report, SkipReason, Verdict,
 };
-use crate::repo::audit::{AuditRepository, Decision, EventClass};
+use crate::repo::audit::{AuditEvent, AuditRepository, Decision, EventClass};
 use axum::{
     Json,
     http::{HeaderMap, StatusCode},
@@ -178,6 +179,97 @@ pub(super) fn is_event_stream(content_type: Option<&str>) -> bool {
     })
 }
 
+/// Inspect a server-sent event stream as it passes (AGENT-265). `Err` is
+/// the response to send instead: an encoded stream under `fail_closed`.
+pub(super) async fn stream(
+    policy: &DirectionPolicy,
+    state: &AppState,
+    ctx: &RequestCtx,
+    headers: &HeaderMap,
+    upstream: UpstreamStream,
+) -> Result<UpstreamStream, Response> {
+    if encoded(headers) {
+        let report = Report {
+            direction: Direction::Response,
+            verdict: Verdict::Pass,
+            hits: Vec::new(),
+            dropped_hits: 0,
+            skipped: Some(SkipReason::Encoded),
+            error: None,
+        };
+        let closed = policy.on_error == inspection::OnError::FailClosed;
+        let report = if closed {
+            Report {
+                verdict: Verdict::Block,
+                ..report
+            }
+        } else {
+            report
+        };
+        record(&state.audit, ctx, &report, closed.then_some(502)).await;
+        if closed {
+            return Err(blocked(
+                StatusCode::BAD_GATEWAY,
+                "response blocked by inspection",
+            ));
+        }
+        return Ok(upstream);
+    }
+    let inspector = StreamInspector::new(policy);
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    tokio::spawn(drive(
+        inspector,
+        upstream,
+        tx,
+        state.audit.clone(),
+        ctx.audit_event_base(),
+    ));
+    Ok(Box::pin(futures_util::stream::unfold(
+        rx,
+        |mut rx| async move { rx.recv().await.map(|item| (item, rx)) },
+    )))
+}
+
+/// Pump the upstream through the inspector to the agent, then audit.
+async fn drive(
+    mut inspector: StreamInspector,
+    mut upstream: UpstreamStream,
+    tx: tokio::sync::mpsc::Sender<Result<Bytes, reqwest::Error>>,
+    audit: Option<AuditRepository>,
+    base: AuditEvent,
+) {
+    loop {
+        let (step, failure) = match upstream.next().await {
+            Some(Ok(chunk)) => (inspector.push(&chunk), None),
+            Some(Err(e)) => (inspector.finish(), Some(e)),
+            None => (inspector.finish(), None),
+        };
+        let mut gone = false;
+        for out in step.out {
+            if tx.send(Ok(Bytes::from(out))).await.is_err() {
+                gone = true;
+                break;
+            }
+        }
+        if let Some(e) = failure {
+            let _ = tx.send(Err(e)).await;
+            break;
+        }
+        if gone || step.ended {
+            break;
+        }
+    }
+    record_event(&audit, base.clone(), inspector.report(), None).await;
+    if inspector.hold_overflowed() {
+        let mut event = base;
+        event.event_class = EventClass::Security;
+        event.event = "inspection_hold_overflow".to_string();
+        event.decision = Decision::Allowed;
+        event.details = Some(json!({ "direction": "response" }));
+        audit_record(&audit, event).await;
+    }
+}
+
 /// A streamed response on an inspected route is not scanned: audited,
 /// and under `fail_closed` refused (`Some` is the 502 to send).
 pub(super) async fn stream_unscanned(
@@ -308,6 +400,16 @@ pub(super) async fn record(
     report: &Report,
     status: Option<u16>,
 ) {
+    record_event(audit, ctx.audit_event_base(), report, status).await;
+}
+
+/// `record` with a request snapshot taken earlier (a stream's task).
+async fn record_event(
+    audit: &Option<AuditRepository>,
+    mut event: AuditEvent,
+    report: &Report,
+    status: Option<u16>,
+) {
     if report.is_quiet() {
         return;
     }
@@ -338,7 +440,6 @@ pub(super) async fn record(
     if let Some(error) = &report.error {
         details["error"] = error.as_str().into();
     }
-    let mut event = ctx.audit_event_base();
     event.event_class = EventClass::Security;
     event.event = event_name.to_string();
     event.status = status;

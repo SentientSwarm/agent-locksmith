@@ -14,7 +14,10 @@ mod dlp;
 mod injection;
 mod literal;
 mod normalize;
+pub mod sse;
+pub mod stream;
 mod text;
+pub mod window;
 
 pub(crate) use text::{percent_decode, percent_decode_path};
 
