@@ -96,6 +96,15 @@ impl TextWindow {
         self.scan()
     }
 
+    /// Drop the held text once nothing will extend it (its output is
+    /// finished and scanned). Offsets carry on from where they were.
+    pub fn release_text(&mut self) {
+        self.base += self.buf.len();
+        self.buf = String::new();
+        self.scanned = 0;
+        self.reported = Vec::new();
+    }
+
     /// Scan whatever is still unscanned.
     pub fn flush(&mut self) -> Result<Vec<WindowHit>, ScanError> {
         if self.scanned == self.buf.len() {

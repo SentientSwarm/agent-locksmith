@@ -7,7 +7,8 @@
 //! `pass` or `flag` every event is forwarded the moment it is complete;
 //! hits are only audited. Under `redact` or `block` an event is held until
 //! no future match can reach back into its text (each field's text ends
-//! before its lane's `base`, or its lane is finished), so a secret split
+//! before its lane's `base`, or its lane is finished; a field complete in
+//! its event, a snapshot, is scanned alone and never waits), so a secret split
 //! across many deltas is caught before any part of it is sent. A redact
 //! rewrites the held events' text fields (the marker in the event where
 //! the match starts, the rest removed); a block drops what is held, sends
@@ -33,8 +34,16 @@ use std::sync::Arc;
 /// counted as dropped without being remembered.
 const MAX_SEEN: usize = 4 * MAX_AUDITED_HITS;
 
-/// Outputs given their own window; more share one, so memory is bounded.
-const MAX_LANES: usize = 16;
+/// Unfinished outputs given their own window; more share one, so memory
+/// is bounded. A finished output's window drops its text.
+const MAX_LANES: usize = 32;
+
+/// Outputs remembered in one stream (finished ones too, so text after
+/// a finish is caught); more share one window.
+const MAX_OUTPUTS: usize = 1024;
+
+/// Ids at or past this name a field scanned alone, not a lane.
+const WHOLE: usize = 1 << 48;
 
 /// What to send the agent after one push, and whether the stream is over.
 #[derive(Debug, Default)]
@@ -95,6 +104,8 @@ pub struct StreamInspector {
     hold_overflowed: bool,
     /// Past an oversized event under `fail_open`: forward bytes as is.
     passthrough: bool,
+    /// Fields scanned alone so far (their ids count up from `WHOLE`).
+    wholes: usize,
 }
 
 impl StreamInspector {
@@ -117,6 +128,7 @@ impl StreamInspector {
             ended: false,
             hold_overflowed: false,
             passthrough: false,
+            wholes: 0,
         }
     }
 
@@ -197,9 +209,10 @@ impl StreamInspector {
         step
     }
 
-    /// The lane `lane`'s index, made on first use. Past `MAX_LANES`, new
-    /// outputs share one window, which can split a match: that is an
-    /// overflow (`None` under `fail_closed`).
+    /// The lane `lane`'s index, made on first use. Past `MAX_LANES`
+    /// unfinished outputs (or `MAX_OUTPUTS` in all), new outputs share one
+    /// window, which can split a match: that is an overflow (`None` under
+    /// `fail_closed`).
     fn lane(&mut self, lane: &Lane) -> Option<usize> {
         if let Some(&i) = self.by_lane.get(lane) {
             return Some(i);
@@ -208,7 +221,8 @@ impl StreamInspector {
             path: "*".into(),
             tags: Vec::new(),
         };
-        let lane = if self.lanes.len() + 1 >= MAX_LANES {
+        let live = self.lanes.iter().filter(|l| !l.done).count();
+        let lane = if live + 1 >= MAX_LANES || self.lanes.len() + 1 >= MAX_OUTPUTS {
             if self.on_error == OnError::FailClosed {
                 return None;
             }
@@ -237,7 +251,18 @@ impl StreamInspector {
         let mut fields = Vec::new();
         let mut hits = Vec::new();
         for span in sse::extract(&event) {
-            let Some(lane) = self.lane(&span.lane) else {
+            let Some(key) = &span.lane else {
+                let Some(id) = self.whole(&span, &mut hits, step) else {
+                    return;
+                };
+                fields.push(Field {
+                    span,
+                    lane: id,
+                    start: 0,
+                });
+                continue;
+            };
+            let Some(lane) = self.lane(key) else {
                 self.report.error = Some("more stream outputs than can be inspected".into());
                 return self.block(step);
             };
@@ -254,7 +279,8 @@ impl StreamInspector {
             }
             let start = state.window.end();
             let found = state.window.push(&span.text);
-            if !self.scanned(lane, found, &mut hits, step) {
+            let overflowed = state.window.overflowed();
+            if !self.scanned(lane, found, overflowed, &mut hits, step) {
                 return;
             }
             fields.push(Field { span, lane, start });
@@ -288,11 +314,33 @@ impl StreamInspector {
         }
     }
 
-    /// Take one window result; false when the stream was blocked.
+    /// Scan a field complete in its event on its own; its id, or `None`
+    /// when the stream was blocked.
+    fn whole(
+        &mut self,
+        span: &TextSpan,
+        hits: &mut Vec<LaneHit>,
+        step: &mut Step,
+    ) -> Option<usize> {
+        let id = WHOLE + self.wholes;
+        self.wholes += 1;
+        let mut window = TextWindow::new(self.scanners.clone(), self.max_held);
+        let found = window.push(&span.text).and_then(|mut found| {
+            found.extend(window.flush()?);
+            Ok(found)
+        });
+        let overflowed = window.overflowed();
+        self.scanned(id, found, overflowed, hits, step)
+            .then_some(id)
+    }
+
+    /// Take one window result (`overflowed`: the window passed its cap);
+    /// false when the stream was blocked.
     fn scanned(
         &mut self,
         lane: usize,
         found: Result<Vec<WindowHit>, super::ScanError>,
+        overflowed: bool,
         hits: &mut Vec<LaneHit>,
         step: &mut Step,
     ) -> bool {
@@ -306,7 +354,7 @@ impl StreamInspector {
                 }
             }
         }
-        if self.lanes[lane].window.overflowed() && self.on_error == OnError::FailClosed {
+        if overflowed && self.on_error == OnError::FailClosed {
             self.report.error = Some("stream text held past max_scan_bytes".into());
             self.block(step);
             return false;
@@ -359,10 +407,12 @@ impl StreamInspector {
                 continue;
             }
             let found = self.lanes[lane].window.flush();
-            if !self.scanned(lane, found, &mut hits, step) {
+            let overflowed = self.lanes[lane].window.overflowed();
+            if !self.scanned(lane, found, overflowed, &mut hits, step) {
                 return;
             }
             self.lanes[lane].done = true;
+            self.lanes[lane].window.release_text();
         }
         let verdict = self.judge(&hits, step);
         if !step.ended && verdict == Verdict::Redact {
@@ -458,8 +508,10 @@ impl StreamInspector {
     /// Can no future match reach back into `h`?
     fn safe(&self, h: &Held) -> bool {
         h.fields.iter().all(|f| {
-            let lane = &self.lanes[f.lane];
-            lane.done || f.start + f.span.text.len() <= lane.window.base()
+            f.lane >= WHOLE || {
+                let lane = &self.lanes[f.lane];
+                lane.done || f.start + f.span.text.len() <= lane.window.base()
+            }
         })
     }
 
@@ -488,12 +540,12 @@ fn render(h: &Held) -> Vec<u8> {
     if h.cuts.iter().all(Vec::is_empty) {
         return h.event.raw.clone();
     }
-    let edits: Vec<(String, String)> = h
+    let edits: Vec<(sse::Place, String)> = h
         .fields
         .iter()
         .zip(&h.cuts)
         .filter(|(_, cuts)| !cuts.is_empty())
-        .map(|(f, cuts)| (f.span.pointer.clone(), apply_cuts(&f.span.text, cuts)))
+        .map(|(f, cuts)| (f.span.place.clone(), apply_cuts(&f.span.text, cuts)))
         .collect();
     sse::rewrite(&h.event, &edits)
 }
@@ -923,6 +975,340 @@ mod tests {
         events.push(DONE.to_string());
         let (_, i) = run(&policy(Verdict::Flag), &events);
         assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+    }
+
+    fn ev(kind: &str, mut data: serde_json::Value) -> String {
+        data["type"] = kind.into();
+        format!("event: {kind}\ndata: {data}\n\n")
+    }
+
+    fn pieces(text: &str) -> Vec<String> {
+        text.split_inclusive(' ').map(str::to_string).collect()
+    }
+
+    /// A real provider stream passes untouched under `fail_closed` and
+    /// `redact`: nothing blocked, its first (snapshot) event sent at
+    /// once, and every byte out before the upstream ends.
+    fn passes_whole(events: &[String]) {
+        let mut i = StreamInspector::new(&closed(1 << 20, Verdict::Redact));
+        let first = i.push(events[0].as_bytes()).out.concat();
+        assert_eq!(
+            String::from_utf8(first).unwrap(),
+            events[0],
+            "first event held"
+        );
+        let mut out = events[0].clone();
+        for e in &events[1..] {
+            out.push_str(&String::from_utf8(i.push(e.as_bytes()).out.concat()).unwrap());
+        }
+        assert_eq!(i.report().error, None);
+        assert_eq!(out, events.concat());
+    }
+
+    fn response(status: &str, output: serde_json::Value) -> serde_json::Value {
+        let tools: Vec<_> = (0..10)
+            .map(|n| {
+                serde_json::json!({"type": "function", "name": format!("tool_{n}"),
+                "description": format!("Looks up record number {n}"), "parameters": {}})
+            })
+            .collect();
+        serde_json::json!({"id": "resp_1", "object": "response", "status": status,
+            "tool_choice": "auto", "truncation": "disabled", "prompt_cache_key": "pck-1",
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tools": tools, "output": output})
+    }
+
+    #[test]
+    fn a_responses_message_passes_whole() {
+        use serde_json::json;
+        let text = "The answer is forty two, as computed.";
+        let at = json!({"output_index": 0, "content_index": 0, "item_id": "msg_1"});
+        let with = |extra: serde_json::Value| {
+            let mut v = at.clone();
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let item = json!({"id": "msg_1", "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}]});
+        let mut events = vec![
+            ev(
+                "response.created",
+                json!({"response": response("in_progress", json!([]))}),
+            ),
+            ev(
+                "response.in_progress",
+                json!({"response": response("in_progress", json!([]))}),
+            ),
+            ev(
+                "response.output_item.added",
+                json!({"output_index": 0,
+                "item": {"id": "msg_1", "type": "message", "role": "assistant", "content": []}}),
+            ),
+            ev(
+                "response.content_part.added",
+                with(json!({"part": {"type": "output_text", "text": "", "annotations": []}})),
+            ),
+        ];
+        for w in pieces(text) {
+            events.push(ev(
+                "response.output_text.delta",
+                with(json!({"delta": w, "obfuscation": "x1"})),
+            ));
+        }
+        events.push(ev("response.output_text.done", with(json!({"text": text}))));
+        events.push(ev(
+            "response.content_part.done",
+            with(json!({"part": {"type": "output_text", "text": text, "annotations": []}})),
+        ));
+        events.push(ev(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": item}),
+        ));
+        events.push(ev(
+            "response.completed",
+            json!({"response": response("completed", json!([item]))}),
+        ));
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn a_responses_function_call_passes_whole() {
+        use serde_json::json;
+        let args = "{\"city\": \"Paris\", \"unit\": \"c\"}";
+        let item = |a: &str| {
+            json!({"type": "function_call", "id": "fc_1", "call_id": "call_1",
+            "name": "get_weather", "arguments": a})
+        };
+        let mut events = vec![
+            ev(
+                "response.created",
+                json!({"response": response("in_progress", json!([]))}),
+            ),
+            ev(
+                "response.output_item.added",
+                json!({"output_index": 1, "item": item("")}),
+            ),
+        ];
+        for p in pieces(args) {
+            events.push(ev(
+                "response.function_call_arguments.delta",
+                json!({"output_index": 1, "item_id": "fc_1", "delta": p}),
+            ));
+        }
+        events.push(ev(
+            "response.function_call_arguments.done",
+            json!({"output_index": 1, "item_id": "fc_1", "arguments": args}),
+        ));
+        events.push(ev(
+            "response.output_item.done",
+            json!({"output_index": 1, "item": item(args)}),
+        ));
+        events.push(ev(
+            "response.completed",
+            json!({"response": response("completed", json!([item(args)]))}),
+        ));
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn two_reasoning_summaries_pass_whole() {
+        use serde_json::json;
+        let mut events = vec![ev(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {"type": "reasoning", "id": "rs_1", "summary": []}}),
+        )];
+        for (n, text) in ["First I read the question.", "Then I checked the sums."]
+            .iter()
+            .enumerate()
+        {
+            let at = |extra: serde_json::Value| {
+                let mut v = json!({"output_index": 0, "summary_index": n, "item_id": "rs_1"});
+                v.as_object_mut()
+                    .unwrap()
+                    .extend(extra.as_object().unwrap().clone());
+                v
+            };
+            events.push(ev(
+                "response.reasoning_summary_part.added",
+                at(json!({"part": {"type": "summary_text", "text": ""}})),
+            ));
+            for p in pieces(text) {
+                events.push(ev(
+                    "response.reasoning_summary_text.delta",
+                    at(json!({"delta": p})),
+                ));
+            }
+            events.push(ev(
+                "response.reasoning_summary_text.done",
+                at(json!({"text": text})),
+            ));
+            events.push(ev(
+                "response.reasoning_summary_part.done",
+                at(json!({"part": {"type": "summary_text", "text": text}})),
+            ));
+        }
+        events.push(ev(
+            "response.completed",
+            json!({"response": response("completed", json!([]))}),
+        ));
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn an_anthropic_stream_with_thinking_and_tools_passes_whole() {
+        use serde_json::json;
+        let mut events = vec![ev(
+            "message_start",
+            json!({"message": {"id": "msg_1",
+            "type": "message", "role": "assistant", "model": "m", "content": [],
+            "stop_reason": null, "usage": {"input_tokens": 10}}}),
+        )];
+        let block = |events: &mut Vec<String>,
+                     n: usize,
+                     start: serde_json::Value,
+                     deltas: Vec<serde_json::Value>| {
+            events.push(ev(
+                "content_block_start",
+                json!({"index": n, "content_block": start}),
+            ));
+            for d in deltas {
+                events.push(ev("content_block_delta", json!({"index": n, "delta": d})));
+            }
+            events.push(ev("content_block_stop", json!({"index": n})));
+        };
+        block(
+            &mut events,
+            0,
+            json!({"type": "thinking", "thinking": "", "signature": ""}),
+            vec![
+                json!({"type": "thinking_delta", "thinking": "Let me look this up."}),
+                json!({"type": "signature_delta", "signature": "c2lnbmVk"}),
+            ],
+        );
+        block(
+            &mut events,
+            1,
+            json!({"type": "text", "text": ""}),
+            pieces("I will check two cities.")
+                .into_iter()
+                .map(|t| json!({"type": "text_delta", "text": t}))
+                .collect(),
+        );
+        for n in 2..4 {
+            block(
+                &mut events,
+                n,
+                json!({"type": "tool_use", "id": format!("toolu_{n}"),
+                "name": "get_weather", "input": {}}),
+                pieces("{\"city\": \"Paris\"}")
+                    .into_iter()
+                    .map(|p| json!({"type": "input_json_delta", "partial_json": p}))
+                    .collect(),
+            );
+        }
+        events.push(ev(
+            "message_delta",
+            json!({"delta": {"stop_reason": "tool_use",
+            "stop_sequence": null}, "usage": {"output_tokens": 50}}),
+        ));
+        events.push(ev("message_stop", json!({})));
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn chat_with_ten_parallel_tool_calls_passes_whole() {
+        use serde_json::json;
+        let chunk = |v: serde_json::Value| format!("data: {v}\n\n");
+        let safe = json!({"hate": {"filtered": false, "severity": "safe"}});
+        let call = |t: usize, f: serde_json::Value| {
+            chunk(json!({"id": "c1",
+            "choices": [{"index": 0, "delta": {"tool_calls": [{"index": t, "function": f}]}}]}))
+        };
+        let mut events = vec![
+            chunk(json!({"id": "c1", "choices": [],
+                "prompt_filter_results": [{"prompt_index": 0, "content_filter_results": safe}]})),
+            chunk(
+                json!({"id": "c1", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}),
+            ),
+        ];
+        for t in 0..10 {
+            events.push(call(
+                t,
+                json!({"name": format!("tool_{t}"), "arguments": ""}),
+            ));
+        }
+        for t in 0..10 {
+            events.push(call(t, json!({"arguments": "{\"n\": "})));
+            events.push(call(t, json!({"arguments": format!("{t}}}")})));
+        }
+        events.push(chunk(
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {},
+            "finish_reason": "tool_calls", "content_filter_results": safe}]}),
+        ));
+        events.push(chunk(
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {"content": ""}}]}),
+        ));
+        events.push(chunk(
+            json!({"id": "c1", "choices": [], "usage": {"total_tokens": 9}}),
+        ));
+        events.push(DONE.to_string());
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn a_match_split_between_block_start_and_delta_is_found() {
+        use serde_json::json;
+        let k = key();
+        let events = vec![
+            ev(
+                "content_block_start",
+                json!({"index": 0,
+                "content_block": {"type": "text", "text": format!("key: {}", &k[..12])}}),
+            ),
+            ev(
+                "content_block_delta",
+                json!({"index": 0,
+                "delta": {"type": "text_delta", "text": format!("{} done", &k[12..])}}),
+            ),
+            ev("content_block_stop", json!({"index": 0})),
+            ev("message_stop", json!({})),
+        ];
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+    }
+
+    #[test]
+    fn an_escaped_duplicate_value_is_still_inspected() {
+        let k = key();
+        // `\u0067` is `g`: the hidden value decodes to the key.
+        let event = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"\\u0067{}\",\"content\":\"safe\"}}}}]}}\n\n",
+            &k[1..]
+        );
+        for verdict in [Verdict::Redact, Verdict::Block] {
+            let (out, i) = run(&policy(verdict), &[event.clone(), DONE.to_string()]);
+            assert!(!out.contains(&k[1..9]), "{out}");
+            assert_eq!(i.report().verdict, verdict);
+        }
+    }
+
+    #[test]
+    fn a_redacted_root_json_string_stays_json() {
+        let k = key();
+        let event = format!("data: {}\n\n", q(&format!("key {k} end")));
+        let (out, _) = run(&policy(Verdict::Redact), &[event, DONE.to_string()]);
+        assert!(!leaked(&out), "{out}");
+        for e in sse::SseParser::default().push(out.as_bytes()) {
+            let d = e.data.unwrap();
+            if d != "[DONE]" {
+                let v: serde_json::Value =
+                    serde_json::from_str(&d).unwrap_or_else(|_| panic!("{d}"));
+                assert!(v.as_str().unwrap().contains("[REDACTED:dlp]"), "{d}");
+            }
+        }
     }
 
     /// Cost per event and time to first forwarded byte, for the design

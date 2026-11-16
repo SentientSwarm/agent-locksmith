@@ -9,23 +9,24 @@
 
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 
 /// One output of a stream: the field's path, with each array position
 /// that carries an integer `index` replaced by `#<index>`, and the
 /// event's top-level indexes as tags.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Lane {
     pub path: String,
     pub tags: Vec<(&'static str, i64)>,
 }
 
 /// Top-level fields that name which output an event belongs to.
-const TAGS: [(&str, &str); 3] = [
+const TAGS: [(&str, &str); 4] = [
     ("index", "i"),
     ("output_index", "o"),
     ("content_index", "c"),
+    ("summary_index", "s"),
 ];
 
 /// An index as a lenient client reads it: an integer, an integer-valued
@@ -104,59 +105,73 @@ pub fn closes(kind: Option<&str>, value: &Value) -> Vec<Close> {
     out
 }
 
-/// Does this JSON text repeat a key in any object? A repeated key hides
-/// the earlier value from a parsed view, so such data is scanned raw.
-pub fn has_duplicate_keys(json: &str) -> bool {
-    let mut found = Dups(false);
+/// The strings a repeated key hides from a parsed view: everything
+/// inside each value but the last for that key, at any depth. A client
+/// whose parser keeps the first value reads them, so they are scanned too.
+pub fn hidden_strings(json: &str) -> Vec<String> {
+    let mut hidden = Hidden(Vec::new());
     let mut de = serde_json::Deserializer::from_str(json);
-    (&mut found).deserialize(&mut de).is_ok() && found.0
+    match (&mut hidden).deserialize(&mut de) {
+        Ok(_) => hidden.0,
+        Err(_) => Vec::new(),
+    }
 }
 
-struct Dups(bool);
+/// Collects hidden strings; each value visited yields the strings in it.
+struct Hidden(Vec<String>);
 
-impl<'de> DeserializeSeed<'de> for &mut Dups {
-    type Value = ();
-    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+impl<'de> DeserializeSeed<'de> for &mut Hidden {
+    type Value = Vec<String>;
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<Vec<String>, D::Error> {
         d.deserialize_any(self)
     }
 }
 
-impl<'de> Visitor<'de> for &mut Dups {
-    type Value = ();
+impl<'de> Visitor<'de> for &mut Hidden {
+    type Value = Vec<String>;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("JSON")
     }
-    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
-        Ok(())
+    fn visit_bool<E>(self, _: bool) -> Result<Vec<String>, E> {
+        Ok(Vec::new())
     }
-    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
-        Ok(())
+    fn visit_i64<E>(self, _: i64) -> Result<Vec<String>, E> {
+        Ok(Vec::new())
     }
-    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
-        Ok(())
+    fn visit_u64<E>(self, _: u64) -> Result<Vec<String>, E> {
+        Ok(Vec::new())
     }
-    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
-        Ok(())
+    fn visit_f64<E>(self, _: f64) -> Result<Vec<String>, E> {
+        Ok(Vec::new())
     }
-    fn visit_str<E>(self, _: &str) -> Result<(), E> {
-        Ok(())
+    fn visit_str<E>(self, s: &str) -> Result<Vec<String>, E> {
+        Ok(vec![s.to_string()])
     }
-    fn visit_unit<E>(self) -> Result<(), E> {
-        Ok(())
+    fn visit_unit<E>(self) -> Result<Vec<String>, E> {
+        Ok(Vec::new())
     }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while seq.next_element_seed(&mut *self)?.is_some() {}
-        Ok(())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-        let mut keys = HashSet::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if !keys.insert(key) {
-                self.0 = true;
-            }
-            map.next_value_seed(&mut *self)?;
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+        let mut all = Vec::new();
+        while let Some(inner) = seq.next_element_seed(&mut *self)? {
+            all.extend(inner);
         }
-        Ok(())
+        Ok(all)
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Vec<String>, A::Error> {
+        let mut by_key: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let inner = map.next_value_seed(&mut *self)?;
+            by_key.entry(key).or_default().push(inner);
+        }
+        let mut all = Vec::new();
+        for mut values in by_key.into_values() {
+            let last = values.pop().unwrap_or_default();
+            for hidden in values {
+                self.0.extend(hidden);
+            }
+            all.extend(last);
+        }
+        Ok(all)
     }
 }
 
@@ -166,10 +181,16 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn duplicate_keys_are_found_at_any_depth() {
-        assert!(!has_duplicate_keys(r#"{"a":1,"b":{"c":[1,{"d":2}]}}"#));
-        assert!(has_duplicate_keys(r#"{"a":1,"a":2}"#));
-        assert!(has_duplicate_keys(r#"{"x":[{"d":"s","d":"t"}]}"#));
+    fn hidden_strings_are_found_at_any_depth() {
+        assert!(hidden_strings(r#"{"a":"x","b":{"c":["y",{"d":"z"}]}}"#).is_empty());
+        assert_eq!(hidden_strings(r#"{"a":"one","a":"two"}"#), vec!["one"]);
+        assert_eq!(hidden_strings(r#"{"x":[{"d":"s","d":"t"}]}"#), vec!["s"]);
+        assert_eq!(hidden_strings(r#"{"a":{"b":"in"},"a":"out"}"#), vec!["in"]);
+        assert_eq!(
+            hidden_strings(r#"{"a":"\u0067h","a":"x"}"#),
+            vec!["gh"],
+            "decoded"
+        );
     }
 
     #[test]

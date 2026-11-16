@@ -172,19 +172,34 @@ as well as deltas, except protocol metadata (`type`, `id`, `object`,
 `model`, `role`, `finish_reason`, `stop_reason`, `system_fingerprint`,
 `status`, `item_id`, `call_id`, `response_id`, the `obfuscation` padding,
 `service_tier`, and `instructions`, the agent's own prompt echoed back).
-Data that is not JSON, or JSON that repeats a key (whose earlier value a
-parsed view would hide), is scanned whole.
+Empty strings are skipped. Data that is not JSON is scanned as one
+string. When JSON repeats a key, the values the parsed view hides are
+decoded and scanned too, since a client that keeps the first value reads
+them; a redact re-writes the event from its parsed view, which drops
+them.
 
-Each string goes to the window of the output it belongs to, the way a
+A string complete in its own event (a snapshot) is scanned alone and
+never waits for later text: every Responses event except a `*.delta`
+(`response.created`, `.added`, `.done`, `response.completed` and the
+rest), Anthropic `message_start`, `message_delta` and `message_stop`,
+and a chat chunk's fields outside a choice's `delta` (Azure content
+filter results, `logprobs`, `usage`). Only fields later events extend
+(a chat or completions choice's `delta` and `text`, a Responses
+`*.delta`, an Anthropic block's text, thinking and tool input, including
+the opening text in `content_block_start`) go to a window.
+
+Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
-`index`, each Anthropic content block, each Responses output and content
-part. So a match split across one output's deltas is found however the
-outputs interleave. Each window keeps the last `max_match_len - 1` bytes
+`index`, each Anthropic content block, each Responses output, content
+part and reasoning summary. So a match split across one output's deltas
+is found however the outputs interleave. Each window keeps the last `max_match_len - 1` bytes
 of its output, measured both raw and after folding, so a match split
 across any number of deltas is found once. A window scans once the text
 it has not scanned reaches an eighth of what it holds, so padding that
-keeps the window long cannot make scanning quadratic. Up to 15 outputs
-get their own window. Past that, or when text arrives for an output the
+keeps the window long cannot make scanning quadratic. Up to 31
+unfinished outputs (1023 in all) get their own window; a finished
+output's window drops its text. Past that, or when non-empty text
+arrives for an output the
 protocol already said was finished, a match could be missed: under
 `fail_closed` the stream is blocked, under `fail_open` the outputs share
 one window (or the finished one reopens) and an `inspection_hold_overflow`

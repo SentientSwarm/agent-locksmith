@@ -4,6 +4,11 @@
 //! event nothing touches is forwarded byte for byte. Text is extracted
 //! from the streaming shapes of the OpenAI chat and Responses APIs and
 //! the Anthropic Messages API; anything else carries no text.
+//!
+//! A field later events extend (a delta) belongs to a lane; a field
+//! complete in its own event (a snapshot: `response.created`, any
+//! Responses event but a `*.delta`, Anthropic message events, a chat
+//! chunk's fields outside `delta`) has none and is scanned alone.
 
 use super::lanes::{self, Close, Lane};
 use serde_json::Value;
@@ -16,12 +21,24 @@ pub struct SseEvent {
     pub data: Option<String>,
 }
 
-/// A text field inside an event's JSON `data`, by JSON pointer, and the
-/// output (lane) it belongs to.
+/// Where a text field lives in its event, for rewriting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// The whole `data`, which is not JSON: rewritten as text.
+    Raw,
+    /// A string in the JSON `data`, by pointer (`""`: a root string).
+    Json(String),
+    /// A value a repeated key hides: a rewrite re-serialises the parsed
+    /// view, which drops it.
+    Hidden,
+}
+
+/// A text field of an event, and the output (lane) later events extend
+/// it in; `None` when it is complete in this event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextSpan {
-    pub pointer: String,
-    pub lane: Lane,
+    pub place: Place,
+    pub lane: Option<Lane>,
     pub text: String,
 }
 
@@ -193,63 +210,101 @@ const METADATA: &[&str] = &[
     "instructions",
 ];
 
-/// The text this event carries: every string in its JSON `data` except
-/// metadata (delta and aggregate shapes alike), each in its output's
-/// lane. Data that is not JSON, or JSON that repeats a key (whose earlier
-/// value a parsed view would hide), is scanned whole (pointer `""`).
-/// `[DONE]` and data-less events carry none.
+/// The text this event carries: every non-empty string in its JSON
+/// `data` except metadata (delta and aggregate shapes alike), each with
+/// its lane, plus any value a repeated key hides. Data that is not JSON is
+/// one field. `[DONE]` and data-less events carry none.
 pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
     let Some(data) = event.data.as_deref() else {
         return Vec::new();
     };
-    let parsed = serde_json::from_str::<Value>(data)
-        .ok()
-        .filter(|_| !lanes::has_duplicate_keys(data));
-    let Some(value) = parsed else {
-        let text = data.to_string();
-        return if text.is_empty() || text == "[DONE]" {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return if data.is_empty() || data == "[DONE]" {
             Vec::new()
         } else {
             vec![TextSpan {
-                pointer: String::new(),
-                lane: Lane {
-                    path: String::new(),
-                    tags: Vec::new(),
-                },
-                text,
+                place: Place::Raw,
+                lane: Some(Lane::default()),
+                text: data.to_string(),
             }]
         };
     };
+    let kind = kind(event, &value);
+    let chat = value.get("choices").is_some_and(Value::is_array);
     let tags = lanes::tags(&value);
-    let mut out = Vec::new();
-    leaves(&value, (String::new(), String::new()), &tags, &mut out);
+    let mut found = Vec::new();
+    leaves(&value, (String::new(), String::new()), &mut found);
+    let mut out: Vec<TextSpan> = found
+        .into_iter()
+        .map(|(pointer, path, text)| TextSpan {
+            place: Place::Json(pointer),
+            lane: stream_path(kind.as_deref(), chat, &path).map(|path| Lane {
+                path,
+                tags: tags.clone(),
+            }),
+            text,
+        })
+        .collect();
+    out.extend(
+        lanes::hidden_strings(data)
+            .into_iter()
+            .filter(|t| !t.is_empty())
+            .map(|text| TextSpan {
+                place: Place::Hidden,
+                lane: None,
+                text,
+            }),
+    );
     out
 }
 
-/// `at` is (JSON pointer, lane path).
-fn leaves(
-    value: &Value,
-    at: (String, String),
-    tags: &[(&'static str, i64)],
-    out: &mut Vec<TextSpan>,
-) {
+/// The lane path of a field later events extend, or `None` for one
+/// complete in its event.
+fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
+    if chat {
+        // A choice's `delta` (chat) or `text` (completions); `logprobs`
+        // and content-filter results are per chunk.
+        let (_, field) = path.strip_prefix("/choices/")?.split_once('/')?;
+        return (field.starts_with("delta/") || field == "text").then(|| path.to_string());
+    }
+    match kind {
+        Some(k) if k.starts_with("response.") => {
+            (k.ends_with(".delta") && path == "/delta").then(|| path.to_string())
+        }
+        // A block's opening text is the start of what its deltas extend.
+        Some("content_block_start") => match path {
+            "/content_block/text" => Some("/delta/text".into()),
+            "/content_block/thinking" => Some("/delta/thinking".into()),
+            _ => None,
+        },
+        Some("content_block_delta") => matches!(
+            path,
+            "/delta/text" | "/delta/thinking" | "/delta/partial_json"
+        )
+        .then(|| path.to_string()),
+        Some(k)
+            if k.starts_with("message_")
+                || matches!(k, "content_block_stop" | "ping" | "error") =>
+        {
+            None
+        }
+        _ => Some(path.to_string()),
+    }
+}
+
+/// Each non-empty, non-metadata string as (JSON pointer, lane path,
+/// text); `at` is where `value` is.
+fn leaves(value: &Value, at: (String, String), out: &mut Vec<(String, String, String)>) {
     let (pointer, path) = at;
     match value {
-        Value::String(text) => out.push(TextSpan {
-            pointer,
-            lane: Lane {
-                path,
-                tags: tags.to_vec(),
-            },
-            text: text.clone(),
-        }),
+        Value::String(text) if !text.is_empty() => out.push((pointer, path, text.clone())),
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
                 let next = (
                     format!("{pointer}/{i}"),
                     format!("{path}/{}", lanes::element(item, i)),
                 );
-                leaves(item, next, tags, out);
+                leaves(item, next, out);
             }
         }
         Value::Object(map) => {
@@ -259,7 +314,7 @@ fn leaves(
                 }
                 let token = key.replace('~', "~0").replace('/', "~1");
                 let next = (format!("{pointer}/{token}"), format!("{path}/{token}"));
-                leaves(item, next, tags, out);
+                leaves(item, next, out);
             }
         }
         _ => {}
@@ -292,19 +347,19 @@ pub fn protocol(event: &SseEvent) -> Option<Protocol> {
     anthropic.then_some(Protocol::Anthropic)
 }
 
-/// Re-serialise `event` with each pointer's text replaced (pointer `""`:
-/// the whole non-JSON `data`).
-pub fn rewrite(event: &SseEvent, edits: &[(String, String)]) -> Vec<u8> {
-    // Pointer "" is data scanned whole (not JSON, or JSON with a repeated
-    // key): it is rewritten as text.
-    if let Some((_, text)) = edits.iter().find(|(p, _)| p.is_empty()) {
+/// Re-serialise `event` with each field's text replaced. JSON data is
+/// written from its parsed view, so values a repeated key hid are gone.
+pub fn rewrite(event: &SseEvent, edits: &[(Place, String)]) -> Vec<u8> {
+    if let Some((_, text)) = edits.iter().find(|(p, _)| *p == Place::Raw) {
         return data_lines(event, text.split('\n').map(str::to_string).collect());
     }
     let Some(mut value) = json(event) else {
         return event.raw.clone();
     };
-    for (pointer, text) in edits {
-        if let Some(slot) = value.pointer_mut(pointer) {
+    for (place, text) in edits {
+        if let Place::Json(pointer) = place
+            && let Some(slot) = value.pointer_mut(pointer)
+        {
             *slot = Value::String(text.clone());
         }
     }
@@ -411,7 +466,8 @@ mod tests {
         let e = one(
             "event: x\nid: 7\ndata: {\"delta\":\"secret\",\"type\":\"response.output_text.delta\"}\n\n",
         );
-        let out = String::from_utf8(rewrite(&e, &[("/delta".into(), "[R]".into())])).unwrap();
+        let out = String::from_utf8(rewrite(&e, &[(Place::Json("/delta".into()), "[R]".into())]))
+            .unwrap();
         assert!(out.starts_with("event: x\nid: 7\ndata: "), "{out}");
         assert!(out.ends_with("\n\n"));
         let again = one(&out);
@@ -461,7 +517,11 @@ mod tests {
         assert_eq!(extract(&start)[0].text, "hello");
         let plain = one("data: not json at all\n\n");
         assert_eq!(extract(&plain)[0].text, "not json at all");
-        let out = String::from_utf8(rewrite(&plain, &[(String::new(), "x\ny".into())])).unwrap();
+        let out = String::from_utf8(rewrite(&plain, &[(Place::Raw, "x\ny".into())])).unwrap();
         assert_eq!(out, "data: x\ndata: y\n\n");
+        let root = one("data: \"hello\"\n\n");
+        assert_eq!(extract(&root)[0].place, Place::Json(String::new()));
+        let out = rewrite(&root, &[(Place::Json(String::new()), "[R]".into())]);
+        assert_eq!(out, b"data: \"[R]\"\n\n");
     }
 }
