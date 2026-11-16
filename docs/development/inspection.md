@@ -233,12 +233,14 @@ How the stream is forwarded depends on `on_hit`:
   rest of the match removed) before any of it is sent. A block drops
   what is held, sends one error event shaped for the stream's protocol
   (OpenAI or Anthropic, with code `inspection_blocked`) and ends the
-  stream. If the agent disconnects, the upstream is closed at once.
+  stream. If the agent disconnects, the upstream is closed at once, and
+text not yet scanned is still judged for the audit.
 
 An event longer than `max_scan_bytes`, one whose strings and their JSON
 locations together pass it (long keys repeated over many values), held
-text or events past it (counting each held field's copies, not just the
-raw event), or lane paths past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
+text or events past it (counting the copies of the fields a held event
+keeps: those later text can reach, and those to rewrite), or lane paths
+past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
 Under `fail_open`, held text or events past the bound are released early
 and an `inspection_hold_overflow` row is written; an oversized event and
 the rest of the stream pass through unscanned, audited

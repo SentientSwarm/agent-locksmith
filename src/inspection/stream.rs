@@ -374,6 +374,7 @@ impl StreamInspector {
                 return self.block(step);
             }
         }
+        self.settle_newest();
         self.close(&closes, step);
         if !step.ended {
             self.release(step);
@@ -459,6 +460,25 @@ impl StreamInspector {
             self.block(step);
         }
         verdict
+    }
+
+    /// Drop the newest held event's fields scanned alone and left uncut:
+    /// their cuts were all decided in their own event, so only the
+    /// fields later text can reach (and those to rewrite) are kept.
+    fn settle_newest(&mut self) {
+        let Some(h) = self.held.back_mut() else {
+            return;
+        };
+        let (fields, cuts): (Vec<_>, Vec<_>) = std::mem::take(&mut h.fields)
+            .into_iter()
+            .zip(std::mem::take(&mut h.cuts))
+            .filter(|(f, cuts)| f.lane < WHOLE || !cuts.is_empty())
+            .unzip();
+        h.fields = fields;
+        h.cuts = cuts;
+        let cost = h.event.raw.len() + h.fields.iter().map(Field::cost).sum::<usize>();
+        self.held_bytes = self.held_bytes - h.cost + cost;
+        h.cost = cost;
     }
 
     /// The newest held event has a cut no rewrite can make.
@@ -1537,24 +1557,24 @@ mod tests {
     }
 
     #[test]
-    fn held_field_copies_count_toward_the_cap() {
+    fn held_events_keep_only_fields_later_text_can_reach() {
         // One byte of text keeps each event held; its other strings are
-        // scanned alone but their locations are kept while it is held.
+        // scanned alone and not kept, so they cost nothing while held.
         let key = "k".repeat(200);
         let items = vec!["\"x\""; 100].join(",");
         let event = format!(
             "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"a\"}},\"{key}\":[{items}]}}]}}\n\n"
         );
-        let mut i = StreamInspector::new(&closed(1 << 16, Verdict::Redact));
-        let ended = (0..10).any(|_| i.push(event.as_bytes()).ended);
-        assert!(ended, "held field copies were not counted");
+        let mut i = StreamInspector::new(&closed(1 << 20, Verdict::Redact));
+        for _ in 0..10 {
+            assert!(!i.push(event.as_bytes()).ended);
+        }
+        assert_eq!(i.held.len(), 10);
         assert!(
-            i.report()
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("held past")
+            i.held.iter().all(|h| h.fields.len() == 1),
+            "uncut whole fields kept"
         );
+        assert!(i.held_bytes <= 10 * (event.len() + 64), "{}", i.held_bytes);
     }
 
     #[test]
@@ -1792,6 +1812,63 @@ mod tests {
         events.push(DONE.to_string());
         let (_, i) = run(&policy(Verdict::Flag), &events);
         assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+    }
+
+    #[test]
+    fn a_key_inside_a_hidden_value_is_scanned() {
+        let k = key();
+        let event = format!("data: {{\"x\":{{\"{k}\":1}},\"x\":null}}\n\n");
+        for verdict in [Verdict::Redact, Verdict::Block] {
+            let (out, i) = run(&policy(verdict), std::slice::from_ref(&event));
+            assert!(!out.contains(&k[..12]), "{verdict:?}: {out}");
+            assert_eq!(i.report().verdict, verdict);
+        }
+    }
+
+    #[test]
+    fn a_long_realistic_chat_stream_passes_under_fail_closed() {
+        use serde_json::json;
+        let chunk = |c: serde_json::Value, finish: serde_json::Value| {
+            format!(
+                "data: {}\n\n",
+                json!({"id": "chatcmpl-AbCdEf0123456789", "object":
+                "chat.completion.chunk", "created": 1_700_000_000, "model": "gpt-x-2026-01-01",
+                "system_fingerprint": "fp_0123456789", "choices": [{"index": 0, "delta": c,
+                "logprobs": null, "finish_reason": finish}]})
+            )
+        };
+        let mut events = vec![chunk(
+            json!({"role": "assistant", "content": ""}),
+            json!(null),
+        )];
+        for n in 0..3000 {
+            events.push(chunk(
+                json!({"content": format!("w{} ", n % 10)}),
+                json!(null),
+            ));
+        }
+        events.push(chunk(json!({}), json!("stop")));
+        events.push(DONE.to_string());
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert_eq!(i.report().error, None);
+        assert!(!i.hold_overflowed());
+        assert_eq!(out, events.concat());
+    }
+
+    #[test]
+    fn a_long_line_in_small_chunks_parses_in_linear_time() {
+        let mut p = sse::SseParser::default();
+        let line = format!("data: {}", "x".repeat(1 << 20));
+        let started = std::time::Instant::now();
+        for chunk in line.as_bytes().chunks(64) {
+            assert!(p.push(chunk).is_empty());
+        }
+        assert_eq!(p.push(b"\n\n").len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

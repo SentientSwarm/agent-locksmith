@@ -14,6 +14,7 @@
 
 use super::lanes::{self, Close, Lane};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// One event: its raw bytes (terminator included) and parsed fields.
 #[derive(Debug, Clone)]
@@ -71,6 +72,9 @@ pub struct SseParser {
     overflowed: bool,
     /// No event has been emitted yet, so a leading BOM is the stream's.
     first: bool,
+    /// Bytes already searched for a line end, so a long line arriving in
+    /// small chunks is searched once.
+    searched: usize,
 }
 
 impl Default for SseParser {
@@ -87,6 +91,7 @@ impl SseParser {
             cap,
             overflowed: false,
             first: true,
+            searched: 0,
         }
     }
 
@@ -103,6 +108,7 @@ impl SseParser {
             }
             let raw: Vec<u8> = self.buf.drain(..end).collect();
             self.line_start = 0;
+            self.searched = 0;
             out.push(self.emit(raw));
         }
         if self.buf.len() > self.cap {
@@ -124,6 +130,7 @@ impl SseParser {
     /// overflow the unparsed rest. Its `raw` is the bytes as received.
     pub fn finish(&mut self) -> Option<SseEvent> {
         self.line_start = 0;
+        self.searched = 0;
         if self.buf.is_empty() {
             return None;
         }
@@ -135,14 +142,22 @@ impl SseParser {
     /// line not yet seen complete.
     fn event_end(&mut self) -> Option<usize> {
         loop {
-            let rel = self.buf[self.line_start..]
+            let from = self.line_start.max(self.searched);
+            let Some(rel) = self.buf[from..]
                 .iter()
-                .position(|&b| b == b'\r' || b == b'\n')?;
-            let at = self.line_start + rel;
+                .position(|&b| b == b'\r' || b == b'\n')
+            else {
+                self.searched = self.buf.len();
+                return None;
+            };
+            let at = from + rel;
             let term = match self.buf[at] {
                 b'\n' => 1,
                 // A CR at the end of the buffer may be half of a CRLF.
-                _ if at + 1 == self.buf.len() => return None,
+                _ if at + 1 == self.buf.len() => {
+                    self.searched = at;
+                    return None;
+                }
                 _ if self.buf[at + 1] == b'\n' => 2,
                 _ => 1,
             };
@@ -472,27 +487,45 @@ pub fn rewrite(event: &SseEvent, edits: &[(Place, String)]) -> Vec<u8> {
         })
         .collect();
     keys.sort_by_key(|(parent, ..)| std::cmp::Reverse(parent.matches('/').count()));
+    let mut next = HashMap::new();
     for (parent, key, renamed) in keys {
-        rename_key(&mut value, parent, key, renamed);
+        rename_key(&mut value, parent, key, renamed, &mut next);
     }
     drop_logprobs(&mut value);
     data_lines(event, vec![value.to_string()])
 }
 
 /// Rename `key` in the object at `parent`; a name already taken gets a
-/// `#<n>` suffix, so no value is overwritten.
-fn rename_key(value: &mut Value, parent: &str, key: &str, renamed: &str) {
+/// `#<n>` suffix, so no value is overwritten. `next` remembers the next
+/// suffix to try per object and name, so many renames stay linear.
+fn rename_key(
+    value: &mut Value,
+    parent: &str,
+    key: &str,
+    renamed: &str,
+    next: &mut HashMap<(String, String), usize>,
+) {
     let Some(map) = value.pointer_mut(parent).and_then(Value::as_object_mut) else {
         return;
     };
     let Some(item) = map.remove(key) else {
         return;
     };
+    let n = next
+        .entry((parent.to_string(), renamed.to_string()))
+        .or_insert(1);
     let mut name = renamed.to_string();
-    let mut n = 2;
-    while map.contains_key(&name) {
-        name = format!("{renamed}#{n}");
-        n += 1;
+    if *n > 1 || map.contains_key(&name) {
+        *n = (*n).max(2);
+        loop {
+            name = format!("{renamed}#{n}");
+            *n += 1;
+            if !map.contains_key(&name) {
+                break;
+            }
+        }
+    } else {
+        *n = 2;
     }
     map.insert(name, item);
 }
@@ -701,6 +734,35 @@ mod tests {
         assert_eq!(extract(&root)[0].place, Place::Json(String::new()));
         let out = rewrite(&root, &[(Place::Json(String::new()), "[R]".into())]);
         assert_eq!(out, b"data: \"[R]\"\n\n");
+        let many: Value = serde_json::json!({"o": (0..5000).map(|n| (format!("k{n}"), Value::from(n)))
+            .collect::<serde_json::Map<_, _>>()});
+        let many = one(&format!("data: {many}\n\n"));
+        let edits: Vec<_> = (0..5000)
+            .map(|n| {
+                (
+                    Place::Key {
+                        parent: "/o".into(),
+                        key: format!("k{n}"),
+                    },
+                    "[R]".to_string(),
+                )
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let out = rewrite(&many, &edits);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        let v: Value = serde_json::from_str(
+            one(std::str::from_utf8(&out).unwrap())
+                .data
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["o"].as_object().unwrap().len(), 5000);
         let keyed = one("data: {\"a\":{\"k1\":1,\"k2\":{\"k1\":\"v\"}}}\n\n");
         let edits = [
             (

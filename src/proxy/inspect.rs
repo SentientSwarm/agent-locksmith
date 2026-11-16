@@ -231,13 +231,14 @@ pub(super) async fn stream(
 }
 
 /// Pump the upstream through the inspector to the agent, then audit.
+/// Returns the report it audited.
 async fn drive(
     mut inspector: StreamInspector,
     mut upstream: UpstreamStream,
     tx: tokio::sync::mpsc::Sender<Result<Bytes, reqwest::Error>>,
     audit: Option<AuditRepository>,
     base: AuditEvent,
-) {
+) -> Report {
     loop {
         // Held events may send nothing for a while, so a disconnect is
         // noticed here rather than only when a send fails.
@@ -266,6 +267,9 @@ async fn drive(
             break;
         }
     }
+    // A disconnect leaves text unscanned: judge it for the audit (what
+    // it would send has nowhere to go).
+    let _ = inspector.finish();
     record_event(&audit, base.clone(), inspector.report(), None).await;
     if inspector.hold_overflowed() {
         let mut event = base;
@@ -275,6 +279,7 @@ async fn drive(
         event.details = Some(json!({ "direction": "response" }));
         audit_record(&audit, event).await;
     }
+    inspector.report().clone()
 }
 
 /// A streamed response on an inspected route is not scanned: audited,
@@ -498,6 +503,47 @@ mod tests {
             .await
             .expect("drive kept the upstream open after the agent left")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_disconnect_still_audits_text_not_yet_scanned() {
+        let policy = DirectionPolicy {
+            scanners: vec![std::sync::Arc::new(crate::inspection::dlp::Dlp)],
+            on_hit: Verdict::Flag,
+            on_error: inspection::OnError::FailOpen,
+            max_scan_bytes: 1 << 20,
+        };
+        // Assembled at run time: no credential-format literal in the repo.
+        let key = format!(
+            "ghp_{}",
+            &"Qm7Zx2Lk9Vb4Nc8Rt1Hy6Jd3Fg5Sa0Wp".repeat(2)[..36]
+        );
+        let delta = |t: &str| {
+            Ok::<Bytes, reqwest::Error>(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({"choices": [{"index": 0, "delta": {"content": t}}]})
+            )))
+        };
+        // The key arrives too small to trigger a scan.
+        let first = futures_util::stream::iter(vec![delta(&"x ".repeat(500)), delta(&key)]);
+        let upstream: UpstreamStream = Box::pin(first.chain(futures_util::stream::pending()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let task = tokio::spawn(drive(
+            StreamInspector::new(&policy),
+            upstream,
+            tx,
+            None,
+            AuditEvent::default(),
+        ));
+        for _ in 0..2 {
+            rx.recv().await.unwrap().unwrap();
+        }
+        drop(rx);
+        let report = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("drive kept running after the agent left")
+            .unwrap();
+        assert_eq!(report.hits.len(), 1, "{report:?}");
     }
 
     #[test]

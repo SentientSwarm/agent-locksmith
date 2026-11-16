@@ -160,7 +160,9 @@ impl<'de> Visitor<'de> for &mut Hidden {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Vec<String>, A::Error> {
         let mut by_key: HashMap<String, Vec<Vec<String>>> = HashMap::new();
         while let Some(key) = map.next_key::<String>()? {
-            let inner = map.next_value_seed(&mut *self)?;
+            let mut inner = map.next_value_seed(&mut *self)?;
+            // A key is text too: one inside a hidden value is hidden.
+            inner.push(key.clone());
             by_key.entry(key).or_default().push(inner);
         }
         let mut all = Vec::new();
@@ -183,21 +185,26 @@ mod tests {
 
     #[test]
     fn hidden_strings_are_found_at_any_depth() {
-        let hidden = |j: &str| hidden_strings(j);
-        let some = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        assert_eq!(hidden(r#"{"a":"x","b":{"c":["y",{"d":"z"}]}}"#), None);
-        assert_eq!(hidden(r#"{"a":"one","a":"two"}"#), some(&["one"]));
-        assert_eq!(hidden(r#"{"x":[{"d":"s","d":"t"}]}"#), some(&["s"]));
-        assert_eq!(hidden(r#"{"a":{"b":"in"},"a":"out"}"#), some(&["in"]));
+        let has = |j: &str, want: &[&str]| {
+            let got = hidden_strings(j).unwrap_or_else(|| panic!("no repeat in {j}"));
+            for w in want {
+                assert!(got.contains(&w.to_string()), "{w} not in {got:?} for {j}");
+            }
+        };
         assert_eq!(
-            hidden(r#"{"a":"\u0067h","a":"x"}"#),
-            some(&["gh"]),
-            "decoded"
+            hidden_strings(r#"{"a":"x","b":{"c":["y",{"d":"z"}]}}"#),
+            None
         );
-        assert_eq!(
-            hidden(r#"{"n":1,"n":2}"#),
-            some(&[]),
-            "a repeat with no strings"
+        has(r#"{"a":"one","a":"two"}"#, &["one"]);
+        has(r#"{"x":[{"d":"s","d":"t"}]}"#, &["s"]);
+        has(r#"{"a":{"b":"in"},"a":"out"}"#, &["in", "b"]);
+        has(r#"{"a":"\u0067h","a":"x"}"#, &["gh"]);
+        has(r#"{"n":1,"n":2}"#, &[]);
+        has(r#"{"x":{"sec":1},"x":null}"#, &["sec"]);
+        let two = hidden_strings(r#"{"a":"one","a":"two"}"#).unwrap();
+        assert!(
+            !two.contains(&"two".to_string()),
+            "the kept value is not hidden"
         );
     }
 
