@@ -21,6 +21,9 @@ jobs:
       - name: Verify vendored SDK before native compilation
         run: |
           python3 crates/mcp-transport/vendor/check.py
+      - name: Edge packaging tests
+        run: |
+          python3 -m unittest discover -s dist/edge/tests
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.13.6"

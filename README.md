@@ -365,6 +365,10 @@ agent ─┤  bearer  ├─► locksmith :9200 ──► pipelock :8888 ──�
                             └──► lf-scan :9100 (kind=infra middleware)
 ```
 
+To run Locksmith as native systemd services in Incus system containers
+instead, rendered from a site file you keep privately, see
+[edge packaging](docs/user/operator/edge-packaging.md) (`dist/edge/`).
+
 For the canonical deployment story:
 
 - **Stack bundle**: [layer8-proxy][layer8] — Docker Compose composition.

@@ -57,6 +57,20 @@
 
 ### Added
 
+- Edge packaging in `dist/edge/` (AGENT-258). It runs Locksmith, and
+  optionally Pipelock and a classifier sidecar, as hardened systemd
+  services in Incus system containers. The tools, all standard-library
+  Python, read a site file you keep in your own private repository:
+  - `incus.py` prints reviewable commands for stopped containers, each
+    with its own state volume.
+  - `render.py` writes inactive units, an ingress nft table and a root
+    guard that refuses to start a service without its custody receipt.
+  - `install_model.py` downloads a pinned classifier model into an
+    offline Hugging Face cache. Gated models such as PromptGuard 2 are
+    fetched under your own HF token, which never reaches argv, disk or
+    the CDN.
+  See [edge packaging](docs/user/operator/edge-packaging.md).
+
 - Per-agent, per-route rate limits (AGENT-266). `locksmith rate-limit
   set <route> --rpm N [--concurrent N] [--agent A]` (`PUT
   /admin/operator/rate-limits/{route}`) sets a route default that applies

@@ -13,11 +13,11 @@ private repository, never here.
 | File | Does |
 |---|---|
 | `site.example.toml` | Example site file with placeholder names and addresses. |
-| `sitefile.py` | Loads and validates a site file; unknown keys, duplicate names, unsafe paths, bad CIDRs and control characters are errors. |
+| `sitefile.py`, `sitecheck.py` | Loads and validates a site file; unknown keys, duplicate names, unsafe paths, bad CIDRs and control characters are errors. |
 | `incus.py` | Prints a bash script that creates one stopped container and one state volume per instance. Runs nothing. |
-| `render.py` | Writes one instance's units, sysusers, ingress nft table, `components.json` and root guard into a new directory. Activates nothing. |
+| `render.py`, `units.py` | Writes one instance's units, sysusers, ingress nft table, `components.json` and root guard into a new directory. Activates nothing. |
 | `state_check.py` | The root guard each unit runs before start (installed as `/usr/local/sbin/locksmith-edge-state-check`). |
-| `install_model.py`, `models.toml` | Installs a pinned classifier model into an offline Hugging Face cache, under your own HF token for gated models. |
+| `install_model.py`, `catalog.py`, `models.toml` | Installs a pinned classifier model into an offline Hugging Face cache, under your own HF token for gated models. |
 
 None of these tools starts a container or a service, creates a custody
 receipt or handles a Locksmith credential.

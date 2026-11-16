@@ -227,6 +227,8 @@ The settings are independent.
 
 - [`getting-started.md`](getting-started.md) — first-contact.
 - [`cli-reference.md`](cli-reference.md) — every subcommand.
+- [`operator/edge-packaging.md`](operator/edge-packaging.md) — systemd
+  units in Incus containers, rendered from a private site file.
 - [`concepts/`](concepts/) — kind taxonomy, agent identity + ACL,
   trust boundary, error envelope.
 - [`docs/v2/SPEC.md`](../v2/SPEC.md) — engineering spec with task

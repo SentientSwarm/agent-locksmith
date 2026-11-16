@@ -30,6 +30,7 @@ For the production Docker Compose bundle deployment story, see
 | [operator/integration-definitions.md](operator/integration-definitions.md) | Immutable definitions, disabled exact pins and deliberate local customer activation. |
 | [operator/native-mcp.md](operator/native-mcp.md) | Native lifecycle, zero tool authority, current identity and upgrade requirements. |
 | [operator/connector-onboarding.md](operator/connector-onboarding.md) | Operator recipe: validate a reference/customer HTTP service, grant a named agent, select its account and verify the receiving effect. |
+| [operator/edge-packaging.md](operator/edge-packaging.md) | Run Locksmith (and optionally Pipelock and a classifier sidecar) as hardened systemd units in Incus containers, rendered from a private site file. |
 | [architecture.md](architecture.md) | User-level system view: daemon composition, request flow, what state lives where. |
 
 ## Tier 2 — concepts (`concepts/`)
