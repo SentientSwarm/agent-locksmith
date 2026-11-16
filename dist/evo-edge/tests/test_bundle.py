@@ -27,6 +27,9 @@ class BundleTest(unittest.TestCase):
                     self.assertIn(f"edge-state-check {instance} {component}", unit)
                     self.assertIn("NoNewPrivileges=yes", unit)
                     self.assertIn("ProtectSystem=strict", unit)
+                    if render.SERVICES[instance][component][2]:
+                        self.assertIn(f"EnvironmentFile=/srv/edge-state/environment/{component}.env", unit)
+                        self.assertNotIn(f"EnvironmentFile=/srv/edge-state/{component}/", unit)
 
     def test_relays_support_early_boot_and_firewall_is_not_after_basic(self):
         with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:

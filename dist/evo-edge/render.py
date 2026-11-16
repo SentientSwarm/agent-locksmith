@@ -28,7 +28,9 @@ def service(instance, component, user, command, environment):
     extra = ""
     assignments = [f"HOME={ROOT}/{component}/home"]
     if environment:
-        extra += f"EnvironmentFile={ROOT}/{component}/service.env\n"
+        # Outside service-writable component trees: a unit environment also
+        # reaches its privileged storage preflight and must remain root-owned.
+        extra += f"EnvironmentFile={ROOT}/environment/{component}.env\n"
     if component == "codex":
         assignments += ["CODEX_HOME=/srv/edge-state/codex/home/.codex-terminal-pool",
                         "CODEX_MULTI_AUTH_DIR=/srv/edge-state/codex/home/.codex-terminal-pool/multi-auth"]

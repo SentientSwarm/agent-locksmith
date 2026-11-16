@@ -220,7 +220,8 @@ Open Design or its credentials into the broker by accident.
 
 Inside each container, after mounting its correct empty custody volume, root
 creates `/srv/edge-state/.edge-state-id` containing the exact instance name,
-and `custody/`, both root-owned and not group/world-writable. Root directory
+and `custody/` plus `environment/`, all root-owned and not group/world-writable.
+Root directory
 0755, marker 0644 and custody directory 0700 are sufficient. Run
 `systemd-sysusers /etc/sysusers.d/edge.conf`; create each component's directory
 and home owned by its unit user (0700). Do not make receipt files yet.
@@ -228,8 +229,12 @@ No service user may write the custody root, marker or receipt directory.
 The guard must fail before a receipt exists. Test missing/wrong ZFS mounts.
 
 Service state is under `/srv/edge-state/<component>`. Each environment-using
-unit requires `service.env` there (root-owned, 0600, created only by the private
-custody transfer, never from a Git template). Preserve only the required
+unit requires `/srv/edge-state/environment/<component>.env` (root-owned 0600,
+with the environment directory root-owned 0700, created only by the private
+custody transfer, never from a Git template). Never place these files in a
+service-writable component directory: a service user could replace even a
+root-owned file through its writable parent. Do not chown environment/ to a
+service account. Preserve only the required
 settings; omit macOS PATHs and runtime helper PIDs. Final `/usr/bin/env` assignments
 in ExecStart enforce HOME, CODEX_HOME/MULTI_AUTH_DIR, TEAMROUTER_CONFIG, HF_HOME
 and the hub data path even if a migrated EnvironmentFile contains old values.
@@ -377,7 +382,7 @@ tokens. Verify no unrelated process can read that directory.
 On destination, relocate the moved `agent-pools/codex-router.json` to
 `/srv/edge-state/codex/router.json` (a rename, not a second copy), retain host
 127.0.0.1/port 43210/client key, and rewrite obsolete absolute paths privately.
-Create the required private service.env from the source job's non-secret tuning
+Create the root-protected environment/codex.env from the source job's non-secret tuning
 and custody settings; do not carry macOS PATH. The unit fixes CODEX_HOME to
 `/srv/edge-state/codex/home/.codex-terminal-pool` and MULTI_AUTH_DIR below it.
 Disable app binding/install and CLI auth sync as on studio; avoid creating
@@ -430,8 +435,10 @@ keys. Retain trust identity; never generate a replacement CA silently.
 Destination selected config is `/srv/edge-state/teamclaude/teamclaude.json`,
 fixed by TEAMROUTER_CONFIG. It must retain all three accounts, account IDs,
 selection/routing settings and proxy key; no re-import that refreshes accounts
-while source exists. Put siblings beside it, create private service.env, chown
-component to teamclaude. Verify source credential files absent and gate still
+while source exists. Put siblings beside it, create the private environment file, chown
+component to teamclaude, leaving environment/ root-owned. The separate environment
+file is environment/teamclaude.env, not part of the service-writable component.
+Verify source credential files absent and gate still
 PASS. Root creates `custody/teamclaude.ready` with
 `edge-brokers:teamclaude`, then unmask/start edge-teamclaude.service and relay
 socket. Validate account count and auth rejection, streaming, quota/refresh
