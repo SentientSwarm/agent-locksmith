@@ -17,14 +17,22 @@ struct Cli {
     config: PathBuf,
 }
 
-#[tokio::main]
-async fn main() {
-    // Before anything reads a secret: same-uid processes (the classifier
-    // sidecar) must not read this process's environment or memory.
+fn main() {
+    // Before the runtime starts and before anything reads a secret:
+    // same-uid processes (the classifier sidecar) must not read this
+    // process's environment or memory.
     if let Err(e) = agent_locksmith::process_hardening::deny_same_uid_inspection() {
         eprintln!("Failed to mark the process non-dumpable: {e}");
         std::process::exit(1);
     }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build the tokio runtime")
+        .block_on(run());
+}
+
+async fn run() {
     let cli = Cli::parse();
     if cli.build_info {
         println!("{}", agent_locksmith::build_info::document("locksmithd"));

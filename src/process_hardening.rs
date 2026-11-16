@@ -20,3 +20,19 @@ pub fn deny_same_uid_inspection() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// Environment variables only the daemon itself may hold.
+pub const DAEMON_SECRET_ENV: &[&str] = &[
+    crate::oauth::sealing::SEALING_KEY_ENV,
+    crate::secret::credential_sealing::CREDENTIAL_SEALING_KEY_ENV,
+];
+
+/// Strip [`DAEMON_SECRET_ENV`] from a child's environment. A child is
+/// dumpable again after exec, so a same-uid process could otherwise read
+/// the keys from it. Every command the daemon spawns goes through this.
+pub fn without_daemon_secrets(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    for key in DAEMON_SECRET_ENV {
+        cmd.env_remove(key);
+    }
+    cmd
+}

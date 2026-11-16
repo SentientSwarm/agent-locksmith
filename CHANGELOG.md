@@ -30,8 +30,9 @@
   `locksmithd`'s environment or memory (AGENT-285). A classifier sidecar
   shares that user so Locksmith can check the socket's peer uid, which
   also let it read `/proc/<pid>/environ`, where the sealing keys are.
-  `locksmithd` now marks itself non-dumpable at startup on Linux, which
-  also disables its core dumps.
+  `locksmithd` now marks itself non-dumpable on Linux before its runtime
+  starts, which also disables its core dumps, and the `op read` child it
+  runs for `op_*` credentials no longer inherits the sealing keys.
 - The edge model installer (`dist/edge/install_model.py`) now refuses a
   cache under a directory that is not root-owned or is group- or
   world-writable, so a service-owned parent cannot be used to swap the

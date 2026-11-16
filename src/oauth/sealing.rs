@@ -19,7 +19,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use secrecy::{ExposeSecret, SecretString};
 
-const SEALING_KEY_ENV: &str = "LOCKSMITH_OAUTH_SEALING_KEY";
+pub const SEALING_KEY_ENV: &str = "LOCKSMITH_OAUTH_SEALING_KEY";
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 

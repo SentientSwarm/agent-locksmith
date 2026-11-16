@@ -40,11 +40,17 @@ pub trait OpCommand: Send + Sync {
 /// Production [`OpCommand`] backed by the 1Password CLI: `op read <ref>`.
 pub struct OpCliCommand;
 
+/// `op read <ref>` without the daemon's own secrets in its environment.
+fn op_read_command(reference: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("op");
+    cmd.arg("read").arg(reference);
+    crate::process_hardening::without_daemon_secrets(&mut cmd);
+    cmd
+}
+
 impl OpCommand for OpCliCommand {
     fn read(&self, reference: &str) -> Result<SecretString, String> {
-        let output = std::process::Command::new("op")
-            .arg("read")
-            .arg(reference)
+        let output = op_read_command(reference)
             .output()
             .map_err(|e| format!("spawn op: {e}"))?;
         if !output.status.success() {
@@ -287,6 +293,25 @@ mod tests {
                 None => Err("item not found".to_string()),
             }
         }
+    }
+
+    #[test]
+    fn op_child_does_not_inherit_the_sealing_keys() {
+        // AGENT-285: a child is dumpable again after exec, so a same-uid
+        // sidecar could read the keys from its environment.
+        let cmd = op_read_command("op://v/item/field");
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for key in [
+            "LOCKSMITH_OAUTH_SEALING_KEY",
+            "LOCKSMITH_CREDENTIAL_SEALING_KEY",
+        ] {
+            assert!(removed.iter().any(|k| k == key), "{key} reaches op");
+        }
+        assert_eq!(cmd.get_program(), "op");
     }
 
     #[test]
