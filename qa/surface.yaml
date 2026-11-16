@@ -149,6 +149,15 @@ routes:
     route: /revoked-agents/prune
   refusals:
   - invalid_credential
+- id: admin.GET./admin/operator/egress/policy
+  listener: admin
+  method: GET
+  path: /admin/operator/egress/policy
+  source:
+    file: src/admin/uds.rs
+    route: /egress/policy
+  refusals:
+  - invalid_credential
 - id: admin.GET./admin/operator/audit
   listener: admin
   method: GET
@@ -610,6 +619,7 @@ routes:
   - timeout
   - oauth_reconnect_required
   - backend_unavailable
+  - egress_proxy_unconfigured
   audit_causes:
   - account_binding_missing
   - selected_credential_unavailable
@@ -1107,6 +1117,8 @@ cli:
   command: bootstrap revoke
 - id: cli.bootstrap-operator
   command: bootstrap-operator
+- id: cli.egress.policy
+  command: egress policy
 - id: cli.export.agents
   command: export agents
 - id: cli.infra.delete
@@ -1240,6 +1252,8 @@ behaviours:
   summary: Audit rows mirrored to a rotating JSONL file
 - id: beh.oplog.store
   summary: Operational log events stored and queryable
+- id: beh.egress.enforcement
+  summary: 'egress.mode decides proxied routes: pipelock uses egress_proxy, external connects directly, neither fails closed with 503'
 - id: beh.egress.proxied
   summary: 'egress: proxied routes upstream calls through the CONNECT proxy'
 - id: beh.tls.upstream-ca
