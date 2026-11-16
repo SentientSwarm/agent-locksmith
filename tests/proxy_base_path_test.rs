@@ -52,6 +52,12 @@ async fn dot_segments_cannot_leave_the_base_path() {
         "%2e%2e",
         // Same prefix, different segment: /base/api -> /base/apix.
         "%2e%2e/apix",
+        // Escapes the upstream resolves after decoding once more, or after
+        // dropping `;` parameters (nginx, Tomcat).
+        "..%252F..%252Fsecret",
+        "%252e%252e%252Fsecret",
+        "..;/secret",
+        "..%3Bx/secret",
     ] {
         let (status, body) = get(&b, &format!("/api/out/{path}")).await;
         assert_eq!(status, 400, "{path}");
@@ -63,14 +69,23 @@ async fn dot_segments_cannot_leave_the_base_path() {
             .fetch_one(&b.pool)
             .await
             .unwrap();
-    assert_eq!(refused, 9);
+    assert_eq!(refused, 13);
 }
 
 #[tokio::test]
 async fn paths_inside_the_base_path_still_forward() {
     let up = upstream().await;
     let b = build(config(&format!("{}/base/api", up.uri()), "  routes: []\n")).await;
-    for path in ["x/y", "x/%2e%2e/y", "a.b/..c", "%2e%2efile"] {
+    for path in [
+        "x/y",
+        "x/%2e%2e/y",
+        "a.b/..c",
+        "%2e%2efile",
+        // GitLab-style encoded slashes stay inside the base.
+        "projects/group%252Fproj",
+        "x/..%252Fy",
+        "v;a=1/y",
+    ] {
         let (status, _) = get(&b, &format!("/api/out/{path}")).await;
         assert_eq!(status, 200, "{path}");
     }

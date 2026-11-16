@@ -8,7 +8,9 @@
   (AGENT-286). The path is decoded before the upstream URL is built, and
   the URL parser resolves dot segments and backslashes, so
   `/api/<route>/%2e%2e/other` reached `other` on the same host with the
-  route's credential. Such a request now gets 400
+  route's credential. The path is also judged as a normalising upstream
+  reads it (decoded again, `;` parameters dropped, `\` as `/`), so
+  `..%252F` and `..;/` are refused too. Such a request gets 400
   `upstream_path_escape` and an audit row, and nothing is sent.
 - Request inspection judges the path and query the way the upstream
   will read them (AGENT-270). axum decodes the path once before Locksmith

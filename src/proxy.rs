@@ -1364,24 +1364,53 @@ async fn record_tool_not_found(audit: &Option<AuditRepository>, ctx: &RequestCtx
         .into_response()
 }
 
-/// Emit a `proxy/request_body_read_error` audit row + 400 wire response
-/// when reading the agent's request body fails (typically the
-/// per-tool body-size cap was exceeded).
 /// Whether `url`, as reqwest will parse it, stays on `upstream`'s origin
-/// and inside its base path at a segment boundary (AGENT-286). A URL that
-/// does not parse is left for reqwest to refuse.
+/// and inside its base path at a segment boundary (AGENT-286). The path
+/// is also judged as an upstream may read it: decoded again (up to the
+/// inspection bound), split on `/` and `\\`, with `;` parameters dropped
+/// and dot segments resolved, so `..%2F` and `..;/` cannot climb out.
+/// A base that does not parse refuses; a built URL that does not parse is
+/// left for reqwest, which parses the same string and sends nothing.
 fn stays_within_base(upstream: &str, url: &str) -> bool {
-    let (Ok(base), Ok(out)) = (reqwest::Url::parse(upstream), reqwest::Url::parse(url)) else {
+    let Ok(base) = reqwest::Url::parse(upstream) else {
+        return false;
+    };
+    let Ok(out) = reqwest::Url::parse(url) else {
         return true;
     };
-    let prefix = base.path().trim_end_matches('/');
-    out.origin() == base.origin()
-        && (prefix.is_empty()
-            || out.path() == prefix
-            || out
-                .path()
-                .strip_prefix(prefix)
-                .is_some_and(|rest| rest.starts_with('/')))
+    if out.origin() != base.origin() {
+        return false;
+    }
+    // Each reading of the path must sit under some reading of the base, so
+    // a base with its own escapes (`/v1/%7Euser`) still matches.
+    let readings = |path: &str| {
+        std::iter::once(path.to_string())
+            .chain(crate::inspection::path_views(path))
+            .collect::<Vec<_>>()
+    };
+    let bases = readings(base.path());
+    let prefixes: Vec<Vec<&str>> = bases.iter().filter_map(|b| upstream_segments(b)).collect();
+    readings(out.path()).iter().all(|view| {
+        upstream_segments(view)
+            .is_some_and(|segs| prefixes.iter().any(|prefix| segs.starts_with(prefix)))
+    })
+}
+
+/// Path segments as a normalising upstream resolves them, or `None` when
+/// `..` climbs above the root.
+fn upstream_segments(path: &str) -> Option<Vec<&str>> {
+    let mut out: Vec<&str> = Vec::new();
+    for raw in path.split(['/', '\\']) {
+        let segment = raw.split(';').next().unwrap_or("");
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop()?;
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
 }
 
 /// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
@@ -1409,6 +1438,9 @@ async fn record_upstream_path_escape(
         .into_response()
 }
 
+/// Emit a `proxy/request_body_read_error` audit row + 400 wire response
+/// when reading the agent's request body fails (typically the
+/// per-tool body-size cap was exceeded).
 async fn record_body_read_error(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
@@ -1892,6 +1924,32 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod base_path_tests {
+    use super::stays_within_base as ok;
+
+    #[test]
+    fn base_path_edges() {
+        // Trailing slash on the base, and an empty base path.
+        assert!(ok("https://h/base/api/", "https://h/base/api/x"));
+        assert!(!ok("https://h/base/api/", "https://h/base/x"));
+        assert!(ok("https://h", "https://h/anything/at/all"));
+        assert!(!ok("https://h", "https://h/a/..%2F..%2Fb"));
+        // Origin must not change.
+        assert!(!ok("https://h/base", "https://other/base/x"));
+        assert!(!ok("https://h/base", "http://h/base/x"));
+        // A base that does not parse refuses; a bad built URL is reqwest's.
+        assert!(!ok("http:", "http://evil.example/x"));
+        assert!(ok("https://h/base", "not a url"));
+        // A base with its own escapes still matches its decoded readings.
+        assert!(ok("https://h/v1/%7Euser", "https://h/v1/%7Euser/x"));
+        assert!(!ok(
+            "https://h/v1/%7Euser",
+            "https://h/v1/%7Euser/..%2F..%2Fx"
+        ));
+    }
 }
 
 #[cfg(test)]
