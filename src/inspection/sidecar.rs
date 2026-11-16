@@ -51,7 +51,7 @@ impl Sidecar {
 
     fn call(&self, text: &str, direction: Direction) -> Result<Vec<u8>, String> {
         let deadline = Instant::now() + self.timeout;
-        let mut stream = UnixStream::connect(&self.socket).map_err(|e| format!("connect: {e}"))?;
+        let mut stream = self.connect(deadline)?;
         check_owner(
             peer_uid(&stream).map_err(|e| format!("peer: {e}"))?,
             own_uid(),
@@ -93,6 +93,29 @@ impl Sidecar {
     }
 }
 
+impl Sidecar {
+    /// Connect within `deadline`. A Unix-socket `connect` waits for room in
+    /// the sidecar's backlog for up to the socket's send timeout, so setting
+    /// it first bounds a sidecar that stopped accepting (Codex P1). Where
+    /// the platform refuses a full backlog outright, that is an error too.
+    fn connect(&self, deadline: Instant) -> Result<UnixStream, String> {
+        use socket2::{Domain, SockAddr, Socket, Type};
+        let addr = SockAddr::unix(&self.socket).map_err(|e| format!("connect: {e}"))?;
+        let socket =
+            Socket::new(Domain::UNIX, Type::STREAM, None).map_err(|e| format!("connect: {e}"))?;
+        socket
+            .set_write_timeout(Some(remaining(deadline)?))
+            .map_err(|e| format!("connect: {e}"))?;
+        socket.connect(&addr).map_err(|e| match e.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                "connect: timed out".to_string()
+            }
+            _ => format!("connect: {e}"),
+        })?;
+        Ok(socket.into())
+    }
+}
+
 impl Scanner for Sidecar {
     fn id(&self) -> &str {
         &self.id
@@ -111,8 +134,7 @@ impl Scanner for Sidecar {
         let fail = |why: String| ScanError(format!("{}: {why}", self.id));
         let raw = self.call(text, direction).map_err(fail)?;
         let body = http_body(&raw).map_err(fail)?;
-        let answer: Answer =
-            serde_json::from_slice(body).map_err(|e| fail(format!("answer: {e}")))?;
+        let answer: Answer = serde_json::from_slice(body).map_err(|e| fail(malformed(&e)))?;
         answer
             .hits
             .into_iter()
@@ -140,6 +162,17 @@ fn remaining(deadline: Instant) -> Result<Duration, String> {
     Ok(left)
 }
 
+/// A malformed answer, described without quoting it: serde's message can
+/// carry the answer's own text, and the error is written to the audit row.
+fn malformed(e: &serde_json::Error) -> String {
+    format!(
+        "answer: malformed ({:?} at line {} column {})",
+        e.classify(),
+        e.line(),
+        e.column()
+    )
+}
+
 /// The body of a 200 answer read to end of stream.
 fn http_body(raw: &[u8]) -> Result<&[u8], String> {
     let split = raw
@@ -149,7 +182,14 @@ fn http_body(raw: &[u8]) -> Result<&[u8], String> {
     let head = std::str::from_utf8(&raw[..split]).map_err(|_| "header is not text")?;
     let status = head.split_whitespace().nth(1).unwrap_or_default();
     if status != "200" {
-        return Err(format!("status {status}"));
+        // Only a well-formed status code is quoted: the error is audited.
+        return Err(
+            if status.len() == 3 && status.bytes().all(|b| b.is_ascii_digit()) {
+                format!("status {status}")
+            } else {
+                "status is not 200".into()
+            },
+        );
     }
     if head
         .to_ascii_lowercase()
@@ -238,6 +278,60 @@ mod tests {
 
     const HIT: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
         {\"hits\":[{\"rule\":\"promptguard\",\"start\":0,\"end\":5,\"score\":0.93}]}";
+
+    /// Codex P1 — `timeout_ms` bounds connecting too. A sidecar that never
+    /// accepts, with its backlog full, used to block `connect` forever.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_sidecar_that_never_accepts_times_out() {
+        use socket2::{Domain, SockAddr, Socket, Type};
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("full.sock");
+        let addr = SockAddr::unix(&path).unwrap();
+        let listener = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        listener.bind(&addr).unwrap();
+        listener.listen(0).unwrap();
+        let mut queued = Vec::new();
+        loop {
+            let c = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+            c.set_nonblocking(true).unwrap();
+            match c.connect(&addr) {
+                Ok(()) => queued.push(c),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("filling the backlog: {e}"),
+            }
+            assert!(queued.len() < 1024, "backlog never filled");
+        }
+        let s = Sidecar::new("pg", path, Duration::from_millis(200));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(s.scan("hello", Direction::Response).is_err());
+        });
+        let failed = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("connect must honour timeout_ms");
+        assert!(failed);
+        drop((listener, queued));
+    }
+
+    /// Codex P2 — a malformed answer's own text never reaches the error,
+    /// which is written to the audit row.
+    #[test]
+    fn sidecar_errors_do_not_quote_the_answer() {
+        const BAD_FIELD: &str = "HTTP/1.1 200 OK\r\n\r\n\
+            {\"hits\":[{\"rule\":\"x\",\"start\":\"MARKER-7f3a\",\"end\":1}]}";
+        const BAD_STATUS: &str = "HTTP/1.1 MARKER-7f3a OK\r\n\r\n{}";
+        for answer in [BAD_FIELD, BAD_STATUS] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let s = Sidecar::new(
+                "pg",
+                serve(&dir, answer, Duration::ZERO),
+                Duration::from_secs(2),
+            );
+            let err = s.scan("hello", Direction::Response).unwrap_err();
+            assert!(!err.0.contains("MARKER"), "{}", err.0);
+        }
+    }
 
     #[test]
     fn hits_from_the_sidecar_are_reported() {
