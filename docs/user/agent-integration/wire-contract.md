@@ -153,6 +153,10 @@ The provider call. Locksmith:
 7. Streams the response back.
 8. Audits.
 
+`/api/{tool_name}/` and `/api/{tool_name}` reach the upstream's root
+(`upstream + /`, query kept) through the same steps, for APIs served at the
+root such as DuckDuckGo's instant answers.
+
 #### Method + path passthrough
 
 The HTTP method, request body, query string, and remaining path

@@ -101,3 +101,34 @@ async fn paths_inside_the_base_path_still_forward() {
         "{paths:?}"
     );
 }
+
+/// AGENT-290 — the upstream's root (and the base path itself) is a valid
+/// target: `/api/<route>/` and `/api/<route>` forward to `<upstream>/`,
+/// query included, instead of falling through to the router's 404.
+#[tokio::test]
+async fn the_upstream_root_is_forwarded() {
+    let up = upstream().await;
+    let b = build(config(&format!("{}/base/api", up.uri()), "  routes: []\n")).await;
+    for path in ["/api/out/?q=x&format=json", "/api/out?q=y", "/api/out/"] {
+        let (status, _) = get(&b, path).await;
+        assert_eq!(status, 200, "{path}");
+    }
+    let seen: Vec<(String, Option<String>)> = up
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.url.path().to_string(), r.url.query().map(str::to_string)))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "/base/api/".to_string(),
+                Some("q=x&format=json".to_string())
+            ),
+            ("/base/api/".to_string(), Some("q=y".to_string())),
+            ("/base/api/".to_string(), None),
+        ]
+    );
+}

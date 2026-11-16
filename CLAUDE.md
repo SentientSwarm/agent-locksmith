@@ -178,6 +178,8 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 /mcp/{connection}                             current AgentIdentity; native lifecycle only
 /api/{tool_name}/{*path}                       agent-authenticated; bearer or mtls
                                                → proxy::proxy_handler
+/api/{tool_name}/ , /api/{tool_name}           upstream root, same pipeline (AGENT-290)
+                                               → proxy::proxy_root_handler
 ```
 
 (`kind=infra` registrations have no agent-facing surface — operator-only via `/admin/operator/infra/*`.)

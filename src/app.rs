@@ -522,6 +522,10 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/{tool_name}/{*path}",
             routing::any(proxy::proxy_handler),
         )
+        // AGENT-290 — `{*path}` never matches an empty tail, so the
+        // upstream's root needs its own routes.
+        .route("/api/{tool_name}/", routing::any(proxy::proxy_root_handler))
+        .route("/api/{tool_name}", routing::any(proxy::proxy_root_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,

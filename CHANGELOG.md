@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Agents can call an upstream's root: `/api/<route>/` and `/api/<route>`
+  now forward to `<upstream>/` with the query (AGENT-290). Before, the
+  router answered 404 with an empty body and never forwarded, so APIs served
+  at the root (the seed `duckduckgo` route) could not be used.
 - Edge site files accept a component `closed = [port, ...]` list,
   rejected for every source (for example an admin listener). Before, a
   port could only be opened to CIDRs or left unfiltered, so a rendered

@@ -625,6 +625,24 @@ routes:
   - unknown_name
   - wrong_kind
   - definition_pending
+- id: agent.ANY./api/{tool_name}/
+  listener: agent
+  method: ANY
+  path: /api/{tool_name}/
+  source:
+    file: src/app.rs
+    route: /api/{tool_name}/
+  refusals:
+  - tool_not_allowed
+- id: agent.ANY./api/{tool_name}
+  listener: agent
+  method: ANY
+  path: /api/{tool_name}
+  source:
+    file: src/app.rs
+    route: /api/{tool_name}
+  refusals:
+  - tool_not_allowed
 - id: agent.ANY./api/{tool_name}/{*path}
   listener: agent
   method: ANY

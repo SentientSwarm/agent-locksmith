@@ -13,6 +13,8 @@ from harness.target import free_port
 
 case = pytest.mark.case
 API = "agent.ANY./api/{tool_name}/{*path}"
+ROOT = "agent.ANY./api/{tool_name}/"
+ROOT_BARE = "agent.ANY./api/{tool_name}"
 STRIP = "beh.proxy.header-strip"
 AGENT_X_API_KEY = "agt-agent-supplied-x-api-key-must-not-forward"
 
@@ -360,3 +362,40 @@ def test_readyz_is_not_a_per_agent_probe(px):
     ready = t.http("GET", "/readyz")
     assert ready.status == 200
     assert ready.json["status"] == "ready"
+
+
+@case("SMK-AGT-082", area="AGT", kind="positive", covers=[ROOT, ROOT_BARE])
+def test_upstream_root_is_forwarded(px):
+    """wire-contract.md, AGENT-290 — `/api/<route>/` and `/api/<route>` reach the
+    upstream's root with the query and the selected credential, like any other path."""
+    t, up, agent = px
+    for path, want in (
+        ("/api/agt-bearer/?q=root&format=json", "/bearer/?q=root&format=json"),
+        ("/api/agt-bearer?q=bare", "/bearer/?q=bare"),
+    ):
+        before = up.count("/bearer")
+        resp = t.http("GET", path, token=agent["token"])
+        assert resp.status == 200, path
+        assert up.count("/bearer") == before + 1, path
+        rec = up.last("/bearer")
+        assert rec.path == want
+        assert rec.headers.get("authorization") == [f"Bearer {CRED}"]
+
+
+@case(
+    "SMK-AGT-083",
+    area="AGT",
+    kind="refusal",
+    covers=[ROOT, ROOT_BARE],
+    codes=["tool_not_allowed"],
+)
+def test_upstream_root_keeps_the_acl(px):
+    """wire-contract.md, AGENT-290 — the root routes run the same ACL gate: a route the
+    agent may not use is refused 403 tool_not_allowed before dispatch."""
+    t, up, agent = px
+    before = up.count("")
+    for path in ("/api/agt-not-granted/", "/api/agt-not-granted"):
+        resp = t.http("GET", path, token=agent["token"])
+        assert resp.status == 403, path
+        assert resp.code == "tool_not_allowed", path
+    assert up.count("") == before, "a refused request reached the upstream"

@@ -403,6 +403,18 @@ pub async fn proxy_handler(
     limit::hold(resp, permit)
 }
 
+/// AGENT-290 — `/api/{tool}/` and `/api/{tool}`: the upstream's root
+/// (`<upstream>/`, query kept). Same pipeline as [`proxy_handler`].
+pub async fn proxy_root_handler(
+    State(state): State<Arc<AppState>>,
+    Path(tool_name): Path<String>,
+    req: Request<Body>,
+) -> Response {
+    let mut permit = None;
+    let resp = proxy_request(state, tool_name, String::new(), req, &mut permit).await;
+    limit::hold(resp, permit)
+}
+
 /// Every reading of the path and query that the scanners must judge
 /// (AGENT-262, AGENT-270): each percent-decoding of the request path and of
 /// the upstream URL's path as reqwest will parse it, and each query both as
