@@ -458,11 +458,11 @@ fn internal(message: &str) -> Response {
 }
 
 fn http() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::client_pool::unproxied()
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .unwrap_or_else(|_| crate::client_pool::unproxied_default())
 }
 
 /// Provider failures report the status only; bodies may carry secrets.

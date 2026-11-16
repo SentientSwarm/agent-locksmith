@@ -273,6 +273,18 @@ fn finish(
     }
 }
 
+/// AGENT-277 — a builder for clients outside the route pool (OAuth, CRL).
+/// It never reads `HTTP(S)_PROXY` / `ALL_PROXY`, which reqwest otherwise
+/// honours: token and CRL fetches must not reach a proxy nothing names.
+pub fn unproxied() -> reqwest::ClientBuilder {
+    Client::builder().no_proxy()
+}
+
+/// The fallback when an [`unproxied`] build fails; still no env proxy.
+pub fn unproxied_default() -> Client {
+    unproxied().build().expect("a default client always builds")
+}
+
 /// Last resort when a configured client cannot be built. It still never
 /// follows redirects, like every other client in the pool.
 fn no_redirect_client() -> Client {
@@ -377,6 +389,57 @@ fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AGENT-277 — every reqwest client the daemon builds ignores proxy
+    /// environment variables. reqwest reads them unless a client is given
+    /// a proxy or `.no_proxy()`, so each `Client::builder()` in `src/` must
+    /// say `.no_proxy()` (or come from [`unproxied`]) and nothing may use
+    /// `Client::new()`. The operator CLI runs in the operator's own shell
+    /// and is exempt; test fixtures are too.
+    #[test]
+    fn no_daemon_client_reads_the_proxy_environment() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut offenders = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if rel == "client_pool.rs" || rel.starts_with("cli/") || rel.ends_with("fixture.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("Client::new()") {
+                    offenders.push(format!("{rel}:{}", i + 1));
+                }
+                if line.contains("Client::builder()") {
+                    let window = lines[i..(i + 3).min(lines.len())].concat();
+                    if !window.contains(".no_proxy()") {
+                        offenders.push(format!("{rel}:{}", i + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "clients that read the proxy env: {offenders:?}"
+        );
+    }
     use crate::config::{ToolConfig, ToolTimeouts};
 
     fn tool(name: &str, request_seconds: u64) -> ToolConfig {

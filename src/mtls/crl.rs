@@ -515,9 +515,11 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
 /// A client for CRL fetches: 10s timeout, trusting the built-in roots plus
 /// each PEM bundle in `extra_roots` (a private step-ca root, say).
 pub fn fetch_client(extra_roots: &[std::path::PathBuf]) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(10));
+    let mut builder = crate::client_pool::unproxied().timeout(Duration::from_secs(10));
     for path in extra_roots {
         builder = crate::client_pool::add_ca_bundle(builder, path);
     }
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    builder
+        .build()
+        .unwrap_or_else(|_| crate::client_pool::unproxied_default())
 }

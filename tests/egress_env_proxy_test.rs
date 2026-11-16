@@ -68,6 +68,14 @@ async fn routes_without_a_configured_proxy_ignore_proxy_env() {
             .unwrap();
         assert_eq!(resp.status(), 200, "{name} route used the env proxy");
     }
+    // AGENT-277 — clients outside the route pool too: CRL fetches.
+    let crl = agent_locksmith::mtls::crl::fetch_client(&[]);
+    let resp = crl
+        .get(format!("{}/crl.pem", upstream.uri()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the CRL client used the env proxy");
     let leaked = env_proxy.received_requests().await.unwrap();
     assert!(
         leaked.is_empty(),

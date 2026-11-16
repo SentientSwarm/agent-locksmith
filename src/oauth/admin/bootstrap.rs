@@ -124,10 +124,10 @@ async fn exchange(
     state: &OauthAdminState,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {
-    let client = reqwest::Client::builder()
+    let client = crate::client_pool::unproxied()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .unwrap_or_else(|_| crate::client_pool::unproxied_default());
     let cat = state.catalog.load();
     match refresh_session(&state.sessions, &cat, &state.sealing_key, &client, session).await {
         Ok(updated) => Ok(updated),

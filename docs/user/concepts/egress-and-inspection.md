@@ -41,6 +41,9 @@ egress:
 - Routes sent without a proxy (`direct`, and `proxied` under
   `external`) ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the
   daemon's environment, so they never reach a proxy that no route names.
+- Locksmith's own OAuth token calls and CRL fetches ignore those
+  variables too. They always connect directly, even under `pipelock`, so
+  allow the token and CRL hosts in your network's egress rules.
 - `external` is a statement that something else enforces egress.
   Locksmith cannot check that claim. Choose it only where that control
   exists and allows no more than your proxied routes need.

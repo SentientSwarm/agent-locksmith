@@ -21,10 +21,10 @@ pub async fn run(
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) {
-    let client = reqwest::Client::builder()
+    let client = crate::client_pool::unproxied()
         .timeout(Duration::from_secs(30))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .unwrap_or_else(|_| crate::client_pool::unproxied_default());
     let task = Task {
         repo,
         catalog,
