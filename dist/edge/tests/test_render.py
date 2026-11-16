@@ -1,4 +1,4 @@
-"""Tests for dist/native/render.py (inactive unit, firewall and sysusers render)."""
+"""Tests for dist/edge/render.py (inactive unit, firewall and sysusers render)."""
 
 import json
 import sys
@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-NATIVE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(NATIVE))
+EDGE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EDGE))
 
 import render
 import sitefile
 
-EXAMPLE = sitefile.load(NATIVE / "site.example.toml")
+EXAMPLE = sitefile.load(EDGE / "site.example.toml")
 UNITS = "usr/local/lib/systemd/system"
 SANDBOX = [
     "NoNewPrivileges=yes",
@@ -154,7 +154,7 @@ class RenderTest(unittest.TestCase):
 
     def test_guard_copied_executable(self):
         guard = self.out("edge-locksmith") / "usr/local/sbin/locksmith-edge-state-check"
-        self.assertEqual(guard.read_bytes(), (NATIVE / "state_check.py").read_bytes())
+        self.assertEqual(guard.read_bytes(), (EDGE / "state_check.py").read_bytes())
         self.assertEqual(guard.stat().st_mode & 0o777, 0o755)
 
     def test_nft_accepts_only_declared_sources(self):

@@ -1,15 +1,15 @@
-"""Tests for dist/native/sitefile.py (site schema and validation)."""
+"""Tests for dist/edge/sitefile.py (site schema and validation)."""
 
 import sys
 import unittest
 from pathlib import Path
 
-NATIVE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(NATIVE))
+EDGE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EDGE))
 
 import sitefile
 
-EXAMPLE = NATIVE / "site.example.toml"
+EXAMPLE = EDGE / "site.example.toml"
 
 MINIMAL = """
 [site]

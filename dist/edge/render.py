@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Render one instance's inactive native definitions from a site file.
+"""Render one instance's inactive edge definitions from a site file.
 
 Writes units, sysusers, the ingress nft table, components.json and the
 root guard into a NEW directory. It never runs systemctl or incus, never

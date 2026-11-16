@@ -1,4 +1,4 @@
-"""Tests for dist/native/install_model.py against a local HTTP fixture."""
+"""Tests for dist/edge/install_model.py against a local HTTP fixture."""
 
 import hashlib
 import json
@@ -11,8 +11,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-NATIVE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(NATIVE))
+EDGE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EDGE))
 
 import install_model
 
@@ -252,7 +252,7 @@ class InstallTest(unittest.TestCase):
 
     def test_cli_has_no_token_argument(self):
         result = subprocess.run(
-            [sys.executable, "-I", str(NATIVE / "install_model.py"), "--help"],
+            [sys.executable, "-I", str(EDGE / "install_model.py"), "--help"],
             check=False,
             capture_output=True,
             text=True,
@@ -266,7 +266,7 @@ class InstallTest(unittest.TestCase):
 
 class CatalogTest(unittest.TestCase):
     def test_shipped_catalog(self):
-        models = install_model.load_catalog(NATIVE / "models.toml")
+        models = install_model.load_catalog(EDGE / "models.toml")
         self.assertEqual(set(models), {"horizon-small", "promptguard2-86m"})
         self.assertFalse(models["horizon-small"].gated)
         self.assertTrue(models["promptguard2-86m"].gated)

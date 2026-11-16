@@ -1,4 +1,4 @@
-"""Tests for dist/native/incus.py (reviewable Incus preparation commands)."""
+"""Tests for dist/edge/incus.py (reviewable Incus preparation commands)."""
 
 import json
 import subprocess
@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-NATIVE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(NATIVE))
+EDGE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EDGE))
 
 import incus
 import sitefile
 
-EXAMPLE = sitefile.load(NATIVE / "site.example.toml")
+EXAMPLE = sitefile.load(EDGE / "site.example.toml")
 IMAGE = "images:ubuntu/24.04/amd64"
 
 
@@ -123,8 +123,8 @@ class IncusTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-I",
-                    str(NATIVE / "incus.py"),
-                    str(NATIVE / "site.example.toml"),
+                    str(EDGE / "incus.py"),
+                    str(EDGE / "site.example.toml"),
                     "--project",
                     "edge",
                     "--image",
@@ -144,7 +144,7 @@ class IncusTest(unittest.TestCase):
             self.assertEqual(result.stdout, "")
 
     def test_module_cannot_execute_commands(self):
-        source = (NATIVE / "incus.py").read_text()
+        source = (EDGE / "incus.py").read_text()
         for word in ("subprocess", "os.system", "popen", "execv"):
             self.assertNotIn(word, source)
 

@@ -7,12 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-NATIVE = Path(__file__).resolve().parent.parent
+EDGE = Path(__file__).resolve().parent.parent
 
 
 def load_guard():
     spec = importlib.util.spec_from_file_location(
-        "state_check", NATIVE / "state_check.py"
+        "state_check", EDGE / "state_check.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -140,7 +140,7 @@ class StateCheckTest(unittest.TestCase):
         self.refused("components file")
 
     def test_shebang_is_isolated(self):
-        first = (NATIVE / "state_check.py").read_text().splitlines()[0]
+        first = (EDGE / "state_check.py").read_text().splitlines()[0]
         self.assertEqual(first, "#!/usr/bin/python3 -I")
 
 

@@ -1,4 +1,4 @@
-"""Site file schema for dist/native: parse and validate, refusing anything unknown.
+"""Site file schema for dist/edge: parse and validate, refusing anything unknown.
 
 A site file is TOML kept in the site's private repo. Every value here can
 reach a systemd unit or an nft table, so the validation is strict: unknown
