@@ -96,19 +96,9 @@ async fn setup() -> Harness {
         )
         .await
         .unwrap();
-    let h_id = agents
-        .get_by_name("agent-a")
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
+    let h_id = agents.get_by_name("agent-a").await.unwrap().unwrap().id;
 
-    let o_id = agents
-        .get_by_name("agent-b")
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
+    let o_id = agents.get_by_name("agent-b").await.unwrap().unwrap().id;
     agent_creds.set(o_id, "lmstudio", &r.auth).await.unwrap();
     // Hermes explicitly selects its distinct account.
     agent_creds
