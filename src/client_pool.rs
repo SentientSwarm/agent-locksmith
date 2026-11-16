@@ -207,9 +207,13 @@ fn build_client_for(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(timeouts.request_seconds))
         .read_timeout(Duration::from_secs(timeouts.idle_seconds));
-    if let Some(proxy) = proxy.clone() {
-        builder = builder.proxy(proxy);
-    }
+    // AGENT-259 — the route's proxy or none at all: reqwest would otherwise
+    // pick up HTTP(S)_PROXY / ALL_PROXY from the daemon's environment and
+    // send direct and `external` traffic to a proxy no route names.
+    builder = match proxy.clone() {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder.no_proxy(),
+    };
 
     if let Some(pem) = upstream_ca_pem {
         // #135 — the route's own anchors replace every other root. Fail
@@ -274,6 +278,7 @@ fn finish(
 fn no_redirect_client() -> Client {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
         .expect("a default client always builds")
 }
@@ -303,6 +308,7 @@ fn route_only_trust(builder: reqwest::ClientBuilder, pem: &str) -> reqwest::Clie
 fn no_trust_client() -> Client {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .tls_built_in_root_certs(false)
         .build()
         .expect("a client without roots always builds")

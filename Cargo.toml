@@ -240,3 +240,7 @@ required-features = ["s3-disconnect-proof"]
 name = "native_compact_ownership_test"
 path = "tests/native_compact_ownership_test.rs"
 required-features = ["s3-disconnect-proof"]
+
+[[test]]
+name = "egress_env_proxy_test"
+path = "tests/egress_env_proxy_test.rs"
