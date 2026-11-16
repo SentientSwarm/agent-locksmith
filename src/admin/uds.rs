@@ -249,6 +249,12 @@ pub fn build_router(state: UdsState) -> Router {
             "/egress/policy",
             get(super::egress_policy::op_egress_policy),
         )
+        // AGENT-266 — per-agent, per-route rate limits.
+        .route("/rate-limits", get(super::rate_limits::op_list))
+        .route(
+            "/rate-limits/{route}",
+            axum::routing::put(super::rate_limits::op_set).delete(super::rate_limits::op_delete),
+        )
         .route(
             "/agents/{public_id}",
             get(op_get_agent).patch(op_modify_agent),

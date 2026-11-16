@@ -9,6 +9,7 @@ pub mod migrate_bindings;
 pub mod model;
 pub mod mtls;
 pub mod oauth;
+pub mod ratelimit;
 pub mod registration;
 pub mod rekey_credentials;
 pub mod route;

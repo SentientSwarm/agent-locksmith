@@ -70,6 +70,7 @@ fn router(f: &crate::native::Fixture, rt: &Arc<agent_locksmith::native::Runtime>
         None,
         rt.clone(),
         Default::default(),
+        Default::default(),
     )
 }
 

@@ -158,6 +158,36 @@ routes:
     route: /egress/policy
   refusals:
   - invalid_credential
+- id: admin.GET./admin/operator/rate-limits
+  listener: admin
+  method: GET
+  path: /admin/operator/rate-limits
+  source:
+    file: src/admin/uds.rs
+    route: /rate-limits
+  refusals:
+  - invalid_credential
+- id: admin.PUT./admin/operator/rate-limits/{route}
+  listener: admin
+  method: PUT
+  path: /admin/operator/rate-limits/{route}
+  source:
+    file: src/admin/uds.rs
+    route: /rate-limits/{route}
+  refusals:
+  - invalid_credential
+  - invalid_rate_limit
+  - route_not_found
+  - agent_not_found
+- id: admin.DELETE./admin/operator/rate-limits/{route}
+  listener: admin
+  method: DELETE
+  path: /admin/operator/rate-limits/{route}
+  source:
+    file: src/admin/uds.rs
+    route: /rate-limits/{route}
+  refusals:
+  - invalid_credential
 - id: admin.GET./admin/operator/audit
   listener: admin
   method: GET
@@ -621,6 +651,7 @@ routes:
   - backend_unavailable
   - egress_proxy_unconfigured
   - inspection_blocked
+  - rate_limited
   audit_causes:
   - account_binding_missing
   - selected_credential_unavailable
@@ -1120,6 +1151,12 @@ cli:
   command: bootstrap-operator
 - id: cli.egress.policy
   command: egress policy
+- id: cli.rate-limit.list
+  command: rate-limit list
+- id: cli.rate-limit.set
+  command: rate-limit set
+- id: cli.rate-limit.unset
+  command: rate-limit unset
 - id: cli.export.agents
   command: export agents
 - id: cli.infra.delete
@@ -1263,6 +1300,8 @@ behaviours:
   summary: The dlp scanner finds credential formats and audits rule ids and hashes, never values
 - id: beh.inspection.injection
   summary: The injection scanner flags folded prompt-injection phrasing and forwards the body unchanged
+- id: beh.ratelimit
+  summary: Per-agent, per-route limits answer 429 rate_limited with Retry-After before the upstream; writes apply live
 - id: beh.egress.proxied
   summary: 'egress: proxied routes upstream calls through the CONNECT proxy'
 - id: beh.tls.upstream-ca

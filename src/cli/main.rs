@@ -100,6 +100,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: commands::egress::EgressCmd,
     },
+    /// Per-agent, per-route rate limits (operator).
+    RateLimit {
+        #[command(subcommand)]
+        cmd: commands::ratelimit::RateLimitCmd,
+    },
     /// Route backends and switching (operator). Brokered routes phase 2.
     Route {
         #[command(subcommand)]
@@ -231,6 +236,7 @@ async fn main() -> ExitCode {
         Cmd::Tool { cmd } => tool::run(&client, cli.format, cmd).await,
         Cmd::Model { cmd } => model::run(&client, cli.format, cmd).await,
         Cmd::Egress { cmd } => commands::egress::run(&client, cli.format, cmd).await,
+        Cmd::RateLimit { cmd } => commands::ratelimit::run(&client, cli.format, cmd).await,
         Cmd::Route { cmd } => commands::route::run(&client, cli.format, cmd).await,
         Cmd::Infra { cmd } => infra::run(&client, cli.format, cmd).await,
         Cmd::Oauth { cmd } => oauth::run(&client, cli.format, cmd).await,

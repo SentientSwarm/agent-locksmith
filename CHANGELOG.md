@@ -43,6 +43,14 @@
 
 ### Added
 
+- Per-agent, per-route rate limits (AGENT-266). `locksmith rate-limit
+  set <route> --rpm N [--concurrent N] [--agent A]` (`PUT
+  /admin/operator/rate-limits/{route}`) sets a route default that applies
+  to each agent separately, or one agent's override; `list` and `unset`
+  complete it. Over the limit the proxy answers 429 `rate_limited` with
+  `Retry-After` before anything is sent upstream; a concurrency slot is
+  held until a streamed body ends. Changes apply live and are audited.
+  Migration 0027 adds the `rate_limits` table.
 - Content inspection (AGENT-262). An `inspection:` config block gives a
   route request and response scanners with a verdict on a hit (`pass`,
   `flag`, `redact` or `block`) and a choice of failing open or closed.

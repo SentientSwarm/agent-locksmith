@@ -466,6 +466,11 @@ async fn run_owned(
         );
         tokio::spawn(prober.run(coord.shutdown_signal()))
     });
+    let rate_limiter = admin_state
+        .as_ref()
+        .and_then(|s| s.admin.rate_limits())
+        .map(|r| r.limiter.clone())
+        .unwrap_or_default();
     let agent_router = match catalog_for_app {
         Some(catalog) => crate::app::build_app_full_with_native(
             shared_config.clone(),
@@ -483,6 +488,7 @@ async fn run_owned(
             op_resolver_for_app,
             native.clone(),
             broker_health,
+            rate_limiter,
         ),
         None => crate::app::build_app_full_with_registrations(
             shared_config.clone(),
@@ -1285,7 +1291,19 @@ async fn build_admin_substrate(
     {
         authority.listeners.expect("admin");
     }
-    let admin = admin.with_native_authority(authority);
+    // AGENT-266 — rate limits load before traffic and are shared with the
+    // proxy through the admin service.
+    let rate_limits = Arc::new(crate::ratelimit::RateLimits {
+        repo: crate::ratelimit::RateLimitRepository::new(pool.clone()),
+        limiter: Arc::new(crate::ratelimit::RateLimiter::default()),
+    });
+    rate_limits
+        .reload()
+        .await
+        .map_err(|e| DaemonError::AdminConfig(format!("rate limits: {e}")))?;
+    let admin = admin
+        .with_native_authority(authority)
+        .with_rate_limits(rate_limits);
 
     Ok(AdminSetup {
         uds_state: UdsState {

@@ -42,6 +42,8 @@ mod proxy_acl_test;
 mod proxy_redirect_test;
 #[path = "proxy_test.rs"]
 mod proxy_test;
+#[path = "rate_limit_test.rs"]
+mod rate_limit_test;
 #[path = "response_controls_apply_test.rs"]
 mod response_controls_apply_test;
 #[path = "response_controls_config_test.rs"]

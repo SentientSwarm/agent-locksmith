@@ -11,6 +11,7 @@ pub mod bootstrap_listener;
 pub mod egress_policy;
 pub mod error_envelope;
 pub mod https;
+pub mod rate_limits;
 pub mod service;
 pub mod uds;
 pub mod uds_client;

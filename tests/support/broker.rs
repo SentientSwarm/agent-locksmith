@@ -32,6 +32,8 @@ pub struct H {
     pub prober: Prober,
     pub admin: TestServer,
     pub agent: TestServer,
+    /// The agent router itself, for requests whose body the test holds.
+    pub agent_app: axum::Router,
     pub op: String,
     pub agent_bearer: String,
     pub pid: String,
@@ -75,14 +77,22 @@ pub async fn setup() -> H {
         Arc::new(BearerAuthenticator::with_audit(agents.clone(), Some(audit.clone())).unwrap());
     let bearer_dyn: Arc<dyn AgentAuthenticator> = bearer.clone();
     let health = BrokerHealth::default();
+    let limiter = Arc::new(agent_locksmith::ratelimit::RateLimiter::default());
+    let rate_limits = Arc::new(agent_locksmith::ratelimit::RateLimits {
+        repo: agent_locksmith::ratelimit::RateLimitRepository::new(pool.clone()),
+        limiter: limiter.clone(),
+    });
     let uds = UdsState {
         broker_health: health.clone(),
-        admin: Arc::new(AdminService::with_audit(
-            agents,
-            BootstrapTokenRepository::new(pool.clone()),
-            cfg.clone(),
-            Some(audit.clone()),
-        )),
+        admin: Arc::new(
+            AdminService::with_audit(
+                agents,
+                BootstrapTokenRepository::new(pool.clone()),
+                cfg.clone(),
+                Some(audit.clone()),
+            )
+            .with_rate_limits(rate_limits),
+        ),
         agent_auth: bearer,
         operator_auth: Arc::new(OperatorAuthenticator::load(&ops_path).unwrap()),
         operator_mtls: None,
@@ -131,6 +141,7 @@ pub async fn setup() -> H {
         None,
         native,
         health.clone(),
+        limiter,
     );
     H {
         _dir: dir,
@@ -138,7 +149,8 @@ pub async fn setup() -> H {
         health,
         prober,
         admin: TestServer::new(build_router(uds)),
-        agent: TestServer::new(agent),
+        agent: TestServer::new(agent.clone()),
+        agent_app: agent,
         op: format!("Bearer {}", op_token.wire_format()),
         agent_bearer: format!("Bearer lk_{pid}.{}", secret.expose_secret()),
         pid,

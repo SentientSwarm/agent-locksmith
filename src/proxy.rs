@@ -14,6 +14,7 @@ use std::time::Instant;
 mod admission;
 mod egress;
 mod inspect;
+mod limit;
 mod oauth;
 mod selection;
 mod upstream_urls;
@@ -395,6 +396,20 @@ pub async fn proxy_handler(
     Path((tool_name, path)): Path<(String, String)>,
     req: Request<Body>,
 ) -> Response {
+    // AGENT-266: a concurrency permit, once taken, lives as long as the
+    // response body, so a streamed response holds its slot.
+    let mut permit = None;
+    let resp = proxy_request(state, tool_name, path, req, &mut permit).await;
+    limit::hold(resp, permit)
+}
+
+async fn proxy_request(
+    state: Arc<AppState>,
+    tool_name: String,
+    path: String,
+    req: Request<Body>,
+    permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
+) -> Response {
     let mut ctx = RequestCtx::snapshot(&req, tool_name);
 
     // M9 ACL gate. When the request carries an AgentIdentity (per-agent
@@ -432,6 +447,19 @@ pub async fn proxy_handler(
         }
         target
     };
+
+    // AGENT-266: per-agent rate limits, after admission and before any
+    // credential is resolved or anything is sent upstream.
+    match limit::check(
+        &state,
+        &ctx,
+        req.extensions().get::<crate::auth_v2::AgentIdentity>(),
+    )
+    .await
+    {
+        Ok(p) => *permit = p,
+        Err(refused) => return refused,
+    }
 
     // Phase F.5: for OAuth registrations, materialize the access token
     // before building the upstream request. Returns a 503 envelope if

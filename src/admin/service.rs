@@ -174,9 +174,22 @@ pub struct AdminService {
     /// `None` outside the production daemon. Records agent register /
     /// revoke on the `agent` component (secret-free).
     operational_log: Option<std::sync::Arc<crate::operational_log_sink::OperationalLogEmitter>>,
+    /// AGENT-266 — rate-limit rows and the proxy's limiter. `None`
+    /// outside the daemon unless a test wires it; the routes then 404.
+    rate_limits: Option<std::sync::Arc<crate::ratelimit::RateLimits>>,
 }
 
 impl AdminService {
+    pub fn with_rate_limits(
+        mut self,
+        limits: std::sync::Arc<crate::ratelimit::RateLimits>,
+    ) -> Self {
+        self.rate_limits = Some(limits);
+        self
+    }
+    pub fn rate_limits(&self) -> Option<std::sync::Arc<crate::ratelimit::RateLimits>> {
+        self.rate_limits.clone()
+    }
     pub fn with_native_authority(
         mut self,
         runtime: std::sync::Arc<crate::native_authority::runtime::Runtime>,
@@ -220,6 +233,7 @@ impl AdminService {
             resolved_creds: None,
             operational_log: None,
             native_authority: None,
+            rate_limits: None,
         }
     }
 
@@ -241,6 +255,7 @@ impl AdminService {
             resolved_creds: Some(resolved_creds),
             operational_log: None,
             native_authority: None,
+            rate_limits: None,
         }
     }
 

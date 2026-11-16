@@ -110,6 +110,9 @@ pub struct AppState {
     /// injects `op` credentials from this cache (T2.3); resolution
     /// happens out-of-band (startup + catalog change), never per request.
     pub op_resolver: Option<Arc<crate::secret::OpResolver>>,
+    /// AGENT-266 — per-agent, per-route limits, shared with the admin API
+    /// so a write applies at once. Empty means unlimited.
+    pub rate_limits: Arc<crate::ratelimit::RateLimiter>,
 }
 
 /// Bundle of OAuth runtime state shared between the proxy hot path
@@ -426,6 +429,7 @@ pub fn build_app_full_with_phase_k(
         op_resolver,
         native,
         Default::default(),
+        Default::default(),
     )
 }
 
@@ -446,6 +450,7 @@ pub fn build_app_full_with_native(
     op_resolver: Option<Arc<crate::secret::OpResolver>>,
     native: Arc<crate::native::Runtime>,
     broker_health: crate::registrations::broker_health::BrokerHealth,
+    rate_limits: Arc<crate::ratelimit::RateLimiter>,
 ) -> Router {
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
@@ -476,6 +481,7 @@ pub fn build_app_full_with_native(
         operational_log,
         op_resolver,
         broker_health,
+        rate_limits,
     });
 
     router(state)

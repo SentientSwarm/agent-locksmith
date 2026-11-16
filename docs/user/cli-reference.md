@@ -373,6 +373,31 @@ behind it, plus the effective `egress.mode`. The proxy URL is not returned.
 Use `--pipelock` to generate the egress proxy's allowlist from Locksmith's
 routes instead of maintaining it separately.
 
+### Rate limits
+
+```bash
+locksmith rate-limit set openai --rpm 60 --concurrent 4   # route default, per agent
+locksmith rate-limit set openai --rpm 600 --agent batch    # one agent's override
+locksmith rate-limit list
+locksmith rate-limit unset openai --agent batch
+```
+
+A limit applies to each agent on the route separately: `--rpm` is a token
+bucket of that many requests, refilled continuously over a minute, and
+`--concurrent` caps requests in flight, counting a streamed response until
+its body ends. An `--agent` row replaces the route default for that agent.
+Over the limit the proxy answers 429 `rate_limited` with `Retry-After` in
+seconds, before any credential is resolved or anything is sent upstream,
+and writes a `rate_limited` security audit row. Requests without an agent
+identity (legacy deployments) are not limited.
+
+Changes apply at once, without a restart, and are audited
+(`rate_limit_set`, `rate_limit_deleted`). A changed `--rpm` gives each
+affected agent a full bucket. `PUT /admin/operator/rate-limits/{route}` takes
+`{requests_per_minute, max_concurrent?, agent?}`; `DELETE` takes `?agent=`.
+A zero value returns 400 `invalid_rate_limit`, an unknown route 404
+`route_not_found`. Buckets are held in memory, so a restart refills them.
+
 ### Per-route upstream CA
 
 An HTTPS upstream behind a private CA can carry its own trust anchors:
