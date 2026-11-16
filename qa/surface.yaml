@@ -620,6 +620,7 @@ routes:
   - oauth_reconnect_required
   - backend_unavailable
   - egress_proxy_unconfigured
+  - inspection_blocked
   audit_causes:
   - account_binding_missing
   - selected_credential_unavailable
@@ -1254,6 +1255,14 @@ behaviours:
   summary: Operational log events stored and queryable
 - id: beh.egress.enforcement
   summary: 'egress.mode decides proxied routes: pipelock uses egress_proxy, external connects directly, neither fails closed with 503'
+- id: beh.inspection.request
+  summary: Request scanners run on the buffered body before the upstream; block answers 403 inspection_blocked
+- id: beh.inspection.response
+  summary: Response scanners run on buffered responses before the agent; redact rewrites, block answers 502
+- id: beh.inspection.dlp
+  summary: The dlp scanner finds credential formats and audits rule ids and hashes, never values
+- id: beh.inspection.injection
+  summary: The injection scanner flags folded prompt-injection phrasing and forwards the body unchanged
 - id: beh.egress.proxied
   summary: 'egress: proxied routes upstream calls through the CONNECT proxy'
 - id: beh.tls.upstream-ca
