@@ -354,6 +354,18 @@ fn duplicate_route_fails_config_load() {
 }
 
 #[tokio::test]
+#[should_panic(expected = "inspection")]
+async fn an_inspection_config_that_does_not_compile_stops_startup() {
+    // AGENT-270: falling back to no inspection would forward every route
+    // unscanned. Config load validates; a config built another way must
+    // not slip through either.
+    let mut cfg = config("http://127.0.0.1:9", &request_policy("block"));
+    let routes = &mut cfg.inspection.as_mut().unwrap().routes;
+    routes.push(routes[0].clone());
+    harness(cfg).await;
+}
+
+#[tokio::test]
 async fn oversize_unscanned_response_still_gets_response_controls() {
     // Too large to inspect under fail_open, the body is forwarded
     // unscanned, but the route's own response-control redaction must
@@ -574,6 +586,22 @@ async fn query_is_also_inspected_with_a_literal_plus() {
     let policy = "  routes:\n    - route: out\n      request:\n        scanners: [\"literal:plus+canary\"]\n        on_hit: block\n";
     let h = harness(config(&up.uri(), policy)).await;
     let resp = h.server.get("/api/out/search?q=plus+canary").await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn encoded_question_mark_cannot_smuggle_an_uninspected_query() {
+    // AGENT-270: `%3F` decodes to `?` before the upstream URL is built, so
+    // the rest of the path reaches the upstream as a form-decoded query.
+    let up = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&up)
+        .await;
+    let policy = "  routes:\n    - route: out\n      request:\n        scanners: [\"literal:plus canary\"]\n        on_hit: block\n";
+    let h = harness(config(&up.uri(), policy)).await;
+    let resp = h.server.get("/api/out/search%3Fq=plus+canary").await;
     assert_eq!(resp.status_code(), 403);
     assert!(up.received_requests().await.unwrap().is_empty());
 }

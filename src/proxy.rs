@@ -595,10 +595,15 @@ async fn proxy_request(
         let literal = crate::inspection::percent_decode_path(q);
         std::iter::once(form.clone()).chain((literal != form).then_some(literal))
     });
-    let uri_text: Vec<String> = crate::inspection::path_views(req.uri().path())
+    // A decoded `%3F` ends the path early, so the upstream may read the
+    // rest as a form query: judge each path view that way too.
+    let path_views = crate::inspection::path_views(req.uri().path())
         .into_iter()
-        .chain(query_views)
-        .collect();
+        .flat_map(|view| {
+            let form = crate::inspection::percent_decode(&view);
+            std::iter::once(view.clone()).chain((form != view).then_some(form))
+        });
+    let uri_text: Vec<String> = path_views.chain(query_views).collect();
     // AGENT-262 — an inspected response must arrive uncompressed to be
     // scanned, so the agent's Accept-Encoding is not forwarded.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {

@@ -455,9 +455,11 @@ pub fn build_app_full_with_native(
     let snapshot = config.load();
     let response_controls = Arc::new(compile_response_controls(&snapshot));
     let inspection = Arc::new(
+        // AGENT-270: config load validates this, so failing here means the
+        // config was built another way. Never fall back to no inspection,
+        // which would forward every route unscanned.
         crate::inspection::config::compile(snapshot.inspection.as_ref()).unwrap_or_else(|e| {
-            tracing::error!(error = %e, "inspection compile failed at AppState build (config validation should have caught this)");
-            Default::default()
+            panic!("inspection config does not compile; refusing to serve without it: {e}")
         }),
     );
     drop(snapshot);
