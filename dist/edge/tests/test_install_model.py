@@ -310,6 +310,28 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(self.hf_home.exists())
         self.assertEqual(fx.requests, [])
 
+    def test_writable_existing_hub_refused(self):
+        fx = self.fixture()
+        (self.hf_home / "hub").mkdir(parents=True)
+        (self.hf_home / "hub").chmod(0o777)
+        with self.assertRaises(install_model.InstallError) as ctx:
+            self.install(fx)
+        self.assertIn("hub", str(ctx.exception))
+        self.assertEqual(fx.requests, [])
+
+    def test_symlink_hiding_a_writable_parent_refused(self):
+        fx = self.fixture()
+        shared = self.base / "shared"
+        (shared / "real").mkdir(parents=True)
+        shared.chmod(0o777)
+        (self.base / "link").symlink_to(shared / "real")
+        self.hf_home = self.base / "link" / "hf"
+        with self.assertRaises(install_model.InstallError) as ctx:
+            self.install(fx)
+        self.assertIn(str(shared), str(ctx.exception))
+        self.assertFalse((shared / "real" / "hf").exists())
+        self.assertEqual(fx.requests, [])
+
     def test_cache_under_a_parent_owned_by_another_user_refused(self):
         # Stands in for a service-owned state directory such as $R/inspector.
         fx = self.fixture()

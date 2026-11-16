@@ -146,7 +146,11 @@ def install(
             f"{model.repo} is gated: supply your own token with --token-file or --token-prompt"
         )
     owners = trusted_owners if trusted_owners is not None else frozenset({0, os.geteuid()})
-    _check_parents(hf_home.absolute(), owners)
+    # Lexical and resolved: a symlinked ancestor must not hide a writable
+    # parent. Checking hub covers an existing hub and everything above it.
+    hub_path = hf_home.absolute() / "hub"
+    for path in (hub_path, hub_path.resolve()):
+        _check_parents(path, owners)
     hub = hf_home / "hub"
     if hf_home.is_symlink() or hub.is_symlink():
         raise InstallError(f"{hub} or its parent is a symlink; refusing to follow it")
