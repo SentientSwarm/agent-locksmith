@@ -100,8 +100,9 @@ def firewall(instance, studio_compat=False):
     # This table exists INSIDE a container. Never flush the host/other tables.
     rules = ["iifname lo accept", "ct state established,related accept"]
     if instance == "edge-brokers":
-        rules += ["ip saddr 10.250.1.0/24 tcp dport { 43210, 3456, 17321 } accept",
-                  "ip saddr 10.250.4.10 tcp dport { 43210, 3456, 9100 } accept"]
+        rules += ["ip saddr 10.250.1.0/24 tcp dport { 43210, 3456, 17321 } accept"]
+        if not studio_compat:
+            rules += ["ip saddr 10.250.4.10 tcp dport { 43210, 3456, 9100 } accept"]
         if studio_compat:
             # Temporary phase 5a SSH forwarding from studio through evo's host.
             # Inbound only; this does not grant edge egress to the host/Docker.
@@ -169,7 +170,7 @@ WantedBy=sockets.target
 """)
             write(f"{units}/edge-{component}-relay.service", f"""[Unit]
 Description=Relay to authenticated loopback {component}
-Requires=edge-{component}.service edge-input.service
+Requires=edge-input.service
 After=edge-{component}.service edge-input.service
 
 [Service]
@@ -178,9 +179,25 @@ ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:{port}
 DynamicUser=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
 CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+UMask=0077
+TasksMax=64
 """)
     guard = output / "usr/local/sbin/edge-state-check"
     guard.parent.mkdir(parents=True)

@@ -29,7 +29,7 @@ done
 for entry in edge-locksmith:10:2GiB edge-pipelock:11:1GiB edge-brokers:12:3GiB; do
     IFS=: read -r name suffix memory <<< "$entry"
     incus --project edge init "$image" "$name" \
-        -c boot.autostart=false -c limits.memory="$memory" \
+        -c boot.autostart=false -c limits.cpu=2 -c limits.memory="$memory" \
         -c user.edge.migration=phase5-inactive -d root,size=12GiB
     incus --project edge config device override "$name" eth0 "ipv4.address=10.250.4.$suffix"
     incus storage volume create zfs "$name-state" --project edge size=64GiB

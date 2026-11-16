@@ -90,6 +90,7 @@ class BundleTest(unittest.TestCase):
         self.assertIn("tcp dport { 43210, 3456 } accept", rule)
         self.assertNotIn("17321", rule)
         self.assertNotIn("9100", rule)
+        self.assertNotIn("10.250.4.10 tcp dport", text)
         self.assertNotIn("10.250.4.1 ", module("render").firewall("edge-brokers"))
 
     def test_compatibility_job_is_transport_only_and_loopback_bound(self):
@@ -104,8 +105,129 @@ class BundleTest(unittest.TestCase):
             self.assertNotIn("EnvironmentVariables", job)
             self.assertNotIn("CODEX_HOME", str(job))
 
+    def test_relay_activation_graph_cannot_start_pool(self):
+        with tempfile.TemporaryDirectory(prefix="edge-render-test-") as root:
+            output = Path(root) / "broker"
+            module("render").render(output, "edge-brokers")
+            units = output / "usr/local/lib/systemd/system"
+            for component in ["codex", "teamclaude"]:
+                for suffix in ["relay.service", "relay.socket"]:
+                    text = (units / f"edge-{component}-{suffix}").read_text()
+                    dependencies = []
+                    for line in text.splitlines():
+                        key, _, value = line.partition("=")
+                        if key in {"Requires", "Wants", "BindsTo", "Upholds"}:
+                            dependencies.extend(value.split())
+                    self.assertNotIn(f"edge-{component}.service", dependencies)
+
+    def test_cpu_limit_does_not_depend_on_mutable_profile(self):
+        text = (Path(__file__).parents[1] / "prepare.sh").read_text()
+        self.assertIn("limits.cpu=2", text)
+
 
 class ProcessGateTest(unittest.TestCase):
+    def test_extensionless_node_shim_is_refresher(self):
+        self.assertIsNotNone(module("drain_check").classify(
+            "node /opt/homebrew/bin/codex-multi-auth auth status", "codex"))
+
+    def test_relative_import_and_script_forms_are_refresher(self):
+        for command in ["node scripts/codex.js", "node --import=./runtime-rotation/helper.mjs app.js",
+                        "node --import=./codex-multi-auth/dist/boot.js app.js"]:
+            self.assertIsNotNone(module("drain_check").classify(command, "codex"))
+
+    def test_component_and_compiler_paths_are_not_omp(self):
+        self.assertIsNone(module("drain_check").classify(
+            "node /repo/component/compiler.js", "codex"))
+
+    def test_plain_claude_is_client_not_a_pool_refresher(self):
+        self.assertEqual("claude-client", module("drain_check").classify(
+            "/Users/jxstanford/.local/bin/claude --resume session", "teamclaude"))
+
+    def test_listener_is_a_hard_gate_even_without_known_process_name(self):
+        from unittest.mock import patch
+        import subprocess
+        gate = module("drain_check")
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "123\n", "")):
+            self.assertEqual({123}, gate.lsof_pids(["-iTCP:43210", "-sTCP:LISTEN"]))
+
+    def test_unavailable_file_holder_visibility_refuses(self):
+        from unittest.mock import patch
+        import subprocess
+        gate = module("drain_check")
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "sudo: denied")):
+            with self.assertRaises(gate.GateError):
+                gate.lsof_pids(["+D", "/source-pool"])
+
+    def test_resource_checks_are_component_specific_and_include_open_files(self):
+        from unittest.mock import patch
+        gate = module("drain_check")
+        with tempfile.TemporaryDirectory(prefix="edge-drain-test-") as root:
+            home = Path(root)
+            (home / ".codex-terminal-pool").mkdir()
+            (home / ".config/agent-pools").mkdir(parents=True)
+            config = home / "teamclaude.json"
+            config.touch()
+            for component, paths, expected_port, excluded_port in [
+                ("codex", [], "-iTCP:43210", "-iTCP:3456"),
+                ("teamclaude", [config], "-iTCP:3456", "-iTCP:43210"),
+            ]:
+                with patch.object(gate, "lsof_pids", return_value={12}) as lsof:
+                    holders = gate.resource_holders(component, home, paths)
+                    self.assertEqual({12}, holders["listener"])
+                    self.assertEqual({12}, holders["custody-open"])
+                    options = [a for call in lsof.call_args_list for a in call.args[0]]
+                    self.assertIn(expected_port, options)
+                    self.assertNotIn(excluded_port, options)
+                    self.assertIn("+D" if component == "codex" else "--", options)
+            with self.assertRaises(gate.GateError):
+                gate.resource_holders("teamclaude", home)
+
+    def test_listener_or_file_holder_blocks_otherwise_drained_source(self):
+        import contextlib
+        import io
+        import os
+        import subprocess
+        from unittest.mock import patch
+        gate = module("drain_check")
+        replies = [
+            subprocess.CompletedProcess([], 1, "", "Could not find service"),
+            subprocess.CompletedProcess([], 0, '"com.jxstanford.agent-pools.codex" => true', ""),
+            subprocess.CompletedProcess([], 0, f"501 {os.getpid()} python drain_check.py codex\n501 123 /usr/bin/sleep 1\n", ""),
+        ]
+        for kind in ["listener", "custody-open"]:
+            with patch.object(gate, "run_visible", side_effect=replies), patch.object(
+                    gate, "resource_holders", return_value={kind: {987}}), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertTrue(gate.check_source("codex", Path("/source")))
+                self.assertIn(f"pid=987 kind={kind}", output.getvalue())
+                self.assertNotIn("/usr/bin/sleep", output.getvalue())
+
+    def test_plain_claude_client_does_not_block_drained_broker(self):
+        import contextlib
+        import io
+        import subprocess
+        from unittest.mock import patch
+        gate = module("drain_check")
+        replies = [
+            subprocess.CompletedProcess([], 1, "", "Could not find service"),
+            subprocess.CompletedProcess([], 0, '"com.karpeleslab.teamclaude" => true', ""),
+            subprocess.CompletedProcess([], 0, "501 123 /usr/local/bin/claude --resume abc\n", ""),
+        ]
+        with patch.object(gate, "run_visible", side_effect=replies), patch.object(
+                gate, "resource_holders", return_value={"listener": set(), "custody-open": set()}), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertFalse(gate.check_source("teamclaude", Path("/source"), [Path("/source/teamclaude.json")]))
+            self.assertIn("INFO: pid=123 kind=claude-client", output.getvalue())
+
+    def test_lsof_timeout_and_unrecognized_output_fail_closed(self):
+        import subprocess
+        from unittest.mock import patch
+        gate = module("drain_check")
+        with patch.object(gate.subprocess, "run", side_effect=subprocess.TimeoutExpired("lsof", 60)):
+            with self.assertRaises(gate.GateError):
+                gate.lsof_pids(["+D", "/source"])
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "private-file-name\n", "")):
+            with self.assertRaises(gate.GateError):
+                gate.lsof_pids(["+D", "/source"])
+
     def test_native_agent_counts_as_refresher(self):
         self.assertIsNotNone(module("drain_check").classify("/opt/homebrew/bin/codex resume abc", "codex"))
 
@@ -121,6 +243,8 @@ class ProcessGateTest(unittest.TestCase):
         gate = module("drain_check")
         self.assertIsNone(gate.classify("/bin/zsh -c 'pgrep codex'", "codex"))
         self.assertIsNone(gate.classify("python3 /repo/dist/evo-edge/drain_check.py codex", "codex"))
+        self.assertIsNone(gate.classify("/bin/zsh -c 'python3 /repo/drain_check.py teamclaude'", "teamclaude"))
+        self.assertIsNone(gate.classify("python3 /repo/drain_check.py teamclaude", "teamclaude"))
 
     def test_teamclaude_broker_is_detected(self):
         self.assertIsNotNone(module("drain_check").classify(

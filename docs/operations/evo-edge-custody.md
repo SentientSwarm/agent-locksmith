@@ -96,9 +96,38 @@ Render **5a broker** rules with `--studio-compat`: this opt-in adds only inbound
 gateway TCP 43210/3456 to the broker's container-local firewall. It does not
 admit gateway access to scanner/hub, change any host/bridge ACL or grant edge
 outbound access to host/Docker. The existing bridge gateway-ingress rule was
-already present; confirm actual source address/denials in the canary. Default
-rendering has no compatibility exception. Remove it in 5b after retiring the
-source proxy/relays, by re-rendering without the flag and atomically replacing
+already present. **This is not a trusted source identity.** Read-only inspection
+on 2026-11-16 found active `inet incus` postrouting NAT chains
+`pstrt.agentbr0`, `pstrt.herdbr0`, `pstrt.svcbr0`, `pstrt.hokbr0` with
+source-subnet / destination-outside-subnet masquerade and no output-interface
+restriction. Traffic allowed through the coordinator's forward filters can
+therefore arrive at edge as `.4.1`. Do not claim that original-zone addresses
+survive NAT or that this exception alone isolates agents.
+
+**Pending pre-transfer gate, owned jointly with the coordinator:** before any
+source pool outage or credential transfer, use a credential-free broker TCP
+canary with the intended container firewall. The coordinator must demonstrate:
+
+- Direct evo SSH-destination connections to `.12:43210` and `:3456` succeed.
+- A real agents-zone client cannot establish TCP to either broker port, even
+  through the gateway/NAT path. An HTTP 401 is a failure of this isolation test.
+- A credential-free peer with real edge source `.10` cannot connect either.
+  Keep edge-locksmith stopped: the coordinator supplies an isolated disposable
+  same-bridge canary while `.10` is unused; do not start the proxy to test it.
+- Both intended herd VM paths work when the coordinator opens their narrow
+  ingress. Check the actual observed source addresses, rather than assuming
+  the `10.250.1.0/24` rule was what admitted a masqueraded request.
+
+These canaries require actual listeners: a closed port proves nothing. Record
+source/destination/port and pass/refuse only; use bounded credential-free
+listeners, stop them and confirm their processes/listeners are gone afterward.
+If a denied source reaches the canary, **hold the move**: the coordinator must
+repair forwarding/isolation or choose a different transport. Do not broaden
+container allow rules or alter host/zone rules from this seat. Repeat the
+canaries after any relevant ACL/NAT change. No canaries have passed yet.
+The 5a compatibility render omits the `.10` allow rule; the normal 5b render
+retains it for Locksmith. Default rendering has no compatibility exception.
+Remove it in 5b after retiring the source proxy/relays, by re-rendering without the flag and atomically replacing
 the container's owned nft table.
 
 Render transport-only jobs on studio, but **do not load them yet**:
@@ -183,8 +212,17 @@ For 5a install only the edge-brokers definitions, with token-monitor and lf-scan
 still masked and without their receipts. Do not start the other two containers.
 Render proxy definitions now only for review, not installation/activation.
 
-Install these files as container root only in the coordinated outage, after the
-relevant source is stopped. Unit definitions are in `/usr/local/lib/systemd/system`;
+The current instruction keeps the broker OS stopped until source stop. This
+means the requested **pre-outage** kernel/network preflight is still pending:
+the coordinator must schedule a credential-free empty-OS preflight before the
+outage (all application units masked, no credentials/receipts), or defer the
+outage until an equivalent isolated container test is available. Do not quietly
+move this validation into the credential outage or claim host `nft --check`
+proved container kernel support. Keep both proxy containers stopped.
+
+Install these files as container root during that agreed empty-OS preflight;
+otherwise installation remains after source stop and migration is held pending
+preflight. Unit definitions are in `/usr/local/lib/systemd/system`;
 reserve `/etc/systemd/system` for masks and overrides. Before installation,
 `systemctl mask` every `edge-*.service` and `edge-*.socket` basename in the role,
 then install the rendered tree and run `systemctl daemon-reload`. Confirm the
@@ -192,8 +230,8 @@ mask links still point to `/dev/null`. The bundle contains no application secret
 or activation links. Keep credentialed units **disabled and masked** until their
 custody ceremony ends; unmask/start only the container-local `edge-input.service`
 for firewall validation before that. Do not copy regular unit files over masks.
-Booting an empty OS for package installation after source stop does not authorize
-starting any credentialed unit. Do not install packages whose maintainer scripts
+Booting an empty OS for package installation does not authorize starting any
+credentialed unit. Do not install packages whose maintainer scripts
 start pool software. No credentialed workload starts on evo while its source runs.
 
 **5a packages:** Python 3, util-linux (`findmnt`), nftables, rsync, CA roots;
@@ -243,9 +281,31 @@ TOKEN_MONITOR_DATA_FILE=/srv/edge-state/token-monitor/devices.json; without a
 secret its source code falls back to loopback and is not remotely serving.
 
 Validate `systemd-analyze verify` inside each container with its binaries
-installed, and `nft --check --file /etc/edge-input.nft` before starting the
-container-local firewall. These rules must never be installed on evo itself.
-Verify the socket-proxyd executable path exists. Keep the caller-owned zone ACL
+installed, inspecting diagnostics as well as exit status. **Before the pool
+outage**, verify nftables >= 1.0.8 and perform a real kernel application inside
+the credential-free broker container, with every application/relay still masked:
+
+```sh
+# INSIDE edge-brokers only, as root; never run this on evo's host:
+nft --version
+nft --check --file /etc/edge-input.nft
+systemctl unmask edge-input.service
+systemctl start edge-input.service
+systemctl is-active --quiet edge-input.service
+nft list table inet edge_input >/dev/null
+# Test destroy/recreate against an existing table too (not just first creation):
+systemctl restart edge-input.service
+systemctl is-active --quiet edge-input.service
+nft list table inet edge_input >/dev/null
+```
+
+Both real applications must succeed with no kernel/permission errors before
+any custody outage. A version string or `--check` alone is insufficient. If
+unsupported, hold migration and review a compatible atomic table replacement;
+do not remove the firewall dependency. This test has **not** run; all three
+containers remain stopped. Complete the network canaries above with the same
+rules before stopping a source pool. These rules must never be installed on
+evo itself. Verify the socket-proxyd executable path exists. Keep the caller-owned zone ACL
 separate from these container rules. The Node/Python units permit executable
 writable mappings for their runtimes; this is deliberate, not Rust/Go policy.
 
@@ -266,8 +326,10 @@ writable mappings for their runtimes; this is deliberate, not Rust/Go policy.
 4. **Teamclaude move control:** an independent Codex seat on a herd VM through
    the newly validated edge router, expected agent-locksmith-codex. Claude
    agents, including herd-ops-claude, cannot control their own model outage.
-5. Stop teamclaude and its clients, move its custody, start/validate edge
-   teamclaude. Restore its old address with the separate compatibility job.
+5. Drain Claude requests and hand off control, stop teamclaude, move its custody,
+   start/validate edge teamclaude. A plain Claude client is reported as
+   informational by the checker, not presumed to be a token refresher; this
+   never substitutes for the independent Codex control seat or request drain. Restore its old address with the separate compatibility job.
    Coordinator repoints the VM Claude clients and verifies recovery.
 6. Report 5a accepted independently. No agent ACL/forwarder cutover, proxy
    retirement, source layer8 shutdown, scanner move or hub move happens in 5a.
@@ -288,21 +350,24 @@ python3 dist/evo-edge/drain_check.py codex
 
 `bootout` is expected to succeed the first time; if the job was already removed,
 inspect that condition rather than blindly swallowing every failure. The gate
-must exit 0 and print PASS. It checks the job is unloaded and all visible users'
-native Codex/omp/opencode clients, Node multi-auth/router scripts and rotation
-helpers are gone. It does not print process arguments/environment. It has been
-tested to refuse the live studio router and helpers. It kills nothing.
+must exit 0 and print PASS. It verifies the job is both unloaded and disabled;
+all visible users' native Codex/omp/opencode clients, Node multi-auth/router
+scripts (including extensionless shims, relative paths and `--import=`) and
+rotation helpers are gone; nothing holds `.codex-terminal-pool` or
+`.config/agent-pools` open; and nothing listens on 43210. It deliberately does
+**not** check 3456 during Codex drain, because teamclaude is its control plane.
+It prints only PIDs/categories, never raw command lines/environment or lsof
+filenames. It kills nothing. It runs as jxstanford and uses `sudo -n lsof` for
+all-user visibility. Preauthenticate sudo privately; missing privilege, warnings,
+timeouts and incomplete inspection all refuse the drain. Do not sudo the whole
+checker (that would select the wrong launchd user). The whole CODEX_HOME scan
+can flag history/tooling readers too: close them before proceeding, never skip
+the file-holder gate just because their process name looks harmless.
 
-Independent PID-only checks (each should return no PIDs; pgrep exits 1 for none):
-
-```sh
-pgrep -x codex
-pgrep -x omp
-pgrep -x opencode
-pgrep -f '[c]odex-multi-auth/scripts/(codex|codex-app-router)\.js'
-pgrep -f '[r]untime-rotation[^ ]*\.(js|mjs)'
-lsof -nP -iTCP:43210 -sTCP:LISTEN
-```
+The checker is the canonical process/file/listener gate. Do not replace it with
+narrow pgrep patterns or raw lsof output. In particular, stop any loaded
+`com.sentientswarm.edge-compat.codex` relay before re-running a Codex drain:
+it is token-free but intentionally occupies the old listener.
 
 Do not use `ps e`, `launchctl print` output, `pgrep -fl`, debug HTTP requests or
 raw Podman inspect output in chat: those can reveal secrets. A process gate is
@@ -346,10 +411,35 @@ are absent/empty; never merge into an already used destination pool. A cross-
 machine move necessarily transfers bytes; the protocol below removes each
 successfully received source file and forbids destination activation until no
 source credential files remain. An interrupted move leaves **both sides off**;
-resume the same move, never start either side to see what happens.
+never blindly rerun rsync into a populated destination. `--remove-source-files`
+is not proof that identical destination files were removed at source (rsync
+versions differ). `--ignore-existing` additionally prevents overwriting a
+populated receiver; any skipped source remains a failed custody gate.
 
-After source Codex is stopped, the coordinator may boot the empty broker OS for
-package/unit installation; all pool units stay masked and have no receipts.
+Reconcile every inventoried relative path privately before continuing:
+
+- **Source only:** after verifying the destination path is absent and parent
+  custody is safe, transfer that exact file with the same move flags. Verify
+  successful receipt and source absence; do not restart a whole-tree transfer.
+- **Both, byte-identical:** verify full content equality and the correct
+  destination path/permissions privately, with both pools stopped. Then remove
+  only the verified source instance as the final move step; verify absence.
+  Do not assume rsync success performed this deletion.
+- **Both, differing:** stop reconciliation and escalate to the credential owner.
+  Do not overwrite either, select by mtime, restore a backup, or try a refresh
+  to find the working token. Establish authoritative current custody first.
+- **Destination only:** verify it is the already-received file from this move,
+  not leftover credentials from a previous run; retain it and verify source
+  absence. Missing on both sides is an incomplete move, never permission to
+  recover from an unverified old token backup.
+
+No receipts or activation while any source credential instance or unresolved
+conflict remains. Record counts/results only; never print token content or
+credential hashes in ordinary logs, messages or review artifacts.
+
+Complete the credential-free pre-outage preflight above first. After source
+Codex is stopped, the coordinator may boot the broker OS again if needed;
+all pool units stay masked and have no receipts.
 Ensure receiver rsync and root-private component directories exist. Use an
 existing authenticated SSH route to evo; do not open SSH from an agents VM.
 Run transfer commands on studio, never on a token-using model control seat that
@@ -361,20 +451,38 @@ no pool files are staged on evo's ordinary host filesystem:
 
 ```sh
 set -eu
-rsync -a --checksum --remove-source-files --no-owner --no-group --quiet \
+rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
   --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
   /Users/jxstanford/.codex-terminal-pool/multi-auth/ \
   evo-x2-1:/srv/edge-state/codex/home/.codex-terminal-pool/multi-auth/
-rsync -a --checksum --remove-source-files --no-owner --no-group --quiet \
+rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
   --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
   /Users/jxstanford/.config/agent-pools/ \
   evo-x2-1:/srv/edge-state/codex/agent-pools/
 ```
 
-Move inventoried top-level auth/accounts files with the same flags to the
-destination CODEX_HOME. Do not use a broad home-directory glob or omit files
-merely because they look like backups. Confirm source `multi-auth` and
-`agent-pools` contain **no files or symlinks**, only empty directories. Confirm
+Move the separately inventoried top-level auth/accounts files too. The following
+uses narrow basenames in CODEX_HOME only (including their backups), never a
+home-directory wildcard. Reconcile any destination already present first; a
+skipped source is a failure, not a completed move. Resolve inventoried symlink
+referents separately before this regular-file pass.
+
+```sh
+bash <<'MOVE_TOP_AUTH'
+set -euo pipefail
+while IFS= read -r -d '' credential_file; do
+  rsync -a --checksum --remove-source-files --ignore-existing --no-owner --no-group --quiet \
+    --rsync-path='sudo incus --project edge exec edge-brokers -- rsync' \
+    "$credential_file" evo-x2-1:/srv/edge-state/codex/home/.codex-terminal-pool/
+done < <(find /Users/jxstanford/.codex-terminal-pool -maxdepth 1 -type f \
+  \( -name auth.json -o -name accounts.json -o -name 'auth.json.*' -o -name 'accounts.json.*' \) -print0)
+MOVE_TOP_AUTH
+```
+
+Compare the transferred set against the complete private inventory; a successful
+loop with zero matching files proves nothing about an omitted credential path.
+Do not omit files merely because they look like backups. Confirm source
+`multi-auth` and `agent-pools` contain **no files or symlinks**, only empty directories. Confirm
 inventoried top-level credentials are absent. Re-run the process gate. Inspect
 the destination account count and non-secret metadata locally without showing
 tokens. Verify no unrelated process can read that directory.
@@ -396,12 +504,21 @@ Only now create a root-owned, mode 0600 receipt:
 printf '%s\n' 'edge-brokers:codex' > /srv/edge-state/custody/codex.ready
 chmod 0600 /srv/edge-state/custody/codex.ready
 /usr/local/sbin/edge-state-check edge-brokers codex
+systemctl unmask edge-input.service
+systemctl start edge-input.service
+systemctl is-active --quiet edge-input.service
 systemctl unmask edge-codex.service edge-codex-relay.socket edge-codex-relay.service
-systemctl start edge-codex.service edge-codex-relay.socket
+systemctl start edge-codex.service
+systemctl is-active --quiet edge-codex.service
+systemctl start edge-codex-relay.socket
+systemctl is-active --quiet edge-codex-relay.socket
 ```
 
-Start the container-local `edge-input.service` first (units require it). Check
-both `127.0.0.1:43210` and `.12:43210`, authentication rejection and one
+Run the shell with `set -e` so a failed assertion stops the ceremony. A zero
+`systemctl start` exit status alone is insufficient: `ConditionPathExists`
+can skip a unit successfully. Start/assert the firewall before either pool or
+relay. The relay has only `After=` ordering for the pool and cannot activate it.
+Check both `127.0.0.1:43210` and `.12:43210`, authentication rejection and one
 authenticated streamed request using a private credential file, never a token
 on a command line. Then coordinator opens the agreed bridge ACL and proves both
 herd VMs reach the same pool without local refresh helpers. Test the provider's
@@ -417,12 +534,20 @@ coordinated, then run on studio:
 ```sh
 launchctl disable "gui/$(id -u)/com.karpeleslab.teamclaude"
 launchctl bootout "gui/$(id -u)/com.karpeleslab.teamclaude"
-python3 dist/evo-edge/drain_check.py teamclaude
-pgrep -f '[t]eamclaude|[t]eamrouter'
-lsof -nP -iTCP:3456 -sTCP:LISTEN
+# Supply every actual inventoried config/state/certificate/key/backup path,
+# each as a separate --custody-path (example config below is not a full inventory):
+python3 dist/evo-edge/drain_check.py teamclaude \
+  --custody-path /Users/jxstanford/.config/teamclaude.json \
+  --custody-path /absolute/inventoried/state-or-key-path
 ```
 
-The gate must PASS; PID/listener checks must be empty. Inventory the actual
+The gate must PASS; blocking PID/file-holder/listener checks must be empty.
+`claude-client` is informational because a plain client is not the pool refresher.
+It cannot serve as the move control plane: the handoff/drain above still applies.
+The gate requires an explicit complete `--custody-path` inventory for teamclaude,
+and checks port 3456 only. Do not scan all of `.config` and misidentify unrelated
+services as credential holders. Stop any compatibility relay for this component
+before a subsequent drain. Inventory the actual
 `TEAMROUTER_CONFIG` / legacy `TEAMCLAUDE_CONFIG` path first. Inspection found
 `/Users/jxstanford/.config/teamclaude.json`; the renamed
 `.config/teamrouter.json` takes precedence if later created. Move the selected
@@ -440,11 +565,53 @@ component to teamclaude, leaving environment/ root-owned. The separate environme
 file is environment/teamclaude.env, not part of the service-writable component.
 Verify source credential files absent and gate still
 PASS. Root creates `custody/teamclaude.ready` with
-`edge-brokers:teamclaude`, then unmask/start edge-teamclaude.service and relay
-socket. Validate account count and auth rejection, streaming, quota/refresh
-without revealing identities/tokens. Coordinator repoints both VM Claude paths,
+`edge-brokers:teamclaude`, then use the same firewall-first start/assert sequence
+as Codex, substituting `edge-teamclaude.service` and `edge-teamclaude-relay.socket`.
+Assert `is-active --quiet` for each; never infer serving from a skipped start.
+Validate account count and auth rejection, streaming, quota/refresh without revealing identities/tokens. Coordinator repoints both VM Claude paths,
 proves recovery and only then enables persistence. Never restore the old JSON
 to recover a failed rotated token.
+
+## 6a. Drain, receipt revocation and move-back
+
+Before rollback or another custody move, block new requests and stop the
+corresponding studio compatibility job **first**, so retries cannot keep its
+old listener alive. For Codex (substitute `teamclaude` for its later move):
+
+```sh
+# On studio, as the source login user; assert disable/bootout, inspect failures:
+launchctl disable "gui/$(id -u)/com.sentientswarm.edge-compat.codex"
+launchctl bootout "gui/$(id -u)/com.sentientswarm.edge-compat.codex"
+```
+
+A job never installed/loaded has nothing to boot out; verify that state explicitly
+rather than ignoring all errors. On edge-brokers as root, under `set -e`:
+
+```sh
+systemctl stop edge-codex-relay.socket
+systemctl stop edge-codex-relay.service edge-codex.service
+rm -f /srv/edge-state/custody/codex.ready
+systemctl disable edge-codex-relay.socket edge-codex.service
+systemctl mask edge-codex-relay.socket edge-codex-relay.service edge-codex.service
+for unit in edge-codex-relay.socket edge-codex-relay.service edge-codex.service; do
+  test "$(systemctl show --property=ActiveState --value "$unit")" = inactive
+  test "$(systemctl show --property=UnitFileState --value "$unit")" = masked
+done
+test ! -e /srv/edge-state/custody/codex.ready
+```
+
+Verify no broker processes/file holders or 43210 listeners remain in the
+container, and no studio relay listener remains. Investigate failed stop states;
+do not move custody until each unit is confirmed inactive and masked. Keep the
+firewall active. Incoming traffic cannot start the pool via the relay graph;
+the revoked receipt and masks also prevent manual/reboot reactivation during
+transfer. Do not use a simulated inbound provider request as a drain probe.
+
+Move back only the destination's **latest** state using the same reconciliation
+and source-absence checks with host roles reversed. Do not start studio's
+original pool or issue another receipt until edge has no remaining credential
+files and the move-back gates pass. Disable persistence before any later
+container reboot. Restoring a pre-refresh token backup is never rollback.
 
 ## 7. Deferred to 5b: Locksmith, Pipelock, scanner and hub state
 
@@ -568,5 +735,11 @@ volume/receipt, unsafe marker permissions/symlinks, traversal, inactive render
 and process classification (including Node CLI paths). Their bounded temporary
 directories are automatically removed. Source-side live gate correctly refused
 the still-loaded Codex router and studio helpers without revealing credentials.
-Host/container-specific systemd, nft capability, package, model and real
-credential/refresh acceptance remain future checks while services are inactive.
+The new regression checks cover no pool activation dependency from relays,
+extensionless/relative/import helpers, bounded process names, informational
+Claude clients, component-specific listeners, file-holder refusal and failed
+inspection visibility. Test temporary roots are bounded and cleaned automatically.
+Host/container-specific systemd, actual nft kernel application, network negative
+canaries, package/model and credential/refresh acceptance remain pending.
+NAT isolation and the pre-outage empty-OS preflight are explicit activation
+blockers; no live drain, transfer or destination activation has occurred.

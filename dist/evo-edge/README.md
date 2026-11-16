@@ -31,7 +31,11 @@ gates pass. Installing files is not the same as starting the units.
 For 5a use `--studio-compat` on the edge-brokers render. It admits inbound
 10.250.4.1 to broker TCP 43210/3456 only, for SSH forwarding from the old studio
 loopback ports. It adds no outbound host/Docker allowance and does not expose
-scanner/hub. The default render has no such exception. `compat_launchd.py`
+scanner/hub. The 5a render also omits the normal `.10` broker/scanner allowance.
+Incus currently masquerades cross-zone traffic: gateway ingress is not proof of
+trusted origin. **Hold migration until the coordinator passes real denied-client
+canaries and a real in-container nft application before the pool outage**; see
+the runbook for the pending empty-OS preflight. The default render has no such exception. `compat_launchd.py`
 renders those two inactive studio SSH jobs without loading them or reading
 credentials. Load each only after that source pool is stopped and its edge
 replacement serves; leave its original launchd pool job disabled. The current
@@ -55,8 +59,10 @@ revisions. No macOS executables or ARM64 Podman binaries can be reused on AMD64.
 `edge-input.service` installs a table **inside each container**, never on evo.
 Broker relays bind 10.250.4.12 and forward to loopback services, preserving the
 router's enforced loopback requirement and original client authentication.
-The container firewall restricts these ports to herd and, for broker requests,
-Locksmith. Bridge ACL changes remain herd-ops-claude's responsibility.
+The default container firewall admits herd and, for broker requests, Locksmith;
+the optional gateway exception additionally needs the coordinator isolation gates.
+Relay units cannot start pool units: they order after them without activation
+dependencies. Revoke receipts and stop/mask pools and sockets before any move-back. Bridge ACL changes remain herd-ops-claude's responsibility.
 Validate kernel/container nft capability before activation. No egress restriction
 is falsely claimed here: temporary direct dependencies remain until AGENT-255.
 
@@ -75,6 +81,10 @@ bash -n dist/evo-edge/prepare.sh
 
 On studio, `python3 dist/evo-edge/drain_check.py codex` is a read-only process
 gate. It deliberately refuses while this seat, the launchd router or other
-pool-capable processes still run. It prints PIDs and categories, never arguments,
+pool-capable processes still run, a selected listener or open custody file exists,
+or privileged inspection is incomplete. The source job must be disabled as well
+as unloaded. Teamclaude requires a full repeated `--custody-path` inventory;
+plain Claude clients are informational and still require control-seat handoff.
+It prints PIDs and categories, never arguments,
 environment, tokens or file contents. A passing result is one prerequisite,
 not permission to skip the runbook's transfer/credential-path audit.
