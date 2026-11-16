@@ -603,6 +603,12 @@ async fn proxy_request(
         }
         _ => format!("{}/{}", target.upstream.trim_end_matches('/'), path),
     };
+    // AGENT-286 — the path was decoded before the URL was built, and the
+    // URL parser resolves dot segments (and `\`), so `%2e%2e` would climb
+    // out of the route's base path with its credential attached.
+    if !stays_within_base(&target.upstream, &upstream_url) {
+        return record_upstream_path_escape(&state.audit, &ctx, upstream_host).await;
+    }
     let method = req.method().clone();
     let agent_base = upstream_urls::agent_base(
         req.headers(),
@@ -1361,6 +1367,48 @@ async fn record_tool_not_found(audit: &Option<AuditRepository>, ctx: &RequestCtx
 /// Emit a `proxy/request_body_read_error` audit row + 400 wire response
 /// when reading the agent's request body fails (typically the
 /// per-tool body-size cap was exceeded).
+/// Whether `url`, as reqwest will parse it, stays on `upstream`'s origin
+/// and inside its base path at a segment boundary (AGENT-286). A URL that
+/// does not parse is left for reqwest to refuse.
+fn stays_within_base(upstream: &str, url: &str) -> bool {
+    let (Ok(base), Ok(out)) = (reqwest::Url::parse(upstream), reqwest::Url::parse(url)) else {
+        return true;
+    };
+    let prefix = base.path().trim_end_matches('/');
+    out.origin() == base.origin()
+        && (prefix.is_empty()
+            || out.path() == prefix
+            || out
+                .path()
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
+/// request path would leave the route's upstream base path.
+async fn record_upstream_path_escape(
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+    upstream_host: Option<String>,
+) -> Response {
+    let mut event = ctx.audit_event_base();
+    event.event_class = EventClass::Proxy;
+    event.event = "upstream_path_escape".to_string();
+    event.status = Some(400);
+    event.decision = Decision::Denied;
+    event.upstream_host = upstream_host;
+    audit_record(audit, event).await;
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": {
+            "message": "Request path leaves the route's upstream base path",
+            "type": "bad_request",
+            "code": "upstream_path_escape",
+        }})),
+    )
+        .into_response()
+}
+
 async fn record_body_read_error(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,

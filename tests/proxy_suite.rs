@@ -42,6 +42,8 @@ mod op_credential_proxy_test;
 mod op_source_safety_test;
 #[path = "proxy_acl_test.rs"]
 mod proxy_acl_test;
+#[path = "proxy_base_path_test.rs"]
+mod proxy_base_path_test;
 #[path = "proxy_redirect_test.rs"]
 mod proxy_redirect_test;
 #[path = "proxy_test.rs"]

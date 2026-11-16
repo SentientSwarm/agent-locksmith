@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A request can no longer leave a route's upstream base path
+  (AGENT-286). The path is decoded before the upstream URL is built, and
+  the URL parser resolves dot segments and backslashes, so
+  `/api/<route>/%2e%2e/other` reached `other` on the same host with the
+  route's credential. Such a request now gets 400
+  `upstream_path_escape` and an audit row, and nothing is sent.
 - Request inspection judges the path and query the way the upstream
   will read them (AGENT-270). axum decodes the path once before Locksmith
   builds the upstream URL and the upstream decodes it again, so a
