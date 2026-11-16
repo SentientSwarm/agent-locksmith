@@ -604,16 +604,17 @@ async fn proxy_request(
     // capture excludes the query, so without this any GET that relies on
     // query params (e.g. ComfyUI `/view?filename=...`, paginated/filtered
     // REST APIs) would reach the upstream stripped and typically 404.
+    // AGENT-290 — `/api/<route>` (no slash) reaches the upstream URL
+    // exactly; `/api/<route>/` reaches `<upstream>/`.
+    let bare = path.is_empty() && !req.uri().path().ends_with('/');
+    let base = if bare {
+        target.upstream.clone()
+    } else {
+        format!("{}/{}", target.upstream.trim_end_matches('/'), path)
+    };
     let upstream_url = match req.uri().query() {
-        Some(query) if !query.is_empty() => {
-            format!(
-                "{}/{}?{}",
-                target.upstream.trim_end_matches('/'),
-                path,
-                query
-            )
-        }
-        _ => format!("{}/{}", target.upstream.trim_end_matches('/'), path),
+        Some(query) if !query.is_empty() => format!("{base}?{query}"),
+        _ => base,
     };
     // AGENT-286 — the path was decoded before the URL was built, and the
     // URL parser resolves dot segments (and `\`), so `%2e%2e` would climb

@@ -366,12 +366,12 @@ def test_readyz_is_not_a_per_agent_probe(px):
 
 @case("SMK-AGT-082", area="AGT", kind="positive", covers=[ROOT, ROOT_BARE])
 def test_upstream_root_is_forwarded(px):
-    """wire-contract.md, AGENT-290 — `/api/<route>/` and `/api/<route>` reach the
-    upstream's root with the query and the selected credential, like any other path."""
+    """wire-contract.md, AGENT-290 — `/api/<route>/` reaches `<upstream>/` and `/api/<route>`
+    the upstream URL exactly, with the query and the selected credential."""
     t, up, agent = px
     for path, want in (
         ("/api/agt-bearer/?q=root&format=json", "/bearer/?q=root&format=json"),
-        ("/api/agt-bearer?q=bare", "/bearer/?q=bare"),
+        ("/api/agt-bearer?q=bare", "/bearer?q=bare"),
     ):
         before = up.count("/bearer")
         resp = t.http("GET", path, token=agent["token"])
@@ -387,13 +387,18 @@ def test_upstream_root_is_forwarded(px):
     area="AGT",
     kind="refusal",
     covers=[ROOT, ROOT_BARE],
-    codes=["tool_not_allowed"],
+    codes=["invalid_credential", "tool_not_allowed"],
 )
-def test_upstream_root_keeps_the_acl(px):
-    """wire-contract.md, AGENT-290 — the root routes run the same ACL gate: a route the
-    agent may not use is refused 403 tool_not_allowed before dispatch."""
+def test_upstream_root_keeps_auth_and_the_acl(px):
+    """wire-contract.md, AGENT-290 — the root routes run the same auth and ACL gates: no
+    bearer is 401 invalid_credential, and a route the agent may not use is 403
+    tool_not_allowed, both before dispatch."""
     t, up, agent = px
     before = up.count("")
+    for path in ("/api/agt-bearer/", "/api/agt-bearer"):
+        resp = t.http("GET", path)
+        assert resp.status == 401, path
+        assert resp.code == "invalid_credential", path
     for path in ("/api/agt-not-granted/", "/api/agt-not-granted"):
         resp = t.http("GET", path, token=agent["token"])
         assert resp.status == 403, path

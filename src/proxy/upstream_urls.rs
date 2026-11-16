@@ -28,14 +28,13 @@ pub(super) fn agent_base(headers: &HeaderMap, tls: bool, route: &str) -> Option<
     })
 }
 
-/// Rewrite one URI target that starts with `upstream` and continues
-/// with a path. A bare base (no path, or only `/`) is left alone because
-/// `/api/<route>` itself is not routable. `https://api.x.com` never
-/// matches `https://api.x.com.evil`.
+/// Rewrite one URI target that is `upstream` itself or continues it with
+/// a path, query or fragment. The bare base maps to `/api/<route>`, which
+/// is routable (AGENT-290). `https://api.x.com` never matches
+/// `https://api.x.com.evil`.
 fn rewrite_target(target: &str, base: &str, agent_base: &str) -> Option<String> {
     let rest = target.strip_prefix(base)?;
-    let path = rest.strip_prefix('/')?;
-    (!path.is_empty() && !path.starts_with(['?', '#'])).then(|| format!("{agent_base}{rest}"))
+    (rest.is_empty() || rest.starts_with(['/', '?', '#'])).then(|| format!("{agent_base}{rest}"))
 }
 
 /// Rewrite the URI targets of a header value: the whole value for
@@ -173,15 +172,23 @@ mod tests {
     }
 
     #[test]
-    fn leaves_bare_bases_and_embedded_urls_alone() {
-        for bare in [
-            "https://api.github.com",
-            "https://api.github.com/",
-            "https://api.github.com?page=2",
-            "https://api.github.com/?page=2",
+    fn rewrites_bare_bases_and_leaves_embedded_urls_alone() {
+        // AGENT-290: the route's root is routable, so a redirect or link to
+        // the bare upstream base comes back through Locksmith too.
+        for (bare, want) in [
+            ("https://api.github.com", ""),
+            ("https://api.github.com/", "/"),
+            ("https://api.github.com?page=2", "?page=2"),
+            ("https://api.github.com/?page=2", "/?page=2"),
+            ("https://api.github.com#top", "#top"),
         ] {
-            assert_eq!(rewrite(bare, UP, AGENT, false), None, "{bare}");
+            assert_eq!(
+                rewrite(bare, UP, AGENT, false).as_deref(),
+                Some(format!("{AGENT}{want}").as_str()),
+                "{bare}"
+            );
         }
+        assert_eq!(rewrite("https://api.github.comx/y", UP, AGENT, false), None);
         let embedded = "https://github.com/login?return_to=https://api.github.com/x";
         assert_eq!(rewrite(embedded, UP, AGENT, false), None);
         let link = r#"<https://other.example/c?next=https://api.github.com/r>; rel="next""#;

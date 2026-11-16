@@ -633,6 +633,7 @@ routes:
     file: src/app.rs
     route: /api/{tool_name}/
   refusals:
+  - invalid_credential
   - tool_not_allowed
 - id: agent.ANY./api/{tool_name}
   listener: agent
@@ -642,6 +643,7 @@ routes:
     file: src/app.rs
     route: /api/{tool_name}
   refusals:
+  - invalid_credential
   - tool_not_allowed
 - id: agent.ANY./api/{tool_name}/{*path}
   listener: agent

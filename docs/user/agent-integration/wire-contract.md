@@ -153,9 +153,11 @@ The provider call. Locksmith:
 7. Streams the response back.
 8. Audits.
 
-`/api/{tool_name}/` and `/api/{tool_name}` reach the upstream's root
-(`upstream + /`, query kept) through the same steps, for APIs served at the
-root such as DuckDuckGo's instant answers.
+`/api/{tool_name}/` reaches `upstream + /` and `/api/{tool_name}` the
+`upstream` URL exactly (query kept in both), through the same steps. Use them
+for APIs served at the root, such as DuckDuckGo's instant answers, or at the
+base URL itself, such as a GraphQL endpoint. Redirects and `Link` targets that
+point at the bare upstream come back as `/api/{tool_name}` too.
 
 #### Method + path passthrough
 

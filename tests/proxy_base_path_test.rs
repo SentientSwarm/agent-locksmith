@@ -127,8 +127,36 @@ async fn the_upstream_root_is_forwarded() {
                 "/base/api/".to_string(),
                 Some("q=x&format=json".to_string())
             ),
-            ("/base/api/".to_string(), Some("q=y".to_string())),
+            // Without the slash the upstream URL is used exactly.
+            ("/base/api".to_string(), Some("q=y".to_string())),
             ("/base/api/".to_string(), None),
         ]
+    );
+}
+
+/// AGENT-290 — a redirect from the root to the bare base comes back through
+/// Locksmith, so the agent's next request does not go around it.
+#[tokio::test]
+async fn a_root_redirect_points_back_at_locksmith() {
+    let up = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(
+            ResponseTemplate::new(301)
+                .insert_header("location", format!("{}/base/api?page=2", up.uri()).as_str()),
+        )
+        .mount(&up)
+        .await;
+    let b = build(config(&format!("{}/base/api", up.uri()), "  routes: []\n")).await;
+    let req = Request::builder()
+        .uri("/api/out/")
+        .header("authorization", &b.auth)
+        .header("host", "ls.test:9200")
+        .body(Body::empty())
+        .unwrap();
+    let resp = b.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 301);
+    assert_eq!(
+        resp.headers()["location"],
+        "http://ls.test:9200/api/out?page=2"
     );
 }
