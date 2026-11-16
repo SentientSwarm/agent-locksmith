@@ -33,7 +33,7 @@ Agent Locksmith is the credential and identity substrate for AI agents that need
 
 Locksmith is deliberately narrow. It is not an LLM gateway, not a prompt-injection scanner, and not a network egress controller. Each of those problems is owned by an adjacent tool — an enterprise inference platform or LiteLLM proxy for inference routing, LlamaFirewall or similar for cognitive scanning, Pipelock for network egress. Locksmith composes with these as peers; it does not absorb them. This discipline is core to the product's identity.
 
-The product serves three audiences with one codebase: hardened agent operators (the proving ground), homelab and small-team operators (the audience that validates Locksmith is genuinely standalone), and Enterprise deployments (the audience that validates Locksmith is enterprise-credible). The features personal users want (per-agent identity, scoped tools, audit) are the same features enterprise buyers ask about under different names (multi-tenancy, RBAC, compliance logs).
+The product serves three audiences with one codebase: hardened agent operators (the proving ground), homelab and small-team operators (the audience that validates Locksmith is genuinely standalone), and enterprise deployments (the audience that validates Locksmith is enterprise-credible). The features personal users want (per-agent identity, scoped tools, audit) are the same features enterprise buyers ask about under different names (multi-tenancy, RBAC, compliance logs).
 
 v2 delivers seven milestones: M1 inference-ready hardening, M2 agent identity and admin substrate, M3 governance audit log, M4 admin HTTP API, M5 keys-at-rest hardening, M6 mTLS support, M7 response-side controls. M1 and M2 are specified at implementation depth; M3–M7 at intent and constraint depth.
 
@@ -122,7 +122,7 @@ Three audiences served by one product. Same features under different names.
 
 - Hardened agent operators
 - Homelab and small-team operators
-- Enterprise deployer
+- Enterprise deployers
 - Compliance and audit reviewers (cross-cutting)
 - AI agents themselves (programmatic users)
 
@@ -351,7 +351,7 @@ The product surface is minimal and deliberately boring.
 
 - **Audience coverage.** All three audiences (hardened operators, homelab/small-team, enterprise) deploy v2 in production using the same binary and the same product surface — no audience-specific forks.
 - **Composability adoption.** The `egress: proxied` flag and `egress_proxy:` config see use in deployments that also run Pipelock (composed deployment validates D-11, D-16).
-- **Inference verification matrix coverage.** M1 ships with passing integration tests against Anthropic, OpenAI, Ollama, LM Studio, and a generic OpenAI-compatible local proxy fixture.
+- **Inference verification matrix coverage.** M1 ships with passing integration tests against Anthropic, OpenAI, Ollama, LM Studio, an enterprise inference endpoint, and a generic OpenAI-compatible local proxy fixture.
 
 ### 10.3 Technical metrics
 

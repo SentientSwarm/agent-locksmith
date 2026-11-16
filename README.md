@@ -97,8 +97,8 @@ middleware (`kind=infra`) is operator-only.
   (zeroized on drop); never logged, never in HTTP responses.
 - **Upstream CA trust (v2.7.0)** — optional `tls.upstream_ca_bundle`
   adds a private/internal CA to the client root store so locksmith can
-  verify HTTPS upstreams behind an internal CA (e.g. an internal MCP
-  endpoint). Adds roots only; verification is never disabled.
+  verify HTTPS upstreams behind an internal CA (e.g. a self-hosted inference
+  platform). Adds roots only; verification is never disabled.
 - **Per-route upstream CA** — a registration can carry its own PEM trust
   anchors (`--upstream-ca-file`). That route trusts only them, an
   intermediate alone is enough, and no other route is affected.

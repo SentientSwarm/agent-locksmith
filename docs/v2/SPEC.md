@@ -3662,7 +3662,7 @@ The PRD's seven milestones (M1–M7) are the workstreams. Each is a deliverable 
 
 **Priority:** P1 | **Wave:** 1 | **Estimate:** S–M (per `docs/v2/PLAN.md` once produced)
 
-Make the existing M0 proxy correct for inference workloads. SSE/streaming passthrough, per-tool timeouts and body limits sufficient for multi-minute generation, the `cloud:` → `egress:` configuration rename, and a verification matrix covering Anthropic, OpenAI, Ollama, LM Studio, and a generic OpenAI-compatible local-proxy fixture.
+Make the existing M0 proxy correct for inference workloads. SSE/streaming passthrough, per-tool timeouts and body limits sufficient for multi-minute generation, the `cloud:` → `egress:` configuration rename, and a verification matrix covering Anthropic, OpenAI, Ollama, LM Studio, an enterprise inference endpoint, and a generic OpenAI-compatible local-proxy fixture.
 
 **Source UCs:** UC-6, UC-13.
 **Source requirements:** R-F12, R-F13, R-F18, R-N6.
