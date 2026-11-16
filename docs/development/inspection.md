@@ -215,8 +215,8 @@ clients use for that event's type count, so an upstream cannot split one
 output across windows by adding or varying others (a top-level `index`
 on a chat chunk names nothing, and an empty `choices` on another
 protocol's event changes nothing). An event naming another protocol, or
-whose event name and `type` name different events, could be read two
-ways: under `fail_closed` the stream is blocked, under `fail_open` an
+whose event name and `type` differ where either names a protocol event
+(the SSE default name `message` names none), could be read two ways: under `fail_closed` the stream is blocked, under `fail_open` an
 `inspection_hold_overflow` row is written. So a match split across one output's deltas
 is found however the outputs interleave. Each window keeps the last `max_match_len - 1` bytes
 of its output, measured both raw and after folding, so a match split

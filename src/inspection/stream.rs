@@ -1956,6 +1956,30 @@ mod tests {
     }
 
     #[test]
+    fn an_event_named_for_a_protocol_with_another_type_fails_closed() {
+        let named = |t: &str| {
+            format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::json!({
+            "type": "x_delta", "index": 0, "delta": {"type": "text_delta", "text": t}})
+            )
+        };
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &[named("hi")]);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(i.report().error.is_some());
+        // The SSE default name `message` names no event type.
+        let plain = format!(
+            "event: message\ndata: {}\n\n",
+            serde_json::json!({
+            "type": "response.output_text.delta", "output_index": 0, "content_index": 0,
+            "delta": "hi"})
+        );
+        let (out, i) = run(&closed(1 << 20, Verdict::Block), &[plain]);
+        assert!(!out.contains("inspection_blocked"), "{out}");
+        assert_eq!(i.report().error, None);
+    }
+
+    #[test]
     fn a_stream_that_changes_protocol_fails_closed() {
         let k = key();
         let events = [

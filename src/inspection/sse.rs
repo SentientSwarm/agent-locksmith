@@ -212,11 +212,12 @@ pub fn scheme(event: &SseEvent) -> Option<lanes::Scheme> {
     lanes::scheme_of(&kind(event, &value)?)
 }
 
-/// The event's name and its data's `type` both name protocol events, but
-/// different ones: a client dispatching on one reads it differently from
-/// one dispatching on the other.
+/// The event's name and its data's `type` differ and at least one names a
+/// protocol event: a client dispatching on one reads it differently from
+/// one dispatching on the other. The SSE default name `message` names no
+/// event type.
 pub fn names_disagree(event: &SseEvent) -> bool {
-    let Some(name) = event.event.as_deref() else {
+    let Some(name) = event.event.as_deref().filter(|n| *n != "message") else {
         return false;
     };
     let Some(value) = json(event) else {
@@ -225,7 +226,7 @@ pub fn names_disagree(event: &SseEvent) -> bool {
     let Some(kind) = value.get("type").and_then(Value::as_str) else {
         return false;
     };
-    kind != name && lanes::scheme_of(kind).is_some() && lanes::scheme_of(name).is_some()
+    kind != name && (lanes::scheme_of(kind).is_some() || lanes::scheme_of(name).is_some())
 }
 
 fn kind(event: &SseEvent, value: &Value) -> Option<String> {
