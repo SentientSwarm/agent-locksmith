@@ -13,7 +13,7 @@ pub async fn exercise() {
     let before = support::authority(&f).await;
     f.stop();
     f.start(process::DAEMON).await;
-    assert_eq!(version(&f).await, 26);
+    assert_eq!(version(&f).await, 27);
     assert_eq!(support::authority(&f).await, before);
     no_automatic_definitions(&f).await;
     support::import(&f, 1);
