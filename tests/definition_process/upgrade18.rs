@@ -110,7 +110,7 @@ pub async fn exercise() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        26
+        27
     );
     pool.close().await;
     assert_eq!(
