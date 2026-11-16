@@ -3,7 +3,8 @@
 //! Events are split on blank lines and kept as their raw bytes, so an
 //! event nothing touches is forwarded byte for byte. Text is extracted
 //! from the streaming shapes of the OpenAI chat and Responses APIs and
-//! the Anthropic Messages API; anything else carries no text.
+//! the Anthropic Messages API; in any other JSON every string is a field
+//! (its lane named by its path).
 //!
 //! A field later events extend (a delta) belongs to a lane; a field
 //! complete in its own event (a snapshot: `response.created`, any
@@ -215,11 +216,17 @@ const METADATA: &[&str] = &[
 /// its lane, plus any value a repeated key hides. Data that is not JSON is
 /// one field. `[DONE]` and data-less events carry none.
 pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
+    extract_within(event, usize::MAX).unwrap_or_default()
+}
+
+/// [`extract`], or `None` when the fields' text and locations together
+/// pass `limit` bytes (deep paths can outweigh the event many times).
+pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
     let Some(data) = event.data.as_deref() else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return if data.is_empty() || data == "[DONE]" {
+        return Some(if data.is_empty() || data == "[DONE]" {
             Vec::new()
         } else {
             vec![TextSpan {
@@ -227,14 +234,21 @@ pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
                 lane: Some(Lane::default()),
                 text: data.to_string(),
             }]
-        };
+        });
     };
     let kind = kind(event, &value);
     let chat = value.get("choices").is_some_and(Value::is_array);
     let tags = lanes::tags(&value);
-    let mut found = Vec::new();
-    leaves(&value, (String::new(), String::new()), &mut found);
-    let mut out: Vec<TextSpan> = found
+    let mut walk = Walk {
+        limit,
+        ..Walk::default()
+    };
+    walk.value(&value);
+    if walk.over {
+        return None;
+    }
+    let mut out: Vec<TextSpan> = walk
+        .found
         .into_iter()
         .map(|(pointer, path, text)| TextSpan {
             place: Place::Json(pointer),
@@ -245,17 +259,19 @@ pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
             text,
         })
         .collect();
-    out.extend(
-        lanes::hidden_strings(data)
-            .into_iter()
-            .filter(|t| !t.is_empty())
-            .map(|text| TextSpan {
-                place: Place::Hidden,
-                lane: None,
-                text,
-            }),
-    );
-    out
+    if let Some(hidden) = lanes::hidden_strings(data) {
+        // At least one hidden span, even empty, so the repeat is visible.
+        let mut texts: Vec<String> = hidden.into_iter().filter(|t| !t.is_empty()).collect();
+        if texts.is_empty() {
+            texts.push(String::new());
+        }
+        out.extend(texts.into_iter().map(|text| TextSpan {
+            place: Place::Hidden,
+            lane: None,
+            text,
+        }));
+    }
+    Some(out)
 }
 
 /// The lane path of a field later events extend, or `None` for one
@@ -265,11 +281,23 @@ fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
         // A choice's `delta` (chat) or `text` (completions); `logprobs`
         // and content-filter results are per chunk.
         let (_, field) = path.strip_prefix("/choices/")?.split_once('/')?;
-        return (field.starts_with("delta/") || field == "text").then(|| path.to_string());
+        if field.starts_with("delta/") || field == "text" {
+            return Some(path.to_string());
+        }
+        return logprob_lane(path);
     }
     match kind {
         Some(k) if k.starts_with("response.") => {
-            (k.ends_with(".delta") && path == "/delta").then(|| path.to_string())
+            if k.ends_with(".delta") {
+                return match path {
+                    "/delta" => Some(path.to_string()),
+                    _ => logprob_lane(path),
+                };
+            }
+            // Clients start a part's text (or a call's arguments) from
+            // what `.added` gives, then append the deltas.
+            let opening = k.ends_with(".added") && matches!(path, "/part/text" | "/item/arguments");
+            opening.then(|| "/delta".to_string())
         }
         // A block's opening text is the start of what its deltas extend.
         Some("content_block_start") => match path {
@@ -292,32 +320,95 @@ fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
     }
 }
 
-/// Each non-empty, non-metadata string as (JSON pointer, lane path,
-/// text); `at` is where `value` is.
-fn leaves(value: &Value, at: (String, String), out: &mut Vec<(String, String, String)>) {
-    let (pointer, path) = at;
-    match value {
-        Value::String(text) if !text.is_empty() => out.push((pointer, path, text.clone())),
-        Value::Array(items) => {
-            for (i, item) in items.iter().enumerate() {
-                let next = (
-                    format!("{pointer}/{i}"),
-                    format!("{path}/{}", lanes::element(item, i)),
-                );
-                leaves(item, next, out);
-            }
+/// A logprob token's lane: its path without the token's position, so a
+/// choice's tokens join in order, as the text they spell does (each
+/// `top_logprobs` rank its own lane). `None` for any other path.
+fn logprob_lane(path: &str) -> Option<String> {
+    let segs: Vec<&str> = path.split('/').collect();
+    let at = segs.iter().position(|s| *s == "logprobs")?;
+    let mut head = segs[..=at].to_vec();
+    let mut rest = &segs[at + 1..];
+    if let Some(&kind @ ("content" | "refusal" | "tokens")) = rest.first() {
+        head.push(kind);
+        rest = &rest[1..];
+    }
+    let position = |s: &str| s.trim_start_matches('#').parse::<usize>().is_ok();
+    let (first, tail) = rest.split_first()?;
+    let ok = position(first)
+        && match tail {
+            [] => head.last() == Some(&"tokens"),
+            ["token"] => true,
+            ["top_logprobs", rank, "token"] => position(rank),
+            _ => false,
+        };
+    ok.then(|| [head, tail.to_vec()].concat().join("/"))
+}
+
+/// Keys whose object value is a tool's input: metadata names there are
+/// the tool's own fields, so they are scanned.
+const TOOL_DATA: &[&str] = &["input", "arguments"];
+
+/// A walk over an event's JSON collecting each non-empty, non-metadata
+/// string as (JSON pointer, lane path, text). Locations are built in
+/// place and copied only for a string, and the copies count against
+/// `limit`, so deep or long keys cost no more than `limit`.
+#[derive(Default)]
+struct Walk {
+    pointer: String,
+    path: String,
+    tool: bool,
+    limit: usize,
+    used: usize,
+    over: bool,
+    found: Vec<(String, String, String)>,
+}
+
+impl Walk {
+    fn value(&mut self, value: &Value) {
+        if self.over {
+            return;
         }
-        Value::Object(map) => {
-            for (key, item) in map {
-                if item.is_string() && METADATA.contains(&key.as_str()) {
-                    continue;
+        match value {
+            Value::String(text) if !text.is_empty() => {
+                self.used += self.pointer.len() + self.path.len() + text.len();
+                if self.used > self.limit {
+                    self.over = true;
+                    return;
                 }
-                let token = key.replace('~', "~0").replace('/', "~1");
-                let next = (format!("{pointer}/{token}"), format!("{path}/{token}"));
-                leaves(item, next, out);
+                self.found
+                    .push((self.pointer.clone(), self.path.clone(), text.clone()));
             }
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    self.enter(&i.to_string(), &lanes::element(item, i), item);
+                }
+            }
+            Value::Object(map) => {
+                for (key, item) in map {
+                    if !self.tool && item.is_string() && METADATA.contains(&key.as_str()) {
+                        continue;
+                    }
+                    let outer = self.tool;
+                    self.tool |= !item.is_string() && TOOL_DATA.contains(&key.as_str());
+                    let token = key.replace('~', "~0").replace('/', "~1");
+                    self.enter(&token, &token, item);
+                    self.tool = outer;
+                }
+            }
+            _ => {}
         }
-        _ => {}
+    }
+
+    /// Walk `item` at `/pointer_seg` (lane segment `path_seg`).
+    fn enter(&mut self, pointer_seg: &str, path_seg: &str, item: &Value) {
+        let (p, l) = (self.pointer.len(), self.path.len());
+        self.pointer.push('/');
+        self.pointer.push_str(pointer_seg);
+        self.path.push('/');
+        self.path.push_str(path_seg);
+        self.value(item);
+        self.pointer.truncate(p);
+        self.path.truncate(l);
     }
 }
 
@@ -363,7 +454,27 @@ pub fn rewrite(event: &SseEvent, edits: &[(Place, String)]) -> Vec<u8> {
             *slot = Value::String(text.clone());
         }
     }
+    drop_logprob_bytes(&mut value, false);
     data_lines(event, vec![value.to_string()])
+}
+
+/// Null every `bytes` array under `logprobs`: a rewritten event's token
+/// bytes would spell the text its cut removed (the token strings are
+/// cut as text).
+fn drop_logprob_bytes(value: &mut Value, under: bool) {
+    match value {
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                if under && key == "bytes" {
+                    *item = Value::Null;
+                } else {
+                    drop_logprob_bytes(item, under || key == "logprobs");
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|i| drop_logprob_bytes(i, under)),
+        _ => {}
+    }
 }
 
 /// The event's non-data lines in order, with its data lines replaced.

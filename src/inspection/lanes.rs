@@ -108,17 +108,17 @@ pub fn closes(kind: Option<&str>, value: &Value) -> Vec<Close> {
 /// The strings a repeated key hides from a parsed view: everything
 /// inside each value but the last for that key, at any depth. A client
 /// whose parser keeps the first value reads them, so they are scanned too.
-pub fn hidden_strings(json: &str) -> Vec<String> {
-    let mut hidden = Hidden(Vec::new());
+/// `None` when no key repeats.
+pub fn hidden_strings(json: &str) -> Option<Vec<String>> {
+    let mut hidden = Hidden(Vec::new(), false);
     let mut de = serde_json::Deserializer::from_str(json);
-    match (&mut hidden).deserialize(&mut de) {
-        Ok(_) => hidden.0,
-        Err(_) => Vec::new(),
-    }
+    (&mut hidden).deserialize(&mut de).ok()?;
+    hidden.1.then_some(hidden.0)
 }
 
-/// Collects hidden strings; each value visited yields the strings in it.
-struct Hidden(Vec<String>);
+/// Collects hidden strings (and whether any key repeated); each value
+/// visited yields the strings in it.
+struct Hidden(Vec<String>, bool);
 
 impl<'de> DeserializeSeed<'de> for &mut Hidden {
     type Value = Vec<String>;
@@ -167,6 +167,7 @@ impl<'de> Visitor<'de> for &mut Hidden {
         for mut values in by_key.into_values() {
             let last = values.pop().unwrap_or_default();
             for hidden in values {
+                self.1 = true;
                 self.0.extend(hidden);
             }
             all.extend(last);
@@ -182,14 +183,21 @@ mod tests {
 
     #[test]
     fn hidden_strings_are_found_at_any_depth() {
-        assert!(hidden_strings(r#"{"a":"x","b":{"c":["y",{"d":"z"}]}}"#).is_empty());
-        assert_eq!(hidden_strings(r#"{"a":"one","a":"two"}"#), vec!["one"]);
-        assert_eq!(hidden_strings(r#"{"x":[{"d":"s","d":"t"}]}"#), vec!["s"]);
-        assert_eq!(hidden_strings(r#"{"a":{"b":"in"},"a":"out"}"#), vec!["in"]);
+        let hidden = |j: &str| hidden_strings(j);
+        let some = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(hidden(r#"{"a":"x","b":{"c":["y",{"d":"z"}]}}"#), None);
+        assert_eq!(hidden(r#"{"a":"one","a":"two"}"#), some(&["one"]));
+        assert_eq!(hidden(r#"{"x":[{"d":"s","d":"t"}]}"#), some(&["s"]));
+        assert_eq!(hidden(r#"{"a":{"b":"in"},"a":"out"}"#), some(&["in"]));
         assert_eq!(
-            hidden_strings(r#"{"a":"\u0067h","a":"x"}"#),
-            vec!["gh"],
+            hidden(r#"{"a":"\u0067h","a":"x"}"#),
+            some(&["gh"]),
             "decoded"
+        );
+        assert_eq!(
+            hidden(r#"{"n":1,"n":2}"#),
+            some(&[]),
+            "a repeat with no strings"
         );
     }
 

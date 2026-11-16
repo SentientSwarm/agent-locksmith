@@ -106,6 +106,8 @@ pub struct StreamInspector {
     passthrough: bool,
     /// Fields scanned alone so far (their ids count up from `WHOLE`).
     wholes: usize,
+    /// Bytes of lane paths remembered, held to `max_scan_bytes`.
+    lane_bytes: usize,
 }
 
 impl StreamInspector {
@@ -129,6 +131,7 @@ impl StreamInspector {
             hold_overflowed: false,
             passthrough: false,
             wholes: 0,
+            lane_bytes: 0,
         }
     }
 
@@ -151,21 +154,30 @@ impl StreamInspector {
             step.out.push(chunk.to_vec());
             return step;
         }
-        for event in self.parser.push(chunk) {
+        let mut events = self.parser.push(chunk).into_iter();
+        while let Some(event) = events.next() {
             self.event(event, &mut step);
             if step.ended {
                 self.ended = true;
                 return step;
             }
+            if self.passthrough {
+                step.out.extend(events.by_ref().map(|e| e.raw));
+            }
         }
-        if self.parser.overflowed() {
-            self.oversized_event(&mut step);
+        if self.parser.overflowed() && !self.passthrough {
+            self.oversized(None, &mut step);
+        } else if self.passthrough
+            && let Some(rest) = self.parser.finish()
+        {
+            step.out.push(rest.raw);
         }
         step
     }
 
-    /// An event too long to judge within `max_scan_bytes`.
-    fn oversized_event(&mut self, step: &mut Step) {
+    /// An event too big to judge within `max_scan_bytes`: `current`, or
+    /// (`None`) the one the parser overflowed on.
+    fn oversized(&mut self, current: Option<SseEvent>, step: &mut Step) {
         self.report.skipped = Some(super::SkipReason::Oversize);
         if self.on_error == OnError::FailClosed {
             self.block(step);
@@ -175,8 +187,10 @@ impl StreamInspector {
         while let Some(h) = self.held.pop_front() {
             step.out.push(render(&h));
         }
-        if let Some(rest) = self.parser.finish() {
-            step.out.push(rest.raw);
+        match current {
+            // `push` forwards the rest of its batch, then the parser's.
+            Some(event) => step.out.push(event.raw),
+            None => step.out.extend(self.parser.finish().map(|rest| rest.raw)),
         }
         self.passthrough = true;
     }
@@ -210,7 +224,8 @@ impl StreamInspector {
     }
 
     /// The lane `lane`'s index, made on first use. Past `MAX_LANES`
-    /// unfinished outputs (or `MAX_OUTPUTS` in all), new outputs share one
+    /// unfinished outputs (or `MAX_OUTPUTS` in all, or lane paths past
+    /// `max_scan_bytes`), new outputs share one
     /// window, which can split a match: that is an overflow (`None` under
     /// `fail_closed`).
     fn lane(&mut self, lane: &Lane) -> Option<usize> {
@@ -222,7 +237,10 @@ impl StreamInspector {
             tags: Vec::new(),
         };
         let live = self.lanes.iter().filter(|l| !l.done).count();
-        let lane = if live + 1 >= MAX_LANES || self.lanes.len() + 1 >= MAX_OUTPUTS {
+        let full = live + 1 >= MAX_LANES
+            || self.lanes.len() + 1 >= MAX_OUTPUTS
+            || self.lane_bytes + lane.path.len() > self.max_held;
+        let lane = if full {
             if self.on_error == OnError::FailClosed {
                 return None;
             }
@@ -234,6 +252,7 @@ impl StreamInspector {
         if let Some(&i) = self.by_lane.get(lane) {
             return Some(i);
         }
+        self.lane_bytes += lane.path.len();
         self.lanes.push(LaneState {
             lane: lane.clone(),
             window: TextWindow::new(self.scanners.clone(), self.max_held),
@@ -250,7 +269,19 @@ impl StreamInspector {
         }
         let mut fields = Vec::new();
         let mut hits = Vec::new();
-        for span in sse::extract(&event) {
+        let Some(spans) = sse::extract_within(&event, self.max_held) else {
+            return self.oversized(Some(event), step);
+        };
+        if spans.iter().any(|s| s.place == sse::Place::Hidden) {
+            // A hidden value is scanned in its event only: one split
+            // across events would be missed.
+            if self.on_error == OnError::FailClosed {
+                self.report.error = Some("stream event repeats a JSON key".into());
+                return self.block(step);
+            }
+            self.hold_overflowed = true;
+        }
+        for span in spans {
             let Some(key) = &span.lane else {
                 let Some(id) = self.whole(&span, &mut hits, step) else {
                     return;
@@ -1309,6 +1340,211 @@ mod tests {
                 assert!(v.as_str().unwrap().contains("[REDACTED:dlp]"), "{d}");
             }
         }
+    }
+
+    /// Every logprob token string in `out`, joined per path with array
+    /// positions dropped: what a client reading logprobs rebuilds.
+    fn logprob_texts(out: &str) -> Vec<String> {
+        fn walk(
+            v: &serde_json::Value,
+            path: String,
+            acc: &mut std::collections::BTreeMap<String, String>,
+        ) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k, x) in m {
+                        if k == "token" {
+                            if let Some(t) = x.as_str() {
+                                acc.entry(path.clone()).or_default().push_str(t);
+                            }
+                        } else if k == "bytes" {
+                            let b: Vec<u8> = x
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|n| n.as_u64().map(|n| n as u8))
+                                .collect();
+                            acc.entry(format!("{path}/bytes"))
+                                .or_default()
+                                .push_str(&String::from_utf8_lossy(&b));
+                        } else {
+                            walk(x, format!("{path}/{k}"), acc);
+                        }
+                    }
+                }
+                serde_json::Value::Array(a) => {
+                    for (i, x) in a.iter().enumerate() {
+                        let p = if path.ends_with("top_logprobs") {
+                            format!("{path}/{i}")
+                        } else {
+                            path.clone()
+                        };
+                        walk(x, p, acc);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut acc = std::collections::BTreeMap::new();
+        for e in sse::SseParser::default().push(out.as_bytes()) {
+            if let Some(v) = e.data.as_deref().and_then(|d| serde_json::from_str(d).ok()) {
+                walk(&v, String::new(), &mut acc);
+            }
+        }
+        acc.into_values().collect()
+    }
+
+    #[test]
+    fn logprob_tokens_of_a_redacted_match_do_not_leak() {
+        use serde_json::json;
+        let k = key();
+        let lp = |t: &str| {
+            json!([{"token": t, "logprob": -0.1, "bytes": t.as_bytes(),
+            "top_logprobs": [{"token": t, "logprob": -0.1, "bytes": t.as_bytes()},
+                {"token": "x", "logprob": -3.0}]}])
+        };
+        let chat = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                json!({"choices": [{"index": 0,
+            "delta": {"content": t}, "logprobs": {"content": lp(t)}}]})
+            )
+        };
+        let resp = |t: &str| {
+            ev(
+                "response.output_text.delta",
+                json!({"output_index": 0, "content_index": 0, "delta": t, "logprobs": lp(t)}),
+            )
+        };
+        let shapes: [&dyn Fn(&str) -> String; 2] = [&chat, &resp];
+        for event in shapes {
+            let mut events = vec![event("key: ")];
+            events.extend(k.chars().map(|c| event(&c.to_string())));
+            events.push(event(" end"));
+            events.push(DONE.to_string());
+            let (out, _) = run(&policy(Verdict::Redact), &events);
+            assert!(!leaked(&out), "{out}");
+            for t in logprob_texts(&out) {
+                assert!(
+                    (0..=k.len() - 8).all(|i| !t.contains(&k[i..i + 8])),
+                    "leaked via logprobs: {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_names_inside_tool_input_are_scanned() {
+        use serde_json::json;
+        let k = key();
+        let events = vec![
+            ev(
+                "content_block_start",
+                json!({"index": 0, "content_block": {"type": "tool_use",
+                "id": "toolu_1", "name": "run", "input": {"instructions": format!("use {k}"),
+                    "id": format!("x {k}")}}}),
+            ),
+            ev("content_block_stop", json!({"index": 0})),
+            ev("message_stop", json!({})),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..12]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    #[test]
+    fn a_match_split_between_added_text_and_a_delta_is_found() {
+        use serde_json::json;
+        let k = key();
+        let at = |extra: serde_json::Value| {
+            let mut v = json!({"output_index": 0, "content_index": 0});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let events = vec![
+            ev(
+                "response.content_part.added",
+                at(json!({"part": {"type": "output_text", "text": format!("key {}", &k[..12])}})),
+            ),
+            ev(
+                "response.output_text.delta",
+                at(json!({"delta": format!("{} end", &k[12..])})),
+            ),
+            ev("response.output_text.done", at(json!({"text": "[elided]"}))),
+            ev("response.completed", json!({"response": {}})),
+        ];
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(
+            !out.contains(&k[..12]) && !out.contains(&k[12..24]),
+            "{out}"
+        );
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+    }
+
+    #[test]
+    fn finished_outputs_do_not_count_toward_the_lane_limit() {
+        use serde_json::json;
+        let mut events = Vec::new();
+        for n in 0..(2 * MAX_LANES) {
+            events.push(ev(
+                "content_block_start",
+                json!({"index": n, "content_block": {"type": "text", "text": ""}}),
+            ));
+            events.push(ev(
+                "content_block_delta",
+                json!({"index": n, "delta": {"type": "text_delta", "text": "hi"}}),
+            ));
+            events.push(ev("content_block_stop", json!({"index": n})));
+        }
+        events.push(ev("message_stop", json!({})));
+        passes_whole(&events);
+    }
+
+    #[test]
+    fn an_event_whose_paths_outweigh_the_cap_is_oversize() {
+        // Few bytes of text, but each string's path repeats a long key.
+        let long = "k".repeat(4096);
+        let items = vec!["\"a\""; 2000].join(",");
+        let event = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"{long}\":[{items}]}}}}]}}\n\n"
+        );
+        assert!(event.len() < 1 << 20);
+        let mut i = StreamInspector::new(&closed(1 << 20, Verdict::Redact));
+        let step = i.push(event.as_bytes());
+        assert!(step.ended, "paths past the cap were accepted");
+        assert_eq!(i.report().skipped, Some(super::super::SkipReason::Oversize));
+    }
+
+    #[test]
+    fn past_an_oversize_event_fail_open_forwards_the_rest_in_order() {
+        let long = "k".repeat(4096);
+        let items = vec!["\"a\""; 2000].join(",");
+        let big = format!(
+            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"{long}\":[{items}]}}}}]}}\n\n"
+        );
+        let batch = [chat("one "), big, chat("two "), DONE.to_string()].concat();
+        let mut i = StreamInspector::new(&policy(Verdict::Redact));
+        let mut out = i.push(batch.as_bytes()).out;
+        out.extend(i.push(chat("three").as_bytes()).out);
+        out.extend(i.finish().out);
+        assert_eq!(
+            String::from_utf8(out.concat()).unwrap(),
+            batch + &chat("three")
+        );
+        assert_eq!(i.report().skipped, Some(super::super::SkipReason::Oversize));
+    }
+
+    #[test]
+    fn a_repeated_key_fails_closed() {
+        let event = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\",\"content\":\"b\"}}]}\n\n";
+        let (out, i) = run(
+            &closed(1 << 20, Verdict::Redact),
+            &[event.to_string(), DONE.to_string()],
+        );
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(i.report().error.is_some());
     }
 
     /// Cost per event and time to first forwarded byte, for the design

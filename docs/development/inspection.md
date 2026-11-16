@@ -172,21 +172,29 @@ as well as deltas, except protocol metadata (`type`, `id`, `object`,
 `model`, `role`, `finish_reason`, `stop_reason`, `system_fingerprint`,
 `status`, `item_id`, `call_id`, `response_id`, the `obfuscation` padding,
 `service_tier`, and `instructions`, the agent's own prompt echoed back).
+Inside a tool's `input` or `arguments` object those names are the tool's
+own fields and are scanned like any other.
 Empty strings are skipped. Data that is not JSON is scanned as one
 string. When JSON repeats a key, the values the parsed view hides are
 decoded and scanned too, since a client that keeps the first value reads
 them; a redact re-writes the event from its parsed view, which drops
-them.
+them. A hidden value is scanned within its event only, so under
+`fail_closed` an event that repeats a key blocks the stream, and under
+`fail_open` it writes an `inspection_hold_overflow` row.
 
 A string complete in its own event (a snapshot) is scanned alone and
 never waits for later text: every Responses event except a `*.delta`
 (`response.created`, `.added`, `.done`, `response.completed` and the
 rest), Anthropic `message_start`, `message_delta` and `message_stop`,
 and a chat chunk's fields outside a choice's `delta` (Azure content
-filter results, `logprobs`, `usage`). Only fields later events extend
-(a chat or completions choice's `delta` and `text`, a Responses
-`*.delta`, an Anthropic block's text, thinking and tool input, including
-the opening text in `content_block_start`) go to a window.
+filter results, `usage`). Only fields later events extend go to a
+window: a chat or completions choice's `delta` and `text`, a Responses
+`*.delta`, an Anthropic block's text, thinking and tool input, the
+opening text clients start them from (`content_block_start`, a Responses
+`.added` part's text or call's arguments), and logprob tokens, which
+spell the same text one token at a time (each `top_logprobs` rank is its
+own output). A rewritten event's logprob `bytes` arrays are set to
+`null`, since they would spell the text a cut removed.
 
 Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
@@ -220,8 +228,9 @@ How the stream is forwarded depends on `on_hit`:
   (OpenAI or Anthropic, with code `inspection_blocked`) and ends the
   stream. If the agent disconnects, the upstream is closed at once.
 
-An event longer than `max_scan_bytes`, or held text or events past it,
-can't be judged within bounds. Under `fail_closed` the stream is blocked.
+An event longer than `max_scan_bytes`, one whose strings and their JSON
+locations together pass it (long keys repeated over many values), or
+held text or events past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
 Under `fail_open`, held text or events past the bound are released early
 and an `inspection_hold_overflow` row is written; an oversized event and
 the rest of the stream pass through unscanned, audited
