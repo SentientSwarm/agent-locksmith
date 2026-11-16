@@ -294,7 +294,10 @@ impl StreamInspector {
         let Some(spans) = sse::extract_within(&event, self.max_held) else {
             return self.oversized(Some(event), step);
         };
-        if spans.iter().any(|s| s.place == sse::Place::View) && self.on_error == OnError::FailClosed
+        if spans
+            .iter()
+            .any(|s| s.place == sse::Place::View { json: true })
+            && self.on_error == OnError::FailClosed
         {
             self.report.error = Some("stream event data is JSON that does not parse".into());
             return self.block(step);
@@ -461,10 +464,9 @@ impl StreamInspector {
     /// The newest held event has a cut no rewrite can make.
     fn unrewritable(&self) -> bool {
         self.held.back().is_some_and(|h| {
-            h.fields
-                .iter()
-                .zip(&h.cuts)
-                .any(|(f, cuts)| f.span.place == sse::Place::View && !cuts.is_empty())
+            h.fields.iter().zip(&h.cuts).any(|(f, cuts)| {
+                matches!(f.span.place, sse::Place::View { .. }) && !cuts.is_empty()
+            })
         })
     }
 
@@ -1761,6 +1763,35 @@ mod tests {
             assert!(!out.contains(&k[1..9]), "{verdict:?}: {out}");
             assert_eq!(i.report().verdict, Verdict::Block);
         }
+    }
+
+    #[test]
+    fn escapes_in_any_unparsed_data_are_resolved() {
+        let k = key();
+        // A JSON string left open, and plain text, each hiding the key
+        // behind `\u0067`.
+        let open = format!("data: \"\\u0067{}\n\n", &k[1..]);
+        let plain = format!("data: key \\u0067{} end\n\n", &k[1..]);
+        let (out, i) = run(&closed(1 << 20, Verdict::Flag), std::slice::from_ref(&open));
+        assert!(out.contains("inspection_blocked"), "fail_closed: {out}");
+        assert!(i.report().error.is_some());
+        for event in [open, plain] {
+            let (out, i) = run(&policy(Verdict::Block), std::slice::from_ref(&event));
+            assert!(!out.contains(&k[1..9]), "{out}");
+            assert_eq!(i.report().verdict, Verdict::Block);
+        }
+    }
+
+    #[test]
+    fn a_metadata_name_in_another_protocol_keeps_its_lane() {
+        let k = key();
+        let mut events: Vec<String> = k
+            .chars()
+            .map(|c| format!("data: {}\n\n", serde_json::json!({"status": c.to_string()})))
+            .collect();
+        events.push(DONE.to_string());
+        let (_, i) = run(&policy(Verdict::Flag), &events);
+        assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
     }
 
     #[test]

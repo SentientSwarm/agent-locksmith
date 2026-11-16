@@ -172,11 +172,12 @@ in an event's `data` is scanned, aggregates as well as deltas; a redact
 renames a key, numbering a name already taken. Empty strings are
 skipped. Short texts found clean (ids, model names, keys) are remembered
 for the stream and not scanned again. Data that is not JSON is scanned
-as one string. Data shaped like JSON that does not parse (a number out
-of range, nesting past the parser's limit), which a client may still
-decode, follows `on_error`: under `fail_closed` the stream is blocked;
-under `fail_open` its text is also scanned with escapes resolved, and a
-redact-level hit there blocks, since no rewrite can reach it. When JSON
+as one string, and, when it holds a backslash, again with its escapes
+resolved; a redact-level hit only that view shows blocks, since no
+rewrite can reach it. Data shaped like JSON (starting with `{`, `[` or
+`"`) that does not parse (a number out of range, nesting past the
+parser's limit, a string left open), which a client may still decode,
+follows `on_error`: under `fail_closed` the stream is blocked. When JSON
 repeats a key, the values the parsed view hides are decoded and scanned
 too, since a client that keeps the first value reads them; a redact
 re-writes the event from its parsed view, which drops them. A hidden
@@ -189,10 +190,11 @@ never waits for later text: every Responses event except a `*.delta`
 (`response.created`, `.added`, `.done`, `response.completed` and the
 rest), Anthropic `message_start`, `message_delta` and `message_stop`, a
 chat chunk's fields outside a choice's `delta` (`logprobs`, Azure content
-filter results, `usage`), and anything named as protocol metadata
-(`type`, `id`, `object`, `model`, `role`, `finish_reason`,
-`stop_reason`, `system_fingerprint`, `status`, `item_id`, `call_id`,
-`response_id`, `obfuscation`, `service_tier`, `instructions`). Only
+filter results, `usage`), and, within a choice, anything named as
+protocol metadata (`type`, `id`, `object`, `model`, `role`,
+`finish_reason`, `stop_reason`, `system_fingerprint`, `status`,
+`item_id`, `call_id`, `response_id`, `obfuscation`, `service_tier`,
+`instructions`), such as a delta's `role` or a tool call's `id`. Only
 fields later events extend go to a window: a chat or completions
 choice's `delta` and `text`, a Responses `*.delta`, an Anthropic block's
 text, thinking and tool input, and the opening text clients start them

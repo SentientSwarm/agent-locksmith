@@ -36,9 +36,11 @@ pub enum Place {
     /// An object key (in the object at pointer `parent`): rewritten by
     /// renaming it.
     Key { parent: String, key: String },
-    /// Decoded text no rewrite can reach (data shaped like JSON that does
-    /// not parse, with its escapes resolved): a redact of it blocks.
-    View,
+    /// Decoded text no rewrite can reach (data that does not parse, with
+    /// its escapes resolved): a redact of it blocks. `json`: the data is
+    /// shaped like JSON, so a client may decode it, and it can't be
+    /// judged as text (`fail_closed` blocks).
+    View { json: bool },
 }
 
 /// A text field of an event, and the output (lane) later events extend
@@ -244,10 +246,13 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
             text: data.to_string(),
         }];
         // JSON the parser refuses (a number out of range, nesting too
-        // deep) that a client may still decode: its escapes hide nothing.
-        if data.trim_start().starts_with(['{', '[']) {
+        // deep, a string left open) that a client may still decode, or
+        // text with escapes: its escapes hide nothing.
+        if data.contains('\\') {
             out.push(TextSpan {
-                place: Place::View,
+                place: Place::View {
+                    json: data.trim_start().starts_with(['{', '[', '"']),
+                },
                 lane: None,
                 text: super::text::json_unescape(data),
             });
@@ -297,18 +302,19 @@ pub fn extract_within(event: &SseEvent, limit: usize) -> Option<Vec<TextSpan>> {
 /// The lane path of a field later events extend, or `None` for one
 /// complete in its event.
 fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
-    if path
-        .rsplit('/')
-        .next()
-        .is_some_and(|last| METADATA.contains(&last))
-    {
-        return None;
-    }
     if chat {
         // A choice's `delta` (chat) or `text` (completions). `logprobs`
         // and content-filter results are scanned per chunk; an event the
         // text's cut reaches loses its `logprobs` (see `rewrite`).
         let (_, field) = path.strip_prefix("/choices/")?.split_once('/')?;
+        // A delta's role, a tool call's id and type come whole.
+        if path
+            .rsplit('/')
+            .next()
+            .is_some_and(|last| METADATA.contains(&last))
+        {
+            return None;
+        }
         return (field.starts_with("delta/") || field == "text").then(|| path.to_string());
     }
     match kind {
