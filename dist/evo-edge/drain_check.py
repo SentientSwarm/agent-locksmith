@@ -8,6 +8,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 
 JOBS = {
     "codex": "com.jxstanford.agent-pools.codex",
@@ -105,14 +106,36 @@ def process_executables():
     return names
 
 
-def check_source(component, home, custody_paths=()):
+def source_job_loaded(component, timeout=10):
     label = f"gui/{os.getuid()}/{JOBS[component]}"
-    job = run_visible(["launchctl", "print", label])
-    blocked = job.returncode == 0
+    job = run_visible(["launchctl", "print", label], timeout=timeout)
+    if job.returncode == 0:
+        return True
+    if "Could not find service" in job.stdout + job.stderr:
+        return False
+    raise GateError("source launchd visibility unavailable")
+
+
+def stop_source_job(component, wait_seconds=30):
+    """Boot out if loaded, then wait for launchd registration to disappear."""
+    deadline = time.monotonic() + wait_seconds
+    def remaining():
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise GateError("source launchd job did not unload within drain deadline")
+        return min(10, seconds)
+    if not source_job_loaded(component, timeout=remaining()):
+        return
+    label = f"gui/{os.getuid()}/{JOBS[component]}"
+    run_visible(["launchctl", "bootout", label], timeout=remaining())
+    while source_job_loaded(component, timeout=remaining()):
+        time.sleep(min(0.25, remaining()))
+
+
+def check_source(component, home, custody_paths=()):
+    blocked = source_job_loaded(component)
     if blocked:
         print("REFUSE: source launchd job is still loaded")
-    elif "Could not find service" not in job.stdout + job.stderr:
-        raise GateError("source launchd visibility unavailable")
     disabled = run_visible(["launchctl", "print-disabled", f"gui/{os.getuid()}"])
     if disabled.returncode or not re.search(r'"' + re.escape(JOBS[component]) + r'"\s*=>\s*(?:disabled|true)(?=\s|$)', disabled.stdout):
         print("REFUSE: source launchd job is not confirmed disabled")
@@ -123,7 +146,7 @@ def check_source(component, home, custody_paths=()):
     executables = process_executables()
     for line in processes.stdout.splitlines():
         fields = line.strip().split(None, 2)
-        if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
+        if len(fields) != 3 or not re.fullmatch(r"-?[0-9]+", fields[0]) or not fields[1].isdigit():
             raise GateError("unrecognized process result")
         _, pid, command = fields
         if int(pid) == os.getpid():

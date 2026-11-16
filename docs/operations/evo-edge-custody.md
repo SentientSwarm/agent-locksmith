@@ -1,7 +1,10 @@
 # evo-x2-1 edge custody: phase 5a brokers, phase 5b proxy cutover
 
 Prepared 2026-11-16 for herd-ops-claude and agent-locksmith. This is a staged
-execution runbook. **No pool has moved. No destination broker is serving.**
+execution runbook. **Coordinator update:** Codex custody has moved and edge
+`.12:43210` is serving, with both herd VM tunnels repointed. Teamclaude remains
+on studio. Use the [detached teamclaude handoff](../../dist/evo-edge/HANDOFF.md)
+for its next move; do not repeat the historical Codex transfer blocks below.
 The broker OS has completed credential-free firewall preflight; bounded test
 TCP listeners are separate from broker activation.
 John authorized the migration and downtime; the coordinator owns space movement,
@@ -55,7 +58,9 @@ macOS-only check with `edge-state-check`, never with a successful no-op.
 
 The Codex router refuses a non-loopback host. Preserve it at loopback; the
 container's systemd socket relay binds `.12:43210`. Teamclaude similarly keeps
-loopback with a `.12:3456` relay. Preserve the existing router client key and
+loopback with a `.12:3456` relay and supported `proxy.trustLoopback=false`;
+without that setting, the TCP relay defeats its localhost authentication gate.
+Preserve the existing router client key and
 teamclaude proxy authentication; test missing/bad credentials fail. The relay
 does not add TLS: it is restricted to the intended internal bridge clients.
 

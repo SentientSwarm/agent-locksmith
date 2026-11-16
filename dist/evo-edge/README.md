@@ -10,6 +10,11 @@ Locksmith broker addresses with temporary transport-only studio SSH relays.
 **5b after phases 8/10:** remaining proxy/scanner/hub custody, real zone
 endpoints, config push, agents cutover and retirement. Those are not 5a gates.
 
+The coordinator now confirms Codex serving on `.12:43210`, source custody moved
+and both herd VM Codex tunnels repointed. See [HANDOFF.md](HANDOFF.md) for the
+detached teamclaude move and current acceptance boundaries. Do not re-run the
+Codex mover or preparation against the serving pool.
+
 | Container | Fixed address | Memory | Workloads |
 | --- | --- | --- | --- |
 | edge-locksmith | 10.250.4.10 | 2 GiB | prod 9200, staging 9300; admin operator-only |
@@ -60,6 +65,9 @@ revisions. No macOS executables or ARM64 Podman binaries can be reused on AMD64.
 `edge-input.service` installs a table **inside each container**, never on evo.
 Broker relays bind 10.250.4.12 and forward to loopback services, preserving the
 router's enforced loopback requirement and original client authentication.
+Teamclaude additionally requires its supported `proxy.trustLoopback=false`
+setting: a plain TCP relay otherwise exempts all forwarded callers from auth.
+The teamclaude mover enforces and tests that setting before compatibility loads.
 The default container firewall admits herd and, for broker requests, Locksmith;
 the optional gateway exception additionally needs the coordinator isolation gates.
 Relay units cannot start pool units: they order after them without activation
