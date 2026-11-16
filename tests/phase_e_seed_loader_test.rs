@@ -293,9 +293,9 @@ async fn ts165b_shipped_catalog_parses() {
     seed_loader::apply_catalog(&repo, &yaml).await.unwrap();
 
     let all = repo.list(None).await.unwrap();
-    assert!(all.len() >= 11, "shipped catalog has at least 11 entries");
+    assert!(all.len() >= 10, "shipped catalog has at least 10 entries");
 
-    // The 11 SHIP names from E.5 must all be present.
+    // The SHIP names from E.5 must all be present.
     let names: std::collections::HashSet<&str> = all.iter().map(|r| r.name.as_str()).collect();
     for expected in [
         "anthropic",
@@ -308,13 +308,18 @@ async fn ts165b_shipped_catalog_parses() {
         "github",
         "duckduckgo",
         "wikipedia",
-        "lf-scan",
     ] {
         assert!(
             names.contains(expected),
             "shipped catalog missing entry: {expected}"
         );
     }
+    // AGENT-256 — the lf-scan sidecar is retired; inline inspection
+    // replaces it, so fresh installs must not register it.
+    assert!(
+        !names.contains("lf-scan"),
+        "shipped catalog still registers the retired lf-scan sidecar"
+    );
 }
 
 // ─── TS-165c: empty / missing catalog is non-fatal ─────────────────────────

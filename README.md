@@ -43,7 +43,7 @@ middleware (`kind=infra`) is operator-only.
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
   taxonomy. Agents reason about LLMs vs service tools differently;
-  operator-only middleware (lf-scan today) lives in its own kind.
+  operator-only middleware lives in its own kind.
 - **Per-agent bearer + ACL** — each agent registration carries an
   `allowlist` / `denylist`. The proxy hot path enforces it before reaching
   upstream.
@@ -81,9 +81,9 @@ middleware (`kind=infra`) is operator-only.
   with G2 (ChatGPT-Account-ID) and G3 (body fields), agents can call
   codex with only `Authorization: Bearer lk_…` + minimal body —
   locksmith owns every codex-specific wire piece.
-- **Seed catalog** — 16 default providers baked into the image
+- **Seed catalog** — 15 default providers baked into the image
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio, tavily,
-  github, duckduckgo, wikipedia, lf-scan + 5 OAuth providers). Operators
+  github, duckduckgo, wikipedia + 5 OAuth providers). Operators
   provide `.env` credentials and override site-specific fields via the
   admin API.
 - **Admin substrate** — UDS (default) and optional HTTPS for cross-host
@@ -194,7 +194,7 @@ Live providers and installed deployments are separate verification.
 
 ### Run (production, layer8-proxy bundle)
 
-For Docker Compose deploys with pipelock + lf-scan + sealed-creds
+For Docker Compose deploys with pipelock + sealed-creds
 infrastructure, see [layer8-proxy][layer8]. The bundle includes
 `./scripts/init-site.sh` to bootstrap a site repo from a public
 template at `layer8-proxy/examples/site/`.
@@ -361,8 +361,7 @@ tools: []
        ┌──────────┐
 agent ─┤  bearer  ├─► locksmith :9200 ──► pipelock :8888 ──► Internet
        └──────────┘         │
-                            ├──► LAN services (direct egress)
-                            └──► lf-scan :9100 (kind=infra middleware)
+                            └──► LAN services (direct egress)
 ```
 
 To run Locksmith as native systemd services in Incus system containers

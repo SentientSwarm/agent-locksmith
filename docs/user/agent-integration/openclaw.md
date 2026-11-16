@@ -106,9 +106,9 @@ processes).
 
 ## Limitations (v1.0)
 
-- **Provider list**: locksmith ships an 11-entry seed catalog at v1.0
+- **Provider list**: locksmith ships a 10-entry seed catalog
   (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio,
-  tavily, github, duckduckgo, wikipedia, lf-scan) plus 5 OAuth
+  tavily, github, duckduckgo, wikipedia) plus 5 OAuth
   providers (codex, copilot, anthropic-oauth, google-gemini-cli,
   qwen-cli). Other providers require operator-side
   `locksmith model put <name>` registration.

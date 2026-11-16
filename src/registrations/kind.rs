@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// - `Tool` — anything that's not a model. Web search, code repos, document fetch,
 ///   sandboxes. Discoverable via `GET /tools` (ACL-filtered). May be authless.
 /// - `Infra` — operator-only middleware the proxy itself calls. NOT agent-discoverable.
-///   Today: `lf-scan`. Future: scanners, validators.
+///   The seed catalog ships none since `lf-scan` was retired (AGENT-256).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {

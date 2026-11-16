@@ -138,14 +138,14 @@ providers:
     api_key: "${LOCKSMITH_TOKEN}"
 
 # Hermes' alignment / prompt-guard / code-shield scanners. Disabled
-# by default in this template — locksmith's lf-scan kind=infra service
-# already runs at the network boundary. Operators who want hermes-side
-# in-process scanning AS WELL can enable them here.
+# by default in this template — locksmith's inline inspection
+# scans brokered traffic at the network boundary. Operators who want
+# hermes-side in-process scanning AS WELL can enable them here.
 scanners:
   alignment_check:
     enabled: false
   prompt_guard:
-    enabled: false                  # owned by network-boundary plane (lf-scan today)
+    enabled: false                  # owned by locksmith inline inspection
   code_shield:
     enabled: false                  # same reasoning
 EOF
@@ -377,10 +377,10 @@ profiles).
 - **Image generation, embeddings**: route via the SDK-level
   `*_BASE_URL` env vars (path B). Provider-config doesn't cover all
   hermes SDK sub-clients in v1.0.
-- **Hermes' alignment_check scanner**: independent of layer8-proxy's
-  lf-scan. You can run both, one, or neither. Most operators run
-  lf-scan at the proxy boundary and disable hermes-side in-process
-  scanners.
+- **Hermes' alignment_check scanner**: independent of locksmith's
+  inline inspection. You can run both, one, or neither. Most operators
+  rely on locksmith's inspection at the proxy boundary and disable
+  hermes-side in-process scanners.
 - **Tool registration auto-derivation**: hermes' tool catalog is
   hermes-side; locksmith's is locksmith-side. A v0.3+ enhancement
   will make hermes auto-discover from locksmith's `/tools` and

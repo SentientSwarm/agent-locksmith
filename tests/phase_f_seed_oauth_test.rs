@@ -27,10 +27,8 @@ async fn ts230_bundled_seed_catalog_loads_at_version_2_1_0() {
     seed_loader::load_or_skip(&repo, &path).await.unwrap();
     let version = repo.get_seed_version().await.unwrap();
     assert!(
-        version.as_deref() == Some("2.2.0")
-            || version.as_deref() == Some("2.1.0")
-            || version.as_deref() == Some("2.0.0"),
-        "expected catalog version 2.0.0/2.1.0/2.2.0, got {version:?}"
+        version.as_deref() == Some("2.3.0"),
+        "expected catalog version 2.3.0, got {version:?}"
     );
 }
 
@@ -145,7 +143,7 @@ async fn ts232_seed_loader_adds_oauth_additively_on_version_bump() {
     }
 
     let v = repo.get_seed_version().await.unwrap();
-    assert_eq!(v.as_deref(), Some("2.2.0"));
+    assert_eq!(v.as_deref(), Some("2.3.0"));
 }
 
 fn unix_now() -> i64 {

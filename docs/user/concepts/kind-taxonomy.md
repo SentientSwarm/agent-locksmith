@@ -10,7 +10,7 @@ Locksmith currently treats every registration as a "tool". From v2.0.0, registra
 
 - **`model`** — LLM, embedding, reranker, audio, image, or any model-shaped service. Discoverable via `GET /models`. Most have authenticated upstreams; `metadata.modality` distinguishes text/embedding/audio/image.
 - **`tool`** — anything that's not a model. Web search, code repos, document fetch, sandboxes. Discoverable via `GET /tools`. May be authless (`auth: none` — see [error-envelope.md](error-envelope.md)).
-- **`infra`** — operator-only middleware that the proxy itself calls. Today: `lf-scan`. Future: structured-output validators, additional content scanners. **Not** discoverable by agents — `GET /infra` does not exist.
+- **`infra`** — operator-only middleware that the proxy itself calls. The seed catalog ships none (the `lf-scan` sidecar was retired in catalog 2.3.0; content scanning is inline, see [egress and inspection](egress-and-inspection.md)). Future: structured-output validators. **Not** discoverable by agents — `GET /infra` does not exist.
 
 ## Why split
 

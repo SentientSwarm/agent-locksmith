@@ -35,7 +35,7 @@ Operator and agent deployer are often the same person at v0.1.0 — single human
 
 ## What it doesn't buy you
 
-- **Side-channel exfiltration**: an agent that can call `anthropic` can send any prompt content it wants. Pipelock egress allowlisting + lf-scan content scanning are the perimeter for that — separate concerns from trust-boundary.
+- **Side-channel exfiltration**: an agent that can call `anthropic` can send any prompt content it wants. Egress allowlisting and Locksmith's inline content inspection (see [egress and inspection](egress-and-inspection.md)) are the perimeter for that — separate concerns from trust-boundary.
 - **Compromised proxy host**: if the host is compromised, the sealed creds + admin credential are at risk. Defense in depth via at-rest sealing (v0.2) and audit (always on) reduces but doesn't eliminate this.
 - **Agent code integrity**: locksmith doesn't verify the agent binary. A malicious agent with a valid bearer can do anything its ACL permits. Allowlist tightly.
 

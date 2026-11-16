@@ -50,7 +50,7 @@ The CLI then expects `LOCKSMITH_OP_TOKEN=lkop_<public_id>.<secret>` in its envir
 LOCKSMITH_OP_TOKEN=$(./scripts/decrypt-creds.sh operator_token) \
   locksmith agent register \
     --name "hermes-mini-m1" \
-    --allowlist "lmstudio,lf-scan,tavily,github"
+    --allowlist "lmstudio,tavily,github"
 
 # Output includes the wire token: lk_<public_id>.<secret>
 # Distribute it to the agent host (e.g. ~/.hermes/locksmith.token, mode 0600).
@@ -74,13 +74,13 @@ export LOCKSMITH_TOKEN="$(cat ~/.hermes/locksmith.token)"
 
 ```bash
 # No-auth → 401
-curl -i http://locksmith-host:9200/api/lf-scan/health
+curl -i http://locksmith-host:9200/api/lmstudio/v1/models
 # Expected: HTTP/1.1 401 Unauthorized
 #   {"error":{"message":"missing credential","type":"auth_error","code":"invalid_credential"}}
 
 # Wrong bearer → 401
 curl -i -H "Authorization: Bearer lk_invalid.xxx" \
-  http://locksmith-host:9200/api/lf-scan/health
+  http://locksmith-host:9200/api/lmstudio/v1/models
 # Expected: HTTP/1.1 401 Unauthorized
 #   {"error":{"message":"invalid credential","type":"auth_error","code":"invalid_credential"}}
 
@@ -92,7 +92,7 @@ curl -i -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
 
 # Allowed tool → upstream's response
 curl -i -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
-  http://locksmith-host:9200/api/lf-scan/health
+  http://locksmith-host:9200/api/lmstudio/v1/models
 # Expected: HTTP/1.1 200 OK (whatever the upstream returns)
 ```
 
@@ -150,7 +150,7 @@ Notes:
 
 **Symptom:** specific agent's requests return 403 on a tool you expected to work.
 **Cause:** the agent's `tool_allowlist` doesn't include that tool, or `tool_denylist` does.
-**Fix:** `locksmith agent get <public_id_or_name>` to inspect; `locksmith agent modify <public_id> --allowlist "lmstudio,lf-scan,..."` to replace the allowlist, or `--allowlist -` to clear it (unrestricted). The denylist is independent: `--denylist a,b` to set, `--denylist -` to clear. `register-agents.sh` after editing `agents.yaml` is the operator-facing equivalent.
+**Fix:** `locksmith agent get <public_id_or_name>` to inspect; `locksmith agent modify <public_id> --allowlist "lmstudio,..."` to replace the allowlist, or `--allowlist -` to clear it (unrestricted). The denylist is independent: `--denylist a,b` to set, `--denylist -` to clear. `register-agents.sh` after editing `agents.yaml` is the operator-facing equivalent.
 
 **Symptom:** startup warns about `inbound_auth.token` even though I removed it.
 **Cause:** there's a stale `inbound_auth:` block (with `mode: bearer` but no `token:`). The deprecation gate checks `token` specifically; `mode` alone is ignored.
