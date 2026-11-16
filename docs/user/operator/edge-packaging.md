@@ -120,6 +120,12 @@ sudo incus --project edge exec lab-locksmith -- sh -c 'systemd-sysusers && syste
 
 Install the service binaries the commands name, such as `locksmithd` built
 with the [tested recipe](../../development/build-identity.md#build-with-the-tested-recipe).
+A component that sets `environment_file` holds secrets, so install its
+executable root-owned and execute-only, for example
+`install -o root -g root -m 0711 locksmithd /usr/local/bin/`. The kernel
+then makes the process non-dumpable from the moment it starts, so no other
+process running as the same user can read its environment or memory. The
+guard refuses to start the component otherwise.
 
 ## 4. Lay out the state volume
 
@@ -157,14 +163,24 @@ in `lab-locksmith` as `locksmith`, listening on
 `/run/locksmith-edge/inspector/inspector.sock` (each component's runtime
 directory is `/run/locksmith-edge/<component>`).
 
-**The sidecar is inside Locksmith's trust boundary.** Running as the same
-user, it can read Locksmith's state directory (read-only for it, not
-hidden), and an exploit in the classifier, which parses untrusted text,
-runs with that access. `locksmithd` marks itself non-dumpable at startup,
-so the sidecar cannot read the daemon's environment or memory, where the
-sealing keys live; the sealed values in its database stay sealed. Run only
-a sidecar you would trust with Locksmith's own files. Point Locksmith at
-it:
+**The sidecar is inside Locksmith's trust boundary.** It runs as the same
+user, so an exploit in the classifier, which parses untrusted text, gets
+that user's access:
+
+- It can read Locksmith's state directory (read-only for it, not hidden),
+  including the database of sealed values.
+- It cannot read the sealing keys from `locksmithd`: the execute-only
+  binary is non-dumpable from exec, and `locksmithd` also marks itself
+  non-dumpable before it starts any threads. Child processes Locksmith
+  starts get only a minimal environment, without the sealing keys or
+  env-backed upstream credentials.
+- With `op_*` credentials, the `op read` child needs your 1Password
+  service-account token in its environment, and the sidecar can read that
+  token while `op` runs. Prefer `stored_*` credentials on an instance with
+  a sidecar.
+
+Run only a sidecar you would trust with Locksmith's own files. Point
+Locksmith at it:
 
 ```yaml
 inspection:
@@ -234,13 +250,13 @@ unless:
   `require_zfs = false`);
 - `.locksmith-edge-id` names this instance;
 - `custody/<component>.ready` exists, is root-owned, and contains
-  `<instance>:<component>`.
+  `<instance>:<component>`;
+- for a component with `environment_file`, its executable is a
+  root-owned, execute-only regular file (mode `0711`).
 
 The receipt is your statement that this component's state is in place and
-that no other copy is running anywhere. Write it only after that is true:
-
-Write one receipt per component. The example site runs two in
-`lab-locksmith`:
+that no other copy is running anywhere. Write it only after that is true,
+one receipt per component. The example site runs two in `lab-locksmith`:
 
 ```bash
 echo lab-locksmith:locksmith > $R/custody/locksmith.ready
@@ -249,8 +265,9 @@ systemctl enable --now locksmith-edge-input.service \
   locksmith-edge-locksmith.service locksmith-edge-inspector.service
 ```
 
-Inspection fails closed by default, so routes that use the sidecar refuse
-requests until `locksmith-edge-inspector.service` is running.
+Request inspection fails closed by default, so routes that use the
+sidecar refuse requests until `locksmith-edge-inspector.service` is
+running. Response inspection fails open by default.
 
 A refusal is logged as `locksmith-edge startup refused: <reason>` in the
 guard unit's journal (`journalctl -u locksmith-edge-locksmith-guard`). Remove the receipt to stop the unit from being started

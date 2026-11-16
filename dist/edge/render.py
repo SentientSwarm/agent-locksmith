@@ -72,7 +72,14 @@ def components_json(site: sitefile.Site, instance: sitefile.Instance) -> str:
         "instance": instance.name,
         "state_root": site.state_root,
         "require_zfs": site.require_zfs,
-        "components": {c.name: {"user": c.user} for c in instance.components},
+        "components": {
+            c.name: {
+                "user": c.user,
+                "executable": c.command.split()[0],
+                "environment_file": c.environment_file,
+            }
+            for c in instance.components
+        },
     }
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
 

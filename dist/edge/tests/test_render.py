@@ -125,21 +125,24 @@ class RenderTest(unittest.TestCase):
         )
         self.assertFalse([l for l in lines if l.startswith("ExecStartPre")])
 
-    def test_no_unit_wide_environment(self):
-        for instance in ("lab-locksmith", "lab-pipelock"):
-            out = self.out(instance)
-            for unit in (out / UNITS).glob("*.service"):
-                for line in unit.read_text().splitlines():
-                    self.assertFalse(
-                        line.startswith("Environment="), f"{unit.name}: {line}"
-                    )
+    def test_guard_units_carry_no_environment(self):
+        out = self.out("lab-locksmith")
+        for unit in (out / UNITS).glob("*-guard.service"):
+            for line in unit.read_text().splitlines():
+                self.assertFalse(line.startswith("Environment"), f"{unit.name}: {line}")
 
-    def test_home_and_env_only_on_execstart(self):
+    def test_component_execs_its_command_directly(self):
+        # No /usr/bin/env wrapper: a readable wrapper would run dumpable with
+        # the environment file's secrets before the daemon could harden.
         text = self.unit(self.out("lab-locksmith"), "inspector")
-        exec_line = next(l for l in text.splitlines() if l.startswith("ExecStart="))
-        self.assertIn('"HOME=/srv/locksmith-edge/inspector/home"', exec_line)
-        self.assertIn('"HF_HUB_OFFLINE=1"', exec_line)
-        self.assertTrue(exec_line.startswith("ExecStart=/usr/bin/env "))
+        lines = text.splitlines()
+        self.assertIn('Environment="HOME=/srv/locksmith-edge/inspector/home"', lines)
+        self.assertIn('Environment="HF_HUB_OFFLINE=1"', lines)
+        exec_line = next(l for l in lines if l.startswith("ExecStart="))
+        self.assertTrue(
+            exec_line.startswith("ExecStart=/opt/locksmith-inspector/venv/bin/python "),
+            exec_line,
+        )
 
     def test_environment_file_only_when_declared(self):
         locksmith = self.unit(self.out("lab-locksmith"), "locksmith")
@@ -153,10 +156,11 @@ class RenderTest(unittest.TestCase):
     def test_specifiers_and_dollars_escaped(self):
         site = sitefile.parse(ESCAPES)
         text = self.unit(self.out("site-a", site), "app")
-        exec_line = next(l for l in text.splitlines() if l.startswith("ExecStart="))
+        lines = text.splitlines()
+        exec_line = next(l for l in lines if l.startswith("ExecStart="))
         self.assertIn("--home %%h --price $$5", exec_line)
-        self.assertIn(r'"NOTE=say \"hi\" \\ bye"', exec_line)
-        self.assertIn('"SPACE=a b"', exec_line)
+        self.assertIn(r'Environment="NOTE=say \"hi\" \\ bye"', lines)
+        self.assertIn('Environment="SPACE=a b"', lines)
 
     def test_refuses_existing_output(self):
         existing = self.root / "live"
@@ -274,7 +278,18 @@ class RenderTest(unittest.TestCase):
                 "instance": "site-a",
                 "state_root": "/srv/edge",
                 "require_zfs": True,
-                "components": {"app": {"user": "app"}, "quiet": {"user": "quiet"}},
+                "components": {
+                    "app": {
+                        "user": "app",
+                        "executable": "/usr/bin/app",
+                        "environment_file": False,
+                    },
+                    "quiet": {
+                        "user": "quiet",
+                        "executable": "/usr/bin/quiet",
+                        "environment_file": False,
+                    },
+                },
             },
         )
         self.assertEqual((out / "etc/locksmith-edge/instance").read_text(), "site-a\n")

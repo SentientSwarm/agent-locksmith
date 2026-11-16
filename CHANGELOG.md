@@ -33,6 +33,23 @@
   `locksmithd` now marks itself non-dumpable on Linux before its runtime
   starts, which also disables its core dumps, and the `op read` child it
   runs for `op_*` credentials no longer inherits the sealing keys.
+- Keep the sealing keys away from processes running as Locksmith's own
+  user (AGENT-285). A classifier sidecar shares that user so Locksmith
+  can check the socket's peer uid, which also let it read
+  `/proc/<pid>/environ`, where the sealing keys are.
+  - `locksmithd` marks itself non-dumpable on Linux before its runtime
+    starts, which also disables its core dumps.
+  - The `op read` child it runs for `op_*` credentials gets only a
+    minimal environment (`PATH`, `HOME`, locale, proxy, `XDG_*` and
+    `OP_*`), without the sealing keys or env-backed upstream
+    credentials. It still needs the 1Password token, so the guide
+    recommends `stored_*` credentials next to a sidecar.
+  - Edge units exec their command directly, with `Environment=` lines
+    instead of an `/usr/bin/env` wrapper. The guard refuses to start a
+    component with an environment file unless its executable is
+    root-owned and execute-only (mode 0711), which makes the process
+    non-dumpable from exec. **Upgrade note:** reinstall `locksmithd`
+    with `install -m 0711` and re-render the edge units.
 - The edge model installer (`dist/edge/install_model.py`) now refuses a
   cache under a directory that is not root-owned or is group- or
   world-writable, so a service-owned parent cannot be used to swap the

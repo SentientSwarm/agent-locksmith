@@ -58,7 +58,10 @@ def quoted(text: str) -> str:
 def service(site: sitefile.Site, instance: str, comp: sitefile.Component) -> str:
     root = site.state_root
     env = {"HOME": f"{root}/{comp.name}/home", **comp.env}
-    words = " ".join(quoted(f"{k}={v}") for k, v in env.items())
+    # Environment= lines, not an /usr/bin/env wrapper: a readable wrapper
+    # would run dumpable with the environment file's secrets. The guard is
+    # a separate unit, so none of this reaches root.
+    environment = "".join(f"Environment={quoted(f'{k}={v}')}\n" for k, v in env.items())
     env_file = (
         f"EnvironmentFile={root}/environment/{comp.name}.env\n"
         if comp.environment_file
@@ -81,7 +84,7 @@ Group={comp.user}
 UMask=0077
 RuntimeDirectory=locksmith-edge/{comp.name}
 RuntimeDirectoryMode=0750
-{env_file}ExecStart=/usr/bin/env {words} {unit_literal(comp.command)}
+{environment}{env_file}ExecStart={unit_literal(comp.command)}
 WorkingDirectory={root}/{comp.name}
 Restart=on-failure
 RestartSec=5

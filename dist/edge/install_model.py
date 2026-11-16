@@ -87,7 +87,7 @@ def _publishable(repo: Path) -> None:
 def _mkdir_readable(path: Path) -> None:
     missing = [p for p in [path, *path.parents] if not p.exists()]
     for directory in reversed(missing):
-        directory.mkdir()
+        directory.mkdir(mode=0o700)  # never briefly writable by others
         directory.chmod(0o755)
 
 

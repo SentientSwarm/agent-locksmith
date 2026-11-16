@@ -62,6 +62,26 @@ def read_protected(path: Path, limit: int) -> str:
         return stream.read(limit)
 
 
+def execute_only(path: Path) -> None:
+    """A secret-holding executable must be root-owned and unreadable by
+    others: the kernel then marks the process non-dumpable at exec, so no
+    same-uid process can read its environment before it hardens itself."""
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise Refusal(f"{path.name} is unavailable") from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != TRUSTED_UID
+        or info.st_mode & 0o066
+        or not info.st_mode & 0o001
+    ):
+        raise Refusal(
+            f"{path.name} holds secrets and must be a root-owned, execute-only "
+            "file (mode 0711)"
+        )
+
+
 def load_components(config: Path) -> dict:
     try:
         protected(config.parent, directory=True)
@@ -75,6 +95,11 @@ def load_components(config: Path) -> dict:
             raise TypeError("shape")
         if not isinstance(data.get("require_zfs", True), bool):
             raise TypeError("require_zfs")
+        for entry in data["components"].values():
+            if not isinstance(entry.get("environment_file"), bool):
+                raise TypeError("environment_file")
+            if not PurePosixPath(entry["executable"]).is_absolute():
+                raise ValueError("executable")
     except (Refusal, OSError, ValueError, KeyError, TypeError) as error:
         raise Refusal("components file is missing, unsafe or malformed") from error
     return data
@@ -88,6 +113,9 @@ def check(config: Path, instance: str, component: str) -> None:
         raise Refusal("instance does not match the components file")
     if component not in data["components"]:
         raise Refusal("component is not listed for this instance")
+    entry = data["components"][component]
+    if entry["environment_file"]:
+        execute_only(Path(entry["executable"]))
     root = Path(data["state_root"])
     fstype = mount_type(root)
     if fstype is None:

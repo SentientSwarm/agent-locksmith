@@ -34,6 +34,10 @@ class StateCheckTest(unittest.TestCase):
         self.etc = base / "etc"
         self.etc.mkdir()
         self.config = self.etc / "components.json"
+        # Execute-only, so the kernel makes the process non-dumpable at exec.
+        self.binary = base / "app"
+        self.binary.write_text("")
+        self.binary.chmod(0o711)
         self.write_config()
         self.uid = self.root.stat().st_uid
 
@@ -42,7 +46,13 @@ class StateCheckTest(unittest.TestCase):
             "instance": "site-a",
             "state_root": str(self.root),
             "require_zfs": True,
-            "components": {"app": {"user": "app"}},
+            "components": {
+                "app": {
+                    "user": "app",
+                    "executable": str(self.binary),
+                    "environment_file": True,
+                }
+            },
         }
         data.update(overrides)
         self.config.write_text(json.dumps(data))
@@ -62,6 +72,42 @@ class StateCheckTest(unittest.TestCase):
 
     def test_verified_mount_and_custody(self):
         self.check()
+
+    def test_secret_holding_executable_must_be_execute_only(self):
+        # A readable binary runs dumpable until it hardens itself, so a
+        # same-uid process could read the environment file's secrets.
+        for mode in (0o755, 0o751, 0o715, 0o731):
+            self.binary.chmod(mode)
+            self.refused("execute-only")
+
+    def test_secret_holding_executable_must_be_root_owned(self):
+        with patch.object(self.guard, "TRUSTED_UID", self.uid + 1):
+            with self.assertRaises(self.guard.Refusal) as ctx:
+                self.guard.execute_only(self.binary)
+        self.assertIn("execute-only", str(ctx.exception))
+
+    def test_secret_holding_executable_must_not_be_a_symlink(self):
+        target = self.binary.with_name("real")
+        self.binary.rename(target)
+        self.binary.symlink_to(target)
+        self.refused("execute-only")
+
+    def test_readable_executable_allowed_without_an_environment_file(self):
+        self.binary.chmod(0o755)
+        self.write_config(
+            components={
+                "app": {
+                    "user": "app",
+                    "executable": str(self.binary),
+                    "environment_file": False,
+                }
+            }
+        )
+        self.check()
+
+    def test_components_file_without_executable_is_refused(self):
+        self.write_config(components={"app": {"user": "app"}})
+        self.refused("components file")
 
     def test_not_root_is_refused(self):
         with (
