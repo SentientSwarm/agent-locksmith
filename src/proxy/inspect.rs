@@ -67,15 +67,24 @@ pub(super) async fn request(
 /// How long one body may be scanned before `on_error` decides.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Run `f` off the async workers; `None` if it outlives `timeout` or
-/// panics. A timed-out scan keeps its blocking thread until it ends.
+/// Why a blocking scan gave no answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Unfinished {
+    TimedOut,
+    /// It panicked (a scanner bug).
+    Failed,
+}
+
+/// Run `f` off the async workers. A timed-out scan keeps its blocking
+/// thread until it ends.
 async fn run_blocking<T: Send + 'static>(
     timeout: Duration,
     f: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
+) -> Result<T, Unfinished> {
     match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
-        Ok(Ok(value)) => Some(value),
-        _ => None,
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => Err(Unfinished::Failed),
+        Err(_) => Err(Unfinished::TimedOut),
     }
 }
 
@@ -105,13 +114,14 @@ async fn judge(
         };
         inspection::apply_with(policy, direction, meta, &body, &extra)
     };
-    match run_blocking(SCAN_TIMEOUT, scan).await {
-        Some(outcome) => outcome,
-        None => match direction_policy(&state.inspection, route, direction) {
-            Some(policy) => inspection::timed_out(policy, direction),
-            None => inspection::timed_out(&inspection::DirectionPolicy::closed(), direction),
-        },
-    }
+    let why = match run_blocking(SCAN_TIMEOUT, scan).await {
+        Ok(outcome) => return outcome,
+        Err(Unfinished::TimedOut) => "timed out",
+        Err(Unfinished::Failed) => "failed",
+    };
+    let closed = inspection::DirectionPolicy::closed();
+    let policy = direction_policy(&state.inspection, route, direction).unwrap_or(&closed);
+    inspection::unfinished(policy, direction, why)
 }
 
 fn direction_policy<'a>(
@@ -168,16 +178,28 @@ pub(super) fn is_event_stream(content_type: Option<&str>) -> bool {
     })
 }
 
-/// Audit that a streamed response on an inspected route was not scanned.
-pub(super) async fn record_stream_skipped(audit: &Option<AuditRepository>, ctx: &RequestCtx) {
+/// A streamed response on an inspected route is not scanned: audited,
+/// and under `fail_closed` refused (`Some` is the 502 to send).
+pub(super) async fn stream_unscanned(
+    policy: &DirectionPolicy,
+    audit: &Option<AuditRepository>,
+    ctx: &RequestCtx,
+) -> Option<Response> {
+    let closed = policy.on_error == inspection::OnError::FailClosed;
     let report = Report {
         direction: Direction::Response,
-        verdict: Verdict::Pass,
+        verdict: if closed {
+            Verdict::Block
+        } else {
+            Verdict::Pass
+        },
         hits: Vec::new(),
+        dropped_hits: 0,
         skipped: Some(SkipReason::Streaming),
         error: None,
     };
-    record(audit, ctx, &report, None).await;
+    record(audit, ctx, &report, closed.then_some(502)).await;
+    closed.then(|| blocked(StatusCode::BAD_GATEWAY, "response blocked by inspection"))
 }
 
 /// An upstream body as a stream of chunks.
@@ -191,8 +213,10 @@ pub(super) enum Buffered {
     /// Too large to scan under `fail_open`: the prefix that was read
     /// followed by the rest of the upstream stream, unscanned.
     Unscanned(UpstreamStream),
-    /// Send this response instead (a block, or a body read failure).
+    /// Send this response instead (a block).
     Respond(Response),
+    /// Reading the upstream body failed; the caller audits it.
+    ReadFailed(reqwest::Error),
 }
 
 /// Read and inspect a non-streamed response.
@@ -214,7 +238,7 @@ pub(super) async fn response(
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(c) => prefix.extend_from_slice(&c),
-            Err(_) => return Buffered::Respond(upstream_read_failed()),
+            Err(e) => return Buffered::ReadFailed(e),
         }
         if prefix.len() > policy.max_scan_bytes {
             let outcome = inspection::apply(policy, Direction::Response, meta, &prefix);
@@ -302,9 +326,12 @@ pub(super) async fn record(
     let mut details = json!({
         "direction": report.direction.as_str(),
         "verdict": report.verdict.as_str(),
-        "count": hits.len(),
+        "count": hits.len() + report.dropped_hits,
         "hits": hits,
     });
+    if report.dropped_hits > 0 {
+        details["truncated"] = true.into();
+    }
     if let Some(reason) = report.skipped {
         details["reason"] = reason.as_str().into();
     }
@@ -353,8 +380,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             1
         });
-        assert_eq!(slow.await, None);
-        assert_eq!(run_blocking(Duration::from_secs(5), || 2).await, Some(2));
+        assert_eq!(slow.await, Err(Unfinished::TimedOut));
+        assert_eq!(run_blocking(Duration::from_secs(5), || 2).await, Ok(2));
+        let panicked = run_blocking(Duration::from_secs(5), || -> i32 { panic!("scanner bug") });
+        assert_eq!(panicked.await, Err(Unfinished::Failed));
     }
 
     #[test]

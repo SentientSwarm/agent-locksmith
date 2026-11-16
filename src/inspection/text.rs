@@ -130,15 +130,24 @@ fn unicode_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> char 
     char::from_u32(high).unwrap_or(char::REPLACEMENT_CHARACTER)
 }
 
-/// Percent-decode (and `+` to space), reading the bytes lossily.
+/// Percent-decode a query or form (`+` is a space), reading lossily.
 pub(crate) fn percent_decode(s: &str) -> String {
+    decode(s, true)
+}
+
+/// Percent-decode a URL path, where `+` is a literal plus.
+pub(crate) fn percent_decode_path(s: &str) -> String {
+    decode(s, false)
+}
+
+fn decode(s: &str, plus_is_space: bool) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         let hex = |b: u8| (b as char).to_digit(16);
         match bytes[i] {
-            b'+' => out.push(b' '),
+            b'+' if plus_is_space => out.push(b' '),
             b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
                 (Some(h), Some(l)) => {
                     out.push((h * 16 + l) as u8);
@@ -194,7 +203,7 @@ fn walk_mut(v: &mut Value, f: &mut impl FnMut(&mut String)) {
     }
 }
 
-/// Merge overlapping spans and replace them, last first.
+/// Merge overlapping spans and replace each with its marker.
 fn redact_str(text: &str, spans: Option<&[(usize, usize, String)]>) -> String {
     let Some(spans) = spans else {
         return text.to_string();
@@ -208,12 +217,22 @@ fn redact_str(text: &str, spans: Option<&[(usize, usize, String)]>) -> String {
             _ => merged.push((start, end, id)),
         }
     }
-    let mut out = text.to_string();
-    for (start, end, id) in merged.into_iter().rev() {
-        if out.is_char_boundary(start) && out.is_char_boundary(end) && end <= out.len() {
-            out.replace_range(start..end, &format!("[REDACTED:{id}]"));
+    // One pass: copy between spans, a marker for each.
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, id) in merged {
+        let valid = start >= at
+            && end <= text.len()
+            && text.is_char_boundary(start)
+            && text.is_char_boundary(end);
+        if !valid {
+            continue;
         }
+        out.push_str(&text[at..start]);
+        out.push_str(&format!("[REDACTED:{id}]"));
+        at = end;
     }
+    out.push_str(&text[at..]);
     out
 }
 
@@ -258,5 +277,27 @@ mod tests {
         values.sort_by_key(|v| v.as_i64());
         assert_eq!(values, vec![Value::from(1), Value::from(2)]);
         assert!(obj.keys().all(|k| k.starts_with("[REDACTED:s]")));
+    }
+
+    #[test]
+    fn path_decoding_keeps_a_literal_plus() {
+        assert_eq!(percent_decode_path("a+b%2Bc%20d"), "a+b+c d");
+        assert_eq!(percent_decode("a+b%2Bc"), "a b+c");
+    }
+
+    #[test]
+    fn many_spans_redact_in_one_pass() {
+        let text = "ab".repeat(200_000);
+        let spans: Vec<_> = (0..200_000)
+            .map(|i| (i * 2, i * 2 + 1, "s".to_string()))
+            .collect();
+        let started = std::time::Instant::now();
+        let out = redact_str(&text, Some(&spans));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(out, "[REDACTED:s]b".repeat(200_000));
     }
 }

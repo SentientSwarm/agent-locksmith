@@ -283,7 +283,7 @@ impl Scanner for Dlp {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{BodyMeta, DirectionPolicy, OnError, Outcome, Verdict, apply};
+    use super::super::{BodyMeta, DirectionPolicy, OnError, Outcome, Verdict, apply, apply_with};
     use super::*;
     use base64::Engine;
     use std::sync::Arc;
@@ -556,5 +556,39 @@ mod tests {
             panic!("expected a rewrite");
         };
         assert!(String::from_utf8(out).unwrap().contains("[REDACTED:dlp]"));
+    }
+
+    #[test]
+    fn a_copy_left_after_redaction_blocks() {
+        let t = token(43);
+        let policy = DirectionPolicy {
+            on_hit: Verdict::Redact,
+            ..block_policy()
+        };
+        // The same key in the body and in the query: the body copy can be
+        // redacted, the query copy cannot.
+        let body = format!(r#"{{"q":"{t}"}}"#);
+        let meta = BodyMeta {
+            content_type: Some("application/json"),
+            encoded: false,
+        };
+        let out = apply_with(
+            &policy,
+            Direction::Request,
+            meta,
+            body.as_bytes(),
+            &[format!("k={t}")],
+        );
+        assert!(matches!(out, Outcome::Block { .. }), "query copy forwarded");
+        // A plain and a percent-encoded copy in one form body.
+        let form = format!("a={t}&b=gh%70{}", &t[3..]);
+        assert!(matches!(
+            outcome(
+                "application/x-www-form-urlencoded",
+                form.as_bytes(),
+                Verdict::Redact
+            ),
+            Outcome::Block { .. }
+        ));
     }
 }

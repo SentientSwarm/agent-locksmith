@@ -560,11 +560,10 @@ pub async fn proxy_handler(
     let mut headers = req.headers().clone();
     // AGENT-262 — the decoded path and query leave with the request too,
     // so request inspection judges them alongside the body.
-    let uri_text: Vec<String> = [Some(req.uri().path()), req.uri().query()]
-        .into_iter()
-        .flatten()
-        .map(crate::inspection::percent_decode)
-        .collect();
+    let uri_text: Vec<String> =
+        std::iter::once(crate::inspection::percent_decode_path(req.uri().path()))
+            .chain(req.uri().query().map(crate::inspection::percent_decode))
+            .collect();
     // AGENT-262 — an inspected response must arrive uncompressed to be
     // scanned, so the agent's Accept-Encoding is not forwarded.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {
@@ -1000,51 +999,68 @@ async fn handle_upstream_response(
     let mut unscanned: Option<inspect::UpstreamStream> = None;
     if let Some(policy) = inspect::response_policy(&state, &ctx.tool_name) {
         if inspect::is_streamed(upstream_content_type.as_deref()) {
-            inspect::record_stream_skipped(&state.audit, ctx).await;
+            if let Some(refused) = inspect::stream_unscanned(policy, &state.audit, ctx).await {
+                return refused;
+            }
         } else {
             let resp = resp.take().expect("unread");
             match inspect::response(policy, &state, ctx, target, resp).await {
                 inspect::Buffered::Respond(r) => return r,
-                inspect::Buffered::Body(body) => {
-                    return match rc.as_ref() {
-                        Some(rc) => {
-                            respond_with_controls(
-                                rc,
-                                &state.audit,
-                                ctx,
-                                target,
-                                upstream_host,
-                                upstream_status,
-                                upstream_content_type,
-                                response_headers,
-                                body,
-                            )
-                            .await
-                        }
-                        None => {
-                            record_proxy_request_success(
-                                &state.audit,
-                                ctx,
-                                target,
-                                upstream_host,
-                                upstream_status,
-                            )
-                            .await;
-                            let mut response = Response::new(Body::from(body));
-                            *response.status_mut() = status;
-                            *response.headers_mut() = response_headers;
-                            response
-                        }
-                    };
+                inspect::Buffered::ReadFailed(e) => {
+                    return record_upstream_body_read_error(&state.audit, ctx, upstream_host, e)
+                        .await;
                 }
+                inspect::Buffered::Body(body) => match rc.as_ref() {
+                    // Redaction patterns need the whole body.
+                    Some(rc) if rc_should_buffer(rc) => {
+                        return respond_with_controls(
+                            rc,
+                            &state.audit,
+                            ctx,
+                            target,
+                            upstream_host,
+                            upstream_status,
+                            upstream_content_type,
+                            response_headers,
+                            body,
+                        )
+                        .await;
+                    }
+                    // Otherwise it streams on like an uninspected response,
+                    // so a size cap truncates rather than denies.
+                    _ => {
+                        let once = futures_util::stream::once(async move {
+                            Ok::<Bytes, reqwest::Error>(Bytes::from(body))
+                        });
+                        unscanned = Some(Box::pin(once));
+                    }
+                },
                 // Unscanned, but the route's redaction patterns still need
                 // the whole body: buffer the rest and run them.
                 inspect::Buffered::Unscanned(stream)
                     if rc.as_ref().is_some_and(rc_should_buffer) =>
                 {
-                    let Some(bytes) = collect_limited(stream, UNSCANNED_CONTROLS_LIMIT).await
-                    else {
-                        return inspect::upstream_read_failed();
+                    let bytes = match collect_limited(stream, UNSCANNED_CONTROLS_LIMIT).await {
+                        Ok(bytes) => bytes,
+                        Err(Unread::Failed(e)) => {
+                            return record_upstream_body_read_error(
+                                &state.audit,
+                                ctx,
+                                upstream_host,
+                                e,
+                            )
+                            .await;
+                        }
+                        Err(Unread::TooLarge(observed)) => {
+                            return record_response_size_exceeded_buffered(
+                                &state.audit,
+                                ctx,
+                                upstream_host,
+                                observed,
+                                UNSCANNED_CONTROLS_LIMIT as u64,
+                            )
+                            .await;
+                        }
                     };
                     return respond_with_controls(
                         rc.as_ref().expect("guarded"),
@@ -1125,17 +1141,26 @@ async fn handle_upstream_response(
 /// was too large to inspect.
 const UNSCANNED_CONTROLS_LIMIT: usize = 64 * 1024 * 1024;
 
-/// Read the rest of `stream`, or `None` past `limit` or on a read error.
-async fn collect_limited(mut stream: inspect::UpstreamStream, limit: usize) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
+/// Why the rest of an unscanned body could not be collected.
+enum Unread {
+    Failed(reqwest::Error),
+    TooLarge(usize),
+}
+
+/// Read the rest of `stream`, up to `limit` bytes.
+async fn collect_limited(
+    mut stream: inspect::UpstreamStream,
+    limit: usize,
+) -> Result<Vec<u8>, Unread> {
     use futures_util::StreamExt;
+    let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
-        out.extend_from_slice(&chunk.ok()?);
+        out.extend_from_slice(&chunk.map_err(Unread::Failed)?);
         if out.len() > limit {
-            return None;
+            return Err(Unread::TooLarge(out.len()));
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 /// Strip hop-by-hop headers (the body is rebuilt as an axum stream

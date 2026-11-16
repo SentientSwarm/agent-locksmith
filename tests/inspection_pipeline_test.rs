@@ -567,3 +567,86 @@ async fn ndjson_responses_stream_unscanned() {
     assert_eq!(rows[0].0, "inspection_skipped");
     assert_eq!(rows[0].2["reason"], "streaming");
 }
+
+#[tokio::test]
+async fn truncated_inspected_response_is_audited() {
+    // Upstream promises 100 bytes, sends 10, and closes.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 100\r\n\r\n0123456789")
+                .await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    let policy = format!(
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n"
+    );
+    let h = harness(config(&format!("http://{addr}"), &policy)).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    let events: Vec<String> = sqlx::query_scalar("SELECT event FROM audit")
+        .fetch_all(&h.pool)
+        .await
+        .unwrap();
+    assert!(
+        events.iter().any(|e| e == "upstream_body_read_error"),
+        "dispatched request left no audit row: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn scanned_response_on_a_size_only_route_is_truncated_not_denied() {
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("y".repeat(2000), "text/plain"))
+        .mount(&up)
+        .await;
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "out"
+    description: "Inspected route"
+    upstream: "{}"
+    response:
+      max_size_bytes: 1000
+inspection:
+  routes:
+    - route: out
+      response:
+        scanners: ["literal:{CANARY}"]
+"#,
+        up.uri()
+    );
+    let h = harness(parse_config_str(&yaml).unwrap()).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        resp.text()
+            .ends_with(agent_locksmith::response_controls::STREAM_TRUNCATION_MARKER)
+    );
+}
+
+#[tokio::test]
+async fn streamed_response_under_fail_closed_is_blocked() {
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}\n", "application/x-ndjson"))
+        .mount(&up)
+        .await;
+    let policy = format!(
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n        on_error: fail_closed\n"
+    );
+    let h = harness(config(&up.uri(), &policy)).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    assert_eq!(resp.json::<Value>()["error"]["code"], "inspection_blocked");
+}

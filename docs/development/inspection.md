@@ -126,7 +126,14 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   duplicate key, and form encoding. A hit found only this way can't be
   rewritten in place, so `redact` becomes `block` for it.
 - **The decoded path and query** of a request are judged the same way,
-  never rewritten.
+  never rewritten, even when the body itself is oversized or encoded.
+  Credentials that legitimately ride in a URL (presigned
+  `X-Amz-Credential=AKIA...`, a JWT query parameter) match `dlp` too, so
+  such routes should not use `dlp` on requests or should set
+  `on_hit: flag`.
+- **After a redaction**, the outgoing bytes (raw views and the path and
+  query) are scanned again; if any copy of a match remains, the request
+  or response is blocked instead.
 - **Binary bodies** (not UTF-8) are scanned only through the raw view. With
   no hit they pass and are audited `inspection_skipped` with reason
   `not_text`, so uploads are not blocked by a text scanner.
@@ -143,12 +150,13 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
 - **Streamed responses** (`text/event-stream`, and newline-delimited
   JSON: `application/x-ndjson`, `application/jsonl`,
   `application/x-jsonlines`, `application/stream+json`) are not buffered.
-  They are audited `inspection_skipped` with reason `streaming` until
-  streamed scanning lands (AGENT-265).
+  They are audited `inspection_skipped` with reason `streaming` and,
+  under `on_error: fail_closed`, refused with 502 `inspection_blocked`,
+  until streamed scanning lands (AGENT-265).
 
 Scanning runs on a blocking thread with a 5 second deadline; a scan that
-misses it is an `inspection_error` (`scan timed out`) and follows
-`on_error`.
+misses it (`scan timed out`) or panics (`scan failed`) is an
+`inspection_error` and follows `on_error`.
 
 A request is scanned as the agent sent it, before Locksmith adds the
 route's credential or any profile fixup, so Locksmith's own key is never
@@ -167,6 +175,8 @@ something:
 
 Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.
+At most 64 distinct hits are listed; `count` includes the rest and
+`truncated: true` marks the row.
 The matched text itself is never recorded.
 
 ## Sidecars

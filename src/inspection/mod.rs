@@ -16,7 +16,7 @@ mod literal;
 mod normalize;
 mod text;
 
-pub(crate) use text::percent_decode;
+pub(crate) use text::{percent_decode, percent_decode_path};
 
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -160,12 +160,17 @@ impl SkipReason {
     }
 }
 
+/// Most hits one audit row lists; the rest are only counted.
+pub const MAX_AUDITED_HITS: usize = 64;
+
 /// What one inspection found, for the audit row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub direction: Direction,
     pub verdict: Verdict,
     pub hits: Vec<HitRecord>,
+    /// Distinct hits past `MAX_AUDITED_HITS`, counted but not listed.
+    pub dropped_hits: usize,
     pub skipped: Option<SkipReason>,
     pub error: Option<String>,
 }
@@ -176,6 +181,7 @@ impl Report {
             direction,
             verdict: Verdict::Pass,
             hits: Vec::new(),
+            dropped_hits: 0,
             skipped: None,
             error: None,
         }
@@ -198,10 +204,10 @@ pub enum Outcome {
     },
 }
 
-/// The outcome for a scan that did not finish in time.
-pub fn timed_out(policy: &DirectionPolicy, direction: Direction) -> Outcome {
+/// The outcome for a scan that did not finish (`why`: timed out, failed).
+pub fn unfinished(policy: &DirectionPolicy, direction: Direction, why: &str) -> Outcome {
     let mut report = Report::new(direction);
-    report.error = Some("scan timed out".into());
+    report.error = Some(format!("scan {why}"));
     unjudged(policy, report)
 }
 
@@ -302,11 +308,15 @@ fn scan_text(
             let new = seen.insert(key);
             if new {
                 report.verdict = report.verdict.max(verdict);
-                report.hits.push(HitRecord {
-                    scanner: scanner.id().to_string(),
-                    rule: hit.rule.clone(),
-                    sha256,
-                });
+                if report.hits.len() < MAX_AUDITED_HITS {
+                    report.hits.push(HitRecord {
+                        scanner: scanner.id().to_string(),
+                        rule: hit.rule.clone(),
+                        sha256,
+                    });
+                } else {
+                    report.dropped_hits += 1;
+                }
             }
             spans.push(ScanSpan {
                 start: hit.start,
@@ -330,18 +340,29 @@ pub fn apply_with(
     extra: &[String],
 ) -> Outcome {
     let mut report = Report::new(direction);
-    if body.len() > policy.max_scan_bytes {
-        report.skipped = Some(SkipReason::Oversize);
-        return unjudged(policy, report);
-    }
-    // A compressed body can't be scanned as sent. Unlike plain binary it
-    // can hide text, so it follows `on_error` rather than passing.
-    if meta.encoded {
-        report.skipped = Some(SkipReason::Encoded);
+    let mut seen = Seen::new();
+    // An oversized body is not read, and a compressed one can't be read
+    // as sent (unlike plain binary it can hide text): both follow
+    // `on_error`. What travels with it (path, query) is still judged.
+    let unreadable = if body.len() > policy.max_scan_bytes {
+        Some(SkipReason::Oversize)
+    } else if meta.encoded {
+        Some(SkipReason::Encoded)
+    } else {
+        None
+    };
+    if let Some(reason) = unreadable {
+        for view in extra {
+            scan_text(policy, direction, view, &mut report, &mut seen);
+        }
+        if report.verdict >= Verdict::Redact {
+            report.verdict = Verdict::Block;
+            return Outcome::Block { report };
+        }
+        report.skipped = Some(reason);
         return unjudged(policy, report);
     }
     let doc = text::Document::parse(meta.content_type, body).ok();
-    let mut seen = Seen::new();
     let mut spans: text::Spans = HashMap::new();
     let segments = doc
         .as_ref()
@@ -359,12 +380,12 @@ pub fn apply_with(
     }
     // What parsing hides (invalid UTF-8, escapes in unparseable JSON,
     // shadowed duplicate keys, form encoding) and what travels outside
-    // the body is judged too. It can't be rewritten in place, so a
-    // redaction it needs becomes a block.
-    let mut unredactable = false;
+    // the body is judged too.
     let mut views = text::raw_views(meta.content_type, body);
     views.retain(|v| segments.len() != 1 || segments[0] != *v);
     views.extend(extra.iter().cloned());
+    // A redact-level hit only these views see can't be rewritten.
+    let mut unredactable = false;
     for view in &views {
         let found = scan_text(policy, direction, view, &mut report, &mut seen);
         unredactable |= found.iter().any(|f| f.new && f.verdict >= Verdict::Redact);
@@ -372,21 +393,49 @@ pub fn apply_with(
     if report.error.is_some() && policy.on_error == OnError::FailClosed {
         return unjudged(policy, report);
     }
-    if report.verdict == Verdict::Redact && (unredactable || doc.is_none()) {
-        report.verdict = Verdict::Block;
-    }
     if doc.is_none() && report.hits.is_empty() {
         // Binary with nothing text-shaped in it: forwarded, audited.
         report.skipped = Some(SkipReason::NotText);
     }
     match (report.verdict, doc) {
-        (Verdict::Block, _) => Outcome::Block { report },
-        (Verdict::Redact, Some(doc)) => Outcome::Forward {
-            body: Some(doc.redact(&spans)),
-            report,
-        },
+        (Verdict::Redact, Some(doc)) if !unredactable => {
+            // Only what the parser located can be rewritten. A copy left
+            // anywhere else (the query, a duplicate key, an encoded form
+            // field) means the redaction is incomplete: block instead.
+            let rewritten = doc.redact(&spans);
+            if leaves_a_hit(policy, direction, meta.content_type, &rewritten, extra) {
+                report.verdict = Verdict::Block;
+                return Outcome::Block { report };
+            }
+            Outcome::Forward {
+                body: Some(rewritten),
+                report,
+            }
+        }
+        (Verdict::Redact | Verdict::Block, _) => {
+            report.verdict = Verdict::Block;
+            Outcome::Block { report }
+        }
         _ => Outcome::Forward { body: None, report },
     }
+}
+
+/// Does any non-flag-only hit survive in `body`'s raw views or `extra`?
+fn leaves_a_hit(
+    policy: &DirectionPolicy,
+    direction: Direction,
+    content_type: Option<&str>,
+    body: &[u8],
+    extra: &[String],
+) -> bool {
+    let mut views = text::raw_views(content_type, body);
+    views.extend(extra.iter().cloned());
+    views.iter().any(|view| {
+        policy.scanners.iter().any(|s| {
+            s.scan(view, direction)
+                .map_or(true, |hits| hits.iter().any(|h| !h.flag_only))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -462,5 +511,81 @@ mod tests {
         };
         let out = apply(&p, Direction::Request, BodyMeta::default(), b"x");
         assert!(matches!(out, Outcome::Forward { report, .. } if report.verdict == Verdict::Flag));
+    }
+
+    /// A hit per space-separated word: distinct hits on demand.
+    struct Words;
+    impl Scanner for Words {
+        fn id(&self) -> &str {
+            "words"
+        }
+        fn max_match_len(&self) -> usize {
+            16
+        }
+        fn scan(&self, text: &str, _: Direction) -> Result<Vec<Hit>, ScanError> {
+            let mut at = 0;
+            Ok(text
+                .split(' ')
+                .map(|w| {
+                    let hit = Hit {
+                        rule: "word".into(),
+                        start: at,
+                        end: at + w.len(),
+                        flag_only: false,
+                    };
+                    at += w.len() + 1;
+                    hit
+                })
+                .filter(|h| h.end > h.start)
+                .collect())
+        }
+    }
+
+    #[test]
+    fn audited_hits_are_capped() {
+        let p = DirectionPolicy {
+            scanners: vec![Arc::new(Words)],
+            on_hit: Verdict::Flag,
+            on_error: OnError::FailOpen,
+            max_scan_bytes: 1 << 20,
+        };
+        let body: String = (0..500).map(|i| format!("w{i} ")).collect();
+        let Outcome::Forward { report, .. } =
+            apply(&p, Direction::Request, BodyMeta::default(), body.as_bytes())
+        else {
+            panic!("flag forwards");
+        };
+        assert_eq!(report.hits.len(), MAX_AUDITED_HITS);
+        assert_eq!(report.dropped_hits, 500 - MAX_AUDITED_HITS);
+    }
+
+    #[test]
+    fn the_query_is_judged_when_the_body_is_not() {
+        let p = DirectionPolicy {
+            scanners: vec![Arc::new(Words)],
+            on_hit: Verdict::Block,
+            on_error: OnError::FailOpen,
+            max_scan_bytes: 4,
+        };
+        let out = apply_with(
+            &p,
+            Direction::Request,
+            BodyMeta::default(),
+            b"a long body",
+            &["q=x".into()],
+        );
+        assert!(
+            matches!(out, Outcome::Block { .. }),
+            "oversize body let the query through"
+        );
+        let encoded = BodyMeta {
+            content_type: None,
+            encoded: true,
+        };
+        let out = apply_with(&p, Direction::Request, encoded, b"ab", &["q=x".into()]);
+        assert!(
+            matches!(out, Outcome::Block { .. }),
+            "encoded body let the query through"
+        );
     }
 }
