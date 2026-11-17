@@ -161,7 +161,9 @@ def test_trusted_crl_restores_mtls(rv, crl):
     assert wait_for(lambda: ok(rv, "a"), 10), (
         "mTLS still refused after a valid CRL was served"
     )
-    assert (rv["t"].work / "mtls-crl-cache.pem").exists()
+    # The CRL is applied before the cache is written (AGENT-301), so wait.
+    cache = rv["t"].work / "mtls-crl-cache.pem"
+    assert wait_for(cache.exists, 5), "last good CRL not written to the cache"
 
 
 @case(
