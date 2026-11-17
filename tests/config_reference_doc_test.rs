@@ -33,36 +33,51 @@ fn complete_example() -> &'static str {
     &PAGE[start..start + len]
 }
 
-/// `(struct, field)` for every public field of a strict struct.
+/// `(struct, field)` for every field of a strict struct. serde reads
+/// private fields too, so visibility does not matter. Attributes may span
+/// lines or share a line with the field.
 fn strict_fields(source: &str) -> Vec<(String, String)> {
+    let field =
+        regex::Regex::new(r"^(?:#\[.*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?([a-z_][a-z0-9_]*)\s*:")
+            .expect("field regex");
     let (mut out, mut strict, mut current) = (Vec::new(), false, None::<String>);
+    let mut attr = String::new();
     for line in source.lines().map(str::trim) {
-        if line.starts_with("#[serde(") && line.contains("deny_unknown_fields") {
+        if !attr.is_empty() || line.starts_with("#[") && !line.contains(']') {
+            attr.push_str(line);
+            if line.contains(")]") {
+                strict |= attr.starts_with("#[serde(") && attr.contains("deny_unknown_fields");
+                attr.clear();
+            }
+        } else if line.starts_with("#[serde(") && line.contains("deny_unknown_fields") {
             strict = true;
         } else if let Some(rest) = line.strip_prefix("pub struct ") {
             current = strict.then(|| rest.split([' ', '{']).next().unwrap().to_string());
             strict = false;
-        } else if line.starts_with("pub enum ") {
+        } else if line.starts_with("pub enum ") || line.starts_with("enum ") {
             strict = false;
         } else if line == "}" {
             current = None;
-        } else if let (Some(name), Some(field)) = (&current, line.strip_prefix("pub "))
-            && let Some((field, _)) = field.split_once(':')
+        } else if let Some(name) = &current
+            && !line.starts_with("//")
+            && let Some(m) = field.captures(line)
         {
-            out.push((name.clone(), field.to_string()));
+            out.push((name.clone(), m[1].to_string()));
         }
     }
     out
 }
 
-/// The page names a field as a YAML key (`field:`) or in backticks
-/// (`` `field` `` or `` `parent.field` ``).
-fn page_names(field: &str) -> bool {
-    let as_key = PAGE.lines().any(|l| {
-        let l = l.trim_start().trim_start_matches("- ");
-        l.starts_with(&format!("{field}:"))
-    });
-    as_key || PAGE.contains(&format!("`{field}`")) || PAGE.contains(&format!(".{field}`"))
+/// A table row or heading on the page documents the field: a backticked
+/// key that is the field itself, or ends or starts with it as a path
+/// segment (`audit.retention_days`, `routes[].route`, `…scanners`). Two
+/// structs sharing a field name can still hide each other's rows.
+fn page_documents(field: &str) -> bool {
+    let key = regex::Regex::new(&format!(r"`(?:[^`\s]*[.\]…])?{field}(?:[.\[][^`]*)?`"))
+        .expect("key regex");
+    PAGE.lines()
+        .filter(|l| l.starts_with('|') || l.starts_with('#'))
+        .any(|l| key.is_match(l))
 }
 
 #[test]
@@ -77,7 +92,7 @@ fn every_strict_config_field_is_on_the_page() {
     for (path, source) in SOURCES {
         for (name, field) in strict_fields(source) {
             seen += 1;
-            if !DOCUMENTED_ELSEWHERE.contains(&name.as_str()) && !page_names(&field) {
+            if !DOCUMENTED_ELSEWHERE.contains(&name.as_str()) && !page_documents(&field) {
                 missing.push(format!("{path}: {name}.{field}"));
             }
         }

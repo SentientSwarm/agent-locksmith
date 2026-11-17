@@ -123,9 +123,9 @@ shutdown:
   drain_window_seconds: 30
 ```
 
-`oauth_consent` and the legacy `tools` list are described in their own
-sections below; they are left out of the example because each needs
-service-specific values.
+`oauth_consent` and the legacy `tools` and `inbound_auth` keys are described
+in their own sections below; they are left out of the example because each
+needs service-specific values.
 
 ## `listen`
 
@@ -133,10 +133,10 @@ The agent listener and the admin listeners.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `host` | `127.0.0.1` | Address of the agent listener. |
+| `host` | `127.0.0.1` | Address of the agent listener. A value that is not an IP address falls back to `127.0.0.1`. |
 | `port` | `9200` | Port of the agent listener. |
 | `auth_mode` | `bearer` | How agents authenticate. `bearer`: a Locksmith token in `Authorization`. `mtls`: a client certificate, and a bearer header is refused. `both`: a certificate if one is presented, otherwise a bearer token. |
-| `admin_socket.path` | none | Unix socket for the operator CLI, created with mode 0660. Without it there is no admin surface and no database: Locksmith runs only the legacy `tools` list. |
+| `admin_socket.path` | none | Unix socket for the operator CLI, created with mode 0660. It turns on the database, per-agent identity and the admin API. Without it Locksmith runs in [legacy mode](#legacy-mode). |
 | `mtls` | none | Required when `auth_mode` is `mtls` or `both`; see below. |
 | `admin_https` | none | Optional admin listener over HTTPS; see below. |
 | `bootstrap_only` | none | Optional enrolment listener; see below. |
@@ -174,18 +174,19 @@ See the [remote management runbook](../operator/runbooks/remote-management.md).
 
 A TLS listener that accepts only agent enrolment
 (`POST /admin/agent/register`), for mTLS-only fleets where new agents have no
-certificate yet.
+certificate yet. Enabling it requires `listen.admin_socket`.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Bound only when `true`. |
-| `host` | `127.0.0.1` | Listener address. |
+| `host` | `127.0.0.1` | Listener address; must be an IP address. |
 | `port` | `9202` | Listener port. |
 | `cert_path`, `key_path` | required | Server certificate and key. |
 
 ## Admin substrate
 
-These are required together with `listen.admin_socket`.
+These are required together with `listen.admin_socket`. `database.path` is
+also required when `listen.auth_mode` is `mtls` or `both`.
 
 | Key | Meaning |
 |---|---|
@@ -245,7 +246,7 @@ Content inspection for named routes.
 | `…on_hit` | request `block`, response `flag` | `pass`, `flag`, `redact` or `block`. A direction whose scanners are only `injection` or sidecars defaults to `flag`. |
 | `…on_error` | request `fail_closed`, response `fail_open` | What happens when a scanner fails. |
 | `…max_scan_bytes` | `1048576` | Bytes scanned per body. |
-| `sidecars[].name` | required | Lowercase letters, digits, `-` and `_`. Used as `sidecar:<name>`. |
+| `sidecars[].name` | required | Unique; lowercase letters, digits, `-` and `_`. Used as `sidecar:<name>`. |
 | `sidecars[].socket` | required | Absolute path of the sidecar's Unix socket. |
 | `sidecars[].timeout_ms` | `1000` | Per-scan timeout; at least 1. |
 
@@ -278,7 +279,8 @@ See [native MCP](../operator/native-mcp.md).
 
 ## `oauth_consent`
 
-Operator-approved OAuth accounts. Requires `listen.admin_socket`.
+Operator-approved OAuth accounts. Requires `listen.admin_socket` and
+`LOCKSMITH_OAUTH_SEALING_KEY`; the daemon refuses to start without either.
 
 ```yaml
 oauth_consent:
@@ -286,7 +288,10 @@ oauth_consent:
     address: "127.0.0.1:9443"
     cert_path: "/etc/locksmith/tls/callback.crt"
     key_path: "/etc/locksmith/tls/callback.key"
-  profiles: []
+  profiles:
+    - id: linear
+      kind: controlled-linear-v1
+      # ...fields for this kind; see the pages below
 ```
 
 | Key | Meaning |
@@ -306,14 +311,29 @@ The profile fields depend on the provider. See
 | Key | Default | Meaning |
 |---|---|---|
 | `logging.level` | `info` | Log level. `RUST_LOG`, when set, takes precedence. |
-| `logging.file` | none | Write logs to this file instead of stdout. |
+| `logging.file` | none | Write logs to this file instead of stdout. If it cannot be opened, the daemon does not start. |
 | `shutdown.drain_window_seconds` | `30` | How long in-flight requests get to finish after SIGTERM. |
 
-## Legacy keys
+## Legacy mode
 
-`tools` is the pre-database way to declare services. Entries are copied into
-the database on first boot. New deployments register services with the CLI
-instead.
+Without `listen.admin_socket`, Locksmith runs as it did before 2.0: there is
+no database, no per-agent identity and no admin API. It serves the services
+in the `tools` list, and `inbound_auth` is the only thing that authenticates
+agents.
+
+| Key | Meaning |
+|---|---|
+| `inbound_auth.mode` | `bearer` checks every request for `inbound_auth.token`. |
+| `inbound_auth.token` | The single token every agent presents. |
+
+> **Warning.** In legacy mode, if `inbound_auth` is absent, its `mode` is not
+> `bearer`, or it has no `token`, every request is served without
+> authentication. Keep the listener on loopback, or set the admin socket.
+
+Once `listen.admin_socket` is set, `inbound_auth` is ignored (with a warning
+if a token is set) and each agent uses its own token.
+
+### `tools`
 
 ```yaml
 tools:
@@ -337,17 +357,34 @@ tools:
           replacement: "[REDACTED:api_key]"
 ```
 
-`auth.value` also accepts `from_file_sealed`; see the
-[sealed secrets runbook](../operator/runbooks/sealed-secrets.md). The
-`response` controls are described in the
+| Key | Default | Meaning |
+|---|---|---|
+| `name`, `description`, `upstream` | required | The route name (`/api/<name>/`), a description and the upstream base URL. |
+| `egress` | `direct` | `direct` or `proxied`; see [egress](#egress-egress_proxy-and-egress). |
+| `auth.header`, `auth.value` | none | Header to inject and its credential. `value` is `"Bearer ${VAR}"`-style text, `{from_env: {var: VAR}}` or `{from_file_sealed: {path: ...}}`; see the [sealed secrets runbook](../operator/runbooks/sealed-secrets.md). |
+| `timeouts.request_seconds` | `30` | Total time for one upstream request. |
+| `timeouts.idle_seconds` | `60` | Longest gap between reads. |
+| `body_limit_bytes` | `10485760` | Largest request body. |
+| `response.max_size_bytes` | none | Largest upstream response. |
+| `response.content_type_allowlist` | none | Accepted response content types. |
+| `response.redaction_patterns` | `[]` | `id`, `regex` and optional `replacement` (default `[REDACTED:<id>]`) for each pattern. |
+
+The `response` controls are described in the
 [response controls runbook](../operator/runbooks/response-controls.md).
 
-These keys are still accepted but have no effect, or are translated, with a
-warning at startup:
+With the admin socket set, `tools` entries are copied into the database at
+startup, but only names the database does not already have; later edits to
+an entry are ignored. Only environment-variable credentials are copied.
+An entry whose `auth.value` uses `from_file_sealed` (or another backend) is
+skipped with a warning and not served. Register services with the CLI
+instead.
+
+### Deprecated keys
+
+These are translated or dropped, with a warning at startup:
 
 | Key | What happens |
 |---|---|
-| `inbound_auth` (`mode`, `token`) | The pre-2.0 shared agent token. It is ignored once `listen.admin_socket` is set; agents use their own tokens. |
 | `telemetry` | Removed; ignored. |
 | `tools[].cloud` | Translated to `egress`. |
 | `tools[].timeout_seconds` | Translated to `timeouts.request_seconds`. |
@@ -357,13 +394,16 @@ warning at startup:
 | Variable | Read by | Meaning |
 |---|---|---|
 | `LOCKSMITH_CREDENTIAL_SEALING_KEY` | daemon | Key for credentials stored in Locksmith. Without it, stored credentials cannot be set or used. |
-| `LOCKSMITH_OAUTH_SEALING_KEY` | daemon | Key for OAuth sessions. Without it the OAuth admin routes are not mounted and OAuth routes cannot be used. |
+| `LOCKSMITH_OAUTH_SEALING_KEY` | daemon | Key for OAuth sessions. Without it the OAuth admin routes are not mounted and OAuth routes cannot be used; `oauth_consent` then stops startup. |
 | `LOCKSMITH_SEED_PATH` | daemon | Seed catalog to load. Default `/etc/locksmith/seed/catalog.yaml`; empty skips seeding. |
 | `RUST_LOG` | daemon | Overrides `logging.level`. |
+| `OP_*` | daemon | Passed to the 1Password `op` CLI that resolves `op_*` credentials, for example `OP_SERVICE_ACCOUNT_TOKEN`. |
 | `LOCKSMITH_SOCKET` | CLI | Admin socket path; default `/var/run/locksmith/admin.sock`. |
 | `LOCKSMITH_ADMIN_URL`, `LOCKSMITH_CA_BUNDLE` | CLI | Admin HTTPS URL and the CA bundle that verifies it. |
 | `LOCKSMITH_OP_TOKEN` | CLI | Operator token. |
 | `LOCKSMITH_AGENT_TOKEN` | CLI | Agent token, for agent self-service commands. |
+
+A sealing key that is set but malformed stops startup.
 
 Services can also read their credentials from environment variables named in
 their registration; see [credential custody](../guide/03-credential-custody.md).
