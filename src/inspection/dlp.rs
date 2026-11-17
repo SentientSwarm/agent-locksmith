@@ -61,9 +61,10 @@ fn is_base64(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"+/=".contains(&b)
 }
 
-/// Bytes of base64 at the start of `line`, counting `/` and `+` written
-/// as JSON escapes (`\/`, `\u002B`, at any depth) as base64 too: some
-/// encoders escape them (AGENT-270).
+/// Bytes of base64 at the start of `line`, counting base64 characters
+/// written as JSON escapes (`\/`, `\u002B`, any `\u00XX`, at any depth)
+/// as base64 too: some encoders escape `/` and `+`, and any encoder may
+/// escape the rest (AGENT-270).
 fn base64_prefix(line: &str) -> usize {
     let b = line.as_bytes();
     let mut i = 0;
@@ -77,8 +78,12 @@ fn base64_prefix(line: &str) -> usize {
         let escaped = if rest.first() == Some(&b'/') {
             1
         } else if rest.len() >= 5
-            && rest[..4].eq_ignore_ascii_case(b"u002")
-            && matches!(rest[4], b'B' | b'b' | b'F' | b'f')
+            && rest.starts_with(b"u00")
+            && rest[3..5].iter().all(u8::is_ascii_hexdigit)
+            && std::str::from_utf8(&rest[3..5])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .is_some_and(is_base64)
         {
             5
         } else {
@@ -93,9 +98,10 @@ fn base64_prefix(line: &str) -> usize {
 }
 
 /// A line break in a PEM body: raw, or escaped once or more inside a
-/// JSON string, with or without a carriage return.
-static PEM_LINE_BREAK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?-u)(?:\\+r)?\\+n|\r?\n").expect("compiles"));
+/// JSON string (`\n` or `\u000A`), with or without a carriage return.
+static PEM_LINE_BREAK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?-u)(?:\\+r|\\+u000[Dd])?(?:\\+n|\\+u000[Aa])|\r?\n").expect("compiles")
+});
 
 /// The whole PEM block after a BEGIN line: through the END line, or, with
 /// no END in reach, through the base64 and RFC 1421 header lines that
@@ -666,6 +672,22 @@ mod tests {
         );
         assert_redacted_whole(&nested_args(&pem, '/', "\\/"), &parts);
         assert_redacted_whole(&nested_args(&pem, '+', "\\u002B"), &parts);
+    }
+
+    #[test]
+    fn any_hex_escape_of_a_base64_byte_or_newline_keeps_the_key_whole() {
+        // Review finding: an encoder (or an adversary) can write any
+        // character as `\u00XX`, including the line break.
+        let mut g = Gen(67);
+        let parts: Vec<String> = (0..6).map(|_| g.chars(AN, 20)).collect();
+        let pem = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}={}={}\n{}={}\n{}",
+            parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+        );
+        let body = nested_args(&pem, '=', "\\u003D");
+        let body = body.replace("\\\\n", "\\\\u000A");
+        assert!(body.contains("u003D") && body.contains("u000A"), "{body}");
+        assert_redacted_whole(&body, &parts);
     }
 
     #[test]

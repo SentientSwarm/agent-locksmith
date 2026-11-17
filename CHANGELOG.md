@@ -5,6 +5,11 @@
 ### Fixed
 
 - A PEM private key with no `END` line in nested tool arguments is no
+  longer cut short by any `\u00XX` escape of a base64 character, or by a
+  line break written as `\u000A` (AGENT-270). Before, only `\/` and
+  `\u002B`/`\u002F` were read, so an encoder that escaped other characters
+  left the rest of the key to be forwarded under `redact`.
+- A PEM private key with no `END` line in nested tool arguments is no
   longer cut short by an escaped `/` or `+` in a line (`\/` from PHP and
   json-c, `\u002B` from .NET), which forwarded the rest of the key under
   `redact` (AGENT-270). An indented blank line after `Proc-Type`/`DEK-Info`
