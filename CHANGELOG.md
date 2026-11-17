@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A failed broker health probe records why, as `health.cause` and in the
+  `broker_down` log: `unexpected_status`, `unreachable`, or the egress
+  refusal (`egress_proxy_unconfigured`, `upstream_client_unavailable`)
+  when the broker may not be reached (AGENT-269). Before, a proxied
+  broker with no egress configured showed down with no reason.
+- The egress policy no longer lists proxied `infra` registrations, which
+  no path calls (AGENT-269); listing them only widened the allowlist.
 - An OAuth route's token calls (bootstrap, device login, inline and
   background refresh) now take the route's egress (AGENT-269). Before,
   they always connected directly, so a `proxied` OAuth route's token

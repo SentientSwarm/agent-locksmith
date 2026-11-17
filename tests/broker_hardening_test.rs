@@ -471,3 +471,53 @@ async fn credential_header_on_a_plain_route() {
     assert_eq!(auth["kind"], "stored_header");
     assert_eq!(auth["header"], "X-Api-Key");
 }
+
+/// A probed broker route `name` on `upstream` with `egress`, keyed.
+async fn probed_route_at(h: &H, name: &str, upstream: &str, egress: &str) {
+    let mut body = broker_body(upstream, json!({ "health": { "path": "/healthz" } }));
+    body["auth"] = json!({ "kind": "none" });
+    body["egress"] = json!(egress);
+    h.put_model(name, body).await.assert_status_ok();
+    h.seal(name, "broker-key-1").await;
+}
+
+/// AGENT-269 — a failed probe records why, in the health state and in
+/// the `broker_down` log: the status it got, an unreachable broker, or no
+/// usable client (a proxied broker with no egress, never probed directly).
+#[tokio::test]
+async fn down_probe_records_its_cause() {
+    use wiremock::matchers::path;
+    let m = MockServer::start().await;
+    Mock::given(path("/healthz"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&m)
+        .await;
+    let h = setup().await;
+    probed_route_at(&h, "status", &m.uri(), "direct").await;
+    probed_route_at(&h, "gone", "http://127.0.0.1:9", "direct").await;
+    probed_route_at(&h, "unproxied", &m.uri(), "proxied").await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    let cause = |route: &str| h.health.get(route).unwrap().cause;
+    assert_eq!(cause("status"), Some("unexpected_status"));
+    assert_eq!(cause("gone"), Some("unreachable"));
+    assert_eq!(cause("unproxied"), Some("egress_proxy_unconfigured"));
+    assert_eq!(
+        m.received_requests().await.unwrap().len(),
+        1,
+        "only the direct route is probed"
+    );
+    // The log rows drain one at a time and in catalog order, so wait for
+    // all three before looking for the egress one.
+    let mut logs = Vec::new();
+    for _ in 0..100 {
+        logs = broker_logs(&h, "broker_down").await;
+        if logs.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        logs.iter().any(|f| f.contains("egress_proxy_unconfigured")),
+        "{logs:?}"
+    );
+}

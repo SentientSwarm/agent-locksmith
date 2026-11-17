@@ -6,7 +6,7 @@
 use super::uds::UdsState;
 use crate::auth_v2::OperatorIdentity;
 use crate::config::{EgressEnforcement, EgressMode};
-use crate::registrations::{AuthSpec, RegistrationRepository};
+use crate::registrations::{AuthSpec, Kind, RegistrationRepository};
 use crate::repo::AgentCredentialRepository;
 use axum::{
     Extension, Json,
@@ -60,6 +60,7 @@ pub(super) async fn op_egress_policy(
 /// `(route, url)` for every URL an enabled proxied route reaches: its
 /// upstream and, for OAuth (AGENT-269), the token URL of the route and of
 /// each agent binding that selects one for it. Read failures are logged.
+/// `infra` rows are left out: no path calls their upstream.
 async fn registration_routes(
     repo: &RegistrationRepository,
     bindings: Option<&AgentCredentialRepository>,
@@ -69,7 +70,7 @@ async fn registration_routes(
     })?;
     let proxied: Vec<_> = rows
         .into_iter()
-        .filter(|r| !r.disabled && r.egress == EgressMode::Proxied)
+        .filter(|r| !r.disabled && r.egress == EgressMode::Proxied && r.kind != Kind::Infra)
         .collect();
     let mut routes = Vec::new();
     for r in &proxied {

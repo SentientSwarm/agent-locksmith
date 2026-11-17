@@ -337,7 +337,12 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   These events use the `broker` component of the operational log
   (`GET /admin/operator/logs`). A selection or key failure is reported
   before a down broker. `tool|model get` shows the last probe as
-  `health` (`status`, `http_status`, `checked_at`; `null` before the first).
+  `health` (`status`, `http_status`, `checked_at`, and on a failure `cause`:
+  `unexpected_status`, `unreachable` (any transport error, including a
+  refusal by the egress proxy), or `egress_proxy_unconfigured` /
+  `upstream_client_unavailable` when the broker cannot be reached under the
+  egress settings; `null` before the first). `broker_down` carries the
+  `cause` at the transition to down.
   `/readyz` reports `brokers: {up, down, unknown}` counts only, and a down
   broker never fails readiness.
 - **Audit.** Proxy rows carry `auth_mode: broker`, `auth_source: broker`,
@@ -371,7 +376,11 @@ locksmith egress policy --pipelock     # Pipelock api_allowlist fragment
 `egress: proxied` route reaches, grouped by host and port, with the routes
 behind it, plus the effective `egress.mode`. For an OAuth route that
 includes the token endpoint of the route and of any agent binding that
-selects one. The proxy URL is not returned.
+selects one. `infra` registrations and a route's inactive backends are
+not listed, because nothing reaches them: no current path calls an infra
+upstream, and only a route's active backend is used. Regenerate the
+allowlist after
+`locksmith route switch` (or any route change). The proxy URL is not returned.
 Use `--pipelock` to generate the egress proxy's allowlist from Locksmith's
 routes instead of maintaining it separately. Pipelock enforces that list only with
 `mode: strict`; its default `balanced` mode reaches every host not on its

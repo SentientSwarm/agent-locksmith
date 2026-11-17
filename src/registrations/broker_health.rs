@@ -40,6 +40,13 @@ pub struct HealthState {
     pub status: HealthStatus,
     pub checked_at: i64,
     pub http_status: Option<u16>,
+    /// Why a probe failed (AGENT-269): `unexpected_status`, `unreachable`
+    /// (any transport error: connect, TLS, timeout or a refusal by the
+    /// egress proxy), or the refusal code when no client may
+    /// reach the broker (`egress_proxy_unconfigured`,
+    /// `upstream_client_unavailable`). `None` when up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<&'static str>,
     /// [`fingerprint`] of the destination probed. A result for any other
     /// destination, key or probe counts as unknown.
     #[serde(skip)]
@@ -192,13 +199,13 @@ impl Prober {
                     continue;
                 }
             };
-            let (status, http_status) = (state.status, state.http_status);
+            let (status, http_status, cause) = (state.status, state.http_status, state.cause);
             let prev = self.health.current(r).map(|s| s.status);
             self.health.set(&r.name, state);
             // Log changes, and a first probe that fails; a first success
             // is the expected state and stays quiet.
             if prev != Some(status) && !(prev.is_none() && status == HealthStatus::Up) {
-                self.log_transition(&r.name, status, http_status);
+                self.log_transition(&r.name, status, http_status, cause);
             }
         }
     }
@@ -208,14 +215,15 @@ impl Prober {
     /// (#159), so admission reports the key, not the broker.
     async fn probe_once(&self, r: &Registration, now: i64) -> Result<HealthState, KeyFailure> {
         let fp = fingerprint(r).unwrap_or_default();
-        let down = |http_status| HealthState {
+        let down = |http_status, cause| HealthState {
             status: HealthStatus::Down,
             checked_at: now,
             http_status,
+            cause: Some(cause),
             fingerprint: fp.clone(),
         };
         let Some(probe) = r.broker.as_ref().and_then(|b| b.health.as_ref()) else {
-            return Ok(down(None));
+            return Ok(down(None, "no_probe"));
         };
         let key = self.key(&r.auth).await?;
         let config = self.config.load();
@@ -228,8 +236,9 @@ impl Prober {
         );
         // AGENT-259 — a proxied broker with no enforced egress is down,
         // not probed directly.
-        let Ok(client) = client else {
-            return Ok(down(None));
+        let client = match client {
+            Ok(client) => client,
+            Err(refused) => return Ok(down(None, refused.describe().1)),
         };
         let url = format!("{}{}", r.upstream.trim_end_matches('/'), probe.path);
         let req = match r.auth.header_name() {
@@ -239,18 +248,19 @@ impl Prober {
         Ok(match req.timeout(PROBE_TIMEOUT).send().await {
             Ok(resp) => {
                 let code = resp.status().as_u16();
-                HealthState {
-                    status: if code == probe.expect_status {
-                        HealthStatus::Up
-                    } else {
-                        HealthStatus::Down
-                    },
-                    checked_at: now,
-                    http_status: Some(code),
-                    fingerprint: fp,
+                if code == probe.expect_status {
+                    HealthState {
+                        status: HealthStatus::Up,
+                        checked_at: now,
+                        http_status: Some(code),
+                        cause: None,
+                        fingerprint: fp.clone(),
+                    }
+                } else {
+                    down(Some(code), "unexpected_status")
                 }
             }
-            Err(_) => down(None),
+            Err(_) => down(None, "unreachable"),
         })
     }
 
@@ -306,7 +316,13 @@ impl Prober {
         }
     }
 
-    fn log_transition(&self, route: &str, status: HealthStatus, http_status: Option<u16>) {
+    fn log_transition(
+        &self,
+        route: &str,
+        status: HealthStatus,
+        http_status: Option<u16>,
+        cause: Option<&'static str>,
+    ) {
         let Some(oplog) = &self.oplog else { return };
         let (level, event, message) = match status {
             HealthStatus::Down => (
@@ -325,7 +341,7 @@ impl Prober {
             LogComponent::Broker,
             event,
             message,
-            Some(json!({ "route": route, "http_status": http_status })),
+            Some(json!({ "route": route, "http_status": http_status, "cause": cause })),
         );
     }
 }

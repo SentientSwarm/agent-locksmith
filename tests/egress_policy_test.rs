@@ -272,3 +272,26 @@ async fn policy_lists_the_token_hosts_of_proxied_oauth_routes() {
         ])
     );
 }
+
+/// AGENT-269 — no path calls an `infra` registration's upstream (agent
+/// admission and broker probes cover tools and models only), so a proxied
+/// infra host would only widen the allowlist.
+#[tokio::test]
+async fn proxied_infra_is_left_out() {
+    let h = setup().await;
+    h.admin
+        .put("/admin/operator/infra/sidecar")
+        .add_header("authorization", &h.op)
+        .json(
+            &json!({ "upstream": "https://infra.example", "auth": { "kind": "none" },
+            "egress": "proxied" }),
+        )
+        .await
+        .assert_status_ok();
+    h.route("search", "https://api.search.example", "proxied")
+        .await;
+    assert_eq!(
+        h.policy().await["hosts"],
+        json!([{ "host": "api.search.example", "port": 443, "routes": ["search"] }])
+    );
+}
