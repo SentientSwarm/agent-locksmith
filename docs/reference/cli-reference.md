@@ -329,9 +329,12 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   `--health-status` (default 200) within 5 s. The probe never follows a
   redirect: a 3xx is the result, so `--health-status 302` can match. A
   probe the broker fails (another status, a timeout or a refused
-  connection) is retried at the prober's next 5 s tick, and the broker
-  counts as down only when the retry fails too, so one slow answer from
-  a loaded broker doesn't refuse its traffic. A broker no client may
+  connection) is retried 10 s after it started (the 5 s timeout and a
+  5 s tick), and the broker counts as down only when the retry fails
+  too, so a loaded broker slow for a few seconds doesn't have its
+  traffic refused. Until the retry, the route keeps its last recorded
+  result: requests still reach the broker (and fail with its own error
+  if it is really down), and `get` shows that result. A broker no client may
   reach (`egress_proxy_unconfigured`, `upstream_client_unavailable`) is
   down at once. A down route answers 503 `backend_unavailable` without
   dispatch, until a probe passes. A route not yet probed is admitted.

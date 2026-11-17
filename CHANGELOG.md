@@ -5,9 +5,9 @@
 ### Fixed
 
 - One failed health probe no longer marks a loaded broker down
-  (AGENT-310). A probe the broker fails is retried at the next 5 s tick,
-  and the route answers 503 `backend_unavailable` only when the retry
-  fails too. Broker up/down transitions are now also written to the
+  (AGENT-310, AGENT-312). A probe the broker fails is retried 10 s after
+  it started, and the route answers 503 `backend_unavailable` only when
+  the retry fails too. Broker up/down transitions are now also written to the
   daemon's log, not only to the operational log.
 - A PEM private key whose body runs past 8 KiB is redacted whole
   (AGENT-270, AGENT-309). Escaped keys inside JSON reach that size.

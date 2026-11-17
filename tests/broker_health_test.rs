@@ -15,6 +15,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const FAR_FUTURE: i64 = i64::MAX / 2;
 /// The default probe interval: one step makes every probe due again.
 const STEP: i64 = 30;
+/// How long a failed probe waits for its retry (AGENT-312).
+const RETRY: i64 = agent_locksmith::registrations::broker_health::RETRY_AFTER;
 
 /// `/healthz` answers 200 for the first `up` probes, then 500.
 async fn broker_server(up: u64) -> MockServer {
@@ -130,9 +132,46 @@ async fn one_failed_probe_is_retried_before_the_broker_is_down() {
     h.prober.tick_at(FAR_FUTURE + STEP).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
     h.call("pool", "/v1/models").await.assert_status_ok();
-    h.prober.tick_at(FAR_FUTURE + STEP + 5).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
     assert_eq!(probes(&m).await, 3, "retried before the interval");
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
+}
+
+/// AGENT-312 — the retry waits out the probe timeout and a tick, so a
+/// broker slow for a moment (its probe timed out and the next tick came
+/// straight after) is not retried into the same slow spell.
+#[tokio::test]
+async fn a_retry_waits_out_a_short_slow_spell() {
+    let h = setup().await;
+    let m = probe_sequence(&[200, 500, 500]).await;
+    route(&h, &m).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + 5).await;
+    assert_eq!(probes(&m).await, 2, "retried too soon");
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
+}
+
+/// AGENT-312 — a key failure between two failed probes starts the count
+/// again: the second failure is not the second in a row.
+#[tokio::test]
+async fn a_key_failure_between_failed_probes_restarts_the_count() {
+    let h = setup().await;
+    let m = probe_sequence(&[200, 500, 500]).await;
+    route(&h, &m).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    let tombstone = |at: &'static str| sqlx::query(at).execute(&h.pool);
+    tombstone("UPDATE credential_secrets SET tombstoned_at = unixepoch()")
+        .await
+        .unwrap();
+    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
+    tombstone("UPDATE credential_secrets SET tombstoned_at = NULL")
+        .await
+        .unwrap();
+    h.prober.tick_at(FAR_FUTURE + STEP + 2 * RETRY).await;
+    assert_eq!(probes(&m).await, 3);
+    assert!(h.health.get("pool").is_none(), "one failure is not down");
 }
 
 /// AGENT-310 — a retry that passes clears the failure: a later single
@@ -144,8 +183,8 @@ async fn a_passing_retry_clears_the_failure() {
     route(&h, &m).await;
     h.prober.tick_at(FAR_FUTURE).await;
     h.prober.tick_at(FAR_FUTURE + STEP).await;
-    h.prober.tick_at(FAR_FUTURE + STEP + 5).await;
-    h.prober.tick_at(FAR_FUTURE + 2 * STEP + 5).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
+    h.prober.tick_at(FAR_FUTURE + 2 * STEP + RETRY).await;
     assert_eq!(probes(&m).await, 4);
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
@@ -169,9 +208,9 @@ async fn hanging_health_marks_down_within_timeout() {
         .await;
     route(&h, &m).await;
     // Each probe (the first and its retry) is bounded by the timeout.
-    for _ in 0..agent_locksmith::registrations::broker_health::DOWN_AFTER {
+    for i in 0..i64::from(agent_locksmith::registrations::broker_health::DOWN_AFTER) {
         let started = Instant::now();
-        h.prober.tick_at(FAR_FUTURE).await;
+        h.prober.tick_at(FAR_FUTURE + i * RETRY).await;
         assert!(
             started.elapsed() < Duration::from_secs(6),
             "{:?}",

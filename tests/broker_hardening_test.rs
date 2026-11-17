@@ -347,9 +347,10 @@ async fn hanging_broker_does_not_stall_another() {
         h.seal(name, "broker-key-1").await;
     }
     // Each tick (the probe and its retry) is bounded by one timeout.
-    for _ in 0..agent_locksmith::registrations::broker_health::DOWN_AFTER {
+    use agent_locksmith::registrations::broker_health::{DOWN_AFTER, RETRY_AFTER};
+    for i in 0..i64::from(DOWN_AFTER) {
         let started = std::time::Instant::now();
-        h.prober.tick_at(FAR_FUTURE).await;
+        h.prober.tick_at(FAR_FUTURE + i * RETRY_AFTER).await;
         assert!(
             started.elapsed() < PROBE_TIMEOUT * 2,
             "{:?}",
@@ -505,7 +506,8 @@ async fn down_probe_records_its_cause() {
     assert!(h.health.get("status").is_none() && h.health.get("gone").is_none());
     let unproxied = h.health.get("unproxied").unwrap().cause;
     assert_eq!(unproxied, Some("egress_proxy_unconfigured"));
-    h.prober.tick_at(FAR_FUTURE).await;
+    let retry = agent_locksmith::registrations::broker_health::RETRY_AFTER;
+    h.prober.tick_at(FAR_FUTURE + retry).await;
     let cause = |route: &str| h.health.get(route).unwrap().cause;
     assert_eq!(cause("status"), Some("unexpected_status"));
     assert_eq!(cause("gone"), Some("unreachable"));

@@ -174,12 +174,13 @@ pub fn upstream_body(upstream: &str) -> Value {
 
 impl H {
     /// Probe due brokers at `now` until the results are recorded: a
-    /// failure is retried at the next tick before the broker counts as
-    /// down (AGENT-310), so tick that many times.
+    /// failure is retried `RETRY_AFTER` seconds later before the broker
+    /// counts as down (AGENT-310, AGENT-312), so tick that many times. A
+    /// result recorded at the retry is stamped that much later.
     pub async fn settle(&self, now: i64) {
-        use agent_locksmith::registrations::broker_health::DOWN_AFTER;
-        for _ in 0..DOWN_AFTER {
-            self.prober.tick_at(now).await;
+        use agent_locksmith::registrations::broker_health::{DOWN_AFTER, RETRY_AFTER};
+        for i in 0..i64::from(DOWN_AFTER) {
+            self.prober.tick_at(now + i * RETRY_AFTER).await;
         }
     }
 

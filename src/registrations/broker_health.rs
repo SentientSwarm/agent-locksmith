@@ -6,8 +6,9 @@
 //! route whose last probe failed (503 `backend_unavailable`, no dispatch);
 //! a route never probed is admitted. A broker that fails a probe it could
 //! reach (an unexpected status, a timeout or a refused connection) is
-//! probed again at the next tick and counts as down only after
-//! [`DOWN_AFTER`] such failures in a row (AGENT-310). A down broker never
+//! probed again [`RETRY_AFTER`] seconds later and counts as down only
+//! after [`DOWN_AFTER`] such failures in a row (AGENT-310, AGENT-312).
+//! Until then its last recorded result stands. A down broker never
 //! fails daemon readiness, because other routes still serve.
 
 use std::collections::HashMap;
@@ -30,10 +31,14 @@ use crate::secret::{CredentialSealingKey, OpResolver};
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the prober wakes to look for due probes.
 pub const TICK: Duration = Duration::from_secs(5);
-/// Failed probes in a row, each retried at the next tick, before a broker
-/// counts as down. A refusal that no retry changes (no usable egress
-/// client) counts at once.
+/// Failed probes in a row, each retried [`RETRY_AFTER`] seconds after the
+/// last, before a broker counts as down. A refusal that no retry changes
+/// (no usable egress client) counts at once.
 pub const DOWN_AFTER: u32 = 2;
+/// Seconds from a failed probe's start to its retry: the probe timeout and
+/// a tick (AGENT-312). Without the tick, a probe that timed out would be
+/// retried the moment it ended, into the same slow spell.
+pub const RETRY_AFTER: i64 = (PROBE_TIMEOUT.as_secs() + TICK.as_secs()) as i64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -136,6 +141,12 @@ fn probed(catalog: &Catalog) -> impl Iterator<Item = &Arc<Registration>> {
         .filter(|r| r.broker.as_ref().is_some_and(|b| b.health.is_some()))
 }
 
+struct Strike {
+    fingerprint: String,
+    count: u32,
+    at: i64,
+}
+
 pub struct Prober {
     health: BrokerHealth,
     catalog: Arc<ArcSwap<Catalog>>,
@@ -147,9 +158,9 @@ pub struct Prober {
     clients: ClientPool,
     /// Routes whose key could not be materialized at their last probe.
     key_unresolved: std::sync::Mutex<std::collections::HashSet<String>>,
-    /// Failed probes in a row not yet recorded, by route, with the
-    /// fingerprint they were made against.
-    strikes: std::sync::Mutex<HashMap<String, (String, u32)>>,
+    /// Failed probes in a row not yet recorded, by route: the fingerprint
+    /// they were made against, how many, and when the last started.
+    strikes: std::sync::Mutex<HashMap<String, Strike>>,
 }
 
 impl Prober {
@@ -189,17 +200,18 @@ impl Prober {
         if let Ok(mut strikes) = self.strikes.lock() {
             strikes.retain(|name, _| keep.contains(name.as_str()));
         }
-        // A result for an earlier destination, or a failure still to be
-        // confirmed, makes the route due now.
+        // A result for an earlier destination makes the route due now. A
+        // failure still to be confirmed is due only at its retry, however
+        // old the last recorded result.
         let due: Vec<_> = probed(&catalog)
             .filter(|r| {
                 let every = r.broker.as_ref().and_then(|b| b.health.as_ref());
                 let every = every.map_or(30, |h| h.interval_seconds) as i64;
-                self.striking(r)
-                    || self
-                        .health
+                self.retry_due(r, now).unwrap_or_else(|| {
+                    self.health
                         .current(r)
                         .is_none_or(|s| now.saturating_sub(s.checked_at) >= every)
+                })
             })
             .cloned()
             .collect();
@@ -230,13 +242,13 @@ impl Prober {
         }
     }
 
-    /// Does `r` have a failed probe, against its current destination, still
-    /// to be confirmed?
-    fn striking(&self, r: &Registration) -> bool {
+    /// Whether a failed probe of `r`, against its current destination, is
+    /// due its retry at `now`; `None` when no retry is pending.
+    fn retry_due(&self, r: &Registration, now: i64) -> Option<bool> {
         let fp = fingerprint(r).unwrap_or_default();
-        self.strikes
-            .lock()
-            .is_ok_and(|s| s.get(&r.name).is_some_and(|(f, _)| *f == fp))
+        let strikes = self.strikes.lock().ok()?;
+        let k = strikes.get(&r.name).filter(|k| k.fingerprint == fp)?;
+        Some(now.saturating_sub(k.at) >= RETRY_AFTER)
     }
 
     /// Count a probe a retry might pass (the broker answered wrongly or
@@ -252,19 +264,23 @@ impl Prober {
             strikes.remove(route);
             return false;
         }
-        let entry = strikes
-            .entry(route.to_string())
-            .or_insert_with(|| (state.fingerprint.clone(), 0));
-        if entry.0 != state.fingerprint {
-            *entry = (state.fingerprint.clone(), 0);
+        let entry = strikes.entry(route.to_string()).or_insert(Strike {
+            fingerprint: state.fingerprint.clone(),
+            count: 0,
+            at: state.checked_at,
+        });
+        if entry.fingerprint != state.fingerprint {
+            entry.fingerprint = state.fingerprint.clone();
+            entry.count = 0;
         }
-        entry.1 += 1;
-        if entry.1 < DOWN_AFTER {
+        entry.count += 1;
+        entry.at = state.checked_at;
+        if entry.count < DOWN_AFTER {
             tracing::info!(
                 route,
                 cause = state.cause,
                 http_status = state.http_status,
-                failures = entry.1,
+                failures = entry.count,
                 "broker health probe failed; retrying before marking it down"
             );
             return true;
@@ -357,6 +373,11 @@ impl Prober {
     /// Forget the route's health and log, once, that its key is unusable.
     fn key_failed(&self, route: &str, failure: KeyFailure) {
         self.health.forget(route);
+        // The broker was not probed: its earlier failure is no longer the
+        // last thing known of it (AGENT-312).
+        if let Ok(mut strikes) = self.strikes.lock() {
+            strikes.remove(route);
+        }
         let first = self
             .key_unresolved
             .lock()
