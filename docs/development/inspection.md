@@ -142,12 +142,12 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
 - **A redaction that can't remove every match** becomes a block, and the
   audit row carries `redaction_incomplete: true`. That covers a
   redact-level match in the path or query (never rewritten, even when the
-  body holds the same text), one only a raw view sees, a body that can't
-  be parsed, and a match still found when the outgoing bytes (raw views,
-  path and query) are scanned again after rewriting. A scanner that fails
-  during that rescan is a scanner error (`error: "rescan <scanner>:
-  <why>"`) and follows `on_error`: blocked under `fail_closed`, forwarded
-  redacted under `fail_open`.
+  body holds the same text), one only a raw view sees, a body that isn't
+  UTF-8, and a match still found when the outgoing bytes (raw views, path
+  and query) are scanned again after rewriting. That rescan is the only
+  guard for copies the rewrite can't reach, such as `SEC%52ET` in a form
+  body, so a scanner that fails during it blocks the body even under
+  `fail_open`, and the row records `error: "rescan <scanner>: <why>"`.
 - **Binary bodies** (not UTF-8) are scanned only through the raw view. With
   no hit they pass and are audited `inspection_skipped` with reason
   `not_text`, so uploads are not blocked by a text scanner.

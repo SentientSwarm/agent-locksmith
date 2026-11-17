@@ -395,6 +395,7 @@ pub fn apply_with(
             scan_text(policy, direction, view, &mut report, &mut seen);
         }
         if report.verdict >= Verdict::Redact {
+            report.redaction_incomplete = report.verdict == Verdict::Redact;
             report.verdict = Verdict::Block;
             return Outcome::Block { report };
         }
@@ -449,18 +450,17 @@ pub fn apply_with(
             let rewritten = doc.redact(&spans);
             match leaves_a_hit(policy, direction, meta.content_type, &rewritten, extra) {
                 Rescan::Clean => {}
-                Rescan::Hit => {
+                // AGENT-270: the rescan is the only guard for copies the
+                // rewrite can't reach (an encoded form field, an escape),
+                // so a scanner that fails there can't vouch for the body
+                // and it blocks even under `fail_open`, with the error.
+                outcome => {
+                    if let Rescan::Error(e) = outcome {
+                        report.error = Some(format!("rescan {e}"));
+                    }
                     report.verdict = Verdict::Block;
                     report.redaction_incomplete = true;
                     return Outcome::Block { report };
-                }
-                // AGENT-270: a rescan that can't finish is a scanner error,
-                // so it is reported and follows `on_error` like any other.
-                Rescan::Error(e) => {
-                    report.error = Some(format!("rescan {e}"));
-                    if policy.on_error == OnError::FailClosed {
-                        return unjudged(policy, report);
-                    }
                 }
             }
             Outcome::Forward {
@@ -715,23 +715,61 @@ mod tests {
             report.error.as_deref(),
             Some("rescan fails_on_rescan: unavailable")
         );
-        assert!(!report.redaction_incomplete);
+        assert!(report.redaction_incomplete);
     }
 
     #[test]
-    fn a_rescan_error_under_fail_open_forwards_the_redacted_body() {
+    fn a_rescan_error_blocks_even_under_fail_open() {
+        // The rescan is the only guard for copies the redaction can't
+        // reach, so a scanner that fails there can't vouch for the body.
         let p = redacting(Arc::new(FailsOnRescan), OnError::FailOpen);
         let out = apply(&p, Direction::Response, JSON, br#"{"a":"SECRET"}"#);
-        let Outcome::Forward {
-            body: Some(body),
-            report,
-        } = out
-        else {
-            panic!("a rescan error under fail_open must forward the redaction");
+        let Outcome::Block { report } = out else {
+            panic!("a rescan error forwarded the body");
         };
-        assert!(!String::from_utf8(body).unwrap().contains("SECRET"));
-        assert_eq!(report.verdict, Verdict::Redact);
-        assert!(report.error.is_some());
+        assert_eq!(
+            report.error.as_deref(),
+            Some("rescan fails_on_rescan: unavailable")
+        );
+        assert!(report.redaction_incomplete);
+    }
+
+    #[test]
+    fn an_encoded_copy_the_rewrite_misses_is_caught_by_the_rescan() {
+        // `SEC%52ET` is a copy only the decoded raw view sees, and the
+        // same text as the parsed hit, so only the rescan finds it.
+        let p = redacting(
+            Arc::new(literal::Literal::new("SECRET").unwrap()),
+            OnError::FailOpen,
+        );
+        let form = BodyMeta {
+            content_type: Some("application/x-www-form-urlencoded"),
+            encoded: false,
+        };
+        let out = apply(&p, Direction::Request, form, b"a=SECRET&b=SEC%52ET");
+        let Outcome::Block { report } = out else {
+            panic!("the encoded copy was forwarded");
+        };
+        assert!(report.redaction_incomplete);
+        assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn a_query_hit_on_an_unreadable_body_is_marked_incomplete() {
+        let p = redacting(
+            Arc::new(literal::Literal::new("SECRET").unwrap()),
+            OnError::FailOpen,
+        );
+        let gzip = BodyMeta {
+            content_type: Some("application/json"),
+            encoded: true,
+        };
+        let extra = ["/x?q=SECRET".to_string()];
+        let out = apply_with(&p, Direction::Request, gzip, b"\x1f\x8b", &extra);
+        let Outcome::Block { report } = out else {
+            panic!("the query copy was forwarded");
+        };
+        assert!(report.redaction_incomplete);
     }
 
     #[test]
