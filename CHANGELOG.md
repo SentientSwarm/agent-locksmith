@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A PEM private key's last line, with no `END` line in reach, is kept when
+  a raw non-ASCII character (a `”` written by a UTF-8 encoder) or a
+  control character follows it (AGENT-270). Before, that line was
+  forwarded under `redact`, while the same key with the quote escaped as
+  a `\u` escape was redacted whole.
 - A PEM private key with no `END` line in nested tool arguments is read
   with every JSON escape decoded, at any depth (AGENT-270). Tab
   indentation written as `\t` or `\u0009` no longer ends the key, and a

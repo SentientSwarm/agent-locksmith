@@ -138,10 +138,11 @@ fn starts_with(line: &[Unit], prefix: &[u8]) -> bool {
 }
 
 /// What may follow a key's last line on the same line: whitespace, a
-/// closing quote or bracket, or punctuation. Not `:`, so a YAML key on
+/// control byte, a closing quote or bracket, punctuation, or any non-ASCII
+/// character (a raw `”` from a UTF-8 encoder). Not `:`, so a YAML key on
 /// the next line is not taken for base64.
 fn closes(b: u8) -> bool {
-    b" \t\r\"'}],\\<>);`.!?&|".contains(&b)
+    !(0x20..0x80).contains(&b) || b" \"'}],\\<>);`.!?&|".contains(&b)
 }
 
 /// The whole PEM block after a BEGIN line: through the END line, or, with
@@ -765,6 +766,23 @@ mod tests {
         let body = nested_args(&pem, '\u{201d}', "\\u201d");
         assert!(body.contains("u201d"), "{body}");
         assert_redacted_whole(&body, &parts);
+    }
+
+    #[test]
+    fn a_last_key_line_before_a_raw_non_ascii_or_control_character_is_kept() {
+        // Round 3 review: a UTF-8 encoder writes `”` raw, and `\b` is a
+        // raw control byte one level up; either ends the line.
+        let mut g = Gen(79);
+        let parts: Vec<String> = (0..2).map(|_| g.chars(AN, 40)).collect();
+        for tail in ["\u{201d} he said", "\u{8}", "\u{e9}t\u{e9}"] {
+            let pem = format!(
+                "-----BEGIN RSA PRIVATE KEY-----\n{}\n{}{tail}",
+                parts[0], parts[1]
+            );
+            assert_redacted_whole(&nested_args(&pem, '~', "~"), &parts);
+            let h = &scan(&pem)[0];
+            assert!(pem[h.end..].starts_with(tail), "{tail:?}");
+        }
     }
 
     #[test]
