@@ -27,7 +27,7 @@ pub async fn exercise() {
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.cleanup();
     println!(
-        "actual schema 12 -> 26 preserves sealed custody/incarnation/version/grants; prior refuses before listeners; restart passes"
+        "actual schema 12 -> current preserves sealed custody/incarnation/version/grants; prior refuses before listeners; restart passes"
     );
 }
 fn snapshot(f: &Fixture) -> (String, String) {

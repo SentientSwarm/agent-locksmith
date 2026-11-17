@@ -51,23 +51,29 @@ impl RateLimitRepository {
         .bind(agent_id)
         .fetch_optional(&self.pool)
         .await?;
-        found.map(|r| limit(&r)).transpose()
+        found.map(|r| limit_of(&r)).transpose()
     }
 
-    /// Insert or replace the limit for `(route, agent_id)`.
+    /// Insert or replace the limit for `(route, agent_id)`; the limit it
+    /// replaced, read in the same transaction (AGENT-272).
     pub async fn set(
         &self,
         route: &str,
         agent_id: Option<i64>,
         limit: Limit,
         now_ms: i64,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<Option<Limit>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM rate_limits WHERE route = ? AND agent_id IS ?")
-            .bind(route)
-            .bind(agent_id)
-            .execute(&mut *tx)
-            .await?;
+        let previous = sqlx::query(
+            "DELETE FROM rate_limits WHERE route = ? AND agent_id IS ? \
+             RETURNING requests_per_minute, max_concurrent",
+        )
+        .bind(route)
+        .bind(agent_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|r| limit_of(&r))
+        .transpose()?;
         sqlx::query(
             "INSERT INTO rate_limits \
              (route, agent_id, requests_per_minute, max_concurrent, updated_at) \
@@ -80,21 +86,32 @@ impl RateLimitRepository {
         .bind(now_ms)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await
+        tx.commit().await?;
+        Ok(previous)
     }
 
     /// Delete the limit for `(route, agent_id)`; false when there was none.
-    pub async fn delete(&self, route: &str, agent_id: Option<i64>) -> Result<bool, sqlx::Error> {
-        let done = sqlx::query("DELETE FROM rate_limits WHERE route = ? AND agent_id IS ?")
-            .bind(route)
-            .bind(agent_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected() > 0)
+    /// Delete the limit for `(route, agent_id)`; the limit deleted, or
+    /// `None` when there was none.
+    pub async fn delete(
+        &self,
+        route: &str,
+        agent_id: Option<i64>,
+    ) -> Result<Option<Limit>, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM rate_limits WHERE route = ? AND agent_id IS ? \
+             RETURNING requests_per_minute, max_concurrent",
+        )
+        .bind(route)
+        .bind(agent_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|r| limit_of(&r))
+        .transpose()
     }
 }
 
-fn limit(r: &sqlx::sqlite::SqliteRow) -> Result<Limit, sqlx::Error> {
+fn limit_of(r: &sqlx::sqlite::SqliteRow) -> Result<Limit, sqlx::Error> {
     let rpm: i64 = r.try_get("requests_per_minute")?;
     let concurrent: Option<i64> = r.try_get("max_concurrent")?;
     let bad = |e: std::num::TryFromIntError| sqlx::Error::Decode(Box::new(e));
@@ -109,7 +126,7 @@ fn row(r: &sqlx::sqlite::SqliteRow) -> Result<RateLimitRow, sqlx::Error> {
         route: r.try_get("route")?,
         agent_id: r.try_get("agent_id")?,
         agent: r.try_get("public_id")?,
-        limit: limit(r)?,
+        limit: limit_of(r)?,
         updated_at: r.try_get("updated_at")?,
     })
 }

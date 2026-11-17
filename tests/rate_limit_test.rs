@@ -91,6 +91,37 @@ async fn route_default_limits_the_third_request_in_a_minute() {
     assert_eq!(count(&h, "rate_limited").await, 1);
 }
 
+/// AGENT-272: the limit is checked before any credential is resolved, so
+/// a limited route whose credential cannot be resolved answers 429, not
+/// 503, once the agent is over its limit.
+#[tokio::test]
+async fn the_limit_is_checked_before_the_credential() {
+    let h = setup().await;
+    let m = MockServer::start().await;
+    let mut body = broker::broker_body(&m.uri(), json!({}));
+    body["auth"] = json!({ "kind": "none" });
+    h.put_model("up", body).await.assert_status_ok();
+    h.seal("up", "broker-key-1").await;
+    h.grant(&["up"]).await;
+    h.bind("up", json!({ "kind": "broker" }))
+        .await
+        .assert_status_ok();
+    // The sealed key is gone by the time a request resolves it.
+    sqlx::query("UPDATE credential_secrets SET tombstoned_at = unixepoch()")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    set(&h, json!({ "requests_per_minute": 1 })).await;
+    let first = h.call("up", "/x").await;
+    assert_eq!(
+        first.json::<Value>()["error"]["code"],
+        "credential_unresolved"
+    );
+    let second = h.call("up", "/x").await;
+    assert_eq!(second.status_code(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(m.received_requests().await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn limit_is_per_agent() {
     let h = setup().await;

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A rate-limit change that is stored but cannot be loaded into the
+  proxy returns 503 `rate_limits_not_applied` and is logged, instead of
+  `rate_limits_unavailable`, which said the write had failed
+  (AGENT-272). A database error while looking up the route now returns
+  503 instead of 404 `route_not_found`, and the audit row's `previous`
+  limit is read in the same transaction as the write.
 - Legacy `tools` credentials written as `"${VAR}"` or `"Bearer ${VAR}"`
   are copied into the database at startup, for tool names it does not
   already have (AGENT-299).

@@ -41,7 +41,7 @@ pub async fn exercise() {
     upstream::allowed(&f, &receiver, &agent.token, "accounts/check", "Y").await;
     f.cleanup();
     println!(
-        "actual schema 14 -> 26 preserves sealed custody, incarnations, versions, high-water and grants; prior refuses before listeners; restart passes"
+        "actual schema 14 -> current preserves sealed custody, incarnations, versions, high-water and grants; prior refuses before listeners; restart passes"
     );
 }
 

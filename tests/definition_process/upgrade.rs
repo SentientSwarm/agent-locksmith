@@ -25,7 +25,7 @@ pub async fn exercise() {
     assert_eq!(support::authority(&f).await, before);
     f.stop();
     println!(
-        "Actual schema 11 -> 26: existing native authority preserved, zero automatic definitions, old binary refuses before listeners, current restart retains disabled pin"
+        "Actual schema 11 -> current: existing native authority preserved, zero automatic definitions, old binary refuses before listeners, current restart retains disabled pin"
     );
 }
 async fn version(f: &Fixture) -> i64 {

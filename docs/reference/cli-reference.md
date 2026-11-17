@@ -420,8 +420,11 @@ affected agent a full bucket. `PUT /admin/operator/rate-limits/{route}` takes
 A zero value returns 400 `invalid_rate_limit`, an unknown route 404
 `route_not_found`. Limits apply only to HTTP `model` and `tool` routes
 served under `/api`; a native MCP or `infra` registration returns 400
-`route_not_limitable`. Buckets are held in memory, so a restart refills
-them.
+`route_not_limitable`. A database failure returns 503
+`rate_limits_unavailable`. If the change is stored but the proxy cannot
+load it, the request returns 503 `rate_limits_not_applied` and the daemon
+logs an error; the old limits stay in force until the next change or a
+restart. Buckets are held in memory, so a restart refills them.
 
 ### Per-route upstream CA
 

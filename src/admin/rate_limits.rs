@@ -54,6 +54,18 @@ fn unavailable() -> Response {
     )
 }
 
+/// AGENT-272: the write is stored and audited, but the limiter could not
+/// be reloaded, so the proxy still applies the old limits until the next
+/// change or restart.
+fn not_applied(route: &str, e: &sqlx::Error) -> Response {
+    tracing::error!(route, error = %e, "rate limit stored but the limiter could not reload");
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "rate_limits_not_applied",
+        "the change is stored, but the proxy could not load it; it applies at the next change or restart",
+    )
+}
+
 fn wired(state: &UdsState) -> Result<Arc<RateLimits>, Box<Response>> {
     state.admin.rate_limits().ok_or_else(|| {
         Box::new(error(
@@ -127,7 +139,8 @@ pub(super) async fn op_set(
                 );
             }
             Ok(Some(_)) => {}
-            _ => return error(StatusCode::NOT_FOUND, "route_not_found", "no such route"),
+            Ok(None) => return error(StatusCode::NOT_FOUND, "route_not_found", "no such route"),
+            Err(_) => return unavailable(),
         }
     }
     let who = match agent(&state, &op, input.agent.as_deref()).await {
@@ -139,10 +152,9 @@ pub(super) async fn op_set(
         max_concurrent: input.max_concurrent,
     };
     let agent_id = who.as_ref().map(|w| w.0);
-    let previous = limits.repo.get(&route, agent_id).await.ok().flatten();
     let written = limits.repo.set(&route, agent_id, limit, now_ms()).await;
     let mut details = json!({ "route": route, "limit": limit });
-    if let Some(p) = previous {
+    if let Ok(Some(p)) = &written {
         details["previous"] = json!(p);
     }
     audit(
@@ -155,8 +167,11 @@ pub(super) async fn op_set(
         details,
     )
     .await;
-    if written.is_err() || limits.reload().await.is_err() {
+    if written.is_err() {
         return unavailable();
+    }
+    if let Err(e) = limits.reload().await {
+        return not_applied(&route, &e);
     }
     Json(json!({ "route": route, "agent": who.map(|w| w.1), "limit": limit })).into_response()
 }
@@ -177,12 +192,11 @@ pub(super) async fn op_delete(
         Err(r) => return r,
     };
     let agent_id = who.as_ref().map(|w| w.0);
-    let previous = limits.repo.get(&route, agent_id).await.ok().flatten();
-    let deleted = match limits.repo.delete(&route, agent_id).await {
-        Ok(d) => d,
+    let previous = match limits.repo.delete(&route, agent_id).await {
+        Ok(p) => p,
         Err(_) => return unavailable(),
     };
-    if !deleted {
+    if previous.is_none() {
         return error(
             StatusCode::NOT_FOUND,
             "rate_limit_not_found",
@@ -200,8 +214,8 @@ pub(super) async fn op_delete(
         details,
     )
     .await;
-    if limits.reload().await.is_err() {
-        return unavailable();
+    if let Err(e) = limits.reload().await {
+        return not_applied(&route, &e);
     }
     StatusCode::NO_CONTENT.into_response()
 }
