@@ -8,26 +8,13 @@ exchange is recorded into the case transcript after canary redaction, like
 
 from __future__ import annotations
 
-import http.client
 import json
 import os
-import socket
 import subprocess
 from urllib.parse import parse_qsl, urlsplit
 
+from fakes.uds_http import exchange
 from harness.target import CliResult, HttpResult, LocalTarget
-
-
-class _UnixConnection(http.client.HTTPConnection):
-    def __init__(self, path: str, timeout: float) -> None:
-        super().__init__("localhost", timeout=timeout)
-        self.unix_path = path
-
-    def connect(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self.unix_path)
-        self.sock = sock
 
 
 def admin(
@@ -45,13 +32,7 @@ def admin(
     if isinstance(body, dict):
         raw = json.dumps(body).encode()
         send.setdefault("Content-Type", "application/json")
-    conn = _UnixConnection(str(target.socket), timeout)
-    try:
-        conn.request(method, path, body=raw, headers=send)
-        resp = conn.getresponse()
-        status, hdrs, data = resp.status, dict(resp.getheaders()), resp.read()
-    finally:
-        conn.close()
+    status, hdrs, data = exchange(str(target.socket), method, path, raw, send, timeout)
     text = data.decode(errors="replace")
     try:
         parsed = json.loads(text)

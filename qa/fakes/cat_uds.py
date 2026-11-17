@@ -10,23 +10,11 @@ recorded.
 
 from __future__ import annotations
 
-import http.client
 import json
-import socket
 from dataclasses import dataclass
 from typing import Any
 
-
-class _UnixConnection(http.client.HTTPConnection):
-    def __init__(self, path: str, timeout: float) -> None:
-        super().__init__("localhost", timeout=timeout)
-        self._path = path
-
-    def connect(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self._path)
-        self.sock = sock
+from fakes.uds_http import exchange
 
 
 @dataclass
@@ -64,13 +52,8 @@ def uds(
         hdrs.setdefault("Content-Type", content_type)
         keys = sorted(body) if isinstance(body, dict) else ["<raw>"]
         shown = f" body-keys={keys}"
-    conn = _UnixConnection(str(target.socket), timeout)
-    try:
-        conn.request(method, path, body=raw, headers=hdrs)
-        resp = conn.getresponse()
-        status, text = resp.status, resp.read().decode(errors="replace")
-    finally:
-        conn.close()
+    status, _, data = exchange(str(target.socket), method, path, raw, hdrs, timeout)
+    text = data.decode(errors="replace")
     try:
         parsed = json.loads(text)
     except ValueError:

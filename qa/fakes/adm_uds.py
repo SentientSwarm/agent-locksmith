@@ -9,11 +9,11 @@ bodies are never recorded.
 
 from __future__ import annotations
 
-import http.client
 import json
-import socket
 from dataclasses import dataclass
 from typing import Any
+
+from fakes.uds_http import exchange
 
 SECRET_KEYS = {
     "token",
@@ -23,18 +23,6 @@ SECRET_KEYS = {
     "bootstrap_token",
     "current_secret",
 }
-
-
-class _UnixConnection(http.client.HTTPConnection):
-    def __init__(self, path: str, timeout: float) -> None:
-        super().__init__("localhost", timeout=timeout)
-        self._path = path
-
-    def connect(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self._path)
-        self.sock = sock
 
 
 @dataclass
@@ -82,13 +70,7 @@ def uds(
         headers["Content-Type"] = "application/json"
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
-    conn = _UnixConnection(str(target.socket), timeout)
-    try:
-        conn.request(method, path, body=data, headers=headers)
-        resp = conn.getresponse()
-        status, raw = resp.status, resp.read()
-    finally:
-        conn.close()
+    status, _, raw = exchange(str(target.socket), method, path, data, headers, timeout)
     text = raw.decode(errors="replace")
     try:
         parsed = json.loads(text) if text else None
