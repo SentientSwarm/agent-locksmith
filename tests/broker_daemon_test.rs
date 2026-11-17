@@ -64,8 +64,9 @@ async fn readyz_counts_a_down_broker() {
     ]);
     set_key(&f, "pool", "daemon-broker-key");
 
-    // The prober ticks every 5 s; allow a few ticks.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Down takes the next probe (within the 5 s interval and a tick) and
+    // two retries 10 s apart (AGENT-314): about 30 s, so allow 60.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let ready = loop {
         let r = f.http.get(f.url("/readyz")).send().await.unwrap();
         assert_eq!(r.status(), 200, "a down broker never fails readiness");

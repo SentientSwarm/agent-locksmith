@@ -32,9 +32,10 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the prober wakes to look for due probes.
 pub const TICK: Duration = Duration::from_secs(5);
 /// Failed probes in a row, each retried [`RETRY_AFTER`] seconds after the
-/// last, before a broker counts as down. A refusal that no retry changes
-/// (no usable egress client) counts at once.
-pub const DOWN_AFTER: u32 = 2;
+/// last, before a broker counts as down. Three absorb about 20 s of
+/// slowness, nearly all of the 21 s AGENT-310 incident (AGENT-314). A refusal
+/// that no retry changes (no usable egress client) counts at once.
+pub const DOWN_AFTER: u32 = 3;
 /// Seconds from a failed probe's start to its retry: the probe timeout and
 /// a tick (AGENT-312). Without the tick, a probe that timed out would be
 /// retried the moment it ended, into the same slow spell.

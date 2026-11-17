@@ -506,16 +506,18 @@ async fn down_probe_records_its_cause() {
     assert!(h.health.get("status").is_none() && h.health.get("gone").is_none());
     let unproxied = h.health.get("unproxied").unwrap().cause;
     assert_eq!(unproxied, Some("egress_proxy_unconfigured"));
-    let retry = agent_locksmith::registrations::broker_health::RETRY_AFTER;
-    h.prober.tick_at(FAR_FUTURE + retry).await;
+    use agent_locksmith::registrations::broker_health::{DOWN_AFTER, RETRY_AFTER};
+    for i in 1..i64::from(DOWN_AFTER) {
+        h.prober.tick_at(FAR_FUTURE + i * RETRY_AFTER).await;
+    }
     let cause = |route: &str| h.health.get(route).unwrap().cause;
     assert_eq!(cause("status"), Some("unexpected_status"));
     assert_eq!(cause("gone"), Some("unreachable"));
     assert_eq!(cause("unproxied"), Some("egress_proxy_unconfigured"));
     assert_eq!(
         m.received_requests().await.unwrap().len(),
-        2,
-        "only the direct route is probed, and retried once"
+        DOWN_AFTER as usize,
+        "only the direct route is probed, and retried until it is down"
     );
     // The log rows drain one at a time and in catalog order, so wait for
     // all three before looking for the egress one.

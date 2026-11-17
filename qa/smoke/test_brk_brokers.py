@@ -324,7 +324,9 @@ def test_down_broker_refuses_without_dispatch(brk):
         assert health.last("/healthz").header("authorization") == f"Bearer {KEY}"
         assert t.http("GET", "/api/brk-health/v1/x", token=agent["token"]).status == 200
         health.routes["/healthz"] = Reply(status=500)
-        got = wait_health(t, "brk-health", "down")
+        # Down takes the next probe (within interval + tick) and two
+        # retries 10 s apart: up to about 35 s (AGENT-314).
+        got = wait_health(t, "brk-health", "down", timeout=60.0)
         assert got["http_status"] == 500
         before = health.count("/v1/")
         r = t.http("GET", "/api/brk-health/v1/x", token=agent["token"])

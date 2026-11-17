@@ -119,22 +119,41 @@ async fn probes(m: &MockServer) -> usize {
     all.iter().filter(|r| r.url.path() == "/healthz").count()
 }
 
-/// AGENT-310 — one failed probe of a broker that is up is retried at the
-/// next tick, before its interval, and the broker counts as down only
-/// when that probe fails too: a loaded broker that misses one probe
-/// keeps serving.
+/// AGENT-310, AGENT-314 — a failed probe of a broker that is up is
+/// retried [`RETRY`] seconds after it started, before its interval, and
+/// the broker counts as down only when two retries in a row fail too: a
+/// loaded broker that misses a probe keeps serving.
 #[tokio::test]
-async fn one_failed_probe_is_retried_before_the_broker_is_down() {
+async fn a_failed_probe_is_retried_before_the_broker_is_down() {
     let h = setup().await;
-    let m = probe_sequence(&[200, 500, 500]).await;
+    let m = probe_sequence(&[200, 500, 500, 500]).await;
     route(&h, &m).await;
     h.prober.tick_at(FAR_FUTURE).await;
     h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
     h.call("pool", "/v1/models").await.assert_status_ok();
-    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
-    assert_eq!(probes(&m).await, 3, "retried before the interval");
+    h.prober.tick_at(FAR_FUTURE + STEP + 2 * RETRY).await;
+    assert_eq!(probes(&m).await, 4, "retried before the interval");
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
+}
+
+/// AGENT-314 — a broker slow for about 20 s (the AGENT-310 incident was
+/// 21 s) fails a probe and its first retry, and still keeps serving when
+/// the second retry passes.
+#[tokio::test]
+async fn a_broker_slow_for_twenty_seconds_keeps_serving() {
+    let h = setup().await;
+    let m = probe_sequence(&[200, 500, 500, 200]).await;
+    route(&h, &m).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    h.prober.tick_at(FAR_FUTURE + STEP + 2 * RETRY).await;
+    assert_eq!(probes(&m).await, 4);
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
 
 /// AGENT-312 — the retry waits out the probe timeout and a tick, so a
@@ -152,40 +171,58 @@ async fn a_retry_waits_out_a_short_slow_spell() {
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
 
-/// AGENT-312 — a key failure between two failed probes starts the count
-/// again: the second failure is not the second in a row.
+/// Failures in a row that leave a broker up: one short of down.
+const SHORT: usize = agent_locksmith::registrations::broker_health::DOWN_AFTER as usize - 1;
+
+/// Tick `n` times, a retry apart, from `at`; returns the next tick.
+async fn retries(h: &H, at: i64, n: usize) -> i64 {
+    let mut at = at;
+    for _ in 0..n {
+        h.prober.tick_at(at).await;
+        at += RETRY;
+    }
+    at
+}
+
+/// AGENT-312 — a key failure between failed probes starts the count
+/// again: the failures on either side of it are not in a row.
 #[tokio::test]
 async fn a_key_failure_between_failed_probes_restarts_the_count() {
     let h = setup().await;
-    let m = probe_sequence(&[200, 500, 500]).await;
+    let mut seq = vec![200];
+    seq.extend([500].repeat(2 * SHORT));
+    let m = probe_sequence(&seq).await;
     route(&h, &m).await;
     h.prober.tick_at(FAR_FUTURE).await;
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    let at = retries(&h, FAR_FUTURE + STEP, SHORT).await;
     let tombstone = |at: &'static str| sqlx::query(at).execute(&h.pool);
     tombstone("UPDATE credential_secrets SET tombstoned_at = unixepoch()")
         .await
         .unwrap();
-    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
+    h.prober.tick_at(at).await;
     tombstone("UPDATE credential_secrets SET tombstoned_at = NULL")
         .await
         .unwrap();
-    h.prober.tick_at(FAR_FUTURE + STEP + 2 * RETRY).await;
-    assert_eq!(probes(&m).await, 3);
-    assert!(h.health.get("pool").is_none(), "one failure is not down");
+    retries(&h, at + RETRY, SHORT).await;
+    assert_eq!(probes(&m).await, 1 + 2 * SHORT);
+    assert!(h.health.get("pool").is_none(), "never down in a row");
 }
 
-/// AGENT-310 — a retry that passes clears the failure: a later single
-/// failure is retried again rather than marking the broker down.
+/// AGENT-310 — a retry that passes clears the failures: later ones are
+/// counted afresh rather than marking the broker down.
 #[tokio::test]
 async fn a_passing_retry_clears_the_failure() {
     let h = setup().await;
-    let m = probe_sequence(&[200, 500, 200, 500]).await;
+    let mut seq = vec![200];
+    seq.extend([500].repeat(SHORT));
+    seq.push(200);
+    seq.extend([500].repeat(SHORT));
+    let m = probe_sequence(&seq).await;
     route(&h, &m).await;
     h.prober.tick_at(FAR_FUTURE).await;
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
-    h.prober.tick_at(FAR_FUTURE + STEP + RETRY).await;
-    h.prober.tick_at(FAR_FUTURE + 2 * STEP + RETRY).await;
-    assert_eq!(probes(&m).await, 4);
+    let at = retries(&h, FAR_FUTURE + STEP, SHORT + 1).await;
+    retries(&h, at - RETRY + STEP, SHORT).await;
+    assert_eq!(probes(&m).await, seq.len());
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
 

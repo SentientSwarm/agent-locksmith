@@ -13,10 +13,11 @@
   `Bearer` on the `Authorization` header now becomes a bearer
   credential. Any other prefix or text is not copied, and the daemon
   logs a warning for each tool it skips.
-- One failed health probe no longer marks a loaded broker down
-  (AGENT-310, AGENT-312). A probe the broker fails is retried 10 s after
-  it started, and the route answers 503 `backend_unavailable` only when
-  the retry fails too. Broker up/down transitions are now also written to the
+- A failed health probe no longer marks a loaded broker down
+  (AGENT-310, AGENT-312, AGENT-314). A probe the broker fails is retried
+  10 s after it started, and the route answers 503 `backend_unavailable`
+  only when two retries in a row fail too, so about 20 s of slowness is
+  absorbed. Broker up/down transitions are now also written to the
   daemon's log, not only to the operational log.
 - A PEM private key whose body runs past 8 KiB is redacted whole
   (AGENT-270, AGENT-309). Escaped keys inside JSON reach that size.
