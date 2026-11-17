@@ -55,7 +55,13 @@ A policy whose only scanners are `injection` or sidecars defaults to
 `flag`. Set `on_hit` to act on a hit. A sidecar that can't be reached,
 answers with an error or misses `timeout_ms` is a scanner error, and the
 route's `on_error` decides what happens. Sidecars do not run on streamed
-(SSE) responses.
+(SSE) responses, so a streamed reply is a scanner error too.
+
+Setting `on_hit: redact` or `block` also makes `on_error` default to
+`fail_closed`. The route then refuses replies while the sidecar is down,
+and refuses every SSE reply. Use the sidecar on routes that don't stream,
+or set `on_error: fail_open` to forward what the sidecar can't judge
+(which also forwards compressed and oversized replies unscanned).
 
 ## Wire protocol
 

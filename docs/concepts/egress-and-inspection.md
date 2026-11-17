@@ -129,7 +129,8 @@ Policy is set per route and per direction under `inspection.routes` in
 the config file, which needs a restart to change. Each policy names its
 scanners and what a hit does (`pass`, `flag`, `redact` or `block`). It
 also says what happens when a body can't be scanned (`fail_open` or
-`fail_closed`). A request is scanned as the agent sent it, before
+`fail_closed`). Requests fail closed by default; responses fail open,
+unless the policy redacts or blocks. A request is scanned as the agent sent it, before
 Locksmith adds the route's credential. Every hit, skip and error writes a
 `security` audit row, and the audit never stores the matched text.
 
@@ -185,7 +186,8 @@ positives a phrase list brings on pages that discuss prompt injection.
 
 - **Sidecars don't scan streamed (SSE) responses**, because a classifier
   scores whole texts. On a route with a sidecar, a streamed response is
-  an inspection error. Under `fail_closed` it is blocked. Under
+  an inspection error. Under `fail_closed` (the default when the policy
+  redacts or blocks) it is blocked. Under
   `fail_open` it streams with only the built-in scanners, so for
   prompt injection the phrase list is all that applies.
 - **The model weights are not shipped.** The operator accepts their

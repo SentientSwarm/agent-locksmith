@@ -482,6 +482,30 @@ async fn a_compressed_reply_is_blocked_by_default_when_hits_block() {
 }
 
 #[tokio::test]
+async fn a_compressed_reply_is_blocked_by_default_when_hits_redact() {
+    // A policy that redacts can't rewrite what it can't read either.
+    let up = compressed_upstream().await;
+    let h = harness(config(
+        &up.uri(),
+        &response_policy("        on_hit: redact\n"),
+    ))
+    .await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "encoded");
+}
+
+#[tokio::test]
+async fn an_oversized_reply_is_blocked_by_default_when_hits_block() {
+    let up = upstream(&format!("\"{}\"", "a".repeat(4096))).await;
+    let extra = "        on_hit: block\n        max_scan_bytes: 1024\n";
+    let h = harness(config(&up.uri(), &response_policy(extra))).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "oversize");
+}
+
+#[tokio::test]
 async fn a_compressed_reply_passes_when_hits_only_flag() {
     let up = compressed_upstream().await;
     let h = harness(config(&up.uri(), &response_policy(""))).await;

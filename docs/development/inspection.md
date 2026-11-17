@@ -35,8 +35,11 @@ inspection:
 | `max_scan_bytes` | 1 MiB | 1 MiB |
 
 A response policy that redacts or blocks fails closed unless `on_error` says
-otherwise, so a reply it can't read (compressed, oversized or streamed as
-NDJSON) doesn't pass unjudged.
+otherwise, so a reply it can't judge doesn't pass unjudged: compressed,
+oversized or streamed as NDJSON, a scanner error or timeout, or an SSE stream
+the scanners can't follow (including any SSE stream on a policy with a
+sidecar scanner, since sidecars don't scan streams). Such a reply is refused
+with 502, or its SSE stream ends with an error event.
 
 Unknown scanner ids, an empty scanner list and a route listed twice fail
 config load.

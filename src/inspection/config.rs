@@ -200,3 +200,68 @@ fn scanner(id: &str, sidecars: &Sidecars) -> Result<Arc<dyn Scanner>, String> {
     }
     Err(format!("unknown scanner `{id}`"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The compiled (on_hit, on_error) for one route's request or response.
+    fn compiled(direction: &str, policy: &str) -> (Verdict, OnError) {
+        let yaml = format!("routes:\n  - route: r\n    {direction}:\n{policy}");
+        let cfg: InspectionConfig = serde_yaml::from_str(&yaml).unwrap();
+        let inspection = compile(Some(&cfg)).unwrap();
+        let route = inspection.policy("r").unwrap();
+        let p = match direction {
+            "request" => route.request.as_ref(),
+            _ => route.response.as_ref(),
+        }
+        .unwrap();
+        (p.on_hit, p.on_error)
+    }
+
+    #[test]
+    fn response_on_error_follows_on_hit() {
+        use OnError::*;
+        use Verdict::*;
+        let cases = [
+            ("      scanners: [dlp]\n", (Flag, FailOpen)),
+            (
+                "      scanners: [dlp]\n      on_hit: pass\n",
+                (Pass, FailOpen),
+            ),
+            (
+                "      scanners: [dlp]\n      on_hit: redact\n",
+                (Redact, FailClosed),
+            ),
+            (
+                "      scanners: [dlp]\n      on_hit: block\n",
+                (Block, FailClosed),
+            ),
+            (
+                "      scanners: [injection]\n      on_hit: block\n",
+                (Block, FailClosed),
+            ),
+            (
+                "      scanners: [dlp]\n      on_hit: redact\n      on_error: fail_open\n",
+                (Redact, FailOpen),
+            ),
+        ];
+        for (policy, want) in cases {
+            assert_eq!(compiled("response", policy), want, "{policy}");
+        }
+    }
+
+    #[test]
+    fn request_defaults_are_unchanged() {
+        use OnError::*;
+        use Verdict::*;
+        assert_eq!(
+            compiled("request", "      scanners: [dlp]\n"),
+            (Block, FailClosed)
+        );
+        assert_eq!(
+            compiled("request", "      scanners: [injection]\n"),
+            (Flag, FailClosed)
+        );
+    }
+}

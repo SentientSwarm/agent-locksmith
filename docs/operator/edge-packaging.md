@@ -275,7 +275,9 @@ systemctl enable --now locksmith-edge-input.service \
 
 Request inspection fails closed by default, so routes that use the
 sidecar refuse requests until `locksmith-edge-inspector.service` is
-running. Response inspection fails open by default.
+running. Response inspection fails open by default, unless the policy
+sets `on_hit: redact` or `block`; then it fails closed too, and a stopped
+sidecar makes that route refuse replies.
 
 A refusal is logged as `locksmith-edge startup refused: <reason>` in the
 guard unit's journal (`journalctl -u locksmith-edge-locksmith-guard`). Remove the receipt to stop the unit from being started

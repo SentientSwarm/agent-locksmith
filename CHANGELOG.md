@@ -6,11 +6,27 @@
 
 - A compressed or NDJSON reply can no longer slip past a response policy
   that redacts or blocks (AGENT-270). Such a policy now defaults to
-  `on_error: fail_closed`, so a reply it can't read is refused with 502
-  `inspection_blocked`; set `on_error: fail_open` to keep the old
-  behaviour. Inspected routes also ask the upstream for
+  `on_error: fail_closed`. Inspected routes also ask the upstream for
   `Accept-Encoding: identity` instead of sending no header, which RFC 9110
-  reads as accepting any coding. Policies that only flag are unchanged.
+  reads as accepting any coding. Policies that only flag, and request
+  policies, are unchanged.
+
+  **Upgrade note.** On a route whose response policy sets `on_hit: redact`
+  or `block` without `on_error`, every reply the policy can't judge is now
+  refused instead of forwarded unscanned: 502 `inspection_blocked` before
+  the body starts, or an error event that ends a server-sent event (SSE)
+  stream. That covers:
+  - a compressed or NDJSON reply;
+  - a reply over `max_scan_bytes` (1 MiB by default);
+  - a scanner error or timeout, including a sidecar that is down, answers
+    with an error or misses its `timeout_ms`;
+  - an SSE stream that uses a sidecar scanner (sidecars can't scan streams),
+    and an SSE event the scanner can't follow (oversized, unparseable,
+    or held text past the cap).
+
+  Set `on_error: fail_open` on the policy to keep the old behaviour. It
+  covers all of these at once, including the compressed-reply bypass.
+
 - Agents can call an upstream's root: `/api/<route>/` now forwards to
   `<upstream>/` and `/api/<route>` to the upstream URL exactly, query kept
   (AGENT-290). Before, the router answered 404 with an empty body and never
