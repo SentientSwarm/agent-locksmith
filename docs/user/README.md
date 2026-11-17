@@ -103,7 +103,7 @@ is [`dist/systemd/locksmith.service.template`](../../dist/systemd/locksmith.serv
 | Doc | Topic |
 |---|---|
 | [operator/sealed-state-recovery.md](operator/sealed-state-recovery.md) | Consistent snapshots, independent key recovery and quarantined restore. |
-| [operator/1password-setup.md](operator/1password-setup.md) | Optional: render deployment `.env` files from 1Password Environments. |
+| [operator/1password-setup.md](operator/1password-setup.md) | Optional pattern (scripts not shipped): render deployment `.env` files from 1Password Environments. |
 
 ### Edge packaging
 

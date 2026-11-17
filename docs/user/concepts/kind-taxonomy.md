@@ -57,7 +57,7 @@ UX before v2.0.0:
 UX from v2.0.0:
 > "Anthropic is built in. Provide `ANTHROPIC_API_KEY` in your `.env`. Done."
 
-Operators can disable a built-in (sets `disabled=1`, doesn't delete) and override fields (sets `seed=0`, image upgrades preserve the override). See [Phase E.7](https://linear.app/wemodulate/issue/WEM-271) for the full mechanic.
+Operators can disable a built-in (sets `disabled=1`, doesn't delete) and override fields (sets `seed=0`, image upgrades preserve the override). The seed loader (Phase E.7) implements the full mechanic.
 
 ## Future direction (post-v2.0.0)
 

@@ -53,7 +53,7 @@ A token that doesn't match this shape is rejected with the same 401 + audit row 
 
 ## Operator practical guidance
 
-- **Sealing**: keep provider keys as sealed `stored_*` values under `LOCKSMITH_CREDENTIAL_SEALING_KEY`, as `op://` references, or as systemd-encrypted credential files (`LoadCredentialEncrypted` in the [unit template](../../../dist/systemd/locksmith.service.template)). See [keep credentials in Locksmith](../../guide/03-credential-custody.md). Cleartext should exist only while you set the value.
+- **Sealing**: keep provider keys as sealed `stored_*` values under `LOCKSMITH_CREDENTIAL_SEALING_KEY` or as `op://` references. See [keep credentials in Locksmith](../../guide/03-credential-custody.md). Cleartext should exist only while you set the value. Systemd-encrypted credential files (`LoadCredentialEncrypted`) apply only to legacy `config.tools` entries and cannot be selected for an agent; see [per-agent credentials](per-agent-credentials.md) to move them into custody.
 - **Distributing bearers**: operator runs `locksmith agent register --name <agent> --allowlist <tools> --format json`, captures the cleartext token from stdout once, then delivers it to the agent host via a side channel (encrypted message, paste over SSH, etc.). The locksmith DB stores only the hash.
 - **Rotation**: revoke + re-register; the agent's old bearer hard-fails with 401 immediately.
 

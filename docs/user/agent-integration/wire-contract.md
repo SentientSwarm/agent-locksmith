@@ -336,7 +336,7 @@ forwards untouched.
 ```http
 POST /api/anthropic/v1/messages HTTP/1.1
 Host: <locksmith-host>:9200
-Authorization: Bearer lk_EXAMPLEpublicIdXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXXXXXX
+Authorization: Bearer lk_EXAMPLEpublicIdXXXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXX
 anthropic-version: 2023-06-01
 Content-Type: application/json
 

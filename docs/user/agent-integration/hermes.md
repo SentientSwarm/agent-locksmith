@@ -163,7 +163,7 @@ mkdir -p ~/.hermes
 chmod 700 ~/.hermes
 # Paste the bearer from `locksmith agent register --name agent-a ...`:
 cat > ~/.hermes/locksmith.token <<'EOF'
-lk_EXAMPLEpublicIdXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXXXXXX
+lk_EXAMPLEpublicIdXXXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXX
 EOF
 chmod 600 ~/.hermes/locksmith.token
 ```
@@ -328,7 +328,7 @@ enterprise) the request hits. **Locksmith injects the header
 automatically** — hermes-agent does not need to extract or pass
 `chatgpt_account_id` itself when proxied through locksmith. From
 hermes' perspective, codex is just another HTTP backend behind
-`http://<locksmith-host>:9200/api/codex/...`.
+`${locksmith_endpoint}/api/codex/...`.
 
 If you're running hermes against codex *without* locksmith (direct
 to chatgpt.com), hermes' native codex provider handles the JWT

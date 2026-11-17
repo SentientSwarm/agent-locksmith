@@ -1,6 +1,6 @@
 # 1Password Setup for Operators (Phase H)
 
-This guide describes how to use 1Password Environments + Service Accounts as the source-of-truth for site-repo `.env` files, materializing them at deploy time via the `op` CLI. The scripts it describes are site scripts in your deployment repo, not part of this repository; adapt the names and paths to your own tooling.
+This guide describes how to use 1Password Environments + Service Accounts as the source-of-truth for site-repo `.env` files, materializing them at deploy time via the `op` CLI. This repository does not ship those scripts: the page describes a pattern, and the script names below are examples to adapt to your own deployment tooling.
 
 This is separate from Locksmith's own `op_header` / `op_bearer` custody, where the daemon resolves `op://` references itself (see [keep credentials in Locksmith](../../guide/03-credential-custody.md)). That needs no `.env` rendering.
 

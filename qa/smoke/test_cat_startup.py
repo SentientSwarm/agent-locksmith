@@ -1,6 +1,6 @@
 """Startup credential resolution for legacy config.tools (env and file-sealed backends).
 
-Docs: docs/user/agent-integration/wire-contract.md:50-66 (/readyz), README.md:200-203,
+Docs: docs/user/agent-integration/wire-contract.md:50-66 (/readyz), README.md:206-208,
 docs/v2/runbooks/m5-sealed-secrets.md:17-22,213 and docs/user/architecture.md:112-113.
 """
 

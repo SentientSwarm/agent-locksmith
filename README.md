@@ -167,7 +167,7 @@ audit:
   retention_days: 90
   sweep_interval_seconds: 3600
 
-# Optional: proxied routes leave through this egress proxy (egress.mode: pipelock).
+# Required unless egress.mode is external: every seeded route is proxied.
 egress_proxy: "http://127.0.0.1:8888"
 ```
 

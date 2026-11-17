@@ -8,7 +8,7 @@ Set these once per shell session:
 
 ```bash
 export LOCKSMITH_URL="http://<locksmith-host>:9200"   # your locksmith
-export AGENT_TOKEN="lk_yN2v..."                  # your agent bearer
+export AGENT_TOKEN="lk_..."                       # your agent bearer
 export OP_TOKEN="lkop_..."                       # operator token (admin paths)
 ```
 

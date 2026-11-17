@@ -86,8 +86,8 @@ locksmith audit query --since-ms $(($(date +%s) * 1000 - 60000)) --tool anthropi
 
 ## Migrating from openclaw-hardened
 
-`openclaw-hardened` is the legacy Ansible-roles deployment path. It
-predates Locksmith and bundles its own pipelock + provider auth.
+`openclaw-hardened` is the legacy Ansible-roles deployment path. It is
+an older deployment path that bundles its own pipelock + provider auth.
 
 To migrate:
 
