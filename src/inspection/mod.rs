@@ -772,6 +772,24 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_and_an_escaped_copy_in_unparseable_json_are_caught_by_the_rescan() {
+        // AGENT-270: unparseable JSON is redacted as text, which rewrites
+        // the plain copy only. The escaped copy has the same text once
+        // unescaped (so it is not a new hit); the rescan finds it.
+        let p = redacting(
+            Arc::new(literal::Literal::new("SECRET").unwrap()),
+            OnError::FailOpen,
+        );
+        let body = br#"{"a":"SECRET","b":"SECR\u0045T""#;
+        let out = apply(&p, Direction::Request, JSON, body);
+        let Outcome::Block { report } = out else {
+            panic!("the escaped copy was forwarded");
+        };
+        assert!(report.redaction_incomplete);
+        assert!(report.error.is_none());
+    }
+
+    #[test]
     fn a_query_hit_on_an_unreadable_body_is_marked_incomplete() {
         let p = redacting(
             Arc::new(literal::Literal::new("SECRET").unwrap()),

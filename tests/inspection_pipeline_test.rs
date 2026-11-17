@@ -870,3 +870,81 @@ async fn streamed_response_under_fail_closed_is_blocked() {
     assert_eq!(resp.status_code(), 502);
     assert_eq!(resp.json::<Value>()["error"]["code"], "inspection_blocked");
 }
+
+/// AGENT-270: an audit row lists at most `MAX_AUDITED_HITS` hits; past
+/// that it counts them all and says the list is truncated.
+#[tokio::test]
+async fn more_hits_than_an_audit_row_lists_are_counted_and_marked_truncated() {
+    use agent_locksmith::inspection::MAX_AUDITED_HITS;
+    let up = upstream("{}").await;
+    let policy = "  routes:\n    - route: out\n      request:\n        scanners: [\"dlp\"]\n        on_hit: flag\n";
+    let h = harness(config(&up.uri(), policy)).await;
+    let n = MAX_AUDITED_HITS + 6;
+    // Distinct tokens, assembled at run time: no credential literal in the repo.
+    let tokens: Vec<String> = (0..n)
+        .map(|i| format!("ghp_{:0>36}", format!("{i}Zq9Lk4Vb7Nc2Rt8Hy5Jd1Fg6Sa3Wp")))
+        .map(|t| t[..40].to_string())
+        .collect();
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .json(&json!({ "prompt": tokens.join(" ") }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows = h.inspection_rows().await;
+    assert_eq!(rows.len(), 1);
+    let details = &rows[0].2;
+    assert_eq!(details["truncated"], true, "{details}");
+    assert_eq!(details["hits"].as_array().unwrap().len(), MAX_AUDITED_HITS);
+    assert!(details["count"].as_u64().unwrap() >= n as u64, "{details}");
+}
+
+/// AGENT-270: a reply too large to inspect under `fail_open` streams on
+/// unscanned, but a route with redaction patterns must buffer it to apply
+/// them; past that buffer's limit the reply is refused, not forwarded
+/// unredacted.
+#[tokio::test]
+async fn an_unscanned_reply_too_large_for_response_controls_is_refused() {
+    let body = vec![b'a'; 64 * 1024 * 1024 + 1];
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_bytes(body),
+        )
+        .mount(&up)
+        .await;
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "out"
+    description: "Inspected route"
+    upstream: "{}"
+    response:
+      redaction_patterns:
+        - id: secret
+          regex: "SECRET-[a-z0-9]+"
+inspection:
+  routes:
+    - route: out
+      response:
+        scanners: ["literal:{CANARY}"]
+        on_error: fail_open
+        max_scan_bytes: 1024
+"#,
+        up.uri()
+    );
+    let h = harness(parse_config_str(&yaml).unwrap()).await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    let (event,): (String,) =
+        sqlx::query_as("SELECT event FROM audit WHERE event = 'response_size_exceeded'")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(event, "response_size_exceeded");
+}
