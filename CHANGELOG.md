@@ -8,8 +8,9 @@
   (`details.error: "rescan <scanner>: <why>"`) and follows `on_error`
   (AGENT-270). Before, it always blocked with no error in the audit row,
   even under `fail_open`; now `fail_open` forwards the redacted body. A
-  redaction that leaves a copy of a match behind still blocks, and its
-  audit row now says so with `redaction_incomplete: true`.
+  redaction that can't remove every match (one in the path or query, an
+  unparseable body, or a match still there after rewriting) still blocks,
+  and its audit row now says so with `redaction_incomplete: true`.
 - A compressed or NDJSON reply can no longer slip past a response policy
   that redacts or blocks (AGENT-270). Such a policy now defaults to
   `on_error: fail_closed`. Inspected routes also ask the upstream for

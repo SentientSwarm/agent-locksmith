@@ -207,8 +207,9 @@ pub struct Report {
     pub dropped_hits: usize,
     pub skipped: Option<SkipReason>,
     pub error: Option<String>,
-    /// A redaction left a copy of a match the scanners still see, so the
-    /// body was blocked instead of forwarded rewritten.
+    /// A redaction could not remove every match (a copy it can't
+    /// rewrite, or one still there after rewriting), so the body was
+    /// blocked instead of forwarded rewritten.
     pub redaction_incomplete: bool,
 }
 
@@ -421,12 +422,17 @@ pub fn apply_with(
     // the body is judged too.
     let mut views = text::raw_views(meta.content_type, body);
     views.retain(|v| segments.len() != 1 || segments[0] != *v);
-    views.extend(extra.iter().cloned());
-    // A redact-level hit only these views see can't be rewritten.
+    // A redact-level hit only the raw views see can't be rewritten.
     let mut unredactable = false;
     for view in &views {
         let found = scan_text(policy, direction, view, &mut report, &mut seen);
         unredactable |= found.iter().any(|f| f.new && f.verdict >= Verdict::Redact);
+    }
+    // Nor can any in the path or query, even a copy of one the body
+    // holds: they are never rewritten (AGENT-270).
+    for view in extra {
+        let found = scan_text(policy, direction, view, &mut report, &mut seen);
+        unredactable |= found.iter().any(|f| f.verdict >= Verdict::Redact);
     }
     if report.error.is_some() && policy.on_error == OnError::FailClosed {
         return unjudged(policy, report);
@@ -462,7 +468,9 @@ pub fn apply_with(
                 report,
             }
         }
-        (Verdict::Redact | Verdict::Block, _) => {
+        (verdict @ (Verdict::Redact | Verdict::Block), _) => {
+            // A redaction that can't reach every copy is a block.
+            report.redaction_incomplete = verdict == Verdict::Redact;
             report.verdict = Verdict::Block;
             Outcome::Block { report }
         }
@@ -739,5 +747,44 @@ mod tests {
         };
         assert!(report.redaction_incomplete);
         assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn a_query_copy_seen_on_the_first_pass_blocks_even_if_the_rescan_fails() {
+        // Review finding: the query is never rewritten, so a redact-level
+        // hit there decides the outcome before any rescan. A scanner that
+        // then fails on the query must not let fail_open forward it.
+        struct QueryFailsLater(std::sync::atomic::AtomicUsize);
+        impl Scanner for QueryFailsLater {
+            fn id(&self) -> &str {
+                "query_fails_later"
+            }
+            fn max_match_len(&self) -> usize {
+                6
+            }
+            fn scan(&self, text: &str, _: Direction) -> Result<Vec<Hit>, ScanError> {
+                use std::sync::atomic::Ordering;
+                if text.contains("?q=") && self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+                    return Err(ScanError("unavailable".into()));
+                }
+                Ok(text
+                    .match_indices("SECRET")
+                    .map(|(start, m)| Hit {
+                        rule: "secret".into(),
+                        start,
+                        end: start + m.len(),
+                        flag_only: false,
+                    })
+                    .collect())
+            }
+        }
+        let scanner = Arc::new(QueryFailsLater(Default::default()));
+        let p = redacting(scanner, OnError::FailOpen);
+        let extra = ["/x?q=SECRET".to_string()];
+        let out = apply_with(&p, Direction::Request, JSON, br#"{"a":"SECRET"}"#, &extra);
+        let Outcome::Block { report } = out else {
+            panic!("the query copy was forwarded");
+        };
+        assert!(report.redaction_incomplete);
     }
 }

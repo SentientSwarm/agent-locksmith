@@ -139,13 +139,15 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   `X-Amz-Credential=AKIA...`, a JWT query parameter) match `dlp` too, so
   such routes should not use `dlp` on requests or should set
   `on_hit: flag`.
-- **After a redaction**, the outgoing bytes (raw views and the path and
-  query) are scanned again; if any copy of a match remains, the request
-  or response is blocked instead and the audit row carries
-  `redaction_incomplete: true`. A scanner that fails during this rescan
-  is a scanner error (`error: "rescan <scanner>: <why>"`) and follows
-  `on_error`: blocked under `fail_closed`, forwarded redacted under
-  `fail_open`.
+- **A redaction that can't remove every match** becomes a block, and the
+  audit row carries `redaction_incomplete: true`. That covers a
+  redact-level match in the path or query (never rewritten, even when the
+  body holds the same text), one only a raw view sees, a body that can't
+  be parsed, and a match still found when the outgoing bytes (raw views,
+  path and query) are scanned again after rewriting. A scanner that fails
+  during that rescan is a scanner error (`error: "rescan <scanner>:
+  <why>"`) and follows `on_error`: blocked under `fail_closed`, forwarded
+  redacted under `fail_open`.
 - **Binary bodies** (not UTF-8) are scanned only through the raw view. With
   no hit they pass and are audited `inspection_skipped` with reason
   `not_text`, so uploads are not blocked by a text scanner.
@@ -306,7 +308,7 @@ Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.
 At most 64 distinct hits are listed; `count` includes the rest and
 `truncated: true` marks the row. A scanner error adds `error`, a skip adds
-`reason`, and a redaction that left a copy behind adds
+`reason`, and a redaction that turned into a block adds
 `redaction_incomplete: true`.
 The matched text itself is never recorded.
 
