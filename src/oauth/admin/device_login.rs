@@ -16,6 +16,7 @@
 //! implemented. Attempts live in memory and expire after 15 minutes.
 
 use super::*;
+use crate::config::EgressMode;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex as StdMutex;
@@ -41,6 +42,9 @@ struct Attempt {
     replace: bool,
     issuer: String,
     client_id: String,
+    /// AGENT-269: the route's egress at start, and the client it selects.
+    egress: EgressMode,
+    http: reqwest::Client,
     device_auth_id: String,
     user_code: String,
     started: Instant,
@@ -129,9 +133,17 @@ async fn guarded(state: &OauthAdminState, f: impl Future<Output = Response>) -> 
 async fn start(state: &OauthAdminState, name: String, label: String, replace: bool) -> Response {
     // Taken first, so a revoke during the provider call fences this attempt.
     let epoch = state.device_logins.epoch(&name, &label);
-    let (issuer, client_id) = match dialect(state, &name).await {
+    let Dialect {
+        issuer,
+        client_id,
+        egress,
+    } = match dialect(state, &name).await {
         Ok(d) => d,
         Err(r) => return *r,
+    };
+    let http = match state.token_clients.for_egress(egress) {
+        Ok(client) => client.clone(),
+        Err(cause) => return egress_refused(cause),
     };
     if let Err(r) = check_existing(state, &name, &label, replace).await {
         return *r;
@@ -139,7 +151,7 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
     if state.device_logins.full() {
         return too_many();
     }
-    let uc = match request_user_code(&issuer, &client_id).await {
+    let uc = match request_user_code(&http, &issuer, &client_id).await {
         Ok(uc) => uc,
         Err(r) => return *r,
     };
@@ -150,6 +162,8 @@ async fn start(state: &OauthAdminState, name: String, label: String, replace: bo
         replace,
         issuer: issuer.clone(),
         client_id,
+        egress,
+        http,
         device_auth_id: uc.device_auth_id,
         user_code: uc.user_code.clone(),
         started: Instant::now(),
@@ -179,7 +193,15 @@ fn too_many() -> Response {
     )
 }
 
-async fn dialect(state: &OauthAdminState, name: &str) -> Result<(String, String), Box<Response>> {
+/// The registration's device-auth issuer and client, and its route egress.
+#[derive(PartialEq)]
+struct Dialect {
+    issuer: String,
+    client_id: String,
+    egress: EgressMode,
+}
+
+async fn dialect(state: &OauthAdminState, name: &str) -> Result<Dialect, Box<Response>> {
     let registration = match state.registrations.get(name).await {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -192,14 +214,21 @@ async fn dialect(state: &OauthAdminState, name: &str) -> Result<(String, String)
         }
         Err(_) => return Err(Box::new(internal("registration read failed"))),
     };
-    openai_issuer(&registration.auth).ok_or_else(|| {
-        Box::new(error_envelope(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "device_login_unsupported",
-            "device login supports only the OpenAI ChatGPT-plan (Codex) dialect",
-        ))
-    })
+    let egress = registration.egress;
+    openai_issuer(&registration.auth)
+        .map(|(issuer, client_id)| Dialect {
+            issuer,
+            client_id,
+            egress,
+        })
+        .ok_or_else(|| {
+            Box::new(error_envelope(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "device_login_unsupported",
+                "device login supports only the OpenAI ChatGPT-plan (Codex) dialect",
+            ))
+        })
 }
 
 /// A healthy session is kept unless the operator asked to replace it.
@@ -329,12 +358,11 @@ async fn finish(state: &OauthAdminState, a: &AttemptView, code: CodeResp) -> Res
         }
         Err(e) => return *super::bootstrap::create_error(e),
     };
-    let client = http();
     let refreshed = crate::oauth::refresh::refresh_selected_session(
         &state.sessions,
         &auth,
         &state.sealing_key,
-        &client,
+        &a.http,
         &session,
     )
     .await;
@@ -394,7 +422,12 @@ async fn same_authority(
     a: &AttemptView,
 ) -> Result<AuthSpec, Box<Response>> {
     let want = (a.issuer.clone(), a.client_id.clone());
-    let stored = dialect(state, &a.name).await.ok();
+    // The egress too: this attempt's calls used the client it selected.
+    let stored = dialect(state, &a.name)
+        .await
+        .ok()
+        .filter(|d| d.egress == a.egress);
+    let stored = stored.map(|d| (d.issuer, d.client_id));
     let serving = state
         .catalog
         .load()
@@ -457,14 +490,6 @@ fn internal(message: &str) -> Response {
     )
 }
 
-fn http() -> reqwest::Client {
-    crate::client_pool::unproxied()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap_or_else(|_| crate::client_pool::unproxied_default())
-}
-
 /// Provider failures report the status only; bodies may carry secrets.
 fn upstream_failed(step: &str, status: Option<reqwest::StatusCode>) -> Box<Response> {
     let detail = status.map_or("unreachable".to_string(), |s| s.as_u16().to_string());
@@ -476,8 +501,12 @@ fn upstream_failed(step: &str, status: Option<reqwest::StatusCode>) -> Box<Respo
     ))
 }
 
-async fn request_user_code(issuer: &str, client_id: &str) -> Result<UserCodeResp, Box<Response>> {
-    let resp = http()
+async fn request_user_code(
+    http: &reqwest::Client,
+    issuer: &str,
+    client_id: &str,
+) -> Result<UserCodeResp, Box<Response>> {
+    let resp = http
         .post(format!("{issuer}{USER_CODE_PATH}"))
         .json(&json!({"client_id": client_id}))
         .send()
@@ -499,7 +528,8 @@ enum Poll {
 }
 
 async fn poll_once(a: &AttemptView) -> Poll {
-    let sent = http()
+    let sent = a
+        .http
         .post(format!("{}/api/accounts/deviceauth/token", a.issuer))
         .json(&json!({"device_auth_id": a.device_auth_id, "user_code": a.user_code}))
         .send()
@@ -538,7 +568,8 @@ async fn exchange_code(
         ("client_id", a.client_id.as_str()),
         ("code_verifier", code.code_verifier.as_str()),
     ];
-    let resp = http()
+    let resp = a
+        .http
         .post(format!("{}/oauth/token", a.issuer))
         .form(&form)
         .send()
@@ -572,6 +603,8 @@ struct AttemptView {
     replace: bool,
     issuer: String,
     client_id: String,
+    egress: EgressMode,
+    http: reqwest::Client,
     device_auth_id: String,
     user_code: String,
     interval: u64,
@@ -660,6 +693,8 @@ impl DeviceLogins {
             replace: a.replace,
             issuer: a.issuer.clone(),
             client_id: a.client_id.clone(),
+            egress: a.egress,
+            http: a.http.clone(),
             device_auth_id: a.device_auth_id.clone(),
             user_code: a.user_code.clone(),
             interval: a.interval,
@@ -737,6 +772,8 @@ mod tests {
             replace: false,
             issuer: "https://auth.openai.com".into(),
             client_id: "app_x".into(),
+            egress: EgressMode::Direct,
+            http: crate::client_pool::unproxied_default(),
             device_auth_id: "d".into(),
             user_code: "u".into(),
             started,

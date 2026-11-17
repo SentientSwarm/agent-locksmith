@@ -458,6 +458,7 @@ routes:
   - oauth_bootstrap_failed
   - session_exists
   - oauth_kind_unsupported
+  - egress_proxy_unconfigured
 - id: admin.POST./admin/operator/oauth/{name}/device-login
   listener: admin
   method: POST

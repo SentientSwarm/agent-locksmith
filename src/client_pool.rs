@@ -18,6 +18,9 @@ use std::time::Duration;
 
 use crate::config::{AppConfig, EgressEnforcement, EgressMode, ToolConfig, ToolTimeouts};
 
+mod oauth;
+pub use oauth::OauthClients;
+
 /// AGENT-259 — why no client can serve a route. A proxied route never
 /// gets a client that skips the proxy it was meant to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +30,24 @@ pub enum ClientUnavailable {
     ProxyUnconfigured,
     /// The client (or its proxy) could not be built.
     BuildFailed,
+}
+
+impl ClientUnavailable {
+    /// The audit event, envelope code and message every refusal uses.
+    pub fn describe(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::ProxyUnconfigured => (
+                "egress_unenforced",
+                "egress_proxy_unconfigured",
+                "route requires an egress proxy and none is configured",
+            ),
+            Self::BuildFailed => (
+                "upstream_client_unavailable",
+                "upstream_client_unavailable",
+                "upstream client could not be built",
+            ),
+        }
+    }
 }
 
 /// Stable fingerprint of the tool fields that affect `Client` construction.
@@ -388,6 +409,8 @@ fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn a_proxied_client_that_fails_to_build_is_unavailable() {
         // AGENT-269: no fallback for a proxied route, since the fallback
@@ -405,8 +428,6 @@ mod tests {
         ));
         assert!(finish(broken(), false, no_redirect_client).is_ok());
     }
-
-    use super::*;
 
     /// AGENT-277 — every reqwest client the daemon builds ignores proxy
     /// environment variables. reqwest reads them unless a client is given

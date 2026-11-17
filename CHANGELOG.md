@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- An OAuth route's token calls (bootstrap, device login, inline and
+  background refresh) now take the route's egress (AGENT-269). Before,
+  they always connected directly, so a `proxied` OAuth route's token
+  endpoint bypassed the egress proxy under `pipelock`, and a site with no
+  egress configured still reached it. The egress policy now lists the
+  token hosts of proxied OAuth routes and of the agent bindings that
+  select them. **Under a Pipelock allowlist, add those token hosts before
+  upgrading** (each route's `token_url`, for example the provider's auth
+  host rather than its API host): a refresh refused at the proxy leaves
+  the session `reconnect_required`, and each such account then needs a
+  fresh bootstrap or device login. Token calls trust
+  `tls.upstream_ca_bundle` like routes do, and no longer follow
+  redirects, which could have resent a refresh token to another host.
 - `locksmith egress policy --pipelock` writes the allowlist with a YAML
   emitter, so a host can no longer break or extend the document
   (AGENT-269). A registration read failure behind the policy's 503

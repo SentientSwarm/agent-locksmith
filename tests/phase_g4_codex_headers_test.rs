@@ -187,7 +187,7 @@ async fn setup(agent_name: &str) -> Harness {
         sessions,
         sealing_key,
         locks: RefreshLockMap::new(),
-        refresh_client: reqwest::Client::new(),
+        token_clients: reqwest::Client::new().into(),
     };
 
     let app = build_app_full_with_phase_g(

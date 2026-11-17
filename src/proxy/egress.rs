@@ -16,18 +16,7 @@ pub(super) async fn record_egress_unavailable(
     ctx: &RequestCtx,
     cause: ClientUnavailable,
 ) -> Response {
-    let (event_name, code, message) = match cause {
-        ClientUnavailable::ProxyUnconfigured => (
-            "egress_unenforced",
-            "egress_proxy_unconfigured",
-            "route requires an egress proxy and none is configured",
-        ),
-        ClientUnavailable::BuildFailed => (
-            "upstream_client_unavailable",
-            "upstream_client_unavailable",
-            "upstream client could not be built",
-        ),
-    };
+    let (event_name, code, message) = cause.describe();
     let mut event = ctx.audit_event_base();
     event.event_class = EventClass::Security;
     event.event = event_name.to_string();

@@ -202,10 +202,6 @@ async fn registration_read_failure_is_an_error_not_a_partial_policy() {
         .execute(&h.pool)
         .await
         .ok();
-    sqlx::query("PRAGMA foreign_keys = OFF")
-        .execute(&h.pool)
-        .await
-        .ok();
     let r = h
         .admin
         .get("/admin/operator/egress/policy")
@@ -215,5 +211,64 @@ async fn registration_read_failure_is_an_error_not_a_partial_policy() {
     assert_eq!(
         r.json::<Value>()["error"]["code"],
         "registrations_unavailable"
+    );
+}
+
+fn device_code(token_url: &str) -> Value {
+    json!({ "kind": "oauth_device_code", "client_id": "c", "scopes": [],
+        "device_url": "https://auth.provider.example/device", "token_url": token_url })
+}
+
+/// AGENT-269 — a proxied OAuth route's token calls go through the egress
+/// proxy too, so the policy lists the hosts they reach: the route's own
+/// token URL and any an agent binding selects for it.
+#[tokio::test]
+async fn policy_lists_the_token_hosts_of_proxied_oauth_routes() {
+    let h = setup().await;
+    for (name, egress, token) in [
+        (
+            "codex",
+            "proxied",
+            "https://auth.provider.example/oauth/token",
+        ),
+        (
+            "lan-oauth",
+            "direct",
+            "https://auth.lan.example/oauth/token",
+        ),
+    ] {
+        h.admin
+            .put(&format!("/admin/operator/models/{name}"))
+            .add_header("authorization", &h.op)
+            .json(
+                &json!({ "upstream": "https://api.provider.example/v1", "egress": egress,
+                "auth": device_code(token) }),
+            )
+            .await
+            .assert_status_ok();
+    }
+    let agents = AgentRepository::new(h.pool.clone());
+    agents
+        .create("a1", None, None, None, None, None)
+        .await
+        .unwrap();
+    let id = agents.get_by_name("a1").await.unwrap().unwrap().id;
+    let bound = serde_json::from_value(device_code("https://alt-auth.example:8443/token")).unwrap();
+    AgentCredentialRepository::new(h.pool.clone())
+        .set(id, "codex", &bound)
+        .await
+        .unwrap();
+    let lan = serde_json::from_value(device_code("https://alt-lan.example/token")).unwrap();
+    AgentCredentialRepository::new(h.pool.clone())
+        .set(id, "lan-oauth", &lan)
+        .await
+        .unwrap();
+    assert_eq!(
+        h.policy().await["hosts"],
+        json!([
+            { "host": "alt-auth.example", "port": 8443, "routes": ["codex"] },
+            { "host": "api.provider.example", "port": 443, "routes": ["codex"] },
+            { "host": "auth.provider.example", "port": 443, "routes": ["codex"] },
+        ])
     );
 }

@@ -64,6 +64,9 @@ async fn setup() -> Harness {
     let sealing_key = SealingKey::generate().unwrap();
 
     let cfg = parse_config_str("listen:\n  host: 127.0.0.1\n  port: 9200\n").unwrap();
+    // As the daemon builds them: no egress is configured, so a proxied
+    // route's token calls have no client (AGENT-269).
+    let token_clients = agent_locksmith::client_pool::OauthClients::new(&cfg);
     let cfg_arc = Arc::new(ArcSwap::from_pointee(cfg));
 
     // Pre-register an OAuth-shaped registration. Mock token endpoint
@@ -99,6 +102,10 @@ async fn setup() -> Harness {
         },
     );
     registrations.create(&other).await.unwrap();
+    let mut proxied = r.clone();
+    proxied.name = "codex-proxied".to_string();
+    proxied.egress = agent_locksmith::config::EgressMode::Proxied;
+    registrations.create(&proxied).await.unwrap();
 
     let catalog = Catalog::from_repo(registrations.as_ref()).await.unwrap();
     let catalog_arc = Arc::new(ArcSwap::from_pointee(catalog));
@@ -124,6 +131,7 @@ async fn setup() -> Harness {
             catalog: catalog_arc.clone(),
             locks: RefreshLockMap::new(),
             device_logins: Default::default(),
+            token_clients,
         }),
         agent_creds: None,
         credential_sealing_key: None,
@@ -654,4 +662,40 @@ async fn provider_rejection_ends_the_attempt_without_echoing_its_body() {
             .unwrap()
             .is_none()
     );
+}
+
+/// AGENT-269 — a proxied route's token calls take its egress. With none
+/// configured, device login and bootstrap refuse before contacting the
+/// provider or writing a session row.
+#[tokio::test]
+async fn proxied_route_without_egress_refuses_token_calls() {
+    let h = setup().await;
+    mock_user_code(&h).await;
+    for (path, body) in [
+        ("device-login", serde_json::json!({})),
+        (
+            "bootstrap",
+            serde_json::json!({ "refresh_token": "refresh-x" }),
+        ),
+    ] {
+        let r = h
+            .server
+            .post(&format!("/admin/operator/oauth/codex-proxied/{path}"))
+            .add_header("authorization", auth(&h))
+            .json(&body)
+            .await;
+        r.assert_status_service_unavailable();
+        assert_eq!(
+            r.json::<serde_json::Value>()["error"]["code"],
+            "egress_proxy_unconfigured",
+            "{path}"
+        );
+    }
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+    let session = h
+        .sessions
+        .get(&h.key, "codex-proxied", "default")
+        .await
+        .unwrap();
+    assert!(session.is_none(), "no session row may be written");
 }

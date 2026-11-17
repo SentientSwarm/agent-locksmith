@@ -1196,10 +1196,7 @@ async fn build_admin_substrate(
             let sessions = crate::oauth::OauthSessionRepository::new(pool.clone());
             let locks = crate::oauth::refresh::RefreshLockMap::with_owner(refresh_owner.clone());
             info!("oauth: sealing key loaded; refresh task prepared");
-            let refresh_client = crate::client_pool::unproxied()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|_| crate::client_pool::unproxied_default());
+            let token_clients = crate::client_pool::OauthClients::new(&config.load());
             let consent = match config.load().oauth_consent.clone() {
                 Some(c) => Some(
                     crate::oauth::consent::Runtime::with_client_key(
@@ -1222,12 +1219,13 @@ async fn build_admin_substrate(
                 catalog: catalog.clone(),
                 locks: locks.clone(),
                 device_logins: Default::default(),
+                token_clients: token_clients.clone(),
             };
             let runtime = crate::app::OauthRuntime {
                 sessions,
                 sealing_key: key,
                 locks,
-                refresh_client,
+                token_clients,
             };
             (Some(admin), Some(runtime))
         }

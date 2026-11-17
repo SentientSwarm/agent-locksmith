@@ -62,6 +62,7 @@ impl Background {
             self.bindings,
             rt.sealing_key,
             rt.locks,
+            rt.token_clients,
             self.log,
             coord.shutdown_signal(),
         ))

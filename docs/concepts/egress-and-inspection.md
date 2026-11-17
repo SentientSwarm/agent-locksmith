@@ -41,9 +41,17 @@ egress:
 - Routes sent without a proxy (`direct`, and `proxied` under
   `external`) ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the
   daemon's environment, so they never reach a proxy that no route names.
-- Locksmith's own OAuth token calls and CRL fetches ignore those
-  variables too. They always connect directly, even under `pipelock`, so
-  allow the token and CRL hosts in your network's egress rules.
+- An OAuth route's token calls (bootstrap, device login and refresh)
+  take the route's egress: a `proxied` route's token endpoint goes
+  through `egress_proxy` under `pipelock`, directly under `external`,
+  and nowhere when neither is configured (the call fails with
+  `egress_proxy_unconfigured` and the session is left as it was). The
+  egress policy lists those token hosts with the route. Keep them on the
+  proxy's allowlist: a refresh the proxy refuses leaves the session
+  `reconnect_required`, which needs a fresh bootstrap.
+- Native MCP OAuth token calls (whose connections are always `direct`)
+  and CRL fetches connect directly in every mode and ignore those
+  variables too, so allow those hosts in your network's egress rules.
 - `external` is a statement that something else enforces egress.
   Locksmith cannot check that claim. Choose it only where that control
   exists and allows no more than your proxied routes need.
@@ -120,7 +128,8 @@ That has two consequences:
   Locksmith has no setting that turns verification off.
 
 Interception also lets the proxy read the credential that Locksmith
-injects. Plain-HTTP upstreams already expose it to the proxy, because
+injects, and the refresh tokens and authorization codes that a proxied
+OAuth route's token calls carry. Plain-HTTP upstreams already expose it to the proxy, because
 they are sent to the proxy unencrypted.
 
 ## Content inspection

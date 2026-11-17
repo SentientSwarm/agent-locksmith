@@ -124,10 +124,10 @@ pub struct OauthRuntime {
     pub sessions: crate::oauth::OauthSessionRepository,
     pub sealing_key: crate::oauth::SealingKey,
     pub locks: crate::oauth::refresh::RefreshLockMap,
-    /// Shared HTTP client for token-endpoint refresh exchanges.
+    /// Token-endpoint clients, one per egress decision (AGENT-269).
     /// Built once at daemon startup so we don't allocate a fresh
     /// reqwest::Client for every refresh.
-    pub refresh_client: reqwest::Client,
+    pub token_clients: crate::client_pool::OauthClients,
 }
 
 fn compile_response_controls(cfg: &AppConfig) -> HashMap<String, ResponseControls> {

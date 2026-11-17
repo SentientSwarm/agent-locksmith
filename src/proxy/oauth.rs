@@ -157,11 +157,15 @@ async fn refresh(
             "explicit OAuth selection is unavailable",
         )
     })?;
+    let client = rt
+        .token_clients
+        .for_egress(target.egress)
+        .map_err(egress_unavailable)?;
     match crate::oauth::refresh::refresh_selected_session(
         &rt.sessions,
         selected,
         &rt.sealing_key,
-        &rt.refresh_client,
+        client,
         session,
     )
     .await
@@ -171,6 +175,20 @@ async fn refresh(
             let _ = rt.sessions.mark_degraded(session).await;
             Err(refresh_failure(target, &e))
         }
+    }
+}
+
+/// AGENT-269 — the token call takes the route's egress. With none usable
+/// the request fails as the route itself would, and the session is kept.
+fn egress_unavailable(cause: crate::client_pool::ClientUnavailable) -> OauthUnavailable {
+    let (event, code, message) = cause.describe();
+    OauthUnavailable {
+        response: (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": {"type": "egress_error", "code": code, "message": message}})),
+        )
+            .into_response(),
+        audit_cause: event,
     }
 }
 

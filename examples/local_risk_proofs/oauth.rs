@@ -33,7 +33,7 @@ async fn setup() -> (Fixture, OauthRuntime) {
         sessions: OauthSessionRepository::new(h.store.pool.clone()),
         sealing_key: SealingKey::generate().unwrap(),
         locks: RefreshLockMap::new(),
-        refresh_client: reqwest::Client::new(),
+        token_clients: reqwest::Client::new().into(),
     };
     let mut row = h.store.registrations.get("proof").await.unwrap().unwrap();
     row.auth = spec(&h.mock.uri(), None);

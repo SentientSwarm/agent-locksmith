@@ -1,10 +1,13 @@
 //! AGENT-137 — the egress policy Locksmith wants enforced, published for
-//! the egress proxy. Every host an enabled `proxied` route reaches, with
-//! the routes behind it. The proxy URL itself is never returned.
+//! the egress proxy. Every host an enabled `proxied` route reaches,
+//! including its OAuth token endpoints, with the routes behind it. The
+//! proxy URL itself is never returned.
 
 use super::uds::UdsState;
 use crate::auth_v2::OperatorIdentity;
 use crate::config::{EgressEnforcement, EgressMode};
+use crate::registrations::{AuthSpec, RegistrationRepository};
+use crate::repo::AgentCredentialRepository;
 use axum::{
     Extension, Json,
     extract::State,
@@ -24,14 +27,9 @@ pub(super) async fn op_egress_policy(
 ) -> Response {
     let config = state.admin.config_snapshot();
     let routes: Vec<(String, String)> = match &state.registrations {
-        Some(repo) => match repo.list(None).await {
-            Ok(rows) => rows
-                .into_iter()
-                .filter(|r| !r.disabled && r.egress == EgressMode::Proxied)
-                .map(|r| (r.name, r.upstream))
-                .collect(),
-            Err(e) => {
-                tracing::warn!(error = %e, "egress policy: registrations could not be read");
+        Some(repo) => match registration_routes(repo, state.agent_creds.as_ref()).await {
+            Ok(routes) => routes,
+            Err(()) => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({ "error": { "code": "registrations_unavailable",
@@ -57,6 +55,43 @@ pub(super) async fn op_egress_policy(
         "hosts": hosts(&routes),
     }))
     .into_response()
+}
+
+/// `(route, url)` for every URL an enabled proxied route reaches: its
+/// upstream and, for OAuth (AGENT-269), the token URL of the route and of
+/// each agent binding that selects one for it. Read failures are logged.
+async fn registration_routes(
+    repo: &RegistrationRepository,
+    bindings: Option<&AgentCredentialRepository>,
+) -> Result<Vec<(String, String)>, ()> {
+    let rows = repo.list(None).await.map_err(|e| {
+        tracing::warn!(error = %e, "egress policy: registrations could not be read");
+    })?;
+    let proxied: Vec<_> = rows
+        .into_iter()
+        .filter(|r| !r.disabled && r.egress == EgressMode::Proxied)
+        .collect();
+    let mut routes = Vec::new();
+    for r in &proxied {
+        routes.push((r.name.clone(), r.upstream.clone()));
+        routes.extend(token_url(&r.auth).map(|u| (r.name.clone(), u)));
+    }
+    if let Some(bindings) = bindings {
+        // A decode error can quote the stored row, so none is logged.
+        let all = bindings.list_all().await.map_err(|_| {
+            tracing::warn!("egress policy: agent bindings could not be read");
+        })?;
+        for b in all {
+            if proxied.iter().any(|r| r.name == b.registration) {
+                routes.extend(token_url(&b.auth_spec).map(|u| (b.registration, u)));
+            }
+        }
+    }
+    Ok(routes)
+}
+
+fn token_url(auth: &AuthSpec) -> Option<String> {
+    crate::oauth::refresh::selected_parameters(auth).map(|(url, _)| url.to_string())
 }
 
 /// Group `(route, upstream)` pairs by destination host and port, sorted.

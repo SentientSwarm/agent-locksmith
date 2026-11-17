@@ -7,7 +7,7 @@ struct Task {
     key: SealingKey,
     locks: RefreshLockMap,
     log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
-    client: reqwest::Client,
+    clients: crate::client_pool::OauthClients,
 }
 
 /// Refresh selected accounts under the same per-label lock as proxy/bootstrap.
@@ -18,13 +18,10 @@ pub async fn run(
     bindings: crate::repo::AgentCredentialRepository,
     key: SealingKey,
     locks: RefreshLockMap,
+    clients: crate::client_pool::OauthClients,
     operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) {
-    let client = crate::client_pool::unproxied()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| crate::client_pool::unproxied_default());
     let task = Task {
         repo,
         catalog,
@@ -32,7 +29,7 @@ pub async fn run(
         key,
         locks,
         log: operational_log,
-        client,
+        clients,
     };
     task.run(shutdown).await;
 }
@@ -66,9 +63,23 @@ impl Task {
     }
 
     async fn refresh(&self, name: &str, label: &str, threshold: i64) {
-        if self.catalog.load().lookup_active(name).is_none() {
+        let Some(egress) = self.catalog.load().lookup_active(name).map(|r| r.egress) else {
             return;
-        }
+        };
+        // AGENT-269: the token call takes the route's egress. With none
+        // usable the route is unusable too, so the session is left as is.
+        let client = match self.clients.for_egress(egress) {
+            Ok(client) => client,
+            Err(cause) => {
+                warn!(
+                    name,
+                    session_label = label,
+                    cause = cause.describe().0,
+                    "oauth refresh skipped: no egress for the token call"
+                );
+                return;
+            }
+        };
         let lock = self.locks.get(name, label).await;
         let _guard = lock.lock().await;
         let Some(selection) = self.selection(name, label).await else {
@@ -78,8 +89,7 @@ impl Task {
             return;
         };
         if let Err(e) =
-            refresh_selected_session(&self.repo, &selection, &self.key, &self.client, &session)
-                .await
+            refresh_selected_session(&self.repo, &selection, &self.key, client, &session).await
         {
             record_failure(&self.repo, &session, &e, self.log.as_deref()).await;
         }

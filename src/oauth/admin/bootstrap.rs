@@ -28,16 +28,17 @@ async fn bootstrap(
     label: &str,
     body: &BootstrapBody,
 ) -> Response {
-    if let Err(response) = validate(state, name).await {
-        return *response;
-    }
+    let client = match validate(state, name).await {
+        Ok(client) => client,
+        Err(response) => return *response,
+    };
     let lock = state.locks.get(name, label).await;
     let _guard = lock.lock().await;
     let session = match create(state, name, label, &body.refresh_token).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
-    let updated = match exchange(state, &session).await {
+    let updated = match exchange(state, &client, &session).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
@@ -49,7 +50,9 @@ async fn bootstrap(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-async fn validate(state: &OauthAdminState, name: &str) -> Result<(), Box<Response>> {
+/// The registration must be OAuth, and its route's egress must allow the
+/// token call (AGENT-269); checked before any session row is written.
+async fn validate(state: &OauthAdminState, name: &str) -> Result<reqwest::Client, Box<Response>> {
     let registration = match state.registrations.get(name).await {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -69,7 +72,12 @@ async fn validate(state: &OauthAdminState, name: &str) -> Result<(), Box<Respons
             )));
         }
     };
-    validate_shape(&registration.auth)
+    validate_shape(&registration.auth)?;
+    state
+        .token_clients
+        .for_egress(registration.egress)
+        .cloned()
+        .map_err(|cause| Box::new(egress_refused(cause)))
 }
 
 fn validate_shape(auth: &AuthSpec) -> Result<(), Box<Response>> {
@@ -122,14 +130,11 @@ pub(super) fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<R
 
 async fn exchange(
     state: &OauthAdminState,
+    client: &reqwest::Client,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {
-    let client = crate::client_pool::unproxied()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| crate::client_pool::unproxied_default());
     let cat = state.catalog.load();
-    match refresh_session(&state.sessions, &cat, &state.sealing_key, &client, session).await {
+    match refresh_session(&state.sessions, &cat, &state.sealing_key, client, session).await {
         Ok(updated) => Ok(updated),
         Err(e) => {
             // Only this attempt's unchanged, committed bootstrap row can be removed.

@@ -53,6 +53,8 @@ pub struct OauthAdminState {
     pub locks: RefreshLockMap,
     /// #138: pending operator device logins (in memory only).
     pub device_logins: DeviceLogins,
+    /// AGENT-269: token-endpoint clients, chosen by the route's egress.
+    pub token_clients: crate::client_pool::OauthClients,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +91,17 @@ fn session_status_json(session: &OauthSession, present: bool) -> Value {
         "updated_at": session.updated_at,
         "audit_session_id": session.audit_session_id(),
     })
+}
+
+/// AGENT-269 — no client may make this route's token call.
+fn egress_refused(cause: crate::client_pool::ClientUnavailable) -> Response {
+    let (_, code, message) = cause.describe();
+    error_envelope(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "egress_error",
+        code,
+        message,
+    )
 }
 
 fn error_envelope(status: StatusCode, ty: &str, code: &str, message: &str) -> Response {

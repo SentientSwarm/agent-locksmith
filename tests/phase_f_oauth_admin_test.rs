@@ -106,6 +106,7 @@ async fn setup() -> Harness {
             catalog: catalog_arc,
             locks: RefreshLockMap::new(),
             device_logins: Default::default(),
+            token_clients: agent_locksmith::client_pool::unproxied_default().into(),
         }),
         agent_creds: None,
         credential_sealing_key: None,

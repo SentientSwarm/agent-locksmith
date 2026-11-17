@@ -369,7 +369,9 @@ locksmith egress policy --pipelock     # Pipelock api_allowlist fragment
 
 `GET /admin/operator/egress/policy` lists every host that an enabled
 `egress: proxied` route reaches, grouped by host and port, with the routes
-behind it, plus the effective `egress.mode`. The proxy URL is not returned.
+behind it, plus the effective `egress.mode`. For an OAuth route that
+includes the token endpoint of the route and of any agent binding that
+selects one. The proxy URL is not returned.
 Use `--pipelock` to generate the egress proxy's allowlist from Locksmith's
 routes instead of maintaining it separately. Pipelock enforces that list only with
 `mode: strict`; its default `balanced` mode reaches every host not on its

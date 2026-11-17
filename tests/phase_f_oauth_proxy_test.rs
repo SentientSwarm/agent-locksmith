@@ -51,6 +51,12 @@ struct Harness {
 }
 
 async fn setup() -> Harness {
+    setup_with(false, None).await
+}
+
+/// `proxied`: make `codex` a proxied route, with token clients built from
+/// the config as the daemon builds them; `egress_proxy` is that config's.
+async fn setup_with(proxied: bool, egress_proxy: Option<&str>) -> Harness {
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("locksmith.db"))
         .await
@@ -64,7 +70,7 @@ async fn setup() -> Harness {
     let mock = MockServer::start().await;
     let token_url = format!("{}/token", mock.uri());
 
-    let r = Registration::new(
+    let mut r = Registration::new(
         "codex".to_string(),
         Kind::Model,
         "OAuth test".to_string(),
@@ -77,6 +83,9 @@ async fn setup() -> Harness {
             session_label: None,
         },
     );
+    if proxied {
+        r.egress = agent_locksmith::config::EgressMode::Proxied;
+    }
     registrations.create(&r).await.unwrap();
 
     let catalog = Catalog::from_repo(registrations.as_ref()).await.unwrap();
@@ -99,14 +108,23 @@ async fn setup() -> Harness {
         Arc::new(BearerAuthenticator::with_audit(agents, Some(audit.clone())).unwrap());
     let bearer_header = format!("Bearer lk_{pid}.{}", secret.expose_secret());
 
-    let cfg = parse_config_str("listen:\n  host: 127.0.0.1\n  port: 9200\n").unwrap();
+    let proxy_line = egress_proxy.map_or(String::new(), |p| format!("egress_proxy: \"{p}\"\n"));
+    let cfg = parse_config_str(&format!(
+        "listen:\n  host: 127.0.0.1\n  port: 9200\n{proxy_line}"
+    ))
+    .unwrap();
+    let token_clients = if proxied {
+        agent_locksmith::client_pool::OauthClients::new(&cfg)
+    } else {
+        reqwest::Client::new().into()
+    };
     let cfg_arc = Arc::new(ArcSwap::from_pointee(cfg));
 
     let runtime = OauthRuntime {
         sessions: sessions.clone(),
         sealing_key: sealing_key.clone(),
         locks: RefreshLockMap::new(),
-        refresh_client: reqwest::Client::new(),
+        token_clients,
     };
 
     let app = build_app_full_with_phase_g(
@@ -438,7 +456,7 @@ async fn setup_codex_shaped_with(
         sessions: sessions.clone(),
         sealing_key: sealing_key.clone(),
         locks: RefreshLockMap::new(),
-        refresh_client: reqwest::Client::new(),
+        token_clients: reqwest::Client::new().into(),
     };
 
     let app = build_app_full_with_phase_g(
@@ -633,3 +651,71 @@ mod isolation;
 
 #[path = "account_bindings/logs.rs"]
 mod logs;
+
+/// AGENT-269 — a proxied route's inline refresh goes through the egress
+/// proxy, as its API call does. The provider itself is never reached
+/// directly: an HTTP proxy receives absolute-form requests, so only the
+/// proxy can answer.
+#[tokio::test]
+async fn proxied_route_refreshes_through_the_egress_proxy() {
+    let proxy = MockServer::start().await;
+    let h = setup_with(true, Some(&proxy.uri())).await;
+    seed_session(&h, "rt-old", Some("at-expired"), Some(unix_now() - 60)).await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "at-fresh",
+            "expires_in": 3600,
+        })))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/whatever"))
+        .and(header("authorization", "Bearer at-fresh"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&proxy)
+        .await;
+    let resp = h
+        .server
+        .get("/api/codex/v1/whatever")
+        .add_header("authorization", &h.bearer_header)
+        .await;
+    resp.assert_status_ok();
+    assert!(
+        h.mock.received_requests().await.unwrap().is_empty(),
+        "nothing may reach the provider without the proxy"
+    );
+}
+
+/// AGENT-269 — with no egress configured, a proxied route's expired
+/// session is not refreshed directly: the request fails closed, the
+/// provider is never contacted, and the session is left usable for when
+/// egress is configured.
+#[tokio::test]
+async fn proxied_route_without_egress_never_refreshes_directly() {
+    let h = setup_with(true, None).await;
+    seed_session(&h, "rt-old", Some("at-expired"), Some(unix_now() - 60)).await;
+    let resp = h
+        .server
+        .get("/api/codex/v1/whatever")
+        .add_header("authorization", &h.bearer_header)
+        .await;
+    resp.assert_status_service_unavailable();
+    assert_eq!(
+        resp.json::<serde_json::Value>()["error"]["code"],
+        "egress_proxy_unconfigured"
+    );
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+    let session = h
+        .sessions
+        .get(
+            &h.sealing_key,
+            "codex",
+            agent_locksmith::oauth::session::DEFAULT_SESSION_LABEL,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!session.degraded && !session.refresh_pending);
+}
