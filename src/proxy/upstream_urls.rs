@@ -30,11 +30,15 @@ pub(super) fn agent_base(headers: &HeaderMap, tls: bool, route: &str) -> Option<
 
 /// Rewrite one URI target that is `upstream` itself or continues it with
 /// a path, query or fragment. The bare base maps to `/api/<route>`, which
-/// is routable (AGENT-290). `https://api.x.com` never matches
-/// `https://api.x.com.evil`.
-fn rewrite_target(target: &str, base: &str, agent_base: &str) -> Option<String> {
+/// reaches the configured upstream exactly (AGENT-290), so it is only
+/// rewritten when `bare_ok`: for a `.../` upstream the slashless form has
+/// no route, and rewriting it would loop. `https://api.x.com` never
+/// matches `https://api.x.com.evil`.
+fn rewrite_target(target: &str, base: &str, agent_base: &str, bare_ok: bool) -> Option<String> {
     let rest = target.strip_prefix(base)?;
-    (rest.is_empty() || rest.starts_with(['/', '?', '#'])).then(|| format!("{agent_base}{rest}"))
+    let ok =
+        rest.starts_with('/') || (bare_ok && (rest.is_empty() || rest.starts_with(['?', '#'])));
+    ok.then(|| format!("{agent_base}{rest}"))
 }
 
 /// Rewrite the URI targets of a header value: the whole value for
@@ -46,8 +50,9 @@ pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str, link: bool)
     if base.is_empty() {
         return None;
     }
+    let bare_ok = base.len() == upstream.len();
     if !link {
-        return rewrite_target(value, base, agent_base);
+        return rewrite_target(value, base, agent_base, bare_ok);
     }
     let mut out = String::with_capacity(value.len());
     let mut changed = false;
@@ -72,7 +77,7 @@ pub(super) fn rewrite(value: &str, upstream: &str, agent_base: &str, link: bool)
                 };
                 let target = &value[i + 1..i + 1 + len];
                 out.push('<');
-                match rewrite_target(target, base, agent_base) {
+                match rewrite_target(target, base, agent_base, bare_ok) {
                     Some(new) => {
                         out.push_str(&new);
                         changed = true;
@@ -198,6 +203,25 @@ mod tests {
             rewrite(both, UP, AGENT, true).unwrap(),
             r#"<http://10.0.0.1:9200/api/github/repos?cb=https://api.github.com/hook>; rel="next""#,
             "only the target's own origin changes"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_upstream_leaves_its_slashless_form_alone() {
+        // `/api/<route>` reaches a `.../api/` upstream exactly, so the
+        // slashless URL has no route; rewriting it would loop (AGENT-290).
+        let up = "https://h.example/base/api/";
+        let agent = "https://ls/api/out";
+        for bare in [
+            "https://h.example/base/api",
+            "https://h.example/base/api?page=2",
+            "https://h.example/base/api#top",
+        ] {
+            assert_eq!(rewrite(bare, up, agent, false), None, "{bare}");
+        }
+        assert_eq!(
+            rewrite("https://h.example/base/api/?page=2", up, agent, false).as_deref(),
+            Some("https://ls/api/out/?page=2")
         );
     }
 

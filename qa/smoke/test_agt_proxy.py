@@ -399,7 +399,13 @@ def test_upstream_root_keeps_auth_and_the_acl(px):
         resp = t.http("GET", path)
         assert resp.status == 401, path
         assert resp.code == "invalid_credential", path
-    for path in ("/api/agt-not-granted/", "/api/agt-not-granted"):
+    # Not in the allowlist, and allowed but with no account binding.
+    for path in (
+        "/api/agt-not-granted/",
+        "/api/agt-not-granted",
+        "/api/agt-unbound/",
+        "/api/agt-unbound",
+    ):
         resp = t.http("GET", path, token=agent["token"])
         assert resp.status == 403, path
         assert resp.code == "tool_not_allowed", path
