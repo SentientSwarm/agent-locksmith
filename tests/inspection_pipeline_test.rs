@@ -257,6 +257,23 @@ async fn request_redact_rewrites_json_string() {
 }
 
 #[tokio::test]
+async fn a_redaction_that_misses_the_query_copy_is_blocked_and_marked() {
+    // AGENT-270: the body copy can be rewritten, the query copy can't.
+    let up = upstream("{}").await;
+    let h = harness(config(&up.uri(), &request_policy("redact"))).await;
+    let resp = h
+        .server
+        .post(&format!("/api/out/x?q={CANARY}"))
+        .json(&json!({ "content": CANARY }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+    assert!(up.received_requests().await.unwrap().is_empty());
+    let details = &h.inspection_rows().await[0].2;
+    assert_eq!(details["verdict"], "block");
+    assert_eq!(details["redaction_incomplete"], true);
+}
+
+#[tokio::test]
 async fn response_hit_is_redacted_before_the_agent() {
     let up = upstream(&json!({ "text": format!("x {CANARY} y") }).to_string()).await;
     let policy = format!(

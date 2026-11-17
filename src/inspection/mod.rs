@@ -207,6 +207,9 @@ pub struct Report {
     pub dropped_hits: usize,
     pub skipped: Option<SkipReason>,
     pub error: Option<String>,
+    /// A redaction left a copy of a match the scanners still see, so the
+    /// body was blocked instead of forwarded rewritten.
+    pub redaction_incomplete: bool,
 }
 
 impl Report {
@@ -218,6 +221,7 @@ impl Report {
             dropped_hits: 0,
             skipped: None,
             error: None,
+            redaction_incomplete: false,
         }
     }
 
@@ -437,9 +441,21 @@ pub fn apply_with(
             // anywhere else (the query, a duplicate key, an encoded form
             // field) means the redaction is incomplete: block instead.
             let rewritten = doc.redact(&spans);
-            if leaves_a_hit(policy, direction, meta.content_type, &rewritten, extra) {
-                report.verdict = Verdict::Block;
-                return Outcome::Block { report };
+            match leaves_a_hit(policy, direction, meta.content_type, &rewritten, extra) {
+                Rescan::Clean => {}
+                Rescan::Hit => {
+                    report.verdict = Verdict::Block;
+                    report.redaction_incomplete = true;
+                    return Outcome::Block { report };
+                }
+                // AGENT-270: a rescan that can't finish is a scanner error,
+                // so it is reported and follows `on_error` like any other.
+                Rescan::Error(e) => {
+                    report.error = Some(format!("rescan {e}"));
+                    if policy.on_error == OnError::FailClosed {
+                        return unjudged(policy, report);
+                    }
+                }
             }
             Outcome::Forward {
                 body: Some(rewritten),
@@ -454,6 +470,16 @@ pub fn apply_with(
     }
 }
 
+/// What rescanning a redacted body found.
+enum Rescan {
+    Clean,
+    /// A non-flag-only hit survived the redaction.
+    Hit,
+    /// A scanner failed (`"<scanner>: <error>"`) and nothing survived
+    /// in what the others could read.
+    Error(String),
+}
+
 /// Does any non-flag-only hit survive in `body`'s raw views or `extra`?
 fn leaves_a_hit(
     policy: &DirectionPolicy,
@@ -461,15 +487,22 @@ fn leaves_a_hit(
     content_type: Option<&str>,
     body: &[u8],
     extra: &[String],
-) -> bool {
+) -> Rescan {
     let mut views = text::raw_views(content_type, body);
     views.extend(extra.iter().cloned());
-    views.iter().any(|view| {
-        policy.scanners.iter().any(|s| {
-            s.scan(view, direction)
-                .map_or(true, |hits| hits.iter().any(|h| !h.flag_only))
-        })
-    })
+    let mut error = None;
+    for view in &views {
+        for s in &policy.scanners {
+            match s.scan(view, direction) {
+                Ok(hits) if hits.iter().any(|h| !h.flag_only) => return Rescan::Hit,
+                Ok(_) => {}
+                Err(e) => {
+                    error.get_or_insert_with(|| format!("{}: {e}", s.id()));
+                }
+            }
+        }
+    }
+    error.map_or(Rescan::Clean, Rescan::Error)
 }
 
 #[cfg(test)]
@@ -621,5 +654,90 @@ mod tests {
             matches!(out, Outcome::Block { .. }),
             "encoded body let the query through"
         );
+    }
+
+    /// Redacts `SECRET`, and fails on text a redaction already rewrote:
+    /// the post-redaction rescan errors (AGENT-270).
+    struct FailsOnRescan;
+    impl Scanner for FailsOnRescan {
+        fn id(&self) -> &str {
+            "fails_on_rescan"
+        }
+        fn max_match_len(&self) -> usize {
+            6
+        }
+        fn scan(&self, text: &str, _: Direction) -> Result<Vec<Hit>, ScanError> {
+            if text.contains("[REDACTED") {
+                return Err(ScanError("unavailable".into()));
+            }
+            Ok(text
+                .match_indices("SECRET")
+                .map(|(start, m)| Hit {
+                    rule: "secret".into(),
+                    start,
+                    end: start + m.len(),
+                    flag_only: false,
+                })
+                .collect())
+        }
+    }
+
+    fn redacting(scanner: Arc<dyn Scanner>, on_error: OnError) -> DirectionPolicy {
+        DirectionPolicy {
+            scanners: vec![scanner],
+            on_hit: Verdict::Redact,
+            on_error,
+            max_scan_bytes: 1024,
+        }
+    }
+
+    const JSON: BodyMeta<'static> = BodyMeta {
+        content_type: Some("application/json"),
+        encoded: false,
+    };
+
+    #[test]
+    fn a_rescan_error_is_reported_and_fails_closed() {
+        let p = redacting(Arc::new(FailsOnRescan), OnError::FailClosed);
+        let out = apply(&p, Direction::Response, JSON, br#"{"a":"SECRET"}"#);
+        let Outcome::Block { report } = out else {
+            panic!("a rescan error under fail_closed must block");
+        };
+        assert_eq!(
+            report.error.as_deref(),
+            Some("rescan fails_on_rescan: unavailable")
+        );
+        assert!(!report.redaction_incomplete);
+    }
+
+    #[test]
+    fn a_rescan_error_under_fail_open_forwards_the_redacted_body() {
+        let p = redacting(Arc::new(FailsOnRescan), OnError::FailOpen);
+        let out = apply(&p, Direction::Response, JSON, br#"{"a":"SECRET"}"#);
+        let Outcome::Forward {
+            body: Some(body),
+            report,
+        } = out
+        else {
+            panic!("a rescan error under fail_open must forward the redaction");
+        };
+        assert!(!String::from_utf8(body).unwrap().contains("SECRET"));
+        assert_eq!(report.verdict, Verdict::Redact);
+        assert!(report.error.is_some());
+    }
+
+    #[test]
+    fn a_copy_the_redaction_missed_is_marked_incomplete() {
+        let p = redacting(
+            Arc::new(literal::Literal::new("SECRET").unwrap()),
+            OnError::FailOpen,
+        );
+        let extra = ["/x?q=SECRET".to_string()];
+        let out = apply_with(&p, Direction::Request, JSON, br#"{"a":"SECRET"}"#, &extra);
+        let Outcome::Block { report } = out else {
+            panic!("a copy left in the query must block");
+        };
+        assert!(report.redaction_incomplete);
+        assert!(report.error.is_none());
     }
 }

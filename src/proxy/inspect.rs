@@ -199,6 +199,7 @@ pub(super) async fn stream(
             dropped_hits: 0,
             skipped: Some(SkipReason::Encoded),
             error: None,
+            redaction_incomplete: false,
         };
         let closed = policy.on_error == inspection::OnError::FailClosed;
         let report = if closed {
@@ -304,6 +305,7 @@ pub(super) async fn stream_unscanned(
         dropped_hits: 0,
         skipped: Some(SkipReason::Streaming),
         error: None,
+        redaction_incomplete: false,
     };
     record(audit, ctx, &report, closed.then_some(502)).await;
     closed.then(|| blocked(StatusCode::BAD_GATEWAY, "response blocked by inspection"))
@@ -454,6 +456,9 @@ async fn record_event(
     }
     if let Some(error) = &report.error {
         details["error"] = error.as_str().into();
+    }
+    if report.redaction_incomplete {
+        details["redaction_incomplete"] = true.into();
     }
     event.event_class = EventClass::Security;
     event.event = event_name.to_string();

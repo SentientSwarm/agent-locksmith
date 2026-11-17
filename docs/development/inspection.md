@@ -5,8 +5,9 @@ itself, so it sees plaintext in both directions without TLS
 interception. The inspection pipeline (`src/inspection/`) uses that
 position to scan brokered traffic: requests (body, decoded path and
 query) before anything leaves, and responses before anything reaches the
-agent. Request headers other than the stripped credential headers are
-not inspected. This implements the D-18
+agent. Headers are not inspected in either direction: request headers
+(Locksmith strips the agent's credential headers rather than scanning
+them) and response headers both pass unscanned. This implements the D-18
 inspector design (AGENT-150) in-process, with ML scanners in a same-UID
 sidecar (see [Sidecars](#sidecars)).
 
@@ -140,7 +141,11 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   `on_hit: flag`.
 - **After a redaction**, the outgoing bytes (raw views and the path and
   query) are scanned again; if any copy of a match remains, the request
-  or response is blocked instead.
+  or response is blocked instead and the audit row carries
+  `redaction_incomplete: true`. A scanner that fails during this rescan
+  is a scanner error (`error: "rescan <scanner>: <why>"`) and follows
+  `on_error`: blocked under `fail_closed`, forwarded redacted under
+  `fail_open`.
 - **Binary bodies** (not UTF-8) are scanned only through the raw view. With
   no hit they pass and are audited `inspection_skipped` with reason
   `not_text`, so uploads are not blocked by a text scanner.
@@ -300,7 +305,9 @@ something:
 Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.
 At most 64 distinct hits are listed; `count` includes the rest and
-`truncated: true` marks the row.
+`truncated: true` marks the row. A scanner error adds `error`, a skip adds
+`reason`, and a redaction that left a copy behind adds
+`redaction_incomplete: true`.
 The matched text itself is never recorded.
 
 ## Sidecars
