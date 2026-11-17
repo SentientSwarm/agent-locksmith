@@ -48,7 +48,11 @@ async fn journey(tls: bool, method: &str, path: &str) {
     let _ = (&mut client).await;
     drop(bytes);
     drop(lock);
-    assert!(ready && entered && normal_return && lock_reacquired);
+    assert!(
+        ready && entered && normal_return && lock_reacquired,
+        "{method} {path} tls={tls}: ready={ready} entered={entered} \
+         normal_return={normal_return} lock_reacquired={lock_reacquired}"
+    );
     assert_eq!(dropped_at_return, 1, "body lifetime, before client cleanup");
     assert_eq!(
         forced, 1,
