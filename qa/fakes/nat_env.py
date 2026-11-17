@@ -9,12 +9,11 @@ echoing exact returned preconditions.
 
 from __future__ import annotations
 
-import http.client
 import json
-import socket
 
 from .nat_mcp import FakeMcp
 from .pki import CA
+from .uds_http import exchange
 
 MCP_CONFIG = {"protocol_version": "2025-11-25", "allow_private_destination": True}
 
@@ -157,39 +156,18 @@ def prepare(
     return result.json
 
 
-class _Uds(http.client.HTTPConnection):
-    def __init__(self, path: str) -> None:
-        super().__init__("localhost", timeout=30)
-        self.uds = path
-
-    def connect(self) -> None:
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(self.uds)
-
-
 def admin_raw(
     target, method: str, path: str, body: dict, headers: dict
 ) -> tuple[int, dict | None]:
     """One admin UDS request with the operator bearer; recorded without it."""
-    conn = _Uds(str(target.socket))
-    try:
-        payload = json.dumps(body).encode()
-        conn.request(
-            method,
-            path,
-            payload,
-            {
-                "Authorization": f"Bearer {target.op_token}",
-                "Content-Type": "application/json",
-                **headers,
-            },
-        )
-        resp = conn.getresponse()
-        text = resp.read().decode(errors="replace")
-        status = resp.status
-    finally:
-        conn.close()
+    payload = json.dumps(body).encode()
+    sent = {
+        "Authorization": f"Bearer {target.op_token}",
+        "Content-Type": "application/json",
+        **headers,
+    }
+    status, _, data = exchange(str(target.socket), method, path, payload, sent, 30)
+    text = data.decode(errors="replace")
     target.bundle.transcript(
         target.current_case,
         "admin-uds",

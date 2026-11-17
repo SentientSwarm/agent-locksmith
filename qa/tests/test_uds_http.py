@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import tempfile
 import threading
@@ -42,8 +43,8 @@ def test_refusal_before_body_is_read_is_returned():
         body = b"x" * (8 * 1024 * 1024)
         status, _, data = exchange(path, "POST", "/x", body, {}, timeout=10)
         worker.join(10)
+        assert not worker.is_alive(), "fake server did not finish"
         assert (status, data) == (401, b"{}")
     finally:
         server.close()
-        os.unlink(path)
-        os.rmdir(root)
+        shutil.rmtree(root, ignore_errors=True)
