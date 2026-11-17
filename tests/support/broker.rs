@@ -173,6 +173,16 @@ pub fn upstream_body(upstream: &str) -> Value {
 }
 
 impl H {
+    /// Probe due brokers at `now` until the results are recorded: a
+    /// failure is retried at the next tick before the broker counts as
+    /// down (AGENT-310), so tick that many times.
+    pub async fn settle(&self, now: i64) {
+        use agent_locksmith::registrations::broker_health::DOWN_AFTER;
+        for _ in 0..DOWN_AFTER {
+            self.prober.tick_at(now).await;
+        }
+    }
+
     pub fn op_req(&self, m: Method, path: &str) -> TestRequest {
         self.admin
             .method(m, &format!("/admin/operator{path}"))

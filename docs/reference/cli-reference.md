@@ -327,10 +327,16 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
 - **Health.** `--health-path /p` probes `GET <upstream>/p` with the broker
   key every `--health-interval` seconds (5-3600, default 30), expecting
   `--health-status` (default 200) within 5 s. The probe never follows a
-  redirect: a 3xx is the result, so `--health-status 302` can match. After
-  a failed probe the route answers 503 `backend_unavailable` without
+  redirect: a 3xx is the result, so `--health-status 302` can match. A
+  probe the broker fails (another status, a timeout or a refused
+  connection) is retried at the prober's next 5 s tick, and the broker
+  counts as down only when the retry fails too, so one slow answer from
+  a loaded broker doesn't refuse its traffic. A broker no client may
+  reach (`egress_proxy_unconfigured`, `upstream_client_unavailable`) is
+  down at once. A down route answers 503 `backend_unavailable` without
   dispatch, until a probe passes. A route not yet probed is admitted.
-  Transitions are logged as `broker_down` (warn) and `broker_up` (info).
+  Transitions are logged as `broker_down` (warn) and `broker_up` (info),
+  and also in the daemon's own log.
   A key that cannot be materialized is not a failed probe: the route is
   not probed, its health stays unknown, `broker_key_unresolved` (warn) is
   logged once, and requests fail on the key (503 `credential_unresolved`).

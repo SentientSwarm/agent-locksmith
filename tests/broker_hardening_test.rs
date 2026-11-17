@@ -258,7 +258,7 @@ async fn unusable_key_is_not_reported_as_broker_down() {
         .execute(&h.pool)
         .await
         .unwrap();
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.health.get("pool"), None, "no health recorded");
     let logs = broker_logs(&h, "broker_key_unresolved").await;
     assert_eq!(logs.len(), 1);
@@ -287,7 +287,7 @@ async fn probe_does_not_follow_redirects() {
         .await;
     let h = setup().await;
     probed_route(&h, &m, 200).await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     let s = h.health.get("pool").unwrap();
     assert_eq!((s.status, s.http_status), (HealthStatus::Down, Some(302)));
     let followed = m
@@ -300,7 +300,7 @@ async fn probe_does_not_follow_redirects() {
 
     let h = setup().await;
     probed_route(&h, &m, 302).await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
 
@@ -346,13 +346,16 @@ async fn hanging_broker_does_not_stall_another() {
         h.put_model(name, body).await.assert_status_ok();
         h.seal(name, "broker-key-1").await;
     }
-    let started = std::time::Instant::now();
-    h.prober.tick_at(FAR_FUTURE).await;
-    assert!(
-        started.elapsed() < PROBE_TIMEOUT * 2,
-        "{:?}",
-        started.elapsed()
-    );
+    // Each tick (the probe and its retry) is bounded by one timeout.
+    for _ in 0..agent_locksmith::registrations::broker_health::DOWN_AFTER {
+        let started = std::time::Instant::now();
+        h.prober.tick_at(FAR_FUTURE).await;
+        assert!(
+            started.elapsed() < PROBE_TIMEOUT * 2,
+            "{:?}",
+            started.elapsed()
+        );
+    }
     assert_eq!(h.health.get("fast").unwrap().status, HealthStatus::Up);
     assert_eq!(h.health.get("slow").unwrap().status, HealthStatus::Down);
 }
@@ -396,7 +399,7 @@ async fn broken_selection_is_reported_before_broker_health() {
         .await;
     let h = setup().await;
     probed_route(&h, &m, 200).await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     // A selection row that is not `broker` (e.g. from before brokers).
     sqlx::query("UPDATE agent_credential_overrides SET auth_spec = '{\"kind\":\"none\"}'")
         .execute(&h.pool)
@@ -496,6 +499,12 @@ async fn down_probe_records_its_cause() {
     probed_route_at(&h, "status", &m.uri(), "direct").await;
     probed_route_at(&h, "gone", "http://127.0.0.1:9", "direct").await;
     probed_route_at(&h, "unproxied", &m.uri(), "proxied").await;
+    // AGENT-310: a refusal no retry changes is down at once; a broker
+    // that answered wrongly or not at all is retried first.
+    h.prober.tick_at(FAR_FUTURE).await;
+    assert!(h.health.get("status").is_none() && h.health.get("gone").is_none());
+    let unproxied = h.health.get("unproxied").unwrap().cause;
+    assert_eq!(unproxied, Some("egress_proxy_unconfigured"));
     h.prober.tick_at(FAR_FUTURE).await;
     let cause = |route: &str| h.health.get(route).unwrap().cause;
     assert_eq!(cause("status"), Some("unexpected_status"));
@@ -503,8 +512,8 @@ async fn down_probe_records_its_cause() {
     assert_eq!(cause("unproxied"), Some("egress_proxy_unconfigured"));
     assert_eq!(
         m.received_requests().await.unwrap().len(),
-        1,
-        "only the direct route is probed"
+        2,
+        "only the direct route is probed, and retried once"
     );
     // The log rows drain one at a time and in catalog order, so wait for
     // all three before looking for the egress one.

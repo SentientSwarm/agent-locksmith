@@ -4,8 +4,11 @@
 //! route's broker key to every enabled broker route that declares a health
 //! probe, and records the result in [`BrokerHealth`]. Admission refuses a
 //! route whose last probe failed (503 `backend_unavailable`, no dispatch);
-//! a route never probed is admitted. A down broker never fails daemon
-//! readiness, because other routes still serve.
+//! a route never probed is admitted. A broker that fails a probe it could
+//! reach (an unexpected status, a timeout or a refused connection) is
+//! probed again at the next tick and counts as down only after
+//! [`DOWN_AFTER`] such failures in a row (AGENT-310). A down broker never
+//! fails daemon readiness, because other routes still serve.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -27,6 +30,10 @@ use crate::secret::{CredentialSealingKey, OpResolver};
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the prober wakes to look for due probes.
 pub const TICK: Duration = Duration::from_secs(5);
+/// Failed probes in a row, each retried at the next tick, before a broker
+/// counts as down. A refusal that no retry changes (no usable egress
+/// client) counts at once.
+pub const DOWN_AFTER: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -140,6 +147,9 @@ pub struct Prober {
     clients: ClientPool,
     /// Routes whose key could not be materialized at their last probe.
     key_unresolved: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Failed probes in a row not yet recorded, by route, with the
+    /// fingerprint they were made against.
+    strikes: std::sync::Mutex<HashMap<String, (String, u32)>>,
 }
 
 impl Prober {
@@ -162,6 +172,7 @@ impl Prober {
             oplog,
             clients: ClientPool::new(),
             key_unresolved: Default::default(),
+            strikes: Default::default(),
         }
     }
 
@@ -175,14 +186,20 @@ impl Prober {
         if let Ok(mut set) = self.key_unresolved.lock() {
             set.retain(|name| keep.contains(name.as_str()));
         }
-        // A result for an earlier destination makes the route due now.
+        if let Ok(mut strikes) = self.strikes.lock() {
+            strikes.retain(|name, _| keep.contains(name.as_str()));
+        }
+        // A result for an earlier destination, or a failure still to be
+        // confirmed, makes the route due now.
         let due: Vec<_> = probed(&catalog)
             .filter(|r| {
                 let every = r.broker.as_ref().and_then(|b| b.health.as_ref());
                 let every = every.map_or(30, |h| h.interval_seconds) as i64;
-                self.health
-                    .current(r)
-                    .is_none_or(|s| now.saturating_sub(s.checked_at) >= every)
+                self.striking(r)
+                    || self
+                        .health
+                        .current(r)
+                        .is_none_or(|s| now.saturating_sub(s.checked_at) >= every)
             })
             .cloned()
             .collect();
@@ -201,6 +218,9 @@ impl Prober {
             };
             let (status, http_status, cause) = (state.status, state.http_status, state.cause);
             let prev = self.health.current(r).map(|s| s.status);
+            if self.strike(&r.name, &state, prev) {
+                continue;
+            }
             self.health.set(&r.name, state);
             // Log changes, and a first probe that fails; a first success
             // is the expected state and stays quiet.
@@ -208,6 +228,49 @@ impl Prober {
                 self.log_transition(&r.name, status, http_status, cause);
             }
         }
+    }
+
+    /// Does `r` have a failed probe, against its current destination, still
+    /// to be confirmed?
+    fn striking(&self, r: &Registration) -> bool {
+        let fp = fingerprint(r).unwrap_or_default();
+        self.strikes
+            .lock()
+            .is_ok_and(|s| s.get(&r.name).is_some_and(|(f, _)| *f == fp))
+    }
+
+    /// Count a probe a retry might pass (the broker answered wrongly or
+    /// not at all) while the route is not down; true while the failures in
+    /// a row are fewer than [`DOWN_AFTER`], so the result is not recorded
+    /// yet. Any recorded result clears the count.
+    fn strike(&self, route: &str, state: &HealthState, prev: Option<HealthStatus>) -> bool {
+        let Ok(mut strikes) = self.strikes.lock() else {
+            return false;
+        };
+        let retryable = matches!(state.cause, Some("unexpected_status" | "unreachable"));
+        if state.status != HealthStatus::Down || !retryable || prev == Some(HealthStatus::Down) {
+            strikes.remove(route);
+            return false;
+        }
+        let entry = strikes
+            .entry(route.to_string())
+            .or_insert_with(|| (state.fingerprint.clone(), 0));
+        if entry.0 != state.fingerprint {
+            *entry = (state.fingerprint.clone(), 0);
+        }
+        entry.1 += 1;
+        if entry.1 < DOWN_AFTER {
+            tracing::info!(
+                route,
+                cause = state.cause,
+                http_status = state.http_status,
+                failures = entry.1,
+                "broker health probe failed; retrying before marking it down"
+            );
+            return true;
+        }
+        strikes.remove(route);
+        false
     }
 
     /// Probe one broker route. A key that cannot be materialized is not a
@@ -323,6 +386,14 @@ impl Prober {
         http_status: Option<u16>,
         cause: Option<&'static str>,
     ) {
+        // Also in the daemon's own log (AGENT-310): operators read the
+        // container log before the operational-log API.
+        match status {
+            HealthStatus::Down => {
+                tracing::warn!(route, http_status, cause, "broker failed its health probe")
+            }
+            HealthStatus::Up => tracing::info!(route, "broker passed its health probe"),
+        }
         let Some(oplog) = &self.oplog else { return };
         let (level, event, message) = match status {
             HealthStatus::Down => (

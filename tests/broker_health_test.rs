@@ -65,7 +65,7 @@ async fn probe_up_then_down_refuses_without_dispatch() {
     let h = setup().await;
     let m = broker_server(1).await;
     route(&h, &m).await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
     let probe = &m.received_requests().await.unwrap()[0];
     assert_eq!(
@@ -80,12 +80,74 @@ async fn probe_up_then_down_refuses_without_dispatch() {
     );
     h.call("pool", "/v1/models").await.assert_status_ok();
 
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.settle(FAR_FUTURE + STEP).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
     let r = h.call("pool", "/v1/models").await;
     assert_eq!(r.status_code(), 503);
     assert_eq!(r.json::<Value>()["error"]["code"], "backend_unavailable");
     assert_eq!(api_hits(&m).await, 1, "no dispatch while down");
+}
+
+/// `/healthz` answers each status in `seq` once, in order, then 200.
+async fn probe_sequence(seq: &[u16]) -> MockServer {
+    let m = MockServer::start().await;
+    for (i, status) in seq.iter().enumerate() {
+        Mock::given(path("/healthz"))
+            .respond_with(ResponseTemplate::new(*status))
+            .up_to_n_times(1)
+            .with_priority(1 + i as u8)
+            .mount(&m)
+            .await;
+    }
+    Mock::given(path("/healthz"))
+        .respond_with(ResponseTemplate::new(200))
+        .with_priority(100)
+        .mount(&m)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .with_priority(101)
+        .mount(&m)
+        .await;
+    m
+}
+
+async fn probes(m: &MockServer) -> usize {
+    let all = m.received_requests().await.unwrap();
+    all.iter().filter(|r| r.url.path() == "/healthz").count()
+}
+
+/// AGENT-310 — one failed probe of a broker that is up is retried at the
+/// next tick, before its interval, and the broker counts as down only
+/// when that probe fails too: a loaded broker that misses one probe
+/// keeps serving.
+#[tokio::test]
+async fn one_failed_probe_is_retried_before_the_broker_is_down() {
+    let h = setup().await;
+    let m = probe_sequence(&[200, 500, 500]).await;
+    route(&h, &m).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
+    h.call("pool", "/v1/models").await.assert_status_ok();
+    h.prober.tick_at(FAR_FUTURE + STEP + 5).await;
+    assert_eq!(probes(&m).await, 3, "retried before the interval");
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
+}
+
+/// AGENT-310 — a retry that passes clears the failure: a later single
+/// failure is retried again rather than marking the broker down.
+#[tokio::test]
+async fn a_passing_retry_clears_the_failure() {
+    let h = setup().await;
+    let m = probe_sequence(&[200, 500, 200, 500]).await;
+    route(&h, &m).await;
+    h.prober.tick_at(FAR_FUTURE).await;
+    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.prober.tick_at(FAR_FUTURE + STEP + 5).await;
+    h.prober.tick_at(FAR_FUTURE + 2 * STEP + 5).await;
+    assert_eq!(probes(&m).await, 4);
+    assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Up);
 }
 
 #[tokio::test]
@@ -106,13 +168,16 @@ async fn hanging_health_marks_down_within_timeout() {
         .mount(&m)
         .await;
     route(&h, &m).await;
-    let started = Instant::now();
-    h.prober.tick_at(FAR_FUTURE).await;
-    assert!(
-        started.elapsed() < Duration::from_secs(6),
-        "{:?}",
-        started.elapsed()
-    );
+    // Each probe (the first and its retry) is bounded by the timeout.
+    for _ in 0..agent_locksmith::registrations::broker_health::DOWN_AFTER {
+        let started = Instant::now();
+        h.prober.tick_at(FAR_FUTURE).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "{:?}",
+            started.elapsed()
+        );
+    }
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
 }
 
@@ -126,7 +191,7 @@ async fn readyz_reports_counts_only() {
         before["brokers"],
         json!({ "up": 0, "down": 0, "unknown": 1 })
     );
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     let r = h.agent.get("/readyz").await;
     r.assert_status_ok();
     assert_eq!(
@@ -134,7 +199,7 @@ async fn readyz_reports_counts_only() {
         json!({ "up": 1, "down": 0, "unknown": 0 })
     );
     assert!(!r.text().contains("pool"), "no route names on /readyz");
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.settle(FAR_FUTURE + STEP).await;
     let r = h.agent.get("/readyz").await;
     r.assert_status_ok();
     assert_eq!(
@@ -150,7 +215,7 @@ async fn transition_logged_once() {
     let m = broker_server(1).await;
     route(&h, &m).await;
     for t in 0..3 {
-        h.prober.tick_at(FAR_FUTURE + STEP * t).await;
+        h.settle(FAR_FUTURE + STEP * t).await;
     }
     // The operational log drains asynchronously: wait for the warning,
     // then a little longer so a duplicate would also have landed.
@@ -191,12 +256,12 @@ async fn admin_get_shows_route_health() {
         }
     };
     assert!(get("/models/pool").await["health"].is_null(), "unknown");
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     let got = get("/models/pool").await;
     assert_eq!(got["health"]["status"], "up");
     assert_eq!(got["health"]["http_status"], 200);
     assert_eq!(got["health"]["checked_at"], FAR_FUTURE);
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.settle(FAR_FUTURE + STEP).await;
     assert_eq!(get("/models/pool").await["health"]["status"], "down");
     let list = get("/models").await;
     let row = list["models"]
@@ -231,14 +296,14 @@ async fn removed_probe_admits_and_forgets() {
     h.bind("pool", json!({ "kind": "broker" }))
         .await
         .assert_status_ok();
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.call("pool", "/v1/models").await.status_code(), 503);
 
     let mut body = broker_body(&m.uri(), json!({}));
     body["auth"] = stored(&sref);
     h.put_model("pool", body).await.assert_status_ok();
     h.call("pool", "/v1/models").await.assert_status_ok();
-    h.prober.tick_at(FAR_FUTURE + STEP).await;
+    h.settle(FAR_FUTURE + STEP).await;
     assert!(
         h.health.get("pool").is_none(),
         "unprobed routes are forgotten"
@@ -255,7 +320,7 @@ async fn repointed_broker_is_probed_again() {
     body["auth"] = json!({ "kind": "none" });
     h.put_model("pool", body).await.assert_status_ok();
     let sref = h.seal("pool", "broker-key-1").await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.health.get("pool").unwrap().status, HealthStatus::Down);
 
     let mut body = broker_body(&good.uri(), spec);
@@ -274,7 +339,7 @@ async fn repointed_broker_is_probed_again() {
         got["health"].is_null(),
         "a result for the old destination is not shown"
     );
-    h.prober.tick_at(FAR_FUTURE + 1).await;
+    h.settle(FAR_FUTURE + 1).await;
     assert!(
         !good.received_requests().await.unwrap().is_empty(),
         "a new destination is probed on the next tick"
@@ -288,7 +353,7 @@ async fn failover_to_a_broker_backend_is_admitted() {
     let bad = failing_broker().await;
     let good = broker_server(10).await;
     route(&h, &bad).await;
-    h.prober.tick_at(FAR_FUTURE).await;
+    h.settle(FAR_FUTURE).await;
     assert_eq!(h.call("pool", "/v1/models").await.status_code(), 503);
 
     h.op_req(axum::http::Method::PUT, "/routes/pool/backends/b")
