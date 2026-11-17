@@ -148,6 +148,27 @@ fn invalid_proxy_error_never_echoes_the_url() {
 }
 
 #[test]
+fn external_mode_reports_an_ignored_egress_proxy() {
+    // AGENT-269: `external` connects proxied routes directly, so a proxy
+    // set alongside it is never used; the daemon warns about it.
+    let both = parse_config_str(&yaml(
+        "https://up.example",
+        "egress:\n  mode: external\negress_proxy: \"http://127.0.0.1:8888\"",
+    ))
+    .unwrap();
+    assert!(both.ignored_egress_proxy());
+    let external =
+        parse_config_str(&yaml("https://up.example", "egress:\n  mode: external")).unwrap();
+    assert!(!external.ignored_egress_proxy());
+    let piped = parse_config_str(&yaml(
+        "https://up.example",
+        "egress_proxy: \"http://127.0.0.1:8888\"",
+    ))
+    .unwrap();
+    assert!(!piped.ignored_egress_proxy());
+}
+
+#[test]
 fn enforcement_defaults_follow_egress_proxy() {
     let none = parse_config_str(&yaml("https://up.example", "")).unwrap();
     assert_eq!(none.egress_enforcement(), None);

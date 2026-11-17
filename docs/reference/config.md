@@ -221,7 +221,7 @@ Routes with `egress: direct` always connect directly.
 | Key | Meaning |
 |---|---|
 | `egress_proxy` | HTTP CONNECT proxy URL for proxied routes. It must parse as a proxy URL. |
-| `egress.mode` | `pipelock`: send proxied routes through `egress_proxy`, which is then required. `external`: connect directly and rely on your network to enforce egress. |
+| `egress.mode` | `pipelock`: send proxied routes through `egress_proxy`, which is then required. `external`: connect directly and rely on your network to enforce egress; an `egress_proxy` set alongside it is ignored, and the daemon warns at startup. |
 
 With `egress_proxy` set and no `egress` block, the mode is `pipelock`. With
 neither set, proxied routes fail with 503 `egress_proxy_unconfigured`; they

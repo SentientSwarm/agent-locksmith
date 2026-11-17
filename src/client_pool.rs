@@ -388,6 +388,24 @@ fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_proxied_client_that_fails_to_build_is_unavailable() {
+        // AGENT-269: no fallback for a proxied route, since the fallback
+        // carries no proxy. A minimum TLS version above the maximum can't
+        // build.
+        let broken = || {
+            Client::builder()
+                .min_tls_version(reqwest::tls::Version::TLS_1_3)
+                .max_tls_version(reqwest::tls::Version::TLS_1_2)
+        };
+        assert!(broken().build().is_err(), "the builder must fail");
+        assert!(matches!(
+            finish(broken(), true, no_redirect_client),
+            Err(ClientUnavailable::BuildFailed)
+        ));
+        assert!(finish(broken(), false, no_redirect_client).is_ok());
+    }
+
     use super::*;
 
     /// AGENT-277 — every reqwest client the daemon builds ignores proxy

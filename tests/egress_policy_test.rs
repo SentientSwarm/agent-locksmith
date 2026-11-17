@@ -169,6 +169,18 @@ fn pipelock_render_lists_hosts() {
     );
 }
 
+#[test]
+fn pipelock_render_escapes_hosts() {
+    // AGENT-269: rendered with a YAML emitter, not string interpolation,
+    // so a host the URL parser allows (an opaque host may hold `"`)
+    // can't break or extend the document.
+    let odd = "a\"b: c\n- injected";
+    let policy = json!({ "hosts": [ { "host": odd, "port": 443, "routes": ["x"] } ] });
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&pipelock_allowlist(&policy)).unwrap();
+    assert_eq!(yaml["api_allowlist"][0].as_str(), Some(odd));
+    assert_eq!(yaml["api_allowlist"].as_sequence().map(Vec::len), Some(1));
+}
+
 #[tokio::test]
 async fn yaml_tools_are_ignored_when_registrations_are_authoritative() {
     // With a registration repository the database is the authority

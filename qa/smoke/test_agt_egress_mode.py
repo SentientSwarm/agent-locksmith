@@ -7,7 +7,8 @@ directly; the policy lists the hosts proxied routes reach.
 """
 
 import pytest
-from fakes.agt_support import enrol, put_tool
+import yaml
+from fakes.agt_support import audit, enrol, put_tool
 from fakes.agt_upstream import EgressProxy, Upstream
 from fakes.cat_uds import uds
 
@@ -33,7 +34,10 @@ def em(target_factory):
     agents = {}
     for name, t in (("none", none), ("external", external), ("piped", piped)):
         put_tool(t, "agt-out", f"{up.url}/out", "none", "--egress", "proxied")
-        put_tool(t, "agt-lan", f"{up.url}/lan", "none", "--egress", "direct")
+        # The piped target never calls agt-lan; a distinct host shows the
+        # policy leaves direct routes out (AGENT-269).
+        lan = up.url.replace("127.0.0.1", "localhost") if name == "piped" else up.url
+        put_tool(t, "agt-lan", f"{lan}/lan", "none", "--egress", "direct")
         agents[name] = enrol(
             t,
             f"qa-egress-{name}",
@@ -46,6 +50,7 @@ def em(target_factory):
         "piped": piped,
         "agents": agents,
         "up": up,
+        "proxy_url": proxy.url,
     }
     up.close()
     proxy.close()
@@ -66,6 +71,7 @@ def test_proxied_route_without_proxy_fails_closed(em):
     resp = t.http("GET", "/api/agt-out/ping", token=em["agents"]["none"]["token"])
     assert resp.status == 503 and resp.code == "egress_proxy_unconfigured"
     assert up.count("/out") == before, "a proxied route went direct"
+    assert audit(t, "agt-out", "egress_unenforced"), "the refusal is audited"
     direct = t.http("GET", "/api/agt-lan/ping", token=em["agents"]["none"]["token"])
     assert direct.status == 200, "direct routes are unaffected"
 
@@ -100,7 +106,9 @@ def test_policy_lists_proxied_hosts(em):
     assert "agt-out" in routes and "agt-lan" not in routes
     rendered = t.cli("egress", "policy", "--pipelock", fmt=None)
     assert rendered.code == 0, rendered.err
-    assert "api_allowlist:" in rendered.out and '"127.0.0.1"' in rendered.out
+    assert yaml.safe_load(rendered.out)["api_allowlist"] == ["127.0.0.1"]
+    for out in (policy.out, rendered.out):
+        assert em["proxy_url"] not in out, "the proxy URL was published"
 
 
 @case(

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `locksmith egress policy --pipelock` writes the allowlist with a YAML
+  emitter, so a host can no longer break or extend the document
+  (AGENT-269). A registration read failure behind the policy's 503
+  `registrations_unavailable` is now logged. With `egress.mode: external`
+  and `egress_proxy` both set, the daemon warns at startup that the proxy
+  is ignored.
 - A PEM private key's last line, with no `END` line in reach, is kept when
   a raw non-ASCII character (a `”` written by a UTF-8 encoder) or a
   control character follows it (AGENT-270). Before, that line was

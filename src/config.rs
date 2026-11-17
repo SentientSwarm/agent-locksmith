@@ -87,6 +87,13 @@ impl AppConfig {
                 .map(|_| EgressEnforcement::Pipelock),
         }
     }
+
+    /// AGENT-269 — `egress.mode: external` with `egress_proxy` also set:
+    /// proxied routes connect directly, so the proxy is never used.
+    pub fn ignored_egress_proxy(&self) -> bool {
+        self.egress_enforcement() == Some(EgressEnforcement::External)
+            && self.egress_proxy.is_some()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

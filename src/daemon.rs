@@ -1436,4 +1436,9 @@ fn log_egress_enforcement(config: &crate::config::AppConfig) {
             "egress: no egress_proxy and no egress.mode; proxied routes fail closed with 503"
         ),
     }
+    if config.ignored_egress_proxy() {
+        tracing::warn!(
+            "egress: egress.mode is external, so egress_proxy is ignored and proxied routes connect directly"
+        );
+    }
 }

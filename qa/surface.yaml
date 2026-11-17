@@ -158,6 +158,9 @@ routes:
     route: /egress/policy
   refusals:
   - invalid_credential
+  fault_refusals:
+  - registrations_unavailable
+  fault_reason: needs the registrations table to fail a read
 - id: admin.GET./admin/operator/rate-limits
   listener: admin
   method: GET
@@ -679,7 +682,8 @@ routes:
   - backend_unavailable
   fault_refusals:
   - connection_not_active
-  fault_reason: needs saved and running registration to diverge (activation refresh failure)
+  - upstream_client_unavailable
+  fault_reason: needs saved and running registration to diverge (activation refresh failure), or an upstream client that fails to build
 - id: agent.GET./health
   listener: agent
   method: GET
