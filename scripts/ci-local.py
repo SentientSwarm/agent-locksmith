@@ -9,6 +9,7 @@ uploaded artifacts into the evidence directory). See docs/development/local-ci.m
 """
 
 import argparse
+import contextlib
 import datetime
 import fcntl
 import hashlib
@@ -17,8 +18,10 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -31,6 +34,10 @@ CACHE = CACHE_BASE  # set per repository in main()
 # image and needs all four native runners, so it is not run locally.
 JOBS = {"test": "ci.yml", "qa-smoke": "ci.yml"}
 KEEP_RUNS = 20
+# Steps' TMPDIR goes here when it exists (AGENT-293): on a shared disk,
+# test SQLite fsyncs stalled past sqlx's 30 s pool timeout. RUNNER_TEMP
+# stays on disk; it holds gigabytes of prior builds.
+MEMORY_FS = Path("/dev/shm")
 # Only what the workflows rely on. Anything else, such as provider API keys
 # (which switch on paid live tests), CARGO_* or BASH_ENV, would make the
 # result depend on the developer's shell.
@@ -49,6 +56,26 @@ def git(*args, cwd=None, check=True):
         ["git", *args], cwd=cwd, check=check, capture_output=True, text=True
     )
     return out.stdout.strip()
+
+
+@contextlib.contextmanager
+def scratch_tmpdir(memory, env):
+    """Point `env`'s TMPDIR at a private directory under `memory` for the
+    block, and remove it afterwards. Without `memory`, TMPDIR is unchanged."""
+    if not memory.is_dir() or not os.access(memory, os.W_OK):
+        yield
+        return
+    path = tempfile.mkdtemp(prefix="locksmith-ci-", dir=memory)
+    env["TMPDIR"] = path
+    try:
+        yield
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def stop_on_sigterm(signum, _frame):
+    """`timeout` sends SIGTERM; exit through `finally` blocks, not around them."""
+    raise SystemExit(128 + signum)
 
 
 def base_env(environ):
@@ -309,6 +336,7 @@ def main():
     # Hosted runners' umask, for the checkouts, RUNNER_TEMP and cached builds
     # the driver makes itself; steps get it too (AGENT-294).
     os.umask(0o022)
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
 
     unknown = set(args.jobs.split(",")) - set(JOBS)
     if unknown:
@@ -346,7 +374,7 @@ def main():
         "CI": "true",
     }
     summary = {"sha": sha, "started": stamp, "host_target": host, "jobs": {}}
-    with open(evidence / "ci.log", "w") as log:
+    with scratch_tmpdir(MEMORY_FS, env), open(evidence / "ci.log", "w") as log:
         for name in args.jobs.split(","):
             # Each GitHub job starts on a fresh runner: clean tree, base env.
             prepare_workspace(repo, sha)
@@ -358,7 +386,10 @@ def main():
                 **{k: expand(v, ctx) for k, v in (wf.get("env") or {}).items()},
             }
             ok, steps = run_job(name, job, ctx, job_env, ws, repo, evidence, log)
-            summary["jobs"][name] = {"result": "pass" if ok else "fail", "steps": steps}
+            summary["jobs"][name] = {
+                "result": "pass" if ok else "fail",
+                "steps": steps,
+            }
             print(f"{name}: {'PASS' if ok else 'FAIL'}", flush=True)
             for label, state in steps:
                 if state != "pass":

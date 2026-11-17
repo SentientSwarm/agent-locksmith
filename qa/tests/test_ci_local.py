@@ -220,3 +220,40 @@ def test_the_toolchain_is_selected_for_every_later_step(tmp_path):
     ci.toolchain_env(env, "1.94.0", tmp_path)
     assert env["RUSTUP_TOOLCHAIN"] == "1.94.0"
     assert "1.94.0" in env["PATH"].split(":")[0]
+
+
+def test_steps_get_a_scratch_tmpdir_in_memory_when_available(tmp_path):
+    # AGENT-293: on a shared disk, test SQLite fsyncs stalled past sqlx's
+    # 30 s pool timeout. Hosted runners have fast local disks; tmpfs is closer.
+    memory = tmp_path / "shm"
+    memory.mkdir()
+    env = {"TMPDIR": "/caller"}
+    with ci.scratch_tmpdir(memory, env):
+        made = Path(env["TMPDIR"])
+        assert made.parent == memory
+        assert made.is_dir()
+        assert made.name.startswith("locksmith-ci-")
+    assert not made.exists()
+
+
+def test_the_scratch_tmpdir_is_removed_when_a_job_fails(tmp_path):
+    memory = tmp_path / "shm"
+    memory.mkdir()
+    env = {}
+    with pytest.raises(SystemExit), ci.scratch_tmpdir(memory, env):
+        (Path(env["TMPDIR"]) / "leftover").write_text("x")
+        raise SystemExit(1)
+    assert list(memory.iterdir()) == []
+
+
+def test_without_a_memory_filesystem_tmpdir_is_left_alone(tmp_path):
+    env = {"TMPDIR": "/caller"}
+    with ci.scratch_tmpdir(tmp_path / "absent", env):
+        assert env["TMPDIR"] == "/caller"
+
+
+def test_sigterm_still_runs_cleanup():
+    # `timeout` sends SIGTERM; Python's default handler skips `finally`.
+    with pytest.raises(SystemExit) as stopped:
+        ci.stop_on_sigterm(15, None)
+    assert stopped.value.code == 143
