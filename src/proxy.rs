@@ -515,6 +515,9 @@ async fn proxy_request(
         match resolve_oauth_token(&state, &target, &session_label).await {
             Ok(updated_auth) => target.auth = updated_auth,
             Err(envelope) => {
+                if let Some(cause) = envelope.egress {
+                    return egress::record_egress_unavailable(&state.audit, &ctx, cause).await;
+                }
                 record_oauth_unavailable(&state.audit, &ctx, envelope.audit_cause).await;
                 return envelope.response;
             }

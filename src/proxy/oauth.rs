@@ -6,6 +6,9 @@ use crate::{app::OauthRuntime, oauth::OauthSession};
 pub(super) struct OauthUnavailable {
     pub response: Response,
     pub audit_cause: &'static str,
+    /// AGENT-302: set when the token call had no usable egress, so the
+    /// refusal is audited as the route's own egress refusal would be.
+    pub egress: Option<crate::client_pool::ClientUnavailable>,
 }
 
 fn unavailable(code: &'static str, cause: &'static str, message: &str) -> OauthUnavailable {
@@ -18,6 +21,7 @@ fn unavailable(code: &'static str, cause: &'static str, message: &str) -> OauthU
         )
             .into_response(),
         audit_cause: cause,
+        egress: None,
     }
 }
 
@@ -189,6 +193,7 @@ fn egress_unavailable(cause: crate::client_pool::ClientUnavailable) -> OauthUnav
         )
             .into_response(),
         audit_cause: event,
+        egress: Some(cause),
     }
 }
 

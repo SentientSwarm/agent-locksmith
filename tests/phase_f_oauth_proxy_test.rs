@@ -707,6 +707,17 @@ async fn proxied_route_without_egress_never_refreshes_directly() {
         "egress_proxy_unconfigured"
     );
     assert!(h.mock.received_requests().await.unwrap().is_empty());
+    // AGENT-302: audited as the refused route itself is, a security
+    // `egress_unenforced` event, not an `oauth_unavailable` one.
+    let events: Vec<(String, String)> =
+        sqlx::query_as("SELECT event, event_class FROM audit WHERE status = 503")
+            .fetch_all(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        events,
+        vec![("egress_unenforced".to_string(), "security".to_string())]
+    );
     let session = h
         .sessions
         .get(

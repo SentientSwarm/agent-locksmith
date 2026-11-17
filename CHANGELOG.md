@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A request refused because its OAuth token refresh has no egress
+  writes the `egress_unenforced` security audit event, as a refused
+  proxied request does and as the egress docs say (AGENT-302). It was
+  audited as `oauth_unavailable` with cause `egress_unenforced`.
 - An agent kept over a rate limit writes at most one `rate_limited`
   audit row per route a minute, not one per refused request
   (AGENT-272). Each row's `details.suppressed` counts the refusals
