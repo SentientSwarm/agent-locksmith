@@ -34,9 +34,17 @@ use std::sync::Arc;
 /// counted as dropped without being remembered.
 const MAX_SEEN: usize = 4 * MAX_AUDITED_HITS;
 
-/// Unfinished outputs given their own window; more share one, so memory
-/// is bounded. A finished output's window drops its text.
+/// Unfinished outputs given their own window under `fail_open`; more
+/// share one, so memory is bounded: each window can hold up to
+/// `max_scan_bytes` there. A finished output's window drops its text.
 const MAX_LANES: usize = 32;
+
+/// The same limit under `fail_closed`, where the text all windows hold
+/// is already limited to `max_scan_bytes` (`over_cap` blocks past it)
+/// and a trimmed window gives memory back, so more lanes add little.
+/// Each parallel tool call takes two lanes, so 32 blocked about 15 of
+/// them (AGENT-273).
+const MAX_LANES_CLOSED: usize = 256;
 
 /// Outputs remembered in one stream (finished ones too, so text after
 /// a finish is caught); more share one window.
@@ -310,10 +318,10 @@ impl StreamInspector {
     }
 
     /// The lane `lane`'s index, made on first use. Past `MAX_LANES`
-    /// unfinished outputs (or `MAX_OUTPUTS` in all, or lane paths past
-    /// `max_scan_bytes`), new outputs share one
-    /// window, which can split a match: that is an overflow (`None` under
-    /// `fail_closed`).
+    /// (`MAX_LANES_CLOSED` under `fail_closed`) unfinished outputs, or
+    /// `MAX_OUTPUTS` in all, or lane paths past `max_scan_bytes`, new
+    /// outputs share one window, which can split a match: that is an
+    /// overflow (`None` under `fail_closed`).
     fn lane(&mut self, lane: &Lane) -> Option<usize> {
         if let Some(&i) = self.by_lane.get(lane) {
             return Some(i);
@@ -323,7 +331,11 @@ impl StreamInspector {
             tags: Vec::new(),
         };
         let live = self.lanes.iter().filter(|l| !l.done).count();
-        let full = live + 1 >= MAX_LANES
+        let max_lanes = match self.on_error {
+            OnError::FailClosed => MAX_LANES_CLOSED,
+            OnError::FailOpen => MAX_LANES,
+        };
+        let full = live + 1 >= max_lanes
             || self.lanes.len() + 1 >= MAX_OUTPUTS
             || self.lane_bytes + lane.path.len() > self.max_held;
         let lane = if full {
@@ -1285,10 +1297,15 @@ mod tests {
 
     #[test]
     fn running_out_of_lanes_fails_closed() {
-        let events: Vec<String> = (0..40).map(|n| chat_n(n, "hi ")).collect();
-        let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
+        let lanes = |n| (0..n).map(|n| chat_n(n, "hi ")).collect::<Vec<String>>();
+        let (out, _) = run(&closed(1 << 20, Verdict::Redact), &lanes(MAX_LANES_CLOSED));
         assert!(out.contains("inspection_blocked"), "{out}");
-        let (out, i) = run(&policy(Verdict::Redact), &events);
+        let (out, _) = run(
+            &closed(1 << 20, Verdict::Redact),
+            &lanes(MAX_LANES_CLOSED - 1),
+        );
+        assert!(!out.contains("inspection_blocked"), "{out}");
+        let (out, i) = run(&policy(Verdict::Redact), &lanes(MAX_LANES));
         assert!(!out.contains("inspection_blocked") && i.hold_overflowed());
     }
 
@@ -1546,6 +1563,78 @@ mod tests {
         ));
         events.push(ev("message_stop", json!({})));
         passes_whole(&events);
+    }
+
+    /// A chat stream of `n` parallel tool calls, each opened with its
+    /// name and then given its arguments in the pieces `args` returns.
+    fn parallel_tool_calls(n: usize, args: impl Fn(usize) -> Vec<String>) -> Vec<String> {
+        use serde_json::json;
+        let chunk = |v: serde_json::Value| format!("data: {v}\n\n");
+        let call = |t: usize, f: serde_json::Value| {
+            chunk(json!({"id": "c1",
+            "choices": [{"index": 0, "delta": {"tool_calls": [{"index": t, "function": f}]}}]}))
+        };
+        let mut events = vec![chunk(
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}),
+        )];
+        for t in 0..n {
+            events.push(call(
+                t,
+                json!({"name": format!("tool_{t}"), "arguments": ""}),
+            ));
+        }
+        for t in 0..n {
+            for piece in args(t) {
+                events.push(call(t, json!({ "arguments": piece })));
+            }
+        }
+        events.push(chunk(
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+        ));
+        events.push(DONE.to_string());
+        events
+    }
+
+    /// AGENT-273: each tool call takes two lanes (name and arguments), so
+    /// 32 lanes blocked about 15 parallel calls under fail_closed. There the
+    /// held text is already bounded across lanes, so more are allowed.
+    #[test]
+    fn forty_parallel_tool_calls_pass_whole_under_fail_closed() {
+        let events = parallel_tool_calls(40, |t| vec!["{\"n\": ".to_string(), format!("{t}}}")]);
+        passes_whole(&events);
+    }
+
+    /// Token-sized pieces: 40 calls of 300 bytes of arguments each, sent
+    /// 6 bytes at a time. Held events are released in order, so the
+    /// whole tool-call section must fit in `max_scan_bytes` as raw SSE
+    /// (here about 0.4 MiB of 1 MiB); past that the stream still blocks.
+    #[test]
+    fn forty_token_streamed_tool_calls_pass_whole_under_fail_closed() {
+        let args = format!("{{\"q\": \"{}\"}}", "word ".repeat(58));
+        let events = parallel_tool_calls(40, |_| {
+            args.as_bytes()
+                .chunks(6)
+                .map(|c| String::from_utf8(c.to_vec()).unwrap())
+                .collect()
+        });
+        passes_whole(&events);
+    }
+
+    /// The same, with a key split across the last call's arguments.
+    #[test]
+    fn a_key_in_the_fortieth_parallel_tool_call_is_redacted() {
+        let k = key();
+        let events = parallel_tool_calls(40, |t| {
+            if t == 39 {
+                vec![k[..12].to_string(), k[12..].to_string()]
+            } else {
+                vec!["{}".to_string()]
+            }
+        });
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+        assert!(!out.contains("inspection_blocked"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
     }
 
     #[test]

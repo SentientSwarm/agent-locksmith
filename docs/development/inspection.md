@@ -264,8 +264,17 @@ from its start until a scan finds it ended, or the window or the held
 events pass `max_scan_bytes` (AGENT-309). A window scans once the
 text it has not scanned reaches an eighth of what it holds, so padding
 that keeps the window long cannot make scanning quadratic. Up to 31
-unfinished outputs (1023 in all) get their own window; a finished
-output's window drops its text. Past that, or when non-empty text
+unfinished outputs under `fail_open`, or 255 under `fail_closed`
+(1023 in all), get their own window; a finished output's window drops
+its text. Each parallel tool call takes two outputs, its name and its
+arguments (AGENT-273). Under `fail_closed` the text all windows hold is
+already limited to `max_scan_bytes`, and a window gives back memory
+when it trims, so the higher limit adds little; each unfinished output
+keeps up to the longest match's length of text, so many long outputs
+reach `max_scan_bytes` before 255. Held events still go out in order,
+so a chat stream's tool calls, which stay unfinished until
+`finish_reason`, must fit in `max_scan_bytes` as raw SSE; a larger
+tool-call section is blocked under `fail_closed`. Past that, or when non-empty text
 arrives for an output the protocol already said was finished, a match
 could be missed: under `fail_closed` the stream is blocked, under
 `fail_open` the outputs share one window (or the finished one reopens)

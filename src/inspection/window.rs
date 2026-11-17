@@ -24,6 +24,10 @@ use super::{Direction, ScanError, Scanner, normalize, sha256_hex};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+/// A trimmed window larger than this, and over four times what it holds,
+/// gives memory back (AGENT-273): a stream can hold 255 windows.
+const SHRINK_ABOVE: usize = 16 * 1024;
+
 /// A hit at absolute offsets in the stream's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowHit {
@@ -215,6 +219,9 @@ impl TextWindow {
             self.overflowed = true;
         }
         self.buf.drain(..cut);
+        if self.buf.capacity() > SHRINK_ABOVE && self.buf.capacity() > 4 * self.buf.len() {
+            self.buf.shrink_to(2 * self.buf.len());
+        }
         self.base += cut;
         self.scanned -= cut;
         let base = self.base;
@@ -292,6 +299,17 @@ mod tests {
 
     fn literal(needle: &str, cap: usize) -> TextWindow {
         TextWindow::new(vec![Arc::new(Literal::new(needle).unwrap())], cap)
+    }
+
+    /// AGENT-273: trimming gives back the memory a large piece took, so
+    /// many lanes that each once took one hold only their tails.
+    #[test]
+    fn a_trimmed_window_gives_back_its_memory() {
+        let mut w = literal("SECRET42", 1 << 20);
+        w.push(&"a".repeat(900 * 1024)).unwrap();
+        w.push("b").unwrap();
+        assert!(w.held() < 64, "{}", w.held());
+        assert!(w.buf.capacity() <= SHRINK_ABOVE, "{}", w.buf.capacity());
     }
 
     #[test]

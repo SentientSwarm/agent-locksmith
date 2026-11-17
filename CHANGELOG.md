@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A streamed response no longer runs out of outputs to inspect at
+  about 15 parallel tool calls under `fail_closed` (AGENT-273). Each
+  call takes two of the 31 outputs a stream could inspect at once;
+  under `fail_closed` the limit is now 255. `fail_open` keeps 31, since
+  there each output's window can hold up to `max_scan_bytes`. The
+  tool-call section must still fit in `max_scan_bytes` as raw SSE.
 - A sidecar's hit `rule` is kept to 64 plain characters before it is
   audited; other characters become `_` and the hit is kept (AGENT-278).
   A streamed response keeps its first inspection error, so under
