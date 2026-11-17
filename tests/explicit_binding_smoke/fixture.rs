@@ -40,8 +40,8 @@ impl Fixture {
         // A stable port, unlike the other daemon tests (AGENT-219): the
         // upgrade probes restart the same config under prior binaries,
         // which log the configured address rather than the bound one. It
-        // comes from below the ephemeral range, so nothing else in the
-        // suite is handed it before the daemon binds it (AGENT-295). A
+        // comes from below the ephemeral range, so nothing else in this
+        // test binary is handed it before the daemon binds it (AGENT-295). A
         // collision cannot be mistaken for readiness, because `ready` also
         // requires this fixture's own admin socket, which a daemon that
         // failed to bind the agent port never creates.

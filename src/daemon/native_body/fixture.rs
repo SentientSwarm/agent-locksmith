@@ -1,6 +1,8 @@
 use crate::{config::parse_config_str, native_authority::body_probe};
 use std::{sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
+#[path = "../../../tests/support/fixed_port.rs"]
+mod fixed_port;
 #[allow(dead_code)] // Existing shared PKI also produces an unused client identity.
 #[path = "../../../tests/native_process/pki.rs"]
 mod pki;
@@ -132,11 +134,8 @@ fn tls_client(
 ) -> (reqwest::Client, String, String) {
     crate::admin::https::install_crypto_provider_once();
     let pki = pki::Pki::write(dir);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // AGENT-313: a probed port can be taken before the daemon binds it.
+    let port = fixed_port::fixed_port();
     let client = builder
         .add_root_certificate(reqwest::Certificate::from_pem(pki.ca.as_bytes()).unwrap())
         .build()

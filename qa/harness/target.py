@@ -9,8 +9,10 @@ differently configured daemons.
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -87,10 +89,28 @@ class HttpResult:
         return None
 
 
+_PORT_FIRST, _PORT_SPAN = 20_000, 10_000
+_port_next = itertools.count(random.randrange(_PORT_SPAN))
+
+
 def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    """A free port for a daemon to bind later, from its config.
+
+    A port probed with bind(0) comes from the ephemeral range, which the
+    harness's own connections draw from too, so it can be taken before the
+    daemon binds it. Pick one below the default ephemeral ranges and below
+    the Kubernetes NodePort range instead (AGENT-313), check it is free,
+    and never return the same one twice in a run.
+    """
+    for _ in range(_PORT_SPAN):
+        port = _PORT_FIRST + next(_port_next) % _PORT_SPAN
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError(f"no free port in {_PORT_FIRST}..{_PORT_FIRST + _PORT_SPAN}")
 
 
 def _parse_json(text: str) -> Any:

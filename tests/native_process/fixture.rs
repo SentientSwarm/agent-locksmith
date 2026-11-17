@@ -124,8 +124,8 @@ impl Fixture {
     }
     /// Configure a fixed port instead of port 0. Only for prior binaries,
     /// which log the configured rather than the bound address (AGENT-219).
-    /// It comes from below the ephemeral range, where nothing else in the
-    /// suite is handed it before the daemon binds it (AGENT-295).
+    /// It comes from below the ephemeral range, where nothing else in this
+    /// test binary is handed it before the daemon binds it (AGENT-295).
     pub fn use_stable_port(&mut self) {
         let port = fixed_port();
         let path = self.path().join("config.yaml");

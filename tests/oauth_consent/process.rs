@@ -126,7 +126,7 @@ async fn try_start(f: &mut Fixture, binary: &str) -> Result<(), String> {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
-/// Re-probe the callback port and rewrite every config value naming it.
+/// Pick a new callback port and rewrite every config value naming it.
 fn move_callback(f: &Fixture) {
     let old = bound_callback(f);
     let new = super::fixture::fixed_port();
@@ -807,7 +807,7 @@ pub async fn callback_bind_failure() {
 }
 
 /// A probed callback port can be taken before the daemon binds it, most
-/// often under full-suite load (#153). Startup re-probes and retries.
+/// often under full-suite load (#153). Startup picks a new port and retries.
 pub async fn taken_callback_port_is_retried() {
     let mut f = Fixture::new();
     let t = Twin::start(&f);
