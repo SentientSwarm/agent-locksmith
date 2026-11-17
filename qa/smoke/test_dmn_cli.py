@@ -1,4 +1,4 @@
-"""Offline `bootstrap-operator` and global CLI behaviour (docs/user/cli-reference.md).
+"""Offline `bootstrap-operator` and global CLI behaviour (docs/reference/cli-reference.md).
 
 bootstrap-operator output holds a wire token and an argon2 hash, so it runs
 through fakes.dmn_support.bootstrap_operator, which registers the token as a

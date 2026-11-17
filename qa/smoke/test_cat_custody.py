@@ -1,7 +1,7 @@
 """Credential custody: operator stored values, env/stored/op sources and retention.
 
-Docs: README.md:106-112 (custody backends), docs/user/concepts/per-agent-credentials.md,
-docs/user/operator/sealed-state-recovery.md, docs/user/operator/native-tool-review.md:32-48
+Docs: README.md:106-112 (custody backends), docs/concepts/per-agent-credentials.md,
+docs/operator/sealed-state-recovery.md, docs/operator/native-tool-review.md:32-48
 and config.example.yaml:57-63 (credential store).
 """
 
@@ -217,7 +217,7 @@ def test_stored_value_for_absent_or_other_kind(cust):
     codes=["definition_pending"],
 )
 def test_stored_value_cannot_attach_to_a_pin(cust):
-    """integration-definitions.md:155-157,166-167: derived instances cannot be edited by
+    """docs/operator/integration-definitions.md:155-157,166-167: derived instances cannot be edited by
     credential writers (definition_pending); a refused attachment commits no sealed value."""
     imported = cust.cli("integration", "import", "--file", str(REPO / "definitions" / "customer.example.json"))
     assert imported.code == 0, imported.err

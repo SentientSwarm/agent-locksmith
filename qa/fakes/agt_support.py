@@ -121,7 +121,7 @@ def put_tool(target, name: str, upstream: str, auth: str = "none", *extra: str) 
 
 
 def audit(target, tool: str, event: str | None = None, limit: int = 50) -> list[dict]:
-    """Audit rows for one tool, newest first (operator CLI, docs/user/cli-reference.md)."""
+    """Audit rows for one tool, newest first (operator CLI, docs/reference/cli-reference.md)."""
     result = target.cli("audit", "query", "--tool", tool, "--limit", str(limit))
     assert result.code == 0, result.err
     rows = result.json or []

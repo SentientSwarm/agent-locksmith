@@ -1,7 +1,7 @@
 """Offline stored-credential re-key (`locksmith rekey-credentials`).
 
-Docs: docs/user/operator/sealed-state-recovery.md (rotate the stored sealing key) and
-docs/user/cli-reference.md. Runs the documented command with no operator token against a
+Docs: docs/operator/sealed-state-recovery.md (rotate the stored sealing key) and
+docs/reference/cli-reference.md. Runs the documented command with no operator token against a
 stopped daemon's database, then restarts the daemon under the new key. Cases run in order
 on one target.
 """

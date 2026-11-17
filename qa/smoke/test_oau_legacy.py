@@ -1,6 +1,6 @@
 """Legacy OAuth custody: refresh-token handoff, status/list/revoke, refresh on
-expiry and the recovery path (docs/user/concepts/oauth-flow.md,
-docs/user/operator/oauth-recovery.md), against the local fake provider in
+expiry and the recovery path (docs/concepts/oauth-flow.md,
+docs/operator/oauth-recovery.md), against the local fake provider in
 qa/fakes/oau_provider.py registered as an `oauth_pkce` tool through the
 operator PUT /admin/operator/tools/{name} interface (oauth-consent.md:58-64).
 No real provider is contacted."""

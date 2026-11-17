@@ -1,4 +1,4 @@
-"""Startup configuration validation (docs/user/architecture.md "Changing configuration").
+"""Startup configuration validation (docs/concepts/architecture.md "Changing configuration").
 
 Refusals run locksmithd in the foreground on a deliberately broken file in
 t1's work directory; a config the daemon wrongly accepts shows as exit None
@@ -75,7 +75,7 @@ def test_malformed_yaml_refuses_start(t1):
     covers=[VALIDATION, "beh.response-controls"],
 )
 def test_invalid_redaction_regex_refuses_start(t1):
-    """m7-response-controls.md:14,170: a malformed redaction_patterns[].regex fails config load with `regex compile failed`."""
+    """response-controls.md:14,170: a malformed redaction_patterns[].regex fails config load with `regex compile failed`."""
     cfg = minimal(tools=[tool_with_patterns([{"id": "broken", "regex": "(unclosed"}])])
     refused(run_once(t1, "dmn-bad-regex", cfg), "regex compile failed", "broken")
 
@@ -87,7 +87,7 @@ def test_invalid_redaction_regex_refuses_start(t1):
     covers=[VALIDATION, "beh.response-controls"],
 )
 def test_duplicate_redaction_id_refuses_start(t1):
-    """m7-response-controls.md:15,171: two patterns sharing an id fail with `duplicate redaction_patterns id`."""
+    """response-controls.md:15,171: two patterns sharing an id fail with `duplicate redaction_patterns id`."""
     pattern = {"id": "dup", "regex": "secret-[0-9]+"}
     cfg = minimal(tools=[tool_with_patterns([pattern, dict(pattern)])])
     refused(
@@ -148,7 +148,7 @@ def test_duplicate_operator_public_id_refuses_start(t1):
 
 @case("SMK-DMN-009", area="DMN", kind="positive", covers=[VALIDATION])
 def test_env_var_expansion_in_config(target_factory):
-    """config.example.yaml:82 and m5-sealed-secrets.md:35: `${VAR}` in the YAML expands from the daemon environment.
+    """config.example.yaml:82 and sealed-secrets.md:35: `${VAR}` in the YAML expands from the daemon environment.
 
     The listen host is given only as `${QA_DMN_LISTEN_HOST}`; the daemon can bind only if it expanded.
     """
@@ -185,7 +185,7 @@ def legacy(target_factory):
     "SMK-DMN-010", area="DMN", kind="positive", covers=[VALIDATION, "beh.seed.catalog"]
 )
 def test_deprecated_fields_are_translated(legacy):
-    """m1-inference-hardening.md:128-137: legacy `cloud: true` -> egress proxied, `timeout_seconds: N` ->
+    """inference-hardening.md:128-137: legacy `cloud: true` -> egress proxied, `timeout_seconds: N` ->
     timeouts.request_seconds N with idle default 60, `telemetry` dropped; the deployment still works.
     architecture.md:187-189: legacy config.tools are migrated into registrations at startup."""
     got = legacy.cli("tool", "get", "dmn-legacy")
@@ -196,7 +196,7 @@ def test_deprecated_fields_are_translated(legacy):
 
 @case("SMK-DMN-011", area="DMN", kind="corner", covers=[VALIDATION])
 def test_deprecated_fields_warn_once_each(legacy):
-    """m1-inference-hardening.md:105,132-135: each legacy field produces a one-shot WARN log naming it."""
+    """inference-hardening.md:105,132-135: each legacy field produces a one-shot WARN log naming it."""
     warns = [e for e in legacy.log_events() if e.get("level") == "WARN"]
     for field in ("tools[].cloud", "tools[].timeout_seconds", "telemetry"):
         named = [e for e in warns if e.get("fields", {}).get("field") == field]

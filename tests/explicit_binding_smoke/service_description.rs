@@ -71,7 +71,7 @@ pub(super) fn authority(f: &Fixture, agent: &str) -> Vec<Value> {
 }
 
 fn publish(f: &Fixture, customer: &str) {
-    let guide = include_str!("../../docs/user/operator/connector-onboarding.md");
+    let guide = include_str!("../../docs/operator/connector-onboarding.md");
     let mut command = docs::fixture(f, guide, "service-descriptions");
     command
         .env("REPO_ROOT", env!("CARGO_MANIFEST_DIR"))

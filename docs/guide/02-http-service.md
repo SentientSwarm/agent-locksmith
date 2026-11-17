@@ -47,8 +47,8 @@ export ACCOUNTS_Y_TOKEN="synthetic-private-account-y"
 
 These two values are the reference service's synthetic accounts. For a real
 service, keep credentials in your secret store and use
-[stored credentials](../user/concepts/per-agent-credentials.md) or
-[1Password references](../user/operator/1password-setup.md) instead.
+[stored credentials](../concepts/per-agent-credentials.md) or
+[1Password references](../operator/1password-setup.md) instead.
 
 Start the daemon from this shell and leave it running:
 

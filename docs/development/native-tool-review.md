@@ -1,6 +1,6 @@
 # Native operator preparation (AGENT-206A)
 
-[Operator workflow and API](../user/operator/native-tool-review.md) describes the
+[Operator workflow and API](../operator/native-tool-review.md) describes the
 consumer surface. Stage A prepared authority; [stage B dispatch](native-dispatch.md)
 now consumes its exact current intersection. [Fixed context](native-protected-context.md)
 extends the immutable review. Full206/provider/compact gates remain separate.
@@ -43,7 +43,7 @@ titles at most128 and descriptions at most2048 bytes. Annotations permit only
 `title` and boolean `readOnlyHint`, `destructiveHint`, `idempotentHint`,
 `openWorldHint`. Provider hints never substitute for declared effect.
 `icons`, `_meta`, execution/task extensions and other members refuse v1 observation.
-An explicit [finite-v2 policy](../user/operator/native-contract-policy.md) adds bounded
+An explicit [finite-v2 policy](../operator/native-contract-policy.md) adds bounded
 metadata, scalar input defaults/enums and a separately reviewed empty-input
 restriction. Output schemas keep v1. Policy is persisted in McpConfig and Source,
 required in review, stored in the same immutable contract and rechecked against

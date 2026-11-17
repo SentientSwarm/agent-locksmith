@@ -1,4 +1,4 @@
-"""One proxied HTTP call with its refusals (docs/user/getting-started.md)."""
+"""One proxied HTTP call with its refusals (docs/getting-started.md)."""
 import pytest
 
 case = pytest.mark.case

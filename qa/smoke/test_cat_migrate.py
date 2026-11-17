@@ -1,6 +1,6 @@
 """Offline account-binding migration (`locksmith migrate-bindings`).
 
-Docs: docs/user/concepts/migrating-account-bindings.md and docs/user/cli-reference.md:374-388.
+Docs: docs/concepts/migrating-account-bindings.md and docs/reference/cli-reference.md:374-388.
 Runs the documented preview/apply commands with no operator token against a stopped
 daemon's database. Cases run in order on one target.
 """

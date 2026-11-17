@@ -1,6 +1,6 @@
 """Per-agent, per-route rate limits (AGENT-266).
 
-Docs: docs/user/cli-reference.md "Rate limits". A route default applies to
+Docs: docs/reference/cli-reference.md "Rate limits". A route default applies to
 each agent separately; over the limit the proxy answers 429 rate_limited
 with Retry-After before anything is sent upstream. Limits change live.
 """

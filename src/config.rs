@@ -275,7 +275,7 @@ pub struct ListenConfig {
     /// Agent-listener authentication mode (M6 / T6.6). Default `bearer`
     /// preserves M0..M5 behavior. `mtls` requires a valid client cert
     /// AND no bearer header. `both` tries mTLS first; on missing-cert
-    /// falls back to bearer. See `docs/archive/v2/runbooks/m6-mtls-migration.md`
+    /// falls back to bearer. See `docs/operator/runbooks/mtls-migration.md`
     /// for the rolling-migration recipe.
     #[serde(default)]
     pub auth_mode: AuthMode,

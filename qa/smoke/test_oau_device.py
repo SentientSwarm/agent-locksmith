@@ -1,6 +1,6 @@
 """Operator device login for ChatGPT-plan sessions (#138): `locksmith oauth
-device-login` and its admin routes (docs/user/cli-reference.md, the `oauth`
-section; docs/user/concepts/oauth-flow.md, codex), against the local fake
+device-login` and its admin routes (docs/reference/cli-reference.md, the `oauth`
+section; docs/concepts/oauth-flow.md, codex), against the local fake
 provider's OpenAI device-authorization dialect in qa/fakes/oau_provider.py.
 No real provider is contacted."""
 

@@ -1,4 +1,4 @@
-"""Operator agent management over the admin socket (docs/user/cli-reference.md)."""
+"""Operator agent management over the admin socket (docs/reference/cli-reference.md)."""
 
 import pytest
 
@@ -50,7 +50,7 @@ def test_get_by_public_id_and_name_without_secrets(t1, managed):
     codes=["agent_not_found"],
 )
 def test_get_unknown_agent_is_404_exit_4(t1):
-    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315; SPEC.md:2783 `404`)."""
+    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315; docs/archive/v2/SPEC.md:2783 `404`)."""
     not_found(t1.cli("agent", "get", UNKNOWN))
     raw = uds(t1, "GET", f"/admin/operator/agents/{UNKNOWN}", token=t1.op_token)
     assert (raw.status, raw.code) == (404, "agent_not_found")
@@ -112,7 +112,7 @@ def test_modify_to_unknown_connection_is_refused_unchanged(t1, managed):
 )
 def test_set_and_clear_cert_identity(t1, managed):
     """`set-cert-identity` binds an identity visible via `agent get`; `--clear` removes
-    it (cli-reference.md:91, docs/archive/v2/runbooks/m6-mtls-onboarding.md:76-86)."""
+    it (cli-reference.md:91, docs/operator/runbooks/mtls-onboarding.md:76-86)."""
     bind = t1.cli("agent", "set-cert-identity", managed["id"], "adm-managed.qa.local")
     assert bind.code == 0, bind.err
     assert (
@@ -175,7 +175,7 @@ def test_revoke_unknown_agent_is_exit_4(t1):
 @case("SMK-ADM-019", area="ADM", kind="positive", covers=["cli.export.agents"])
 def test_export_agents_is_a_secret_free_snapshot(t1, managed):
     """`export agents` emits a JSON snapshot of agent records for backup
-    (cli-reference.md:278-286) with no secret material (SPEC.md:2789 "no cleartext")."""
+    (cli-reference.md:278-286) with no secret material (docs/archive/v2/SPEC.md:2789 "no cleartext")."""
     out = t1.cli("export", "agents")
     assert out.code == 0, out.err
     assert isinstance(out.json, list)

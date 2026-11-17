@@ -21,7 +21,7 @@ those runs, so what you see is what the current release does.
 | 8 | [Day-two operations](08-operate.md) | rotate agent and operator tokens, back up and restore, revoke an agent |
 
 Not yet covered here: upgrading an existing 2.x instance (see the
-[change notes](../user/changes/)) and running Locksmith as a system service
+[change notes](../changes/)) and running Locksmith as a system service
 (see the hardened unit in `dist/systemd/`).
 
 ## Conventions

@@ -2,8 +2,8 @@
 
 This extends accepted manual native dispatch through the existing review,
 Source, grant-CAS, session-pin and committed dispatcher paths. See the
-[operator contract](../user/operator/native-context.md) and
-[agent interface](../user/agent-integration/native-mcp.md). No new policy store,
+[operator contract](../operator/native-context.md) and
+[agent interface](../agents/native-mcp.md). No new policy store,
 provider adapter, background logger, dependency or migration is introduced.
 
 ## Immutable contract and one captured call

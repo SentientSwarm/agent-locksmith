@@ -1,7 +1,7 @@
 """Startup credential resolution for legacy config.tools (env and file-sealed backends).
 
-Docs: docs/user/agent-integration/wire-contract.md:50-66 (/readyz), README.md:206-208,
-docs/archive/v2/runbooks/m5-sealed-secrets.md:17-22,213 and docs/user/architecture.md:112-113.
+Docs: docs/reference/wire-contract.md:50-66 (/readyz), README.md:206-208,
+docs/operator/runbooks/sealed-secrets.md:17-22,213 and docs/concepts/architecture.md:112-113.
 """
 
 import pytest
@@ -34,7 +34,7 @@ def sealed_file(work, name, mode):
     covers=["beh.creds.startup-resolution", "beh.secret.backends"],
 )
 def test_resolved_startup_credentials_are_ready(target_factory):
-    """m5-sealed-secrets.md:17,21: a chmod-0600 sealed file and a present env var resolve at
+    """sealed-secrets.md:17,21: a chmod-0600 sealed file and a present env var resolve at
     startup; wire-contract.md:52-56 /readyz is 200 ready."""
     t = target_factory(
         label="cat-ready",
@@ -58,7 +58,7 @@ def test_resolved_startup_credentials_are_ready(target_factory):
     codes=["tool_credentials_unresolved"],
 )
 def test_unresolved_startup_credentials_fail_readiness(target_factory):
-    """m5-sealed-secrets.md:18,22,213: a group/world-readable sealed file is rejected and a
+    """sealed-secrets.md:18,22,213: a group/world-readable sealed file is rejected and a
     missing env var is unresolved; the tool degrades without taking the daemon down.
     wire-contract.md:58-63: /readyz is 503 tool_credentials_unresolved naming exactly them."""
     t = target_factory(

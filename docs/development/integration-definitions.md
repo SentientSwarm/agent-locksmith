@@ -1,6 +1,6 @@
 # Definition authoring and customer activation
 
-The [operator workflow](../user/operator/integration-definitions.md) is the
+The [operator workflow](../operator/integration-definitions.md) is the
 consumer entry point. This covers offline authoring and deliberate local customer activation,
 not accepted hosted-provider onboarding. Definition data is never executable authority.
 
@@ -95,7 +95,7 @@ refresh durability or rollback of already submitted effects.
 
 ## Activation transaction
 
-The [public activation and repair workflow](../user/operator/integration-definitions.md#deliberate-customer-activation)
+The [public activation and repair workflow](../operator/integration-definitions.md#deliberate-customer-activation)
 specifies bodies and truthful state. GET tool reads the row and registration
 instance/revision together and adds `definition_control`: opaque 64-hex `revision`,
 `phase` disabled/promoted, nullable `selection_kind` none/stored_bearer/controlled_oauth,

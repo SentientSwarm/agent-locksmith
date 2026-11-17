@@ -5,7 +5,7 @@ use serde_json::json;
 #[test]
 fn public_declared_profile_example_validates() {
     let profile = serde_json::from_str(include_str!(
-        "../../../docs/user/operator/custom-oauth-profile.example.json"
+        "../../../docs/operator/custom-oauth-profile.example.json"
     ))
     .unwrap();
     let cfg = config::Config {

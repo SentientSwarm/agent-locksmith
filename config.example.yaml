@@ -1,5 +1,5 @@
 # /etc/locksmith/config.yaml — example v2 configuration.
-# See docs/archive/v2/runbooks/m1-inference-hardening.md for migration from M0.
+# See docs/operator/runbooks/inference-hardening.md for migration from M0.
 
 listen:
   host: "127.0.0.1"
@@ -12,12 +12,12 @@ listen:
 #   token: "${LOCKSMITH_INBOUND_TOKEN}"
 
 # Native MCP budgets/host policy require restart. Calls need reviewed tool grants.
-# See docs/user/operator/native-mcp.md and docs/development/native-mcp.md.
+# See docs/operator/native-mcp.md and docs/development/native-mcp.md.
 # Fixed native context is reviewed per account, not global config:
-# docs/user/operator/native-context.md (diagnostics and synchronous sink limits).
+# docs/operator/native-context.md (diagnostics and synchronous sink limits).
 # mcp:
 #   # Native observation and dispatch trust; adds roots and requires restart.
-#   # See docs/user/operator/native-tool-review.md. Never disables TLS checks.
+#   # See docs/operator/native-tool-review.md. Never disables TLS checks.
 #   upstream_ca_bundle: "/etc/locksmith/ca/native-provider.pem"
 #   allowed_hosts: ["localhost", "127.0.0.1", "[::1]"]
 #   allowed_origins: [] # Reject every present Origin unless explicitly allowed.
@@ -142,11 +142,11 @@ tools:
 
 # Native connection MCP JSON can opt in with "compact": true before authority setup.
 # This is per-registration metadata (not a global mcp setting); see
-# docs/user/agent-integration/compact-mcp.md for toggle/downgrade costs.
+# docs/agents/compact-mcp.md for toggle/downgrade costs.
 
 # Optional owner-bound operator consent (off when omitted):
-# See docs/user/operator/oauth-consent.md for controlled local profiles and
-# docs/user/operator/hosted-linear.md for fixed hosted Linear profiles, the
+# See docs/operator/oauth-consent.md for controlled local profiles and
+# docs/operator/hosted-linear.md for fixed hosted Linear profiles, the
 # selected_tools list, callback TLS configuration and migration 0019 costs.
 # Consent alone creates no agent authority; select, observe, review and grant
 # explicitly. Hosted fixture and real-provider profiles remain distinct.

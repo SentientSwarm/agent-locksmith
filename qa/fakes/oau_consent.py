@@ -1,5 +1,5 @@
 """Owner-bound consent setup for the OAU cases: a declared custom-oauth-v1
-contract against the local fake IdP, following docs/user/operator/custom-oauth.md
+contract against the local fake IdP, following docs/operator/custom-oauth.md
 and custom-oauth-workflow.md with invented origins, scopes and identities.
 
 Nothing here opens a browser: ``authorize`` fetches the authorization URL with

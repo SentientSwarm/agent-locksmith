@@ -1,5 +1,5 @@
 """Per-agent account bindings over the admin socket, without a credential-store key
-(docs/user/concepts/per-agent-credentials.md, cli-reference.md:100-125)."""
+(docs/concepts/per-agent-credentials.md, cli-reference.md:100-125)."""
 
 import pytest
 
@@ -126,7 +126,7 @@ def test_binding_commands_on_unknown_agent_exit_4(t1, accounts):
 @case("SMK-ADM-023", area="ADM", kind="refusal", covers=[PUT], codes=["selection_only"])
 def test_generic_write_cannot_create_controlled_oauth(t1, bound):
     """`controlled_oauth` is a selection-only stamp; generic credential writes cannot
-    create it (docs/user/operator/native-oauth.md:67-68)."""
+    create it (docs/operator/native-oauth.md:67-68)."""
     spec = {
         "kind": "controlled_oauth",
         "session_label": "x",

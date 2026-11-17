@@ -1,5 +1,5 @@
 """Proxy hot path: header strip, selected-credential injection, query forwarding and
-the /api refusals (docs/user/agent-integration/wire-contract.md, docs/user/architecture.md)."""
+the /api refusals (docs/reference/wire-contract.md, docs/concepts/architecture.md)."""
 
 import shutil
 import tempfile
@@ -293,7 +293,7 @@ def test_reenable_preserves_grant_and_selection(px):
 
 @case("SMK-AGT-018", area="AGT", kind="refusal", covers=[API], codes=["bad_request"])
 def test_request_body_over_limit_is_400(px):
-    """wire-contract.md:212,226 400 bad_request; m7-response-controls.md:162 request-side
+    """wire-contract.md:212,226 400 bad_request; response-controls.md:162 request-side
     limit is body_limit_bytes. No dispatch."""
     t, up, agent = px
     before = up.count("/small")

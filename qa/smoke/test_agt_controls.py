@@ -1,5 +1,5 @@
-"""M7 response controls on config.tools entries (docs/archive/v2/runbooks/m7-response-controls.md,
-docs/user/agent-integration/wire-contract.md:192-235)."""
+"""M7 response controls on config.tools entries (docs/operator/runbooks/response-controls.md,
+docs/reference/wire-contract.md:192-235)."""
 
 import hashlib
 
@@ -78,7 +78,7 @@ def rc(target_factory):
 
 @case("SMK-AGT-040", area="AGT", kind="positive", covers=[API, RC])
 def test_streaming_over_cap_truncates_with_marker(rc):
-    """m7-response-controls.md:70-74 — a stream over max_size_bytes is cut at the cap and the
+    """response-controls.md:70-74 — a stream over max_size_bytes is cut at the cap and the
     `\\n{"_locksmith":"response_size_exceeded"}\\n` marker appended; m7:116-118 audit
     response_size_exceeded records cap and observed bytes."""
     t, _up, agent = rc
@@ -94,7 +94,7 @@ def test_streaming_over_cap_truncates_with_marker(rc):
 
 @case("SMK-AGT-041", area="AGT", kind="corner", covers=[API, RC])
 def test_streaming_under_cap_passes_unchanged(rc):
-    """m7-response-controls.md:74 — a stream under the cap passes through unchanged, no marker."""
+    """response-controls.md:74 — a stream under the cap passes through unchanged, no marker."""
     t, _, agent = rc
     resp = t.http("GET", "/api/agt-rc-stream/small", token=agent["token"])
     assert resp.status == 200
@@ -109,7 +109,7 @@ def test_streaming_under_cap_passes_unchanged(rc):
     codes=["response_size_exceeded"],
 )
 def test_buffered_over_cap_is_502(rc):
-    """m7-response-controls.md:21 non-streaming over cap -> 502; wire-contract.md:235
+    """response-controls.md:21 non-streaming over cap -> 502; wire-contract.md:235
     502 type upstream_error code response_size_exceeded; m7:118 audit row."""
     t, _, agent = rc
     resp = t.http("GET", "/api/agt-rc-buffer/big", token=agent["token"])
@@ -122,7 +122,7 @@ def test_buffered_over_cap_is_502(rc):
 
 @case("SMK-AGT-043", area="AGT", kind="positive", covers=[API, RC, "cli.audit.query"])
 def test_redaction_replaces_matches_and_audits_hash_only(rc):
-    """m7-response-controls.md:79-100 and :119 — matches are replaced; audit emits one
+    """response-controls.md:79-100 and :119 — matches are replaced; audit emits one
     response_redaction row per matching pattern with pattern_id, matches and match_hash
     (SHA-256 hex of the cleartext matches); cleartext is never recorded."""
     t, _, agent = rc
@@ -150,7 +150,7 @@ def test_redaction_replaces_matches_and_audits_hash_only(rc):
     codes=["response_content_type_disallowed"],
 )
 def test_disallowed_content_type_is_502(rc):
-    """m7-response-controls.md:86-89 + wire-contract.md:234 — text/html against a JSON
+    """response-controls.md:86-89 + wire-contract.md:234 — text/html against a JSON
     allowlist is 502 type upstream_error code response_content_type_disallowed; m7:117 audit."""
     t, _, agent = rc
     resp = t.http("GET", "/api/agt-rc-ctype/html", token=agent["token"])
@@ -163,7 +163,7 @@ def test_disallowed_content_type_is_502(rc):
 
 @case("SMK-AGT-045", area="AGT", kind="corner", covers=[API, RC])
 def test_allowlist_matches_with_charset_suffix(rc):
-    """m7-response-controls.md:23 — `application/json; charset=utf-8` matches an
+    """response-controls.md:23 — `application/json; charset=utf-8` matches an
     `application/json` allowlist."""
     t, _, agent = rc
     resp = t.http("GET", "/api/agt-rc-ctype/json", token=agent["token"])

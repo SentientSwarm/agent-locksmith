@@ -3,7 +3,7 @@
 Base: the stage B native dispatcher. The facade is an opt-in projection and
 reference protocol over existing native authority and dispatch. It adds no
 upstream client, credential mechanism, grant store, observation service, vendor
-patch or migration. [Public contract](../user/agent-integration/compact-mcp.md).
+patch or migration. [Public contract](../agents/compact-mcp.md).
 Full AGENT-208/AGENT-210 and provider acceptance, and AGENT-211 model
 evaluation, remain open.
 

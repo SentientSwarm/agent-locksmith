@@ -1,8 +1,8 @@
 """Seed catalog and legacy config.tools bootstrap into registrations.
 
-Docs: seed/catalog.yaml header (shipped catalog contract), docs/user/concepts/
-kind-taxonomy.md:50-60, docs/user/cli-reference.md:157-169,187,
-docs/user/operator/connector-onboarding.md:41-45 and docs/user/architecture.md:118-121,
+Docs: seed/catalog.yaml header (shipped catalog contract), docs/concepts/
+kind-taxonomy.md:50-60, docs/reference/cli-reference.md:157-169,187,
+docs/operator/connector-onboarding.md:41-45 and docs/concepts/architecture.md:118-121,
 166-189. Cases in this module run in order against one daemon.
 """
 

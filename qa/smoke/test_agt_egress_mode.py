@@ -1,7 +1,7 @@
 """Egress enforcement mode and the published egress policy (AGENT-259 / 261 / 137).
 
-Docs: docs/user/architecture.md step 8, config.example.yaml `egress`,
-docs/user/cli-reference.md "Egress policy". A proxied route with nothing
+Docs: docs/concepts/architecture.md step 8, config.example.yaml `egress`,
+docs/reference/cli-reference.md "Egress policy". A proxied route with nothing
 enforcing egress fails closed; `egress.mode: external` lets it connect
 directly; the policy lists the hosts proxied routes reach.
 """

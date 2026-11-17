@@ -190,7 +190,7 @@ The server's counts show one tool call, the read.
 
 If the server changes a granted tool's contract, the grant no longer matches
 and calls are refused until you observe, review and grant again. A new grant
-takes effect in a new session. See [native tool review](../user/operator/native-tool-review.md)
-and [the agent interface](../user/agent-integration/native-mcp.md) for the
-full rules, and [compact MCP](../user/agent-integration/compact-mcp.md) for a
+takes effect in a new session. See [native tool review](../operator/native-tool-review.md)
+and [the agent interface](../agents/native-mcp.md) for the
+full rules, and [compact MCP](../agents/compact-mcp.md) for a
 search-describe-invoke facade over the same grants.

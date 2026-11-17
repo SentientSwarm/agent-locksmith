@@ -1,7 +1,7 @@
 """Agent listener in auth_mode mtls: certificate identity maps to an agent.
 
-Docs: docs/archive/v2/runbooks/m6-mtls-onboarding.md (§2-§6), m6-mtls-migration.md
-(stage B and failure modes), docs/user/cli-reference.md:91. Identity is the
+Docs: docs/operator/runbooks/mtls-onboarding.md (§2-§6), mtls-migration.md
+(stage B and failure modes), docs/reference/cli-reference.md:91. Identity is the
 CN, else the first SAN DNS, else the first SAN URI (CLAUDE.md agent listener;
 `locksmith agent set-cert-identity --help`: "CN, SAN_DNS, or SAN_URI string").
 """
@@ -118,7 +118,7 @@ def assert_reaches_as(mt, key, account):
     covers=[IDENTITY, API, *SET_ID, "cli.agent.get"],
 )
 def test_cn_identity_maps_to_agent(mt):
-    """m6-mtls-onboarding.md:49,76-82,113-123: the CN bound with set-cert-identity
+    """mtls-onboarding.md:49,76-82,113-123: the CN bound with set-cert-identity
     authenticates the agent; `agent get` carries cert_identity; audit shows mtls."""
     shown = mt["t"].cli("agent", "get", mt["cn"][0]["id"])
     assert shown.code == 0, shown.err
@@ -128,7 +128,7 @@ def test_cn_identity_maps_to_agent(mt):
 
 @case("SMK-TLS-002", area="TLS", kind="positive", covers=[IDENTITY, API, *SET_ID])
 def test_san_dns_identity_maps_to_agent(mt):
-    """m6-mtls-onboarding.md:49 "The CN (or SAN) becomes the cert_identity";
+    """mtls-onboarding.md:49 "The CN (or SAN) becomes the cert_identity";
     a cert with no CN maps by its SAN DNS name."""
     assert_reaches_as(mt, "dns", "Y")
 
@@ -162,7 +162,7 @@ def test_cn_wins_over_san_dns(mt, pki):
     codes=["invalid_credential"],
 )
 def test_unbound_identity_is_401_and_audited(mt, pki):
-    """m6-mtls-migration.md:93: a cert whose identity is bound to no agent fails
+    """mtls-migration.md:93: a cert whose identity is bound to no agent fails
     authentication; the refusal is a 401 invalid_credential envelope and a security row."""
     t = mt["t"]
     before, since = t.upstream_counts(), now_ms()
@@ -185,7 +185,7 @@ def test_unbound_identity_is_401_and_audited(mt, pki):
     covers=[IDENTITY, API],
 )
 def test_bearer_without_cert_is_refused_at_handshake_in_mtls_mode(mt):
-    """m6-mtls-migration.md (auth_mode mtls): the listener requires a client certificate
+    """mtls-migration.md (auth_mode mtls): the listener requires a client certificate
     during the TLS handshake, so a bearer-only client is refused before any HTTP exchange
     and nothing reaches the upstream."""
     t = mt["t"]
@@ -206,7 +206,7 @@ def test_bearer_without_cert_is_refused_at_handshake_in_mtls_mode(mt):
     covers=[IDENTITY, API],
 )
 def test_foreign_ca_cert_is_refused_at_handshake(mt, pki):
-    """m6-mtls-migration.md: a cert issued by a CA outside ca_bundle_path is refused during
+    """mtls-migration.md: a cert issued by a CA outside ca_bundle_path is refused during
     the TLS handshake (unknown CA): no HTTP response, no upstream request, and no audit row,
     because no request reached locksmith."""
     t = mt["t"]
@@ -226,7 +226,7 @@ def test_foreign_ca_cert_is_refused_at_handshake(mt, pki):
     codes=["invalid_credential"],
 )
 def test_cleared_identity_no_longer_authenticates(mt, pki):
-    """m6-mtls-onboarding.md:82-86: `set-cert-identity --clear` removes the binding;
+    """mtls-onboarding.md:82-86: `set-cert-identity --clear` removes the binding;
     the agent's cert then no longer authenticates."""
     t = mt["t"]
     agent = enrol(t, "qa-tls-cleared", "SMOKE_X", "qa-tls-cleared.agent")

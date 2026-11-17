@@ -4,7 +4,7 @@ Tools that turn a private **site file** into the definitions for running
 Locksmith and its optional companions (Pipelock, a classifier sidecar) as
 hardened systemd services, one Incus system container per instance. The
 operator guide is
-[docs/user/operator/edge-packaging.md](../../docs/user/operator/edge-packaging.md).
+[docs/operator/edge-packaging.md](../../docs/operator/edge-packaging.md).
 
 Everything here is standard-library Python 3.11+ and generic. Hosts,
 addresses, CIDRs and commands belong in your site file, kept in your own

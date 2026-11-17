@@ -61,12 +61,12 @@ preview/apply, reference API and customer-service setup/grant/call. CLI help che
 Markdown link validation is a separate delivery check; external URLs and actual
 provider instructions are not live-tested by this target.
 
-See [setup](../user/getting-started.md),
-[credential concepts](../user/concepts/per-agent-credentials.md),
-[migration](../user/concepts/migrating-account-bindings.md),
-[CLI](../user/cli-reference.md),
-[troubleshooting](../user/operator/account-binding-troubleshooting.md),
-[change notes](../user/changes/explicit-account-bindings.md),
+See [setup](../getting-started.md),
+[credential concepts](../concepts/per-agent-credentials.md),
+[migration](../concepts/migrating-account-bindings.md),
+[CLI](../reference/cli-reference.md),
+[troubleshooting](../operator/account-binding-troubleshooting.md),
+[change notes](../changes/explicit-account-bindings.md),
 [contract](../archive/design/2026-10-18-d1-explicit-account-bindings.md) and
 [acceptance matrix](../archive/design/2026-10-18-d1-acceptance-tests.md).
 
@@ -91,6 +91,6 @@ For connector-onboarding acceptance, retain the independent consumer's
 original code and allowed-input bundle separately from these scripted tests.
 Repeat/extend the public-docs/discovery journey with a fresh ordinary identity at
 the final immutable revision before inspecting implementation or test bodies.
-The [project change notes](../user/changes/connector-onboarding.md) record upgrade
+The [project change notes](../changes/connector-onboarding.md) record upgrade
 and compatibility boundaries; the final delivery record names actual commands,
 exits, environment and separate consumer/QA/reviewer evidence.

@@ -111,7 +111,7 @@ sweeper after a grace period.
 
 ## Select a 1Password reference
 
-Install the [1Password CLI](../user/operator/1password-setup.md) on the
+Install the [1Password CLI](../operator/1password-setup.md) on the
 daemon's host and sign it in for the user the daemon runs as. Selecting an
 `op://` reference uses the admin API; the `locksmith` CLI has no flag for it
 yet. Send it over the admin socket with your operator token:

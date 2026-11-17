@@ -1,5 +1,5 @@
-"""Admin-socket authentication refusals (docs/user/concepts/error-envelope.md,
-docs/user/cli-reference.md exit codes)."""
+"""Admin-socket authentication refusals (docs/reference/error-envelope.md,
+docs/reference/cli-reference.md exit codes)."""
 
 import pytest
 
@@ -80,7 +80,7 @@ def sweep(t1, routes, tokens, victim):
 def test_operator_routes_refuse_missing_and_wrong_credentials(t1, victim):
     """Every operator admin route is operator-authenticated; a missing, malformed,
     wrong-secret or agent-namespace bearer is 401 invalid_credential
-    (docs/user/concepts/error-envelope.md:23, cli-reference.md:18), and nothing changes."""
+    (docs/reference/error-envelope.md:23, cli-reference.md:18), and nothing changes."""
     tokens = [None, BAD_OPERATOR, wrong_secret(t1.op_token), victim["token"]]
     sweep(t1, OPERATOR_ROUTES, tokens, victim)
     assert "adm-sweep-created" not in agent_names(t1, include_revoked=True)
@@ -183,7 +183,7 @@ def test_self_service_cli_wrong_or_missing_agent_token_exits_3(t1, victim):
 )
 def test_admin_401_uses_the_uniform_envelope(t1):
     """Every authentication failure carries the three-field envelope
-    {message, type: auth_error, code} (docs/user/concepts/error-envelope.md:3-17, 23)."""
+    {message, type: auth_error, code} (docs/reference/error-envelope.md:3-17, 23)."""
     for path in ("/admin/operator/audit", "/admin/agent/status"):
         r = uds(t1, "GET", path)
         assert r.status == 401

@@ -133,7 +133,7 @@ upstream credential plaintext without sudo.**
 | `file-sealed credential resolved` not in logs | The tool may not declare `auth.value: from_file_sealed:` — check the config block. |
 | Locksmith starts but TPM unavailable | systemd-creds falls back to `/var/lib/systemd/credential.secret`. That file is host-bound but not TPM-bound; restoring a backup of it on another machine breaks the binding by design. |
 
-See `docs/archive/v2/runbooks/m5-sealed-secrets.md` for the full operational guide.
+See `docs/operator/runbooks/sealed-secrets.md` for the full operational guide.
 
-See `docs/archive/v2/threat-model.md` for what this protects against and what
+See `docs/concepts/threat-model.md` for what this protects against and what
 it does not.

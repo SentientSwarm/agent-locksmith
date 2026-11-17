@@ -1,4 +1,4 @@
-//! Uniform admin error envelope (docs/user/concepts/error-envelope.md).
+//! Uniform admin error envelope (docs/reference/error-envelope.md).
 //!
 //! Admin handlers build `{"error":{"code","message"}}` in many places. The
 //! documented contract is three fields on every error response, so this

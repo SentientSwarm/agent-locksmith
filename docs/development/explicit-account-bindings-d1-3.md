@@ -51,7 +51,7 @@ and an OAuth malformed-store proposal mismatch in the first implementation;
 both have dedicated corrected coverage. Environment names follow the runtime's
 OS namespace rather than shell assignment syntax.
 
-The [operator guide](../user/concepts/migrating-account-bindings.md) documents
+The [operator guide](../concepts/migrating-account-bindings.md) documents
 WAL-safe backup, private preview/review/select/apply/verify, availability limits
 and rollback consequences. A disposable CLI/SQLite rehearsal executes the backup
 and migration flags, verifies repeat=0 and later-clear refusal, and cleans up.

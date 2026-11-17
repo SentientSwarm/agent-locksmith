@@ -1,6 +1,6 @@
-"""Readiness semantics and identityless legacy routes (docs/user/agent-integration/
-wire-contract.md:49-61, docs/user/operator/account-binding-troubleshooting.md:9,
-docs/user/concepts/per-agent-credentials.md:126)."""
+"""Readiness semantics and identityless legacy routes (docs/agents/
+wire-contract.md:49-61, docs/operator/account-binding-troubleshooting.md:9,
+docs/concepts/per-agent-credentials.md:126)."""
 
 import shutil
 import tempfile

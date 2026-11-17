@@ -1,0 +1,152 @@
+# Routing OpenClaw through Locksmith
+
+OpenClaw integrates with Locksmith via the standard
+`*_BASE_URL` environment-variable convention used by the Anthropic
+and OpenAI SDKs. **No openclaw code changes required.**
+
+## Prerequisites
+
+- A running Locksmith daemon that the openclaw host can reach (see [getting started](../getting-started.md) or [edge packaging](../operator/edge-packaging.md)).
+- Operator has registered an agent for openclaw via `locksmith agent register --name openclaw-host1 --allowlist anthropic,openai,...` and selected an account for each registration (see [connector onboarding](../operator/connector-onboarding.md)).
+- Bearer token from the agent registration installed on the openclaw host.
+
+## Configuration
+
+Set the following environment variables on the openclaw host:
+
+```bash
+# Required: agent bearer token from `locksmith agent register`
+export LOCKSMITH_TOKEN=lk_pid.secret-from-locksmith-output
+
+# Route Anthropic calls via locksmith
+export ANTHROPIC_BASE_URL=http://<locksmith-host>:9200/api/anthropic
+export ANTHROPIC_API_KEY=$LOCKSMITH_TOKEN
+
+# Route OpenAI calls via locksmith
+export OPENAI_BASE_URL=http://<locksmith-host>:9200/api/openai
+export OPENAI_API_KEY=$LOCKSMITH_TOKEN
+
+# OAuth providers (Phase F): operator runs `locksmith oauth bootstrap`
+# once per provider; subsequent calls just need the bearer.
+# Example for ChatGPT Plus subscription:
+# export OPENAI_BASE_URL=http://<locksmith-host>:9200/api/codex
+```
+
+## How it works
+
+OpenClaw's Anthropic / OpenAI SDK reads `*_BASE_URL` and `*_API_KEY` at
+client construction (see `src/agents/cli-runner.spawn.test.ts` for the
+canonical openclaw env-var conventions). When set, the SDK posts to the
+configured base URL with the supplied key as the bearer.
+
+In our setup, the bearer the SDK sends is the **agent's locksmith
+token**, not the provider's API key. Locksmith:
+
+1. Validates the bearer against the agent's registration.
+2. Enforces the agent's `tool_allowlist` (e.g., does this openclaw
+   instance have `anthropic` in its allowlist? if not → 403).
+3. Strips the agent's `Authorization` / `x-api-key` headers (defense
+   against agent override).
+4. Injects the **provider's actual credentials** from `resolved_creds`
+   (sealed at rest on the locksmith host).
+5. Forwards to the upstream (`https://api.anthropic.com` etc.) and
+   streams the response back.
+
+The openclaw container never sees the provider's API key. It only ever
+holds its own per-agent locksmith bearer.
+
+## Multiple openclaw instances on one host
+
+If you run multiple openclaw instances (different users, isolated
+sessions), register one agent per instance:
+
+```bash
+locksmith agent register --name openclaw-alice --allowlist anthropic,openai
+locksmith agent register --name openclaw-bob   --allowlist anthropic,tavily
+```
+
+Each gets its own bearer with its own ACL. Audit rows record
+`agent_public_id` so you can correlate calls back to their owning
+instance.
+
+## Verifying the setup
+
+```bash
+# Should succeed (anthropic in allowlist)
+curl -sS -X POST $ANTHROPIC_BASE_URL/v1/messages \
+    -H "Authorization: Bearer $LOCKSMITH_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"claude-3-haiku-20240307","max_tokens":10,"messages":[{"role":"user","content":"ping"}]}'
+
+# Audit row should appear with auth_mode=header (or auth_mode=bearer
+# depending on the registered AuthSpec) and the agent's public_id.
+# Run on the locksmith host with LOCKSMITH_OP_TOKEN set.
+locksmith audit query --since-ms $(($(date +%s) * 1000 - 60000)) --tool anthropic
+```
+
+## Migrating from openclaw-hardened
+
+`openclaw-hardened` is the legacy Ansible-roles deployment path. It is
+an older deployment path that bundles its own pipelock + provider auth.
+
+To migrate:
+
+1. Install and start Locksmith (see [getting started](../getting-started.md)).
+2. Move provider API keys from openclaw-hardened's `.env` into
+   Locksmith's custody (sealed `stored_*` values, `op://` references or
+   the daemon's environment).
+3. Register an openclaw agent in locksmith and select its accounts.
+4. Set the `*_BASE_URL` + `LOCKSMITH_TOKEN` env vars on the openclaw
+   host (replace `*_API_KEY` if it referenced the provider's actual key).
+5. Restart openclaw.
+6. Decommission openclaw-hardened's pipelock binary once you've
+   confirmed all openclaw traffic flows through Locksmith.
+
+The openclaw-hardened deployment can run alongside Locksmith during
+the migration; they don't conflict (different ports, different
+processes).
+
+## Limitations (v1.0)
+
+- **Provider list**: locksmith ships a 10-entry seed catalog
+  (anthropic, openai, openrouter, ai-gateway, ollama, lmstudio,
+  tavily, github, duckduckgo, wikipedia) plus 5 OAuth
+  providers (codex, copilot, anthropic-oauth, google-gemini-cli,
+  qwen-cli). Other providers require operator-side
+  `locksmith model put <name>` registration.
+- **OAuth UX**: the v1.0 OAuth bootstrap flow is "operator obtains a
+  refresh token via the provider's own CLI then runs `locksmith oauth
+  bootstrap <name> --refresh-token <token>`". Interactive PKCE / device-
+  code flows land in v1.1+.
+- **Single network namespace**: openclaw and Locksmith don't need
+  to share a host or container network. They communicate via LAN HTTP.
+  If openclaw runs in a container, make sure Locksmith's listen
+  address is reachable from that container (typically via host
+  networking or an explicit network alias).
+
+## codex specifics (Phase G2 — locksmith v2.2.0+)
+
+OpenClaw natively supports OpenAI's Responses API
+(`/backend-api/codex/responses`). When OpenClaw runs *directly*
+against chatgpt.com, it extracts `chatgpt_account_id` from the
+access-token JWT itself and adds the required
+`ChatGPT-Account-ID: <uuid>` header on every call.
+
+When proxied through locksmith, OpenClaw doesn't see the JWT —
+it only holds the locksmith bearer. **Locksmith handles the header
+injection automatically** (Phase G2). Set
+`OPENAI_BASE_URL=http://<locksmith-host>:9200/api/codex` and OpenClaw's
+existing codex provider works unchanged; locksmith decodes the JWT
+at OAuth bootstrap, stores `chatgpt_account_id` on the
+`oauth_sessions` row, and adds the header on every
+`/backend-api/codex/*` upstream call.
+
+For the full OAuth flow (bootstrap, refresh, header injection),
+see [`docs/concepts/oauth-flow.md`](../concepts/oauth-flow.md).
+
+## See also
+
+- [`../getting-started.md`](../getting-started.md) and [`../operator/edge-packaging.md`](../operator/edge-packaging.md) — deploy walkthroughs.
+- [`../operator/connector-onboarding.md`](../operator/connector-onboarding.md) — agent registration, grants and account selection.
+- [`agent-locksmith/docs/concepts/agent-identity-and-acl.md`](../concepts/agent-identity-and-acl.md) — per-agent bearer semantics.
+- [`agent-locksmith/docs/concepts/oauth-flow.md`](../concepts/oauth-flow.md) — end-to-end OAuth flow (bootstrap, refresh, codex header injection).

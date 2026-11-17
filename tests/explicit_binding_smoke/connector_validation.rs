@@ -27,7 +27,7 @@ pub async fn exercise() {
 }
 
 fn snapshot(f: &Fixture, agent: &str) -> Vec<Value> {
-    let guide = include_str!("../../docs/user/operator/connector-onboarding.md");
+    let guide = include_str!("../../docs/operator/connector-onboarding.md");
     let mut command = docs::fixture(f, guide, "connector-inspect");
     command
         .env("REGISTRATION", "accounts")

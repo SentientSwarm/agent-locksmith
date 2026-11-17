@@ -3,7 +3,7 @@
 AGENT-198/199 bounded transport and session library. AGENT-202 consumes the
 session pool in the [native daemon lifecycle](../../docs/development/native-mcp.md);
 AGENT-206A also consumes its pinned outbound client for
-[operator observation](../../docs/user/operator/native-tool-review.md).
+[operator observation](../../docs/operator/native-tool-review.md).
 AGENT-206B consumes the same outbound client for
 [reviewed native dispatch](../../docs/development/native-dispatch.md) with
 current finite grants for manual None/live StoredBearer accounts.

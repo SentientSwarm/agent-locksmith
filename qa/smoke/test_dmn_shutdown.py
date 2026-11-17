@@ -1,4 +1,4 @@
-"""Graceful shutdown and the drain window (docs/archive/v2/runbooks/m1-inference-hardening.md section 6).
+"""Graceful shutdown and the drain window (docs/operator/runbooks/inference-hardening.md section 6).
 
 A slow loopback upstream holds a proxied request open while the test signals
 the daemon, so the request is provably in flight.
@@ -86,7 +86,7 @@ def timed_stop(t, sig=signal.SIGTERM) -> tuple[int, float]:
 
 @case("SMK-DMN-050", area="DMN", kind="positive", covers=[DRAIN])
 def test_in_flight_request_completes_within_drain_window(drain, slow):
-    """m1-inference-hardening.md:145,171 and config.example.yaml:66-70: on SIGTERM the daemon waits up
+    """inference-hardening.md:145,171 and config.example.yaml:66-70: on SIGTERM the daemon waits up
     to drain_window_seconds; a request that finishes within the window COMPLETES; clean exit."""
     worker, outcome = in_flight(drain, slow, 2)
     code, elapsed = timed_stop(drain)
@@ -106,7 +106,7 @@ def test_in_flight_request_completes_within_drain_window(drain, slow):
 
 @case("SMK-DMN-051", area="DMN", kind="positive", covers=[DRAIN])
 def test_idle_sigterm_exits_zero_promptly(drain):
-    """m1-inference-hardening.md:145-163: SIGTERM (systemctl stop) shuts down cleanly; the window
+    """inference-hardening.md:145-163: SIGTERM (systemctl stop) shuts down cleanly; the window
     caps waiting for in-flight work, so an idle daemon exits 0 well inside it."""
     code, elapsed = timed_stop(drain)
     try:
@@ -122,7 +122,7 @@ def test_idle_sigterm_exits_zero_promptly(drain):
 
 @case("SMK-DMN-052", area="DMN", kind="positive", covers=[DRAIN])
 def test_sigint_exits_zero(drain):
-    """m1-inference-hardening.md:145 and config.example.yaml:66: graceful shutdown on SIGINT as well as SIGTERM."""
+    """inference-hardening.md:145 and config.example.yaml:66: graceful shutdown on SIGINT as well as SIGTERM."""
     code, elapsed = timed_stop(drain, signal.SIGINT)
     try:
         assert code == 0
@@ -133,7 +133,7 @@ def test_sigint_exits_zero(drain):
 
 @case("SMK-DMN-053", area="DMN", kind="corner", covers=[DRAIN])
 def test_request_longer_than_window_does_not_hold_shutdown(target_factory, slow):
-    """m1-inference-hardening.md:171-172 and config.example.yaml:66-68 (in-flight requests get up to the
+    """inference-hardening.md:171-172 and config.example.yaml:66-68 (in-flight requests get up to the
     window "before the listener is forcibly closed"): a request that does not finish within the window does not
     complete; the listener closes at the window instead of waiting for it."""
     t = target_factory(

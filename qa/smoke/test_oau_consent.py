@@ -1,5 +1,5 @@
 """Owner-bound OAuth consent with a declared custom-oauth-v1 contract against the local
-fake IdP (docs/user/operator/custom-oauth.md, custom-oauth-workflow.md, oauth-consent.md,
+fake IdP (docs/operator/custom-oauth.md, custom-oauth-workflow.md, oauth-consent.md,
 native-oauth.md). The browser step is a urllib fetch of the authorization URL; the
 URL, state and code are canaries and never recorded."""
 

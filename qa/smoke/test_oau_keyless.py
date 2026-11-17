@@ -1,5 +1,5 @@
-"""A daemon started without LOCKSMITH_OAUTH_SEALING_KEY (docs/user/concepts/oauth-flow.md:101-110,
-docs/user/operator/oauth-consent.md:20-23)."""
+"""A daemon started without LOCKSMITH_OAUTH_SEALING_KEY (docs/concepts/oauth-flow.md:101-110,
+docs/operator/oauth-consent.md:20-23)."""
 
 import socket
 import tempfile

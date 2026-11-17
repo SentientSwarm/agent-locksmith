@@ -11,7 +11,7 @@ through an operator read or error log.
 An explicit `AuthSpec::None` remains an owner-approved credential-free selection,
 subject to the current ACL. Clearing a binding denies the next admission;
 replacing it changes the next admitted account. Explicit env bindings survive
-registration credential-template edits. See [per-agent credentials](../user/concepts/per-agent-credentials.md)
+registration credential-template edits. See [per-agent credentials](../concepts/per-agent-credentials.md)
 for the existing operator commands and the changed clear/failure semantics.
 
 ## Coverage

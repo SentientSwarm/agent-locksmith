@@ -1,8 +1,8 @@
 """Operator catalog management: tool/model/infra registrations and their refusals.
 
-Docs: docs/user/cli-reference.md "tool / model / infra", docs/user/concepts/
-error-envelope.md, docs/user/concepts/kind-taxonomy.md, docs/user/operator/
-connector-onboarding.md and docs/user/operator/native-mcp.md.
+Docs: docs/reference/cli-reference.md "tool / model / infra", docs/concepts/
+error-envelope.md, docs/concepts/kind-taxonomy.md, docs/operator/
+connector-onboarding.md and docs/operator/native-mcp.md.
 """
 
 import json

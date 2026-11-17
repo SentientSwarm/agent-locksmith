@@ -1,5 +1,5 @@
-"""Egress routing and upstream TLS trust (docs/user/architecture.md:80-82,
-docs/user/cli-reference.md:177, README.md:98-101, config.example.yaml egress_proxy / tls)."""
+"""Egress routing and upstream TLS trust (docs/concepts/architecture.md:80-82,
+docs/reference/cli-reference.md:177, README.md:98-101, config.example.yaml egress_proxy / tls)."""
 
 import shutil
 import tempfile

@@ -77,7 +77,7 @@ def test_logging_file_receives_json_lines(target_factory):
 
 @case("SMK-DMN-063", area="DMN", kind="refusal", covers=[LOGGING, "beh.config.validation"])
 def test_unopenable_logging_file_refuses_to_start(target_factory):
-    """config.example.yaml (`logging.file`) with docs/user/architecture.md (startup validates
+    """config.example.yaml (`logging.file`) with docs/concepts/architecture.md (startup validates
     the config and refuses to start on any error): a log file that cannot be opened stops
     startup with exit 1 and a message naming `logging.file`, rather than logging nowhere."""
     t = target_factory(

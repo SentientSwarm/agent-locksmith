@@ -10,7 +10,7 @@ agent integration, reference pages and change notes. Locksmith runs as a
 native daemon, standalone or in Incus containers (see [Deployment](#deployment)).
 
 See [Cargo.toml](Cargo.toml) for the crate version and
-[explicit account binding notes](docs/user/changes/explicit-account-bindings.md)
+[explicit account binding notes](docs/changes/explicit-account-bindings.md)
 for the 3.0.0 explicit-account compatibility change.
 
 ## What it does
@@ -33,12 +33,12 @@ middleware (`kind=infra`) is operator-only.
 - **Offline integration authoring** — strict immutable definitions and disabled
   native instances pinned to exact revisions, with matching operator API/CLI.
   No provider verification, credential, account selection or grant is implied.
-  See [authoring setup](docs/user/operator/integration-definitions.md).
+  See [authoring setup](docs/operator/integration-definitions.md).
 - **Native MCP sessions and reviewed tools** — authenticated stateful2025-11-25
   sessions with finite current per-agent contracts, explicit None/sealed-bearer
-  accounts and committed admission before one useful call. See [operator setup](docs/user/operator/native-mcp.md),
-  [review/grants](docs/user/operator/native-tool-review.md) and the
-  [agent interface](docs/user/agent-integration/native-mcp.md). Stale observations
+  accounts and committed admission before one useful call. See [operator setup](docs/operator/native-mcp.md),
+  [review/grants](docs/operator/native-tool-review.md) and the
+  [agent interface](docs/agents/native-mcp.md). Stale observations
   require deliberate refresh; unknown outcomes never cause automatic replay.
 
 - **Kind-discriminated registrations (Phase E)** — `model` / `tool` / `infra`
@@ -58,14 +58,14 @@ middleware (`kind=infra`) is operator-only.
   select distinct Y. Missing bindings deny with 403; unavailable selected sources
   fail with 503. Clearing denies the next request; catalog templates never supply
   fallback authority. OAuth labels require consistent explicit metadata.
-  See [upgrade and change notes](docs/user/changes/explicit-account-bindings.md).
+  See [upgrade and change notes](docs/changes/explicit-account-bindings.md).
 - **codex `ChatGPT-Account-ID` injection (Phase G2)** — locksmith
   decodes the access-token JWT at OAuth bootstrap/refresh, extracts
   `chatgpt_account_id`, and injects the required
   `ChatGPT-Account-ID` header on `/backend-api/codex/*` upstream
   calls. Agents proxied through locksmith get full ChatGPT plan auth
   (Responses API) without needing to be JWT-aware OAuth clients
-  themselves. See [`docs/user/concepts/oauth-flow.md`](docs/user/concepts/oauth-flow.md).
+  themselves. See [`docs/concepts/oauth-flow.md`](docs/concepts/oauth-flow.md).
 - **codex Responses API body fixup (Phase G3)** — on requests where
   the upstream is codex AND the path is `/responses`, locksmith
   inspects the JSON body and injects/overrides the three codex-
@@ -178,7 +178,7 @@ references; no per-tool YAML required for the 15 default providers.
 
 ### Run (standalone)
 
-Follow [getting started](docs/user/getting-started.md) for a private config,
+Follow [getting started](docs/getting-started.md) for a private config,
 operator bootstrap, real agent registration and explicit selection. An ACL alone
 no longer enables calls. Run the repeatable local cutover smoke:
 
@@ -189,14 +189,14 @@ cargo test --test explicit_binding_smoke_test -- --nocapture
 
 It starts disposable actual daemon/CLI processes and verifies receiving accounts,
 denials, reviewed migration, restart and cleanup. Existing installations need the
-[offline migration procedure](docs/user/concepts/migrating-account-bindings.md).
+[offline migration procedure](docs/concepts/migrating-account-bindings.md).
 Live providers and installed deployments are separate verification.
 
 ### Run (production)
 
 Run `locksmithd` as a native systemd service from the hardened template in
 `dist/systemd/`, or in Incus system containers rendered by `dist/edge/` (see
-[edge packaging](docs/user/operator/edge-packaging.md)). Choose an egress
+[edge packaging](docs/operator/edge-packaging.md)). Choose an egress
 mode for proxied routes; see [Deployment](#deployment).
 
 ## Wire surface
@@ -268,12 +268,12 @@ name exists; per-agent errors are generic.
 
 ## Explicit HTTP grants
 
-Use [the standalone setup](docs/user/getting-started.md) for a runnable local
+Use [the standalone setup](docs/getting-started.md) for a runnable local
 reference API and an ordinary customer HTTP service. New agents start with no
 HTTP grants. Explicitly grant current connections and select accounts; new
 registrations never inherit authority. Existing installations need the
-[reviewed finite migration](docs/user/concepts/migrating-account-bindings.md).
-[Activation and lifecycle changes](docs/user/changes/explicit-http-grants.md)
+[reviewed finite migration](docs/concepts/migrating-account-bindings.md).
+[Activation and lifecycle changes](docs/changes/explicit-http-grants.md)
 explain saved-but-pending writes, destination reapproval and denial repair.
 
 ## Configuration reference
@@ -371,7 +371,7 @@ This repository ships two ways to run the daemon:
 - **Native systemd service**: copy the hardened unit template in
   [`dist/systemd/`](dist/systemd/locksmith.service.template) and fill in
   its placeholders.
-- **Incus edge**: [edge packaging](docs/user/operator/edge-packaging.md)
+- **Incus edge**: [edge packaging](docs/operator/edge-packaging.md)
   (`dist/edge/`) renders hardened systemd units for Incus system
   containers from a site file you keep privately, optionally with an
   egress proxy and a classifier sidecar.
@@ -384,7 +384,7 @@ Routes marked `egress: proxied` leave according to `egress.mode`:
   policy enforces egress.
 
 With neither `egress.mode` nor `egress_proxy` set, proxied routes fail
-with 503. See [egress and inspection](docs/user/concepts/egress-and-inspection.md).
+with 503. See [egress and inspection](docs/concepts/egress-and-inspection.md).
 
 ## Documentation
 
@@ -392,14 +392,14 @@ Start at the [documentation index](docs/README.md). It splits the docs by
 audience:
 
 - **Operators**: the [guide journeys](docs/guide/README.md), then the
-  [operator how-tos and concepts](docs/user/README.md), including
-  [egress modes and content inspection](docs/user/concepts/egress-and-inspection.md).
-- **Agent developers**: [`docs/user/agent-integration/`](docs/user/agent-integration)
+  [operator how-tos](docs/operator/README.md), including
+  [egress modes and content inspection](docs/concepts/egress-and-inspection.md).
+- **Agent developers**: [`docs/agents/`](docs/agents/)
   covers wiring agents (Hermes, OpenClaw or your own) to Locksmith.
-- **Reference**: [`docs/user/cli-reference.md`](docs/user/cli-reference.md)
+- **Reference**: [`docs/reference/cli-reference.md`](docs/reference/cli-reference.md)
   (the full `locksmith` CLI surface), the
-  [wire contract](docs/user/agent-integration/wire-contract.md) and the
-  [error envelope](docs/user/concepts/error-envelope.md).
+  [wire contract](docs/reference/wire-contract.md) and the
+  [error envelope](docs/reference/error-envelope.md).
 - **Contributors**: [`docs/development/`](docs/development), including the
   [bounded MCP transport prerequisite](docs/development/mcp-transport.md).
 - **Historical**: [`docs/archive/`](docs/archive/) holds the 2.x spec,

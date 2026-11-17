@@ -30,61 +30,66 @@ CLI). This repository ships two ways to run the daemon:
 
 - **Native systemd service.** A hardened unit template is in
   [`dist/systemd/`](../dist/systemd/locksmith.service.template).
-- **Incus edge.** [Edge packaging](user/operator/edge-packaging.md) renders
+- **Incus edge.** [Edge packaging](operator/edge-packaging.md) renders
   hardened systemd units for Incus system containers from a site file you
   keep privately (`dist/edge/`).
 
 Outbound traffic for `egress: proxied` routes is set by `egress.mode` in the
 config. `pipelock` sends those routes through the egress proxy named by
 `egress_proxy`. `external` sends them directly and relies on your network to
-enforce egress. See [egress and inspection](user/concepts/egress-and-inspection.md).
+enforce egress. See [egress and inspection](concepts/egress-and-inspection.md).
 
 ### Task how-tos
 
-The [user documentation index](user/README.md) lists every operator how-to,
-grouped by subject: HTTP connections, integration definitions, native MCP,
-OAuth, Slack, custody and recovery, and edge packaging. It also lists the
-concept pages, such as the [trust boundary](user/concepts/trust-boundary.md)
-and [agent identity and ACL](user/concepts/agent-identity-and-acl.md).
+The [operator how-tos](operator/README.md) are grouped by subject: HTTP
+connections, integration definitions, native MCP, OAuth, Slack, custody and
+recovery, edge packaging, and the feature runbooks.
+
+## Concepts
+
+The [concept pages](concepts/README.md) explain how Locksmith works: the
+[trust boundary](concepts/trust-boundary.md),
+[agent identity and ACL](concepts/agent-identity-and-acl.md), per-agent
+credentials, OAuth, egress and the [threat model](concepts/threat-model.md).
 
 ## Agent developers
 
 An agent needs only its Locksmith token and the Locksmith URL.
 
-- [Wire contract](user/agent-integration/wire-contract.md): endpoints,
+- [Wire contract](reference/wire-contract.md): endpoints,
   headers, error codes and streaming.
-- [HTTP services](user/agent-integration/http-services.md): build calls
+- [HTTP services](agents/http-services.md): build calls
   from typed discovery.
-- [Native MCP](user/agent-integration/native-mcp.md) and
-  [compact native MCP](user/agent-integration/compact-mcp.md).
-- [`/skill` reference](user/agent-integration/skill-reference.md).
-- Recipes for [Hermes](user/agent-integration/hermes.md) and
-  [OpenClaw](user/agent-integration/openclaw.md).
-- Examples in [curl](user/agent-integration/examples/curl.md),
-  [Python](user/agent-integration/examples/python.md) and
-  [TypeScript](user/agent-integration/examples/typescript.md).
+- [Native MCP](agents/native-mcp.md) and
+  [compact native MCP](agents/compact-mcp.md).
+- [`/skill` reference](reference/skill-reference.md).
+- Recipes for [Hermes](agents/hermes.md) and
+  [OpenClaw](agents/openclaw.md).
+- Examples in [curl](agents/examples/curl.md),
+  [Python](agents/examples/python.md) and
+  [TypeScript](agents/examples/typescript.md).
 
 ## Reference
 
-- [CLI reference](user/cli-reference.md): every `locksmith` subcommand and
+- [CLI reference](reference/cli-reference.md): every `locksmith` subcommand and
   flag.
-- [Wire contract](user/agent-integration/wire-contract.md): the
+- [Wire contract](reference/wire-contract.md): the
   agent-facing HTTP surface.
-- [Error envelope](user/concepts/error-envelope.md): the JSON error shape
+- [Error envelope](reference/error-envelope.md): the JSON error shape
   and its codes.
-- [Architecture](user/architecture.md): daemon composition, request flow
+- [Architecture](concepts/architecture.md): daemon composition, request flow
   and where state lives.
 
 ## Change notes
 
 Read these before upgrading an existing installation.
 
-- [Explicit account bindings](user/changes/explicit-account-bindings.md)
-- [Explicit HTTP grants and activation](user/changes/explicit-http-grants.md)
-- [HTTP connector onboarding](user/changes/connector-onboarding.md)
-- [Integration definition activation](user/changes/integration-definitions.md)
-- [Native MCP lifecycle and migration](user/changes/native-mcp.md)
-- [Upgrade to finite HTTP grants and explicit accounts](user/concepts/migrating-account-bindings.md)
+- [Explicit account bindings](changes/explicit-account-bindings.md)
+- [Explicit HTTP grants and activation](changes/explicit-http-grants.md)
+- [HTTP connector onboarding](changes/connector-onboarding.md)
+- [Integration definition activation](changes/integration-definitions.md)
+- [Native MCP lifecycle and migration](changes/native-mcp.md)
+- [Upgrade to finite HTTP grants and explicit accounts](concepts/migrating-account-bindings.md)
 
 ## Contributors
 
@@ -103,7 +108,7 @@ Contributor documentation is in [`development/`](development/):
 These record earlier designs and plans. They do not describe current
 behaviour; use the pages above instead.
 
-- [`archive/v2/`](archive/v2/): the 2.x engineering spec, PRD, handoff and runbooks.
+- [`archive/v2/`](archive/v2/): the 2.x engineering spec, PRD and handoff.
 - [`archive/design/`](archive/design/): design notes for the explicit account and HTTP
   grant work.
 - [`archive/plans/`](archive/plans/): early implementation plans.

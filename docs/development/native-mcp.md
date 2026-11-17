@@ -11,9 +11,9 @@ The optional [compact facade](native-compact.md) uses this same Context/pool and
 committed dispatcher with separate described references; no quota split or second
 executor.
 
-Public contracts: [operator setup](../user/operator/native-mcp.md),
-[agent interface](../user/agent-integration/native-mcp.md), and
-[upgrade notes](../user/changes/native-mcp.md).
+Public contracts: [operator setup](../operator/native-mcp.md),
+[agent interface](../agents/native-mcp.md), and
+[upgrade notes](../changes/native-mcp.md).
 
 ## Composition and pins
 

@@ -1,4 +1,4 @@
-"""Agent-listener health surfaces (docs/user/getting-started.md)."""
+"""Agent-listener health surfaces (docs/getting-started.md)."""
 import pytest
 
 case = pytest.mark.case

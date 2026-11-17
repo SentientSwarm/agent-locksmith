@@ -136,7 +136,7 @@
     offline Hugging Face cache. Gated models such as PromptGuard 2 are
     fetched under your own HF token, which never reaches argv, disk or
     the CDN.
-  See [edge packaging](docs/user/operator/edge-packaging.md).
+  See [edge packaging](docs/operator/edge-packaging.md).
 
 - Per-agent, per-route rate limits (AGENT-266). `locksmith rate-limit
   set <route> --rpm N [--concurrent N] [--agent A]` (`PUT
@@ -372,7 +372,7 @@
   `token_verifier_refused` reason, and add a stdlib helper that transforms only the
   authorization challenge in a private connect receipt. Acceptance predicates and
   explicit account and grant authority are unchanged. See
-  [refusal and lifecycle boundaries](docs/user/operator/oauth-capability-proof.md).
+  [refusal and lifecycle boundaries](docs/operator/oauth-capability-proof.md).
 
 - Add a [nonpublishing native candidate lane](docs/development/native-validation.md)
   with bounded build, smoke and artifact checks for four targets; local fixtures
@@ -380,11 +380,11 @@
 
 - Decode documented Slack workspace display labels in declared identity checks
   while retaining exact observed IDs, bot refusal and token echo validation;
-  expose [closed identity diagnostics](docs/user/operator/slack-identity-diagnostics.md).
+  expose [closed identity diagnostics](docs/operator/slack-identity-diagnostics.md).
 
-- Add [declared custom OAuth contracts](docs/user/operator/custom-oauth.md) for exact scopes, independently verified user/workspace or service-principal identities, none/confidential clients and explicit Slack response variants. Existing named contracts remain unchanged. Migration 0022 preserves custody and sequence highwaters; old binaries refuse the new schema.
+- Add [declared custom OAuth contracts](docs/operator/custom-oauth.md) for exact scopes, independently verified user/workspace or service-principal identities, none/confidential clients and explicit Slack response variants. Existing named contracts remain unchanged. Migration 0022 preserves custody and sequence highwaters; old binaries refuse the new schema.
 
-- Report [closed Slack token metadata reasons](docs/user/operator/slack-token-diagnostics.md)
+- Report [closed Slack token metadata reasons](docs/operator/slack-token-diagnostics.md)
   through the existing attempt/refresh status path. Missing, null, wrong-type and
   conflicting metadata remain refused without provider values or token hashes.
   Acceptance, identity/scope checks and custody are unchanged; reason enums are
@@ -393,25 +393,25 @@
 - Permit an absent Slack response issuer only at the dedicated, issuer-distinct
   `/oauth/callback/slack` redirect, with actual Host/path checked against sealed
   attempt state before claim. Supplied issuer checks and legacy/Linear mandatory
-  issuer behavior remain. [Callback upgrade](docs/user/operator/slack-callback.md)
+  issuer behavior remain. [Callback upgrade](docs/operator/slack-callback.md)
   requires a new client generation and explicit reactivation; no migration or
   automatic custody rebind. Offline TLS controls do not establish live acceptance.
 
 - Separate the fixed Slack OAuth resource `https://mcp.slack.com` from MCP
   transport `https://mcp.slack.com/mcp` across activation, custody checks and
   native sessions. The old real-kind `/mcp` resource now refuses explicitly;
-  [deliberate binding repair](docs/user/operator/slack-oauth.md#renewal-retirement-and-upgrade)
+  [deliberate binding repair](docs/operator/slack-oauth.md#renewal-retirement-and-upgrade)
   is required. Existing Linear and local fixture behavior remains. Offline
   receiving evidence does not establish live Slack confidential-S256 acceptance.
 
-- Add an explicit [confidential Slack user profile](docs/user/operator/slack-oauth.md)
+- Add an explicit [confidential Slack user profile](docs/operator/slack-oauth.md)
   through owner-bound sealed client/token custody and customer definition activation.
   S256/client authentication, exact identities/scopes, finite tool authority and
   deliberate refresh repair are exercised against an invented TLS receiver.
   Migration 0021 preserves custody/highwater and permanently retires client generations.
   Preserve closed deadline/HTTP diagnostics; no live provider acceptance is claimed.
 
-- Add explicit [finite-v2 native contracts](docs/user/operator/native-contract-policy.md)
+- Add explicit [finite-v2 native contracts](docs/operator/native-contract-policy.md)
   for supported customer None/bearer/OAuth sources through existing review/grants.
   Customer registrations can explicitly select names after the same complete
   bounded catalog scan, with declared omissions and no early publication.
@@ -422,7 +422,7 @@
   activation/reset while preserving immutable pins and active configuration; prior
   schema-19 daemons refuse the newer database. No provider acceptance or timeout change.
 
-- Add a fixed [hosted Linear OAuth profile](docs/user/operator/hosted-linear.md)
+- Add a fixed [hosted Linear OAuth profile](docs/operator/hosted-linear.md)
   and an explicit local fixture kind through existing owner custody, refresh,
   native selection and finite grants. Hosted observation scans a bounded complete
   catalog and retains only explicitly selected original contracts with omission
@@ -430,7 +430,7 @@
   separate from the loopback TLS bind. Migration 0019 preserves custody/highwater
   and refuses prior daemons. Live shipping provider adoption remains separate.
 
-- Connect the [local customer MCP journey](docs/user/operator/customer-mcp-journey.md)
+- Connect the [local customer MCP journey](docs/operator/customer-mcp-journey.md)
   from definition promotion through account selection, finite review/grants,
   ordinary task discovery and deliberate repair. Clarify that controlled refresh
   invalidates existing native authority without creating grants. Live-provider
@@ -441,9 +441,9 @@
   OAuth. Import/creation/promotion create no account or grant. Full authority
   repair follows real transitions; current exact-state retries only resync.
   Migration 0018 refuses older whole-daemon startup. Builtin providers and full
-  readiness remain open. See [setup and recovery](docs/user/operator/integration-definitions.md).
+  readiness remain open. See [setup and recovery](docs/operator/integration-definitions.md).
 
-- Add deliberate owner-bound [controlled OAuth native selection](docs/user/operator/native-oauth.md),
+- Add deliberate owner-bound [controlled OAuth native selection](docs/operator/native-oauth.md),
   finite preparation and standard/compact dispatch through the existing admission path.
   Refresh/version or trust changes require renewed preparation and a fresh session;
   reconnect requires reselection. Access-only materialization preserves optional refresh.
@@ -452,18 +452,18 @@
 - Add manual owner-bound controlled refresh and explicit fresh-consent repair.
   Migration 0016 commits pending uncertainty before I/O and exact current custody
   before success, preserving optional expiry/scope and claimed refresh retention.
-  Status/revisions and the [JSON contract](docs/user/operator/oauth-account-response-v1.schema.json)
+  Status/revisions and the [JSON contract](docs/operator/oauth-account-response-v1.schema.json)
   expose pending/reconnect state. Legacy kind barriers remain; no automatic refresh,
   hosted provider acceptance or agent/native authority. Prior schema-15 binaries
   refuse upgraded state; restore only a full prior snapshot under recovery rules.
 
-- Add [controlled operator consent](docs/user/operator/oauth-consent.md) with
+- Add [controlled operator consent](docs/operator/oauth-consent.md) with
   public-ID ownership, sealed `connected_unbound` custody, strict twin identity
   checks and revision-checked disconnect. Migration 0015 preserves legacy custody;
   older binaries refuse the new schema/config. Hosted provider acceptance and
   native OAuth activation remain outside this increment.
 
-- Document and exercise [sealed-state recovery](docs/user/operator/sealed-state-recovery.md):
+- Document and exercise [sealed-state recovery](docs/operator/sealed-state-recovery.md):
   SQLite-consistent snapshots, separate stored/OAuth key custody, isolated restore
   and selected-account verification. Missing/wrong keys, revoked-owner quarantine
   and uncertain refresh remain fail-closed; no new keychain or key-rewrap command.
@@ -493,7 +493,7 @@
   `/skill`, with complete-schema native request guidance, fixed-context/pin and
   current-grant limits, safely rendered display data and protocol-specific repair.
   Native connections do not inherit HTTP Codex recipes by name. See the
-  [skill reference](docs/user/agent-integration/skill-reference.md). Guidance reads
+  [skill reference](docs/reference/skill-reference.md). Guidance reads
   do not materialize credentials or contact upstreams; auth/cache behavior and
   existing wire/authority contracts are unchanged. This is bounded AGENT-209 work,
   not full onboarding or live-provider acceptance.
@@ -548,7 +548,7 @@
   contract, and expose a truthful callable schema that omits protected fields.
   Reject any caller override, inject once, validate merged limits and screen the
   current selected secret before persistence or upstream I/O. Empty context keeps
-  existing bytes/digests. See [operator guidance](docs/user/operator/native-context.md).
+  existing bytes/digests. See [operator guidance](docs/operator/native-context.md).
 - Refuse a combined schema/context contract that exceeds the grant reader's
   JSON budget before saving it; keep existing reviews and grants unchanged.
 - Add safe phase/reason/correlation diagnostics, current-state repair hints and
@@ -570,7 +570,7 @@
 - Bound supported text/structured results, enforce known-token screening and
   preserve uncertain outcomes without retry. Re-observe after60s or restart.
   Stage B adds no migration; schema14 downgrade retains state but loses positive
-  dispatch. See [agent workflow](docs/user/agent-integration/native-mcp.md) and
+  dispatch. See [agent workflow](docs/agents/native-mcp.md) and
   [implementation/verification](docs/development/native-dispatch.md). Full206 and
   provider/compact acceptance remain open; bounded fixed context is above.
 
@@ -579,7 +579,7 @@
 - Add operator-only observe/inspect/review/finite grant replacement for manual
   native None and sealed-bearer accounts, with matching strict CLI/API. Stage A
   initially retained empty lists and denial; stage B above adds reviewed calls. See the
-  [workflow, limits and upgrade](docs/user/operator/native-tool-review.md).
+  [workflow, limits and upgrade](docs/operator/native-tool-review.md).
 - Use the bounded outbound adapter with duplicate-safe raw response checks,
   approved-address pinning, verified TLS, finite complete observations and
   generation/source CAS. Migration0014 starts with zero preparation and refuses
@@ -598,7 +598,7 @@
   Local revoke plus freshly issued credentials is the explicit recovery path.
 - Migration0013 preserves existing custody/authority and makes schema12 binaries
   refuse upgraded state. Current bootstrap/inline/background OAuth scopes stop
-  before daemon return releases database ownership. See [recovery and upgrade](docs/user/operator/oauth-recovery.md).
+  before daemon return releases database ownership. See [recovery and upgrade](docs/operator/oauth-recovery.md).
   This is bounded local AGENT-205 only; consent204, provider policy/live T14
   and full205 acceptance remain open.
 
@@ -608,11 +608,11 @@
   instances through matching operator CLI/API. Pins include exact revision,
   content digest and descriptive auth profile; no provider request, credential,
   account selection or authority is created. Candidate reference/customer
-  examples use the same validation. See [operator workflow](docs/user/operator/integration-definitions.md).
+  examples use the same validation. See [operator workflow](docs/operator/integration-definitions.md).
 - Migration0012 preserves existing state and makes older binaries refuse the
   upgraded database. Derived rows reject general edits/enable; credential
   attachment and sealed storage now commit together, including rollback on
-  pinned replacement. See [upgrade and limits](docs/user/changes/integration-definitions.md).
+  pinned replacement. See [upgrade and limits](docs/changes/integration-definitions.md).
   This is independent AGENT-203 authoring only: full203 and live195/196/200,
   setup194 and G0/G1 remain pending.
 
@@ -626,9 +626,9 @@
 - Migration0011 preserves HTTP accounts/grants/revocations and reviewed receipts,
   creates zero native/tool authority and makes old binaries refuse upgraded state.
   Protocol/config changes require connection-grant/account reapproval; one daemon
-  owns each database. See [setup](docs/user/operator/native-mcp.md),
-  [wire contract](docs/user/agent-integration/native-mcp.md) and
-  [backup, recovery and limits](docs/user/changes/native-mcp.md).
+  owns each database. See [setup](docs/operator/native-mcp.md),
+  [wire contract](docs/agents/native-mcp.md) and
+  [backup, recovery and limits](docs/changes/native-mcp.md).
 
 ### Native MCP prerequisite safety
 
@@ -662,7 +662,7 @@
   recreation or a newer token write. Tokens become usable only after
   the intended sealed row commits. Migration 0010 preserves existing custody,
   grants and selections and prevents older binaries from opening upgraded state.
-  Follow [recovery/backup/rollback guidance](docs/user/operator/oauth-recovery.md).
+  Follow [recovery/backup/rollback guidance](docs/operator/oauth-recovery.md).
   Already-admitted work may finish; this does not establish crash-safe rotating
   refresh or provider proof.
 ### Connector onboarding
@@ -674,7 +674,7 @@
   newer seed apply; this adds no migration or automatic rewrite. Rejected writes
   preserve existing rows, grants and selections; invalid seed destinations
   leave every row and the seed version unchanged.
-- [Connector onboarding change notes](docs/user/changes/connector-onboarding.md)
+- [Connector onboarding change notes](docs/changes/connector-onboarding.md)
   collect the operator-to-agent outcome, compatibility/upgrade steps and local
   verification limits. The saved actual-process smoke and independent
   discovery-driven consumer evidence remain separate acceptance layers.
@@ -692,7 +692,7 @@
   reference/customer services without new execution or grant authority. Legacy
   metadata remains compatible; metadata-only changes preserve grants/selections
   while still requiring runtime activation. No migration or version bump.
-- A focused [operator onboarding recipe](docs/user/operator/connector-onboarding.md)
+- A focused [operator onboarding recipe](docs/operator/connector-onboarding.md)
   reuses reference/customer setup, inspection, named-agent grants and account
   selection, with receiving-account checks and truthful readiness/repair guidance
  . Unsupported modes and narrower authority claims remain rejected.
@@ -726,7 +726,7 @@
 - Back up a consistent database, preview and review the reference-only mapping,
   apply the selected bindings, then verify the cutover and restart. Existing
   explicit selections are preserved; ambiguous mappings need operator input.
-  Follow [the migration guide](docs/user/concepts/migrating-account-bindings.md).
+  Follow [the migration guide](docs/concepts/migrating-account-bindings.md).
 - [The repeatable daemon/CLI smoke](docs/development/explicit-account-bindings-smoke.md)
   covers account attribution, zero-dispatch denials, migration and the documented
   setup commands using synthetic accounts. It does not establish live provider
@@ -738,7 +738,7 @@
   configuration/state backup. Use the reviewed `preview --grants` workflow to
   commit finite policy and account references atomically. Old unreviewed bootstrap
   tokens need re-minting; stale plans must not resurrect removed authority.
-- See [HTTP grant and activation changes](docs/user/changes/explicit-http-grants.md)
+- See [HTTP grant and activation changes](docs/changes/explicit-http-grants.md)
   for saved-but-failed activation repair, next-admission boundaries and limits.
   Original local synthetic acceptance is historical. Live-provider
   compatibility is not claimed.

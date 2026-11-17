@@ -1,16 +1,16 @@
 # Reviewed native dispatch (AGENT-206B)
 
 Manual native None/live StoredBearer accounts support a bounded useful call.
-[Controlled OAuth](../user/operator/native-oauth.md) reuses this dispatcher with
+[Controlled OAuth](../operator/native-oauth.md) reuses this dispatcher with
 owner-stamped, token-version/trust-bound authority and access-only custody.
-[Operator observation and grant](../user/operator/native-tool-review.md) and the
-[ordinary agent interface](../user/agent-integration/native-mcp.md) describe setup.
+[Operator observation and grant](../operator/native-tool-review.md) and the
+[ordinary agent interface](../agents/native-mcp.md) describe setup.
 The original None/StoredBearer increment built on A preparation without a new
 migration or dependency. Controlled OAuth adds migration 0017 and the repair costs
 in its guide. Supported local customer pins now reach this same dispatcher through
-[dedicated definition activation](../user/operator/integration-definitions.md),
+[dedicated definition activation](../operator/integration-definitions.md),
 with schema 18 and separate ACL/account/tool-authority repair. Hosted provider
-acceptance, dynamic context and full AGENT-206 acceptance remain separate. [Compact MCP](../user/agent-integration/compact-mcp.md)
+acceptance, dynamic context and full AGENT-206 acceptance remain separate. [Compact MCP](../agents/compact-mcp.md)
 uses this same dispatcher. [Fixed context and phase diagnostics](native-protected-context.md)
 extend this path under bounded207. This ships in 3.0.0.
 

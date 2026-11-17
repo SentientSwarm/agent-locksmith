@@ -1,6 +1,6 @@
 """Broker routes (brokered routes phase 3): a destination that picks the account.
 
-Docs: docs/user/cli-reference.md "Broker routes". Locksmith sends the route's
+Docs: docs/reference/cli-reference.md "Broker routes". Locksmith sends the route's
 broker key and the caller's identity, never an agent's own credential; agents
 select the route with `--broker`; a broker that fails its health probe answers
 503 backend_unavailable without dispatch.

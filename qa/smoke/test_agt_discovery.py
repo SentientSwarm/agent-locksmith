@@ -1,5 +1,5 @@
 """Agent discovery surfaces: /skill, /tools, /models
-(docs/user/agent-integration/wire-contract.md "Endpoints")."""
+(docs/reference/wire-contract.md "Endpoints")."""
 
 import pytest
 
@@ -7,7 +7,7 @@ from fakes.agt_support import enrol, put_tool
 from fakes.agt_upstream import Upstream
 
 case = pytest.mark.case
-WIRE = "docs/user/agent-integration/wire-contract.md"
+WIRE = "docs/reference/wire-contract.md"
 BAD_BEARER = "lk_qaAgtNotARealPublicId0.not-a-real-secret-value-for-agt-cases-00"
 
 

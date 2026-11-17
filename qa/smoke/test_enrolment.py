@@ -1,4 +1,4 @@
-"""Operator enrols an agent through the CLI (docs/user/cli-reference.md)."""
+"""Operator enrols an agent through the CLI (docs/reference/cli-reference.md)."""
 import pytest
 
 case = pytest.mark.case

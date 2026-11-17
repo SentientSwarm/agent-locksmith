@@ -1,8 +1,8 @@
 //! Execute the user guide's actual shell blocks with disposable substituted inputs.
 use super::{fixture::Fixture, process};
 
-pub const SETUP: &str = include_str!("../../docs/user/getting-started.md");
-pub const UPGRADE: &str = include_str!("../../docs/user/concepts/migrating-account-bindings.md");
+pub const SETUP: &str = include_str!("../../docs/getting-started.md");
+pub const UPGRADE: &str = include_str!("../../docs/concepts/migrating-account-bindings.md");
 pub fn block<'a>(document: &'a str, name: &str) -> &'a str {
     document
         .split_once(&format!("<!-- smoke:{name} -->"))

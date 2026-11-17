@@ -1,4 +1,4 @@
-"""Codex wire fixups (CLAUDE.md Phase G2-G5, docs/user/concepts/oauth-flow.md:293-600)
+"""Codex wire fixups (CLAUDE.md Phase G2-G5, docs/concepts/oauth-flow.md:293-600)
 and the OAuth proxy refusals, against a fake upstream whose path contains
 /backend-api/codex and a fake token endpoint."""
 
@@ -26,7 +26,7 @@ from fakes.agt_upstream import Upstream
 case = pytest.mark.case
 API = "agent.ANY./api/{tool_name}/{*path}"
 FIX = "beh.codex.fixups"
-FLOW = "docs/user/concepts/oauth-flow.md"
+FLOW = "docs/concepts/oauth-flow.md"
 DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 
 

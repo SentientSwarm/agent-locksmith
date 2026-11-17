@@ -1,6 +1,6 @@
 """Route backends (brokered routes phase 2): declare backends, switch a route.
 
-Docs: docs/user/cli-reference.md "Route backends". A switch keeps grants,
+Docs: docs/reference/cli-reference.md "Route backends". A switch keeps grants,
 moves bindings with the backend, and refuses stale revisions, OAuth backends,
 native routes and the active backend.
 """

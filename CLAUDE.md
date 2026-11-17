@@ -37,7 +37,7 @@ Recent phase shipments:
   identityless paths). After G4, agents can call codex through
   locksmith with only `Authorization` + minimal body — locksmith
   owns every codex-specific wire piece.
-  See `docs/user/concepts/oauth-flow.md` for the end-to-end flow.
+  See `docs/concepts/oauth-flow.md` for the end-to-end flow.
 - **Phase G5** (v2.5.2): codex `max_output_tokens` strip. The codex
   Responses backend rejects `max_output_tokens`; `codex_body::fixup`
   now removes it alongside the G3 store/stream/instructions fixups.
@@ -85,8 +85,10 @@ The authoritative stack-level docs live at `agents-stack/docs/`:
 - `agents-stack/docs/adrs/0004-kind-taxonomy.md` — kind enum decision.
 - `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design (Phase F + G2 + G3 + G4 addenda).
 
-Start at `docs/README.md`. User docs are at `docs/user/` (concepts,
-agent-integration recipes) and the operator journeys at `docs/guide/`.
+Start at `docs/README.md`. Operator journeys are at `docs/guide/`; the
+rest of the user docs are split into `docs/operator/` (task pages and
+runbooks), `docs/concepts/`, `docs/agents/` (agent-integration recipes),
+`docs/reference/` and `docs/changes/`.
 `docs/archive/` is historical: the 2.x engineering spec
 (`docs/archive/v2/SPEC.md`, with `SPEC.state.md`), its handoff, design
 notes and plans. They explain old task tags but do not describe current
@@ -149,7 +151,7 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
 
 `daemon::run` (in `src/daemon.rs`) is the single composition root. Everything below is wired from there:
 
-1. **Shared config** — `Arc<ArcSwap<AppConfig>>`. The agent router and the AdminService both observe the same snapshot. Nothing stores to it after startup: the YAML is read once, and config edits need a restart (see `docs/user/architecture.md#changing-configuration`). The `deny_unknown_fields` schema is in `src/config.rs`.
+1. **Shared config** — `Arc<ArcSwap<AppConfig>>`. The agent router and the AdminService both observe the same snapshot. Nothing stores to it after startup: the YAML is read once, and config edits need a restart (see `docs/concepts/architecture.md#changing-configuration`). The `deny_unknown_fields` schema is in `src/config.rs`.
 2. **Credential resolution** — two paths converge into one `ResolvedCreds` map:
    - **`config.tools` legacy path**: `secret::SecretResolver` resolves each `tool.auth.value: SecretRef` at startup. Backends in `src/secret/`: `EnvBackend` (incl. legacy `${VAR}` strings), `FileSealedBackend` (systemd-creds-decrypted files; rejects group/world-readable), Vault + AWS stubs.
    - **Phase E registrations path**: after seed_loader + legacy_bootstrap populate the registrations table, `secret::resolve_registration_creds_sync_env_only` walks `AuthSpec::Header` / `AuthSpec::Bearer` entries and resolves their env vars into the same map. OAuth registrations skip this path (their tokens live in the `oauth_sessions` cache).
@@ -162,7 +164,7 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
    - `Mtls` / `Both`: TLS-terminated TCP via `agent_listener::bind_and_serve_mtls`. The handshake verifies client certs against `listen.mtls.ca_bundle_path`; the resolved peer cert is stamped into request extensions for `auth::auth_middleware` to consume. `MtlsAuthenticator` (in `src/mtls/`) maps cert identity (CN → SAN_DNS → SAN_URI) to an agent row, applies CRL + local blocklist, and emits `auth_method=mtls` audit rows.
 6. **Admin UDS listener** — at `listen.admin_socket.path`. AdminService handlers live in `src/admin/service.rs`; the UDS shim is `src/admin/uds.rs`.
 7. **Admin HTTPS listener** (M4, off by default) — same `UdsState` / handlers, different transport. Supports `Bearer`, `Mtls`, or `Both` independently of the agent listener. Operator client certs map to operators via `OperatorRecord.cert_identity`.
-8. **Native MCP lifecycle** — `/mcp/{connection}` uses current agent identity, typed registrations and explicit connection selections. The root consumes the accepted bounded session manager through one process pool. N1 supplies the session boundary. `native_authority` provides bounded operator observation/review/grants and current per-agent listing plus committed dispatch for manual None/live StoredBearer and deliberate owner-selected controlled OAuth. See [controlled OAuth](docs/user/operator/native-oauth.md) for its limited profile, access-only custody, renewal and migration 0017 costs; docs/development/native-dispatch.md covers pinning/deadlines and docs/development/native-protected-context.md covers fixed context, truthful schemas and phase diagnostics. See [native MCP architecture](docs/development/native-mcp.md) and [operator preparation](docs/development/native-tool-review.md) for migrations 0011/0014, finite budgets, shutdown ownership and remaining gates.
+8. **Native MCP lifecycle** — `/mcp/{connection}` uses current agent identity, typed registrations and explicit connection selections. The root consumes the accepted bounded session manager through one process pool. N1 supplies the session boundary. `native_authority` provides bounded operator observation/review/grants and current per-agent listing plus committed dispatch for manual None/live StoredBearer and deliberate owner-selected controlled OAuth. See [controlled OAuth](docs/operator/native-oauth.md) for its limited profile, access-only custody, renewal and migration 0017 costs; docs/development/native-dispatch.md covers pinning/deadlines and docs/development/native-protected-context.md covers fixed context, truthful schemas and phase diagnostics. See [native MCP architecture](docs/development/native-mcp.md) and [operator preparation](docs/development/native-tool-review.md) for migrations 0011/0014, finite budgets, shutdown ownership and remaining gates.
 9. **Bootstrap-only listener** (M6 / C-4) — separate single-endpoint TLS listener for agent enrollment that doesn't require operator credentials.
 10. **OAuth refresh task** (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set) — `tokio` task scanning `oauth_sessions` for tokens nearing expiry; refreshes via `oauth::refresh::run`. Per-session `Mutex<()>` (`RefreshLockMap`) prevents racing with on-demand proxy refresh.
 
@@ -241,8 +243,9 @@ migrations/                SQLite schema (embedded into the binary)
 seed/catalog.yaml          Phase E.7: bundled default registrations (15 entries at catalog 2.3.0)
 dist/systemd/              hardened unit template (NoNewPrivileges, ProtectSystem=strict, …)
 dist/examples/             smallstep mTLS + sealed-secrets worked examples
-docs/user/                 User docs (concepts, agent-integration recipes)
-docs/archive/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineering)
+docs/guide/                Operator journeys, in order
+docs/{operator,concepts,agents,reference,changes}/  User docs by kind
+docs/archive/              Historical: v2 SPEC, PRD, HANDOFF, design notes, plans
 ```
 
 ## Conventions worth knowing
@@ -265,9 +268,9 @@ The parent `agents-stack/AGENTS.md` and `agents-stack/CLAUDE.md` apply at the me
 disposable daemon/CLI SM01–SM05, executes marked user setup/upgrade blocks, checks
 receiving X/X/Y and zero-dispatch failures, and stops/restarts for offline
 migration. See [smoke contract](docs/development/explicit-account-bindings-smoke.md)
-and [change notes](docs/user/changes/explicit-account-bindings.md). Full source
+and [change notes](docs/changes/explicit-account-bindings.md). Full source
 matrices remain in focused Rust tests. The same target covers D4 finite migration,
 activation failure/restart, name lifecycle and an independently configured customer
 API. It runs the shipped Python reference API (Python 3 required). See
-[HTTP grant changes](docs/user/changes/explicit-http-grants.md). Provider
+[HTTP grant changes](docs/changes/explicit-http-grants.md). Provider
 compatibility remains outside local smoke; the two baseline D4 findings are historical.

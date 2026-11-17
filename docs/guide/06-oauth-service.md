@@ -303,5 +303,5 @@ A renewal verifies the identity again and changes the token version, which
 retires existing grants: observe, review and grant again before the agent's
 next session. To end access, `oauth disconnect records --label reader
 --if-match REVISION` removes the account. See
-[native OAuth accounts](../user/operator/native-oauth.md) and
-[declared OAuth contracts](../user/operator/custom-oauth.md).
+[native OAuth accounts](../operator/native-oauth.md) and
+[declared OAuth contracts](../operator/custom-oauth.md).

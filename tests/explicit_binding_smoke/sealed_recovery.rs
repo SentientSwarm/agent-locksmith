@@ -83,7 +83,7 @@ impl Snapshot {
     pub fn take(f: &Fixture) -> Self {
         assert!(f.daemon.is_none(), "snapshot only after source stop/join");
         let dir = tempfile::TempDir::new().unwrap();
-        let recipe = include_str!("../../docs/user/operator/sealed-state-recovery.md");
+        let recipe = include_str!("../../docs/operator/sealed-state-recovery.md");
         let command = |database: &std::path::Path| {
             // Execute exactly the public block: no hidden shell error flags.
             let mut c = process::command("sh");

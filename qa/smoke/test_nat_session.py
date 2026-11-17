@@ -1,7 +1,7 @@
 """Native MCP session lifecycle and admission refusals over raw streamable HTTP.
 
-Docs: docs/user/agent-integration/native-mcp.md (agent wire sequence and errors),
-docs/user/operator/native-mcp.md (operator setup and diagnosis).
+Docs: docs/agents/native-mcp.md (agent wire sequence and errors),
+docs/operator/native-mcp.md (operator setup and diagnosis).
 """
 
 import pytest
@@ -46,12 +46,12 @@ def no_arrivals(env, before):
 def test_session_lifecycle_without_grants(env):
     """Discovery shows a native entry; initialize/initialized/ping/list/DELETE follow the documented sequence.
 
-    docs/user/agent-integration/native-mcp.md:7-9 (`/tools` native entry),
+    docs/agents/native-mcp.md:7-9 (`/tools` native entry),
     :32-47 (initialize, Mcp-Session-Id, initialized returns 202), :50-58 (unapproved
     call -32050 tool_not_approved, tools_list_required before list, neither sends
     upstream), :77-78 (DELETE returns 202 and retires the session);
-    docs/user/operator/native-mcp.md:113-118 (no `/api/` path; empty list, calls refused);
-    docs/user/operator/native-mcp.md:61 (compact opt-in adds `compact_path`).
+    docs/operator/native-mcp.md:113-118 (no `/api/` path; empty list, calls refused);
+    docs/operator/native-mcp.md:61 (compact opt-in adds `compact_path`).
     """
     t, before = env["t"], env["fake"].snapshot()
     tools = t.http("GET", "/tools", token=env["agent"]["token"])
@@ -98,7 +98,7 @@ def ping(rid=1):
 def test_missing_and_wrong_bearer_are_401(env):
     """401 means no current agent identity; session IDs are not authentication.
 
-    docs/user/agent-integration/native-mcp.md:27-30, :135; docs/user/operator/native-mcp.md:122.
+    docs/agents/native-mcp.md:27-30, :135; docs/operator/native-mcp.md:122.
     """
     t, before = env["t"], env["fake"].snapshot()
     for path in PATHS:
@@ -114,7 +114,7 @@ def test_missing_and_wrong_bearer_are_401(env):
 def test_unsupported_protocol_version_is_400(env):
     """Protocol 2025-11-25 is explicit; other versions and a missing version header on later requests reject.
 
-    docs/user/agent-integration/native-mcp.md:36-41, :134 (400 malformed protocol/session input).
+    docs/agents/native-mcp.md:36-41, :134 (400 malformed protocol/session input).
     """
     t, token, before = env["t"], env["agent"]["token"], env["fake"].snapshot()
     old = dict(w.INIT, params=dict(w.INIT["params"], protocolVersion="2025-03-26"))
@@ -134,7 +134,7 @@ def test_unsupported_protocol_version_is_400(env):
 def test_session_header_rules(env):
     """Start without a session header; later requests need it.
 
-    docs/user/agent-integration/native-mcp.md:32-41, :134.
+    docs/agents/native-mcp.md:32-41, :134.
     """
     t, token, before = env["t"], env["agent"]["token"], env["fake"].snapshot()
     for path in PATHS:
@@ -152,7 +152,7 @@ def test_session_header_rules(env):
 def test_list_before_initialized_notification_is_refused(env):
     """Send notifications/initialized after consuming InitializeResult, then list.
 
-    docs/user/agent-integration/native-mcp.md:39-51, :134.
+    docs/agents/native-mcp.md:39-51, :134.
     """
     t, before = env["t"], env["fake"].snapshot()
     for path in PATHS:
@@ -169,8 +169,8 @@ def test_list_before_initialized_notification_is_refused(env):
 def test_unknown_foreign_and_cross_route_sessions_are_404(env):
     """Sessions bind to agent and endpoint; another agent cannot use or close them; never move between paths.
 
-    docs/user/agent-integration/native-mcp.md:27-30, :136 (404 unavailable session);
-    docs/user/agent-integration/compact-mcp.md:13-14.
+    docs/agents/native-mcp.md:27-30, :136 (404 unavailable session);
+    docs/agents/compact-mcp.md:13-14.
     """
     t, token, before = env["t"], env["agent"]["token"], env["fake"].snapshot()
     other = register(t, "nat-sess-other", "natsess")
@@ -195,7 +195,7 @@ def test_unknown_foreign_and_cross_route_sessions_are_404(env):
 def test_reused_request_id_is_409(env):
     """Request IDs share a ledger; reuse is 409.
 
-    docs/user/agent-integration/native-mcp.md:67-70, :137.
+    docs/agents/native-mcp.md:67-70, :137.
     """
     t, before = env["t"], env["fake"].snapshot()
     for path in PATHS:
@@ -213,7 +213,7 @@ def test_reused_request_id_is_409(env):
 def test_get_delete_bodies_and_resume_are_refused(env):
     """Only POST carries JSON; Last-Event-ID / resume are refused.
 
-    docs/user/agent-integration/native-mcp.md:32, :76-81, :134.
+    docs/agents/native-mcp.md:32, :76-81, :134.
     """
     t, token, before = env["t"], env["agent"]["token"], env["fake"].snapshot()
     for path in PATHS:
@@ -236,8 +236,8 @@ def test_get_delete_bodies_and_resume_are_refused(env):
 def test_missing_connection_grant_or_selection_is_403(env):
     """Connection access and explicit account selection permit the lifecycle; 403 when missing.
 
-    docs/user/operator/native-mcp.md:6-7, :122-123; docs/user/agent-integration/native-mcp.md:136;
-    docs/user/agent-integration/compact-mcp.md:6-7.
+    docs/operator/native-mcp.md:6-7, :122-123; docs/agents/native-mcp.md:136;
+    docs/agents/compact-mcp.md:6-7.
     """
     t, before = env["t"], env["fake"].snapshot()
     not_allowed = register(t, "nat-sess-noacl", "natplain")
@@ -256,7 +256,7 @@ def test_missing_connection_grant_or_selection_is_403(env):
 def test_unknown_connection_is_404(env):
     """404 means unavailable connection.
 
-    docs/user/operator/native-mcp.md:122-124; docs/user/agent-integration/native-mcp.md:136.
+    docs/operator/native-mcp.md:122-124; docs/agents/native-mcp.md:136.
     """
     t, token, before = env["t"], env["agent"]["token"], env["fake"].snapshot()
     for path in ("/mcp/natsess-nothing", "/mcp/natsess-nothing/compact"):
@@ -270,7 +270,7 @@ def test_unknown_connection_is_404(env):
 def test_compact_route_without_opt_in_is_404(env):
     """Use `compact_path` only when present; it is an operator opt-in.
 
-    docs/user/agent-integration/compact-mcp.md:3-6; docs/user/operator/native-mcp.md:55-61.
+    docs/agents/compact-mcp.md:3-6; docs/operator/native-mcp.md:55-61.
     """
     t, before = env["t"], env["fake"].snapshot()
     agent = register(t, "nat-sess-plain", "natplain")
@@ -289,7 +289,7 @@ def test_compact_route_without_opt_in_is_404(env):
 def test_account_reselection_retires_open_sessions(env):
     """Policy/account changes require a fresh session; the old one is unavailable (404).
 
-    docs/user/agent-integration/native-mcp.md:85-86, :136; docs/user/operator/native-mcp.md:104-106.
+    docs/agents/native-mcp.md:85-86, :136; docs/operator/native-mcp.md:104-106.
     """
     t, before = env["t"], env["fake"].snapshot()
     agent = register(t, "nat-sess-reselect", "natsess")
@@ -310,7 +310,7 @@ def test_account_reselection_retires_open_sessions(env):
 def test_identityless_and_shared_gateway_cannot_open_sessions(target_factory):
     """Native access needs an actual registered agent; a shared gateway bearer or identityless setup cannot.
 
-    docs/user/operator/native-mcp.md:19-22; docs/user/agent-integration/wire-contract.md:27-28.
+    docs/operator/native-mcp.md:19-22; docs/reference/wire-contract.md:27-28.
     """
     gateway = target_factory(
         config={"listen": {"admin_socket": None},

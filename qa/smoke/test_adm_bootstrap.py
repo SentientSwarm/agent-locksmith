@@ -1,5 +1,5 @@
 """Bootstrap tokens and agent self-service over the admin socket
-(docs/user/cli-reference.md:127-143, 295-303; docs/archive/v2/SPEC.md:2769-2788)."""
+(docs/reference/cli-reference.md:127-143, 295-303; docs/archive/v2/SPEC.md:2769-2788)."""
 
 import time
 
@@ -45,7 +45,7 @@ def enrolled(t1, accounts):
 )
 def test_mint_returns_token_once_and_list_omits_it(t1, enrolled):
     """`mint` returns the cleartext once with its scope; `list` shows tokens with no
-    cleartext (cli-reference.md:127-143, SPEC.md:2786)."""
+    cleartext (cli-reference.md:127-143, docs/archive/v2/SPEC.md:2786)."""
     bt = enrolled["bootstrap"]
     assert bt["token"] and bt["public_id"]
     assert bt["scope"]["tool_allowlist"] == ["accounts"]
@@ -63,7 +63,7 @@ def test_mint_returns_token_once_and_list_omits_it(t1, enrolled):
 )
 def test_self_registration_consumes_token_and_constrains_acl(t1, enrolled):
     """A bootstrap token enrols an agent whose ACL is the token's allowlist
-    (cli-reference.md:141; SPEC.md:2773); `locksmith status` shows that agent with
+    (cli-reference.md:141; docs/archive/v2/SPEC.md:2773); `locksmith status` shows that agent with
     its own bearer (cli-reference.md:298, getting-started.md:170-173)."""
     reg = enrolled["reg"]
     assert reg.status == 200, reg.text
@@ -85,7 +85,7 @@ def test_self_registration_consumes_token_and_constrains_acl(t1, enrolled):
     codes=["invalid_credential"],
 )
 def test_wrong_bootstrap_secret_is_401_and_does_not_consume(t1):
-    """A wrong bootstrap secret is 401 invalid_credential (SPEC.md:2773,
+    """A wrong bootstrap secret is 401 invalid_credential (docs/archive/v2/SPEC.md:2773,
     error-envelope.md:23); the token stays unused and still enrols afterwards."""
     bt = mint(t1)
     refused(self_register(t1, wrong_secret(bt["token"]), "adm-wrong-secret"))
@@ -112,7 +112,7 @@ def test_single_use_token_cannot_be_reused(t1, enrolled):
 )
 def test_revoke_marks_token_revoked(t1):
     """`bootstrap revoke <public_id>` revokes an outstanding token
-    (cli-reference.md:136; SPEC.md:2787)."""
+    (cli-reference.md:136; docs/archive/v2/SPEC.md:2787)."""
     bt = mint(t1)
     out = t1.cli("bootstrap", "revoke", bt["public_id"])
     assert out.code == 0, out.err
@@ -145,7 +145,7 @@ def test_expired_token_cannot_enrol(t1):
 )
 def test_name_conflict_is_409_and_keeps_token(t1, enrolled):
     """A taken name is 409 agent_name_conflict and the bootstrap token is not consumed
-    (SPEC.md:2773, 1459)."""
+    (docs/archive/v2/SPEC.md:2773, 1459)."""
     bt = mint(t1)
     clash = self_register(t1, bt["token"], "adm-self")
     assert (clash.status, clash.code) == (409, "agent_name_conflict"), clash.text
@@ -233,7 +233,7 @@ def test_rotate_with_wrong_current_secret_keeps_old_bearer(t1):
     covers=["admin.POST./admin/agent/deregister"],
 )
 def test_deregister_revokes_own_identity(t1):
-    """`POST /admin/agent/deregister` (agent token) returns 204 (SPEC.md:2777); the
+    """`POST /admin/agent/deregister` (agent token) returns 204 (docs/archive/v2/SPEC.md:2777); the
     agent is revoked and its bearer 401s (cli-reference.md:93-94)."""
     agent = register(t1, "adm-leaver")
     out = uds(t1, "POST", "/admin/agent/deregister", token=agent["token"])

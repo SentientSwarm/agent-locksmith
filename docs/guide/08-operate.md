@@ -105,7 +105,7 @@ locksmith --format json audit query --agent "$BILLING_BOT_ID" | jq length
 ![The restored instance serves the same agent](img/08-operate/after-restore.svg)
 
 Anything changed after the backup was taken is not in the restored copy.
-For sealed state, see [sealed-state recovery](../user/operator/sealed-state-recovery.md).
+For sealed state, see [sealed-state recovery](../operator/sealed-state-recovery.md).
 
 ## Revoke an agent
 

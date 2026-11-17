@@ -1,8 +1,8 @@
 """Agent listener in auth_mode both: mTLS and bearer each authenticate.
 
-Docs: docs/archive/v2/runbooks/m6-mtls-migration.md:26-41 (stage A: "Now both bearer AND
+Docs: docs/operator/runbooks/mtls-migration.md:26-41 (stage A: "Now both bearer AND
 mTLS work; either authenticates an agent"; audit auth_method shows which),
-docs/user/architecture.md:195-201.
+docs/concepts/architecture.md:195-201.
 """
 
 import pytest
@@ -69,7 +69,7 @@ def get(both, ctx, token=None):
 
 @case("SMK-TLS-010", area="TLS", kind="positive", covers=[IDENTITY, API])
 def test_bearer_without_cert_authenticates(both):
-    """m6-mtls-migration.md:34: in `both`, an agent with no cert still authenticates
+    """mtls-migration.md:34: in `both`, an agent with no cert still authenticates
     with its bearer; the audit row records auth_method bearer."""
     t = both["t"]
     before, since = t.upstream_counts(), now_ms()
@@ -85,7 +85,7 @@ def test_bearer_without_cert_authenticates(both):
 
 @case("SMK-TLS-011", area="TLS", kind="positive", covers=[IDENTITY, API])
 def test_cert_authenticates_in_both_mode(both):
-    """m6-mtls-migration.md:34-41: in `both`, a bound cert authenticates the same agent
+    """mtls-migration.md:34-41: in `both`, a bound cert authenticates the same agent
     and the audit row records auth_method mtls."""
     t = both["t"]
     before, since = t.upstream_counts(), now_ms()
@@ -108,7 +108,7 @@ def test_cert_authenticates_in_both_mode(both):
     codes=["invalid_credential"],
 )
 def test_no_cert_wrong_bearer_is_401(both):
-    """m6-mtls-migration.md:34 with cli-reference.md exit/HTTP semantics: in `both`
+    """mtls-migration.md:34 with cli-reference.md exit/HTTP semantics: in `both`
     with no cert the bearer path decides; a wrong bearer is 401 invalid_credential."""
     t = both["t"]
     before = t.upstream_counts()

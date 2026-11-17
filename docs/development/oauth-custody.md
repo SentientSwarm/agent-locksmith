@@ -3,7 +3,7 @@
 AGENT-197 supplies committed incarnation/version identity and stale-write
 protection. The local AGENT-205 change extends that same sealed repository with
 pre-request uncertainty and owned refresh scopes; no parallel account store is
-introduced. See [operator recovery](../user/operator/oauth-recovery.md).
+introduced. See [operator recovery](../operator/oauth-recovery.md).
 
 ## Stored identity and migration
 

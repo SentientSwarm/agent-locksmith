@@ -4,7 +4,8 @@
 //! template, so admission (D4), the proxy and the catalog are unchanged.
 //! `registration_backends` stores declared backends and `backend_bindings`
 //! stashes per-agent bindings for backends that are not active. See
-//! migration 0025 and `docs/archive/design/2026-11-11-brokered-routes.md` §1.
+//! migration 0025, `docs/concepts/per-agent-credentials.md` and the CLI
+//! reference's "Route backends" section.
 
 use sqlx::{Row, SqlitePool};
 

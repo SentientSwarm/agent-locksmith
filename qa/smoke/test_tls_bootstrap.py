@@ -1,6 +1,6 @@
 """Bootstrap-only enrolment listener (listen.bootstrap_only).
 
-Docs: docs/archive/v2/runbooks/m6-mtls-onboarding.md §4 and §7 (lines 61-86, 128-156) and
+Docs: docs/operator/runbooks/mtls-onboarding.md §4 and §7 (lines 61-86, 128-156) and
 CHANGELOG.md 3.0.0 lines 5-12 (binds; needs admin_socket; host must be an IP;
 port and certificate must be usable; the bootstrap secret is verified before the
 agent is created).
@@ -83,7 +83,7 @@ def agent_names(t):
     covers=[REGISTER, LISTENER, "cli.bootstrap.mint"],
 )
 def test_bootstrap_listener_enrols_with_token(boot):
-    """m6-mtls-onboarding.md:142-153 and CHANGELOG.md:5-7: the listener binds at startup,
+    """mtls-onboarding.md:142-153 and CHANGELOG.md:5-7: the listener binds at startup,
     and a bootstrap token alone (no operator credential) registers an agent."""
     t = boot["t"]
     assert any(
@@ -126,7 +126,7 @@ def test_wrong_secret_is_401_and_creates_nothing(boot):
     codes=["agent_name_conflict"],
 )
 def test_name_conflict_is_409(boot):
-    """m6-mtls-onboarding.md:128-153 with cli-reference.md exit code 5 (409 conflict): a
+    """mtls-onboarding.md:128-153 with cli-reference.md exit code 5 (409 conflict): a
     valid token registering a name already in use gets 409 agent_name_conflict."""
     t = boot["t"]
     assert "qa-tls-boot-a" in agent_names(t)
@@ -143,7 +143,7 @@ def test_name_conflict_is_409(boot):
     codes=["invalid_credential"],
 )
 def test_single_use_token_cannot_enrol_twice(boot):
-    """m6-mtls-onboarding.md:66-73 and cli-reference.md:134 (mint is single-use unless
+    """mtls-onboarding.md:66-73 and cli-reference.md:134 (mint is single-use unless
     --reusable): a consumed token is refused 401 and creates no second agent."""
     t = boot["t"]
     token = mint(t)
@@ -156,7 +156,7 @@ def test_single_use_token_cannot_enrol_twice(boot):
 
 @case("SMK-TLS-044", area="TLS", kind="corner", covers=[LISTENER])
 def test_only_register_is_served(boot):
-    """m6-mtls-onboarding.md:130,155: the listener accepts ONLY POST /admin/agent/register;
+    """mtls-onboarding.md:130,155: the listener accepts ONLY POST /admin/agent/register;
     every other path returns 404, even with a valid operator bearer."""
     t = boot["t"]
     for method, path in (
@@ -202,7 +202,7 @@ def refuses_to_start(offline, overlay, expect):
     codes=[],
 )
 def test_bootstrap_without_admin_socket_refuses_to_start(offline):
-    """m6-mtls-onboarding.md:142-145 and CHANGELOG.md:7-9: the listener needs
+    """mtls-onboarding.md:142-145 and CHANGELOG.md:7-9: the listener needs
     listen.admin_socket; startup fails when it is missing."""
     block = bootstrap_block(offline["files"], free_port())
     refuses_to_start(
@@ -220,7 +220,7 @@ def test_bootstrap_without_admin_socket_refuses_to_start(offline):
     codes=[],
 )
 def test_bootstrap_host_must_be_ip(offline):
-    """m6-mtls-onboarding.md:143 ("`host` must be an IP address") and CHANGELOG.md:8."""
+    """mtls-onboarding.md:143 ("`host` must be an IP address") and CHANGELOG.md:8."""
     block = bootstrap_block(offline["files"], free_port(), host="localhost")
     refuses_to_start(
         offline, {"listen": {"bootstrap_only": block}}, "must be an IP address"
@@ -235,7 +235,7 @@ def test_bootstrap_host_must_be_ip(offline):
     codes=[],
 )
 def test_bootstrap_port_or_cert_unusable_refuses_to_start(offline):
-    """m6-mtls-onboarding.md:144-145 and CHANGELOG.md:8-9: the daemon binds the port and
+    """mtls-onboarding.md:144-145 and CHANGELOG.md:8-9: the daemon binds the port and
     loads the certificate at startup and refuses to start if either fails."""
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))

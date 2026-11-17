@@ -10,7 +10,7 @@ Generic sections live in `src/skill_template.md` and `src/skill/*.md`.
 `src/skill/personal.rs` selects safe display fields and separates personalized
 HTTP recipes from native instructions. Native connections are distinct from
 callable tools. Machine consumers use JSON discovery and complete native schemas,
-not Markdown parsing. See the [skill reference](../user/agent-integration/skill-reference.md).
+not Markdown parsing. See the [skill reference](../reference/skill-reference.md).
 
 ## Repeatable verification
 

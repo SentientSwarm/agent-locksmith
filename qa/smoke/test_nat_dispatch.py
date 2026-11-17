@@ -1,8 +1,8 @@
 """Operator observe/review/grant and reviewed native dispatch to a TLS upstream.
 
-Docs: docs/user/operator/native-tool-review.md, native-tool-grants.md,
+Docs: docs/operator/native-tool-review.md, native-tool-grants.md,
 native-oauth.md (select-oauth refusals), and the agent guides
-docs/user/agent-integration/native-mcp.md and compact-mcp.md.
+docs/agents/native-mcp.md and compact-mcp.md.
 """
 
 import base64
@@ -72,10 +72,10 @@ def calls(env) -> int:
 def test_observe_review_grant_then_call_reaches_upstream(env):
     """The documented operator workflow grants one finite tool; a fresh session lists and calls it.
 
-    docs/user/operator/native-tool-review.md:81-101 (show/observe; initialize and list only,
+    docs/operator/native-tool-review.md:81-101 (show/observe; initialize and list only,
     never calls tools), :103-125 (review returns contract_digest, prepared_only),
-    docs/user/operator/native-tool-grants.md:13-29, :51-57 (show/replace),
-    docs/user/agent-integration/native-mcp.md:56-65 (list holds only effective reviewed tools;
+    docs/operator/native-tool-grants.md:13-29, :51-57 (show/replace),
+    docs/agents/native-mcp.md:56-65 (list holds only effective reviewed tools;
     explicit None sends no credential).
     """
     t, fake = env["t"], env["fake"]
@@ -143,8 +143,8 @@ def test_observe_review_grant_then_call_reaches_upstream(env):
 def test_sealed_bearer_selection_is_injected_upstream(env):
     """A live sealed-bearer selection is used for observation and reviewed dispatch; agents never hold it.
 
-    docs/user/operator/native-tool-review.md:33-45; docs/user/operator/native-mcp.md:81-83;
-    docs/user/agent-integration/native-mcp.md:10-11.
+    docs/operator/native-tool-review.md:33-45; docs/operator/native-mcp.md:81-83;
+    docs/agents/native-mcp.md:10-11.
     """
     t, fake = env["t"], env["fake"]
     agent = register(t, "nat-disp-bearer", "natdisp", select=False)
@@ -182,7 +182,7 @@ def test_sealed_bearer_selection_is_injected_upstream(env):
 def test_revocation_refuses_pinned_tool_without_dispatch(env):
     """Existing pins still require current grants on every call; an empty tools array revokes.
 
-    docs/user/agent-integration/native-mcp.md:61-65; docs/user/operator/native-tool-grants.md:57-59.
+    docs/agents/native-mcp.md:61-65; docs/operator/native-tool-grants.md:57-59.
     """
     t = env["t"]
     agent = register(t, "nat-disp-revoke", "natdisp")
@@ -207,7 +207,7 @@ def test_revocation_refuses_pinned_tool_without_dispatch(env):
 def test_compact_search_describe_invoke(env):
     """Compact adds compact_path; search, full describe, then invoke the ordinary checked call.
 
-    docs/user/agent-integration/compact-mcp.md:5-15, :19-41, :43-63, :81-83 (schema_required).
+    docs/agents/compact-mcp.md:5-15, :19-41, :43-63, :81-83 (schema_required).
     """
     t, fake = env["t"], env["fake"]
     agent = register(t, "nat-cmp-agent", "natcmp")
@@ -262,7 +262,7 @@ def test_compact_search_describe_invoke(env):
 def test_wrong_operator_token_is_auth_failure(env):
     """The same authenticated operator API serves preparation; a wrong operator token is refused (exit 3).
 
-    docs/user/operator/native-tool-review.md:140-146; docs/user/cli-reference.md:314.
+    docs/operator/native-tool-review.md:140-146; docs/reference/cli-reference.md:314.
     """
     t = env["t"]
     agent = register(t, "nat-disp-badop", "natdisp")
@@ -302,8 +302,8 @@ def test_wrong_operator_token_is_auth_failure(env):
 def test_stale_preconditions_refuse_observe_and_review(env):
     """Echo exact returned preconditions; changed source/generation refuses with 409.
 
-    docs/user/operator/native-tool-review.md:85-92, :196-201; docs/user/operator/native-tool-grants.md:70-72;
-    docs/user/operator/native-context.md:90.
+    docs/operator/native-tool-review.md:85-92, :196-201; docs/operator/native-tool-grants.md:70-72;
+    docs/operator/native-context.md:90.
     """
     t = env["t"]
     agent = register(t, "nat-disp-stale", "natdisp")
@@ -377,7 +377,7 @@ def test_stale_preconditions_refuse_observe_and_review(env):
 def test_stale_grant_revision_is_409(env):
     """A changed grant revision refuses the write; `revision: null` creates an absent set only.
 
-    docs/user/operator/native-tool-grants.md:42-57, :70-72.
+    docs/operator/native-tool-grants.md:42-57, :70-72.
     """
     t = env["t"]
     agent = register(t, "nat-disp-cas", "natdisp")
@@ -414,7 +414,7 @@ def test_stale_grant_revision_is_409(env):
     codes=["review_required"],
 )
 def test_unreviewed_digest_cannot_be_granted(env):
-    """All entries must match current reviewed contracts. docs/user/operator/native-tool-grants.md:55-57."""
+    """All entries must match current reviewed contracts. docs/operator/native-tool-grants.md:55-57."""
     t = env["t"]
     agent = register(t, "nat-disp-unrev", "natdisp")
     observed = observe(t, "natdisp", agent["id"])
@@ -436,8 +436,8 @@ def test_unreviewed_digest_cannot_be_granted(env):
 def test_stale_source_or_generation_refuses_grant_replace(env):
     """A changed source or generation refuses the grant write (409); echo exact current preconditions.
 
-    docs/user/operator/native-tool-grants.md:31-33, :42-44, :70-72; docs/user/operator/native-tool-review.md:196-201;
-    docs/user/operator/native-context.md:90.
+    docs/operator/native-tool-grants.md:31-33, :42-44, :70-72; docs/operator/native-tool-review.md:196-201;
+    docs/operator/native-context.md:90.
     """
     t = env["t"]
     agent = register(t, "nat-disp-grantcas", "natdisp")
@@ -475,7 +475,7 @@ def test_stale_source_or_generation_refuses_grant_replace(env):
 def test_oauth_selection_refusals(env):
     """Missing If-Match is 428; an unavailable store/key is 503.
 
-    docs/user/operator/native-oauth.md:56-66.
+    docs/operator/native-oauth.md:56-66.
     """
     t = env["t"]
     agent = register(t, "nat-disp-oauth", "natdisp", select=False)
@@ -510,7 +510,7 @@ def test_oauth_selection_refusals(env):
 def test_native_registration_validation(env):
     """Non-HTTPS endpoints, proxied egress, unsupported versions and private destinations without opt-in reject.
 
-    docs/user/operator/native-mcp.md:87-96.
+    docs/operator/native-mcp.md:87-96.
     """
     t, url = env["t"], env["fake"].url
     cases = [
@@ -560,7 +560,7 @@ def test_native_registration_validation(env):
 def test_untrusted_upstream_certificate_publishes_nothing(target_factory):
     """Upstreams must use verified HTTPS; without the CA in `mcp.upstream_ca_bundle` observation fails.
 
-    docs/user/operator/native-tool-review.md:55-63, :98-101.
+    docs/operator/native-tool-review.md:55-63, :98-101.
     """
     from fakes.nat_mcp import FakeMcp
     from fakes.pki import CA
