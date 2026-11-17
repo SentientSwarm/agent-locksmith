@@ -932,6 +932,29 @@ mod tests {
         assert_eq!(i.report().verdict, Verdict::Redact);
     }
 
+    /// AGENT-311: a key joined onto its BEGIN line with spaces, longer
+    /// than an END is looked for across, is redacted whole when streamed.
+    #[test]
+    fn a_streamed_space_joined_key_is_redacted_whole() {
+        let words: Vec<String> = (0..200).map(|_| "QUJD".repeat(16)).collect();
+        let text = format!(
+            "Here: -----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED \
+             DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF {}",
+            words.join(" ")
+        );
+        let mut events: Vec<String> = text
+            .as_bytes()
+            .chunks(64)
+            .map(|c| chat(std::str::from_utf8(c).unwrap()))
+            .collect();
+        events.push(chat(". That is all."));
+        events.push(DONE.to_string());
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains("QUJD"), "a key word was forwarded");
+        assert!(out.contains("That is all"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
     /// AGENT-273: a stream the upstream broke off or the agent left is
     /// judged for the audit, but nothing it holds is sent.
     #[test]

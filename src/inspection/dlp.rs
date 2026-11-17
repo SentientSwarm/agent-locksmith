@@ -235,6 +235,84 @@ fn read_line(units: &mut PemUnits, line: &mut Vec<Unit>, may_be_header: bool) ->
     }
 }
 
+/// How reading the rest of a BEGIN line stopped.
+#[derive(PartialEq)]
+enum JoinedStop {
+    /// A line break: the key may go on, line by line.
+    Newline,
+    /// The end of the text.
+    End,
+    /// A `-----` marker (an END or another BEGIN line), or a character
+    /// a key or its headers cannot hold.
+    Other,
+}
+
+/// Read the rest of a BEGIN line into `line`. A key may be joined onto it
+/// with spaces, headers and all (`-----BEGIN RSA PRIVATE KEY----- Proc-Type:
+/// 4,ENCRYPTED DEK-Info: ... MIIE...`), so base64, blanks and the header
+/// characters `:`, `,` and `-` are read (AGENT-311). It stops at the next
+/// `-----`, so BEGIN lines packed onto one line cost linear time.
+fn read_joined(units: &mut PemUnits, line: &mut Vec<Unit>) -> JoinedStop {
+    loop {
+        let Some(u) = units.next() else {
+            return JoinedStop::End;
+        };
+        match u.byte {
+            b'\n' => return JoinedStop::Newline,
+            b' ' | b'\t' | b'\r' | b':' | b',' | b'-' => {}
+            b if is_base64(b) => {}
+            _ => return JoinedStop::Other,
+        }
+        line.push(u);
+        let dashes = line.iter().rev().take_while(|u| u.byte == b'-').count();
+        if dashes == 5 {
+            line.truncate(line.len() - 5);
+            return JoinedStop::Other;
+        }
+    }
+}
+
+/// Where a key on its BEGIN line ends, and whether all of the line was
+/// key or headers. One base64 word is a key line however short (the key's
+/// first line on the BEGIN line). Several words are a key joined onto it
+/// with spaces when one is base64 of at least `JOINED_WORD_MIN`
+/// characters; the others may be RFC 1421 header words (holding `:` or
+/// `,`) or shorter base64. At `at_end`, the text stops inside the line, so
+/// headers then a word not yet long count too. Prose (`-----BEGIN PRIVATE
+/// KEY----- and so on`) has no long word, so it is not taken for a key.
+fn joined_key(body: &[Unit], at_end: bool) -> (Option<usize>, bool) {
+    let mut end = None;
+    let (mut long, mut base64_words, mut headers, mut words) = (false, 0, 0, 0);
+    let mut last_base64 = false;
+    let mut whole = true;
+    for word in body
+        .split(|u| matches!(u.byte, b' ' | b'\t' | b'\r'))
+        .filter(|w| !w.is_empty())
+    {
+        words += 1;
+        last_base64 = word.iter().all(|u| is_base64(u.byte));
+        if last_base64 {
+            base64_words += 1;
+            long |= word.len() >= JOINED_WORD_MIN;
+            end = word.last().map(|u| u.end);
+        } else if word.iter().any(|u| matches!(u.byte, b':' | b',')) {
+            headers += 1;
+        } else {
+            whole = false;
+            break;
+        }
+    }
+    let cut_short = at_end && whole && headers > 0 && last_base64;
+    if long || (words == 1 && base64_words == 1) || cut_short {
+        (end, whole)
+    } else {
+        (None, whole && base64_words == 0)
+    }
+}
+
+/// The shortest base64 word taken for key material on a BEGIN line.
+const JOINED_WORD_MIN: usize = 16;
+
 fn is_header(body: &[Unit]) -> bool {
     starts_with(body, b"Proc-Type:") || starts_with(body, b"DEK-Info:")
 }
@@ -260,7 +338,26 @@ fn pem_extend(text: &str, header_end: usize, ends: &[(usize, usize)]) -> usize {
     let mut after_header = false;
     let mut seen_key = false;
     let mut line = Vec::new();
-    for i in 0.. {
+    // The rest of the BEGIN line: empty, or a key joined onto it.
+    let stop = read_joined(&mut units, &mut line);
+    let at_end = stop == JoinedStop::End
+        && line
+            .last()
+            .is_some_and(|u| !matches!(u.byte, b' ' | b'\t' | b'\r'));
+    let joined = trimmed(&line);
+    let (joined_end, whole) = joined_key(joined, at_end);
+    if let Some(e) = joined_end {
+        end = e;
+        seen_key = true;
+    } else if whole && !joined.is_empty() {
+        // Header words only: the RFC 1421 blank line may follow.
+        end = joined.last().map_or(end, |u| u.end);
+        after_header = true;
+    }
+    if !whole || stop != JoinedStop::Newline {
+        return header_end + end;
+    }
+    for i in 1.. {
         line.clear();
         // RFC 1421 headers (`Proc-Type`, `DEK-Info`) are the two lines
         // after BEGIN: more would let packed headers walk the whole text.
@@ -273,9 +370,9 @@ fn pem_extend(text: &str, header_end: usize, ends: &[(usize, usize)]) -> usize {
             end = body.last().map_or(end, |u| u.end);
             after_header = header;
             seen_key |= !header;
-        } else if !(body.is_empty() && (i == 0 || after_header)) {
-            // Anything but the rest of the BEGIN line or a blank line
-            // after RFC 1421 headers ends the block. Blank lines after
+        } else if !(body.is_empty() && after_header) {
+            // Anything but a blank line after RFC 1421 headers ends the
+            // block. Blank lines after
             // headers are not limited to one: covering more of a body is
             // the safe side, and a stream keeps the BEGIN line held
             // across them as whitespace (AGENT-311). A key quoted in a
@@ -1112,6 +1209,96 @@ mod tests {
         assert_eq!(end, text.len(), "the key's tail must be covered");
     }
 
+    /// AGENT-311: a key joined onto its BEGIN line with spaces (headers
+    /// and base64 on one line), with no END within `PEM_BODY_MAX`, is
+    /// covered to its last base64, not just its BEGIN line.
+    #[test]
+    fn a_space_joined_key_without_a_near_end_is_covered() {
+        let words: Vec<String> = (0..200).map(|_| "QUJD".repeat(16)).collect();
+        let body = words.join(" ");
+        for (head, tail) in [
+            (
+                "-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED \
+                 DEK-Info: AES-128-CBC,00112233445566778899AABBCCDDEEFF ",
+                " -----END RSA PRIVATE KEY-----",
+            ),
+            ("-----BEGIN PRIVATE KEY----- ", ". That is all."),
+        ] {
+            let text = format!("x {head}{body}{tail}");
+            assert!(body.len() > super::PEM_BODY_MAX);
+            let (_, start, end) = super::rule_hits(&text)
+                .into_iter()
+                .find(|(id, ..)| *id == "private_key")
+                .expect("private_key hit");
+            assert_eq!(start, 2);
+            assert_eq!(end, 2 + head.len() + body.len(), "{head}");
+        }
+    }
+
+    /// A key's first line on its BEGIN line (no space, or one space),
+    /// then line after line, with no END within `PEM_BODY_MAX`: one word
+    /// of base64 there is a key line however short, as before AGENT-311.
+    #[test]
+    fn a_first_key_line_on_the_begin_line_is_walked() {
+        let line = "QUJD".repeat(16);
+        let rest: String = (0..200).map(|_| format!("\n{line}")).collect();
+        for joint in ["", " "] {
+            let text = format!("x -----BEGIN PRIVATE KEY-----{joint}MIIE{rest}\n-- done");
+            let (_, start, end) = super::rule_hits(&text)
+                .into_iter()
+                .find(|(id, ..)| *id == "private_key")
+                .expect("private_key hit");
+            assert_eq!(start, 2);
+            assert_eq!(end, text.len() - "\n-- done".len(), "{joint:?}");
+        }
+    }
+
+    /// RFC 1421 headers joined onto the BEGIN line, then the blank line,
+    /// then the key, with no END within `PEM_BODY_MAX`; and a short key
+    /// on the BEGIN line closed by a quote.
+    #[test]
+    fn headers_on_the_begin_line_then_a_blank_line_are_walked() {
+        let line = "QUJD".repeat(16);
+        let rest: String = (0..200).map(|_| format!("\n{line}")).collect();
+        let text = format!(
+            "x -----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED \
+             DEK-Info: AES-128-CBC,0011\n{rest}\n-- done"
+        );
+        let (_, _, end) = super::rule_hits(&text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert_eq!(end, text.len() - "\n-- done".len());
+        let text = "x -----BEGIN PRIVATE KEY-----AB==\"} and more";
+        let (_, _, end) = super::rule_hits(text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert_eq!(&text[end - 4..end], "AB==");
+    }
+
+    /// In a stream the text can stop inside a joined key's first word, or
+    /// after a short word with long ones to come: the hit covers it and
+    /// stays open.
+    #[test]
+    fn a_joined_key_cut_short_by_the_stream_stays_open() {
+        let long = "QUJD".repeat(16);
+        for cut in [
+            "-----BEGIN PRIVATE KEY----- MIIEvQ".to_string(),
+            format!("-----BEGIN PRIVATE KEY----- {long} AB {long} MI"),
+            format!("-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED {long} AB"),
+        ] {
+            let text = format!("x {cut}");
+            let hits = Dlp.scan(&text, Direction::Response).unwrap();
+            let hit = hits
+                .iter()
+                .find(|h| h.rule == "private_key")
+                .expect("private_key hit");
+            assert_eq!(hit.end, text.len(), "{cut}");
+            assert!(Dlp.holds_open(&text, hit), "{cut}");
+        }
+    }
+
     /// AGENT-311: a key closed by its END line is not held open, so blank
     /// padding after many BEGIN lines sharing one END isn't walked once per
     /// hit on every scan.
@@ -1243,6 +1430,8 @@ mod tests {
             "-----BEGIN PRIVATE KEY-----QUJD",
             "-----BEGIN PRIVATE KEY-----\nDEK-Info: ",
             "-----BEGIN PRIVATE KEY----- \\",
+            "-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED DEK-Info: AES-128-CBC,AB ",
+            "-----BEGIN PRIVATE KEY----- QUJD QUJD ",
         ] {
             let text = unit.repeat((1 << 20) / unit.len());
             let started = std::time::Instant::now();

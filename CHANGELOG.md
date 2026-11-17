@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A PEM private key joined onto its `BEGIN` line with spaces, headers
+  and all, with no `END` line within 8 KiB, is redacted to its last
+  base64 word, in a body or a streamed response (AGENT-311). Before,
+  only the `BEGIN` line was removed and the key was forwarded.
 - A streamed response no longer runs out of outputs to inspect at
   about 15 parallel tool calls under `fail_closed` (AGENT-273). Each
   call takes two of the 31 outputs a stream could inspect at once;
