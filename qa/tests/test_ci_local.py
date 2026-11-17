@@ -1,6 +1,7 @@
 """Tests for scripts/ci-local.py, the local CI runner."""
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -54,6 +55,18 @@ def test_a_failure_step_runs_after_a_failed_step(tmp_path):
         ("always", "pass"),
     ]
     assert (tmp_path / "marker").exists()
+
+
+def test_steps_run_with_the_hosted_runner_umask(tmp_path):
+    # AGENT-294: a 002 login umask made dist/edge tests create group-writable
+    # directories that the guard rightly refuses. Hosted runners use 022.
+    old = os.umask(0o002)
+    try:
+        ok, _ = run([{"name": "u", "run": "umask > umask.txt"}], tmp_path)
+    finally:
+        os.umask(old)
+    assert ok
+    assert (tmp_path / "umask.txt").read_text().strip() == "0022"
 
 
 def test_a_failure_step_is_skipped_on_success(tmp_path):

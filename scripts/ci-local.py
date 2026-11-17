@@ -262,6 +262,9 @@ def run_job(name, job, ctx, env, ws, repo, evidence, log):
                     env=run_env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
+                    # Hosted runners' umask; a 002 login umask breaks
+                    # mode-checking tests (AGENT-294).
+                    umask=0o022,
                 )
                 return proc.returncode == 0
 
