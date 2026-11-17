@@ -557,6 +557,36 @@ mod tests {
     }
 
     #[test]
+    fn a_key_escaped_inside_json_nested_in_a_string_is_found() {
+        // AGENT-270: tool arguments are often JSON in a JSON string. Two
+        // levels of escaping hide `g` behind `\\u0067`.
+        let t = token(31);
+        let inner = serde_json::json!({ "k": format!("\\u0067{}", &t[1..]) }).to_string();
+        let body = serde_json::json!({ "args": inner }).to_string();
+        assert!(!body.contains("ghp_"), "{body}");
+        for verdict in [Verdict::Block, Verdict::Redact] {
+            let out = outcome("application/json", body.as_bytes(), verdict);
+            let Outcome::Block { report } = out else {
+                panic!("{verdict:?}: forwarded");
+            };
+            assert!(
+                report.hits.iter().any(|h| h.rule == "github_token"),
+                "{report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_unescaping_stops_at_a_bounded_depth() {
+        let views = super::super::text::raw_views(None, "\\\\".repeat(64).as_bytes());
+        assert!(
+            views.len() <= 1 + super::super::text::NESTED_ESCAPE_DEPTH,
+            "{}",
+            views.len()
+        );
+    }
+
+    #[test]
     fn shadowed_duplicate_key_is_scanned() {
         let body = format!(r#"{{"q":"{}","q":"hi"}}"#, token(31));
         assert!(matches!(

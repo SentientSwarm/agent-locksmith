@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A key escaped inside JSON nested in a JSON string (`"{\"k\":\"\\u0067hp_…\"}"`)
+  is now found in buffered bodies (AGENT-270). The raw view was unescaped
+  once, which left the inner escapes; it is now unescaped up to four more
+  levels. Such a hit blocks under `redact`, since the rewrite can't reach
+  it. Streamed responses still unescape one level.
 - `dlp` finds two more encoded credentials (AGENT-270). A base64 run with
   letters glued to its start (`token<base64>`) is decoded at each
   alignment, so the prefix no longer garbles it, and the decoded bytes are
