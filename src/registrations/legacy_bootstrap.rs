@@ -18,24 +18,21 @@
 //! - `auth: None` (no `auth:` block) → `AuthSpec::None`. Preserves
 //!   pre-Phase-E "implicit absence means authless" semantics for
 //!   tools migrated from existing site repos.
-//! - `auth: { header, value: from_env { var } }` → `AuthSpec::Header
-//!   { header, env_var: var }`. Most operator configs use this shape.
-//! - `auth: { header: "Authorization", value: "Bearer ${VAR}" }`
-//!   (legacy string) → `AuthSpec::Bearer { env_var: VAR }` when the
-//!   prefix matches and the value contains exactly one `${...}`. Other
-//!   legacy-string shapes fall back to `AuthSpec::Header` with the
-//!   variable extracted (best-effort).
-//! - `from_file_sealed` / `from_vault` / `from_aws_secrets_manager` /
-//!   `Inline`: SKIPPED with a WARN log. AuthSpec at v2.0.0 only
-//!   supports env-var indirection. Operators using these shapes need
-//!   to either switch to env vars or wait for v0.2's richer
-//!   admin-side AuthSpec.
+//! - `value: "${VAR}"` or `from_env { var }` with no prefix →
+//!   `AuthSpec::Header { header, env_var: VAR }`.
+//! - `value: "Bearer ${VAR}"` or `from_env { var, prefix: "Bearer " }`
+//!   on the `Authorization` header → `AuthSpec::Bearer { env_var: VAR }`.
+//!   Plain-string values are read as written, before `${VAR}` expansion
+//!   (AGENT-299; see `ToolAuthConfig::written`).
+//! - Any other prefix or text, and `from_file_sealed` / `from_vault` /
+//!   `from_aws_secrets_manager` / `Inline`: SKIPPED with a WARN log per
+//!   tool. A registration carries only a variable name.
 //!
 //! Deprecated. Removed in v0.3. By then operators are expected to have
 //! either migrated to the seed catalog (E.7) or to the override-only
 //! site-repo flow (E.8).
 
-use crate::config::{AppConfig, ToolAuthConfig};
+use crate::config::{AppConfig, ToolAuthConfig, WrittenValue};
 use crate::registrations::{
     AuthSpec, Kind, Registration, RegistrationError, RegistrationRepository,
 };
@@ -110,48 +107,49 @@ pub async fn bootstrap_from_config_tools(
     Ok((inserted, skipped_existing, skipped_unsupported))
 }
 
-/// Translate a pre-Phase-E `ToolAuthConfig` to a v2.0.0 `AuthSpec`.
-/// Returns `None` for shapes we can't represent (sealed file, Vault,
-/// AWS, Inline, legacy strings without a single `${VAR}`).
+/// Translate a pre-Phase-E `ToolAuthConfig` to an `AuthSpec`, or
+/// `None` (with a warning naming the tool) for a shape no registration
+/// can carry.
 ///
-/// Always emits `AuthSpec::Header` (never `AuthSpec::Bearer`). Reason:
-/// pre-Phase-E configs commonly wrote
-/// `auth: { header: "Authorization", value: from_env { var: X, prefix: "Bearer " } }`
-/// — the `prefix` was applied at resolve time, so `resolved_creds[name]`
-/// already carries the full `Bearer <token>` header value. Using
-/// `AuthSpec::Bearer` would have the proxy hot path prepend "Bearer "
-/// a second time. Header injection takes the value verbatim, which is
-/// what the pre-Phase-E proxy did. AuthSpec::Bearer is reserved for
-/// seed-catalog entries where the env var is unambiguously just the
-/// token.
+/// A registration keeps the variable name, so the value must be
+/// recoverable from it:
+/// - `${VAR}`, or `from_env` without a prefix → `Header`: the variable
+///   holds the whole header value.
+/// - `Bearer ${VAR}`, or `from_env` with prefix `Bearer `, on the
+///   `Authorization` header → `Bearer`: the variable holds the token and
+///   the proxy adds `Bearer `.
+/// - Any other prefix or text, a `Bearer` prefix on another header,
+///   sealed file, Vault, AWS or inline values are not migrated.
 fn translate_auth(tool_name: &str, ta: &ToolAuthConfig) -> Option<AuthSpec> {
-    match &ta.value {
-        SecretRef::FromEnv { var, .. } => Some(AuthSpec::Header {
-            header: ta.header.clone(),
-            env_var: var.clone(),
-        }),
-        SecretRef::LegacyString(s) => {
-            // Pre-Phase-E "Bearer ${VAR}" or "${VAR}" form. Best-effort
-            // parse: find the first ${...} reference.
-            let var = extract_single_env_var(s)?;
-            Some(AuthSpec::Header {
-                header: ta.header.clone(),
-                env_var: var,
-            })
+    let authorization = ta.header.eq_ignore_ascii_case("authorization");
+    let header = |var: &str| AuthSpec::Header {
+        header: ta.header.clone(),
+        env_var: var.to_owned(),
+    };
+    let bearer = |var: &str| AuthSpec::Bearer {
+        env_var: var.to_owned(),
+    };
+    let spec = match (&ta.value, &ta.written) {
+        (SecretRef::FromEnv { var, prefix }, _) => match prefix.as_deref().unwrap_or("") {
+            "" => Some(header(var)),
+            "Bearer " if authorization => Some(bearer(var)),
+            _ => None,
+        },
+        (SecretRef::LegacyString(_), Some(WrittenValue::Var(var))) => Some(header(var)),
+        (SecretRef::LegacyString(_), Some(WrittenValue::BearerVar(var))) if authorization => {
+            Some(bearer(var))
         }
-        SecretRef::FromFileSealed { .. }
-        | SecretRef::FromVault { .. }
-        | SecretRef::FromAwsSecretsManager { .. }
-        | SecretRef::Inline(_) => {
-            warn!(
-                tool = %tool_name,
-                shape = %ta.value,
-                "legacy bootstrap: unsupported auth shape; tool not migrated to registrations \
-                 (use admin PUT once v0.2 admin-side AuthSpec lands, or switch to env-var auth)"
-            );
-            None
-        }
+        _ => None,
+    };
+    if spec.is_none() {
+        warn!(
+            tool = %tool_name,
+            shape = %ta.value,
+            "legacy bootstrap: unsupported auth shape; tool not migrated to registrations \
+             (register it with the admin API, or write the value as `${{VAR}}` or `Bearer ${{VAR}}`)"
+        );
     }
+    spec
 }
 
 /// Extract a single `${VAR}` reference from a legacy-string value.
@@ -183,3 +181,7 @@ fn unix_now() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "legacy_bootstrap_tests.rs"]
+mod tests;

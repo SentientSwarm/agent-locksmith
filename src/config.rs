@@ -564,6 +564,43 @@ pub struct ToolAuthConfig {
     /// { from_env: { var: ... } }`, `from_file_sealed`, etc.). See
     /// `crate::secret::SecretRef` for the deserialization contract.
     pub value: SecretRef,
+    /// How a plain-string `value` was written before `${VAR}` expansion
+    /// (AGENT-299). Set by [`parse_config_str`]; `None` for typed values
+    /// or when the unexpanded YAML could not be matched to this tool.
+    #[serde(skip)]
+    pub written: Option<WrittenValue>,
+}
+
+/// The shape of a plain-string `auth.value` as the operator wrote it.
+/// Only the variable name is kept: other text may be a literal secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrittenValue {
+    /// `${VAR}` and nothing else.
+    Var(String),
+    /// `Bearer ${VAR}` and nothing else.
+    BearerVar(String),
+    /// Any other text.
+    Other,
+}
+
+impl WrittenValue {
+    fn classify(text: &str) -> Self {
+        let whole_var = |t: &str| {
+            t.strip_prefix("${")
+                .and_then(|t| t.strip_suffix('}'))
+                .filter(|n| {
+                    !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+                .map(str::to_owned)
+        };
+        if let Some(var) = whole_var(text) {
+            Self::Var(var)
+        } else if let Some(var) = text.strip_prefix("Bearer ").and_then(whole_var) {
+            Self::BearerVar(var)
+        } else {
+            Self::Other
+        }
+    }
 }
 
 impl AppConfig {
@@ -639,7 +676,45 @@ pub fn expand_env_vars(input: &str) -> String {
 pub fn parse_config_str(raw: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     let expanded = expand_env_vars(raw);
     let registry = default_registry();
-    parse_with_registry(&expanded, &registry)
+    let mut config = parse_with_registry(&expanded, &registry)?;
+    keep_written_auth_values(raw, &mut config);
+    Ok(config)
+}
+
+/// AGENT-299: record how each tool's plain-string `auth.value` was
+/// written, because expansion has already replaced its `${VAR}`. The
+/// legacy bootstrap needs the variable name, not the value.
+fn keep_written_auth_values(raw: &str, config: &mut AppConfig) {
+    let has_text = config.tools.iter().any(|t| {
+        matches!(
+            t.auth.as_ref().map(|a| &a.value),
+            Some(SecretRef::LegacyString(_))
+        )
+    });
+    let doc = serde_yaml::from_str::<serde_yaml::Value>(raw).ok();
+    let tools = doc
+        .as_ref()
+        .and_then(|d| d.get("tools"))
+        .and_then(|t| t.as_sequence())
+        .filter(|t| t.len() == config.tools.len());
+    let Some(tools) = tools else {
+        if has_text {
+            warn!(
+                "config: the tools entries could not be read as written, before ${{VAR}} \
+                 expansion; text auth values will not be copied into the database"
+            );
+        }
+        return;
+    };
+    for (tool, written) in config.tools.iter_mut().zip(tools) {
+        let text = written
+            .get("auth")
+            .and_then(|a| a.get("value"))
+            .and_then(|v| v.as_str());
+        if let (Some(auth), Some(text)) = (tool.auth.as_mut(), text) {
+            auth.written = Some(WrittenValue::classify(text));
+        }
+    }
 }
 
 fn parse_with_registry(

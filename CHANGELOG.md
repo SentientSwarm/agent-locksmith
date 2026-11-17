@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- Legacy `tools` credentials written as `"${VAR}"` or `"Bearer ${VAR}"`
+  are copied into the database at startup, for tool names it does not
+  already have (AGENT-299).
+  Before, the text was expanded when the file was read, so these tools
+  were skipped, and a `from_env` `prefix` was dropped, so a
+  `prefix: "Bearer "` credential reached the upstream without `Bearer `.
+  `Bearer` on the `Authorization` header now becomes a bearer
+  credential. Any other prefix or text is not copied, and the daemon
+  logs a warning for each tool it skips.
 - One failed health probe no longer marks a loaded broker down
   (AGENT-310, AGENT-312). A probe the broker fails is retried 10 s after
   it started, and the route answers 503 `backend_unavailable` only when

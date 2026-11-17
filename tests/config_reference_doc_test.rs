@@ -35,12 +35,14 @@ fn complete_example() -> &'static str {
 
 /// `(struct, field)` for every field of a strict struct. serde reads
 /// private fields too, so visibility does not matter. Attributes may span
-/// lines or share a line with the field.
+/// lines or share a line with the field. A `#[serde(skip)]` field is not
+/// read from the file, so it is not a config field.
 fn strict_fields(source: &str) -> Vec<(String, String)> {
     let field =
         regex::Regex::new(r"^(?:#\[.*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?([a-z_][a-z0-9_]*)\s*:")
             .expect("field regex");
     let (mut out, mut strict, mut current) = (Vec::new(), false, None::<String>);
+    let mut skip = false;
     let mut attr = String::new();
     for line in source.lines().map(str::trim) {
         if !attr.is_empty() || line.starts_with("#[") && !line.contains(']') {
@@ -53,14 +55,17 @@ fn strict_fields(source: &str) -> Vec<(String, String)> {
             strict = true;
         } else if let Some(rest) = line.strip_prefix("pub struct ") {
             current = strict.then(|| rest.split([' ', '{']).next().unwrap().to_string());
-            strict = false;
+            (strict, skip) = (false, false);
         } else if line.starts_with("pub enum ") || line.starts_with("enum ") {
             strict = false;
         } else if line == "}" {
-            current = None;
+            (current, skip) = (None, false);
+        } else if line == "#[serde(skip)]" {
+            skip = current.is_some();
         } else if let Some(name) = &current
             && !line.starts_with("//")
             && let Some(m) = field.captures(line)
+            && !std::mem::take(&mut skip)
         {
             out.push((name.clone(), m[1].to_string()));
         }
