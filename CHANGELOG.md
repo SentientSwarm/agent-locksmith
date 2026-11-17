@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A PEM private key whose body runs past the 8 KiB the scanner reads
+  after its `BEGIN` line is now redacted to the end of the text, not
+  just to the window's edge (AGENT-270). Escaped keys inside JSON reach
+  that size; in a JSON body the span runs past the string, so `redact`
+  blocks the body instead of forwarding the key's tail. Streamed
+  responses keep the old limit (AGENT-309).
 - Redacting a JSON body rewrites only the strings that held a hit
   (AGENT-270). Before, the body was parsed and re-serialized, which
   sorted object keys, rounded integers too big for 64 bits, and dropped

@@ -145,15 +145,40 @@ fn closes(b: u8) -> bool {
     !(0x20..0x80).contains(&b) || b" \"'}],\\<>);`.!?&|".contains(&b)
 }
 
+/// Did the window cut this, its last line, inside the key: in its base64,
+/// in an escape the cut split (the `\` of a `\/`, or of the line break
+/// after a trailing blank or escaped `\r`), or right after one of its
+/// lines? Prose after a BEGIN line is not a key.
+fn cut_inside_key(body: &[Unit], last_was_key: bool) -> bool {
+    let mut body = body;
+    // A split escape reads as a lone backslash, then what was cut of a
+    // `\uXXXX`.
+    if let Some(p) = body.iter().rposition(|u| u.escaped && u.byte == b'\\') {
+        let tail = &body[p + 1..];
+        let hex = |u: &Unit| !u.escaped && u.byte.is_ascii_hexdigit();
+        let cut_u = tail.first().is_some_and(|u| !u.escaped && u.byte == b'u')
+            && tail.len() <= 4
+            && tail[1..].iter().all(hex);
+        if tail.is_empty() || cut_u {
+            body = trimmed(&body[..p]);
+        }
+    }
+    let key = body.iter().take_while(|u| is_base64(u.byte)).count();
+    key == body.len() && (key > 0 || last_was_key)
+}
+
 /// The whole PEM block after a BEGIN line: through the END line, or, with
 /// no END in reach, through the base64 and RFC 1421 header lines that
-/// follow. Redacting only the BEGIN line would leave the key.
+/// follow. Redacting only the BEGIN line would leave the key. A key still
+/// running where the window ends (AGENT-270: escapes can double its size)
+/// is covered to the end of the text: failing safe costs prose, not a key.
 fn pem_extend(text: &str, header_end: usize) -> usize {
     let rest = &text[header_end..];
     let mut limit = rest.len().min(PEM_BODY_MAX);
     while !rest.is_char_boundary(limit) {
         limit -= 1;
     }
+    let truncated = limit < rest.len();
     let window = &rest[..limit];
     if let Some(m) = PEM_END.find(window) {
         return header_end + m.end();
@@ -164,6 +189,7 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
     };
     let mut end = 0;
     let mut after_header = false;
+    let mut last_was_key = false;
     let mut line = Vec::new();
     for i in 0.. {
         line.clear();
@@ -177,9 +203,13 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
         let body = trimmed(&line);
         let key = body.iter().take_while(|u| is_base64(u.byte)).count();
         let header = starts_with(body, b"Proc-Type:") || starts_with(body, b"DEK-Info:");
+        if !more && truncated && cut_inside_key(body, last_was_key) {
+            return text.len();
+        }
         if (key > 0 && key == body.len()) || header {
             end = body.last().map_or(end, |u| u.end);
             after_header = header;
+            last_was_key = true;
         } else if !(body.is_empty() && (i == 0 || after_header)) {
             // Anything but the rest of the BEGIN line or the blank line
             // after RFC 1421 headers ends the block. A key quoted in a
@@ -978,5 +1008,127 @@ mod tests {
             ),
             Outcome::Block { .. }
         ));
+    }
+
+    /// AGENT-270: a key line still running when the 8 KiB window ends
+    /// (a long or heavily escaped key) is not cut there: the hit runs to
+    /// the end of the text, so no tail of the key is forwarded.
+    #[test]
+    fn a_key_running_past_the_window_is_covered_to_the_end() {
+        let line = "QUJD".repeat(16); // 64 base64 characters
+        let body: String = (0..200).map(|_| format!("{line}\n")).collect();
+        let text = format!("x -----BEGIN PRIVATE KEY-----\n{body}tail");
+        assert!(text.len() > super::PEM_BODY_MAX);
+        let (_, start, end) = super::rule_hits(&text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert_eq!(start, 2);
+        assert_eq!(end, text.len(), "the key's tail must be covered");
+    }
+
+    /// `n` key lines whose `\n` breaks are JSON escapes, each line
+    /// starting with `lead`, padded so the window ends `cut` bytes into
+    /// the line after them.
+    fn cut_key(lead: &str, n: usize, cut: usize) -> String {
+        let line = format!("{lead}{}", "QUJD".repeat(16));
+        let head = "-----BEGIN PRIVATE KEY-----";
+        let used = n * (line.len() + 2);
+        let pad = super::PEM_BODY_MAX - used - cut - 2;
+        let body: String = (0..=n + 40).map(|_| format!("{line}\\n")).collect();
+        format!("{head}{}\\n{body}end", " ".repeat(pad))
+    }
+
+    #[test]
+    fn a_window_cut_inside_a_leading_escape_fails_safe() {
+        for (lead, cut) in [("\\/", 1), ("\\t", 1), ("\\u0020", 3)] {
+            let text = cut_key(lead, 100, cut);
+            let (_, _, end) = super::rule_hits(&text)
+                .into_iter()
+                .find(|(id, ..)| *id == "private_key")
+                .expect("private_key hit");
+            assert_eq!(end, text.len(), "lead {lead}");
+        }
+    }
+
+    #[test]
+    fn prose_on_a_long_begin_line_is_not_taken_for_a_key() {
+        let text = format!("-----BEGIN PRIVATE KEY----- and {}", "so on ".repeat(2000));
+        let (_, _, end) = super::rule_hits(&text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert!(end < 64, "end {end}");
+    }
+
+    #[test]
+    fn an_outsized_key_in_a_json_string_blocks_the_body() {
+        let line = "QUJD".repeat(16);
+        let pem: String = (0..200).map(|_| format!("{line}\n")).collect();
+        let body = serde_json::json!({
+            "k": format!("-----BEGIN PRIVATE KEY-----\n{pem}"),
+            "other": "hello",
+        })
+        .to_string();
+        let Outcome::Block { report } =
+            outcome("application/json", body.as_bytes(), Verdict::Redact)
+        else {
+            panic!("an outsized key in JSON must not be forwarded");
+        };
+        assert!(report.redaction_incomplete);
+    }
+
+    #[test]
+    fn every_cut_position_inside_a_key_line_fails_safe() {
+        for sep in [
+            "\\n",
+            "\\r\\n",
+            "\\\\r\\\\n",
+            "\\u000d\\u000a",
+            " \\n",
+            "\\t\\n",
+            "\n",
+            "\r\n",
+        ] {
+            let line = format!("{}{sep}", "QUJD".repeat(16));
+            let body = line.repeat(200);
+            for shift in 0..line.len() {
+                let pad = " ".repeat(shift + 1);
+                let text = format!("-----BEGIN PRIVATE KEY-----{pad}{sep}{body}end");
+                let (_, _, end) = super::rule_hits(&text)
+                    .into_iter()
+                    .find(|(id, ..)| *id == "private_key")
+                    .expect("private_key hit");
+                assert_eq!(end, text.len(), "sep {sep:?} shift {shift}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_cut_just_after_a_key_line_fails_safe() {
+        let line = "QUJD".repeat(16);
+        let body: String = (0..126).map(|_| format!("{line}\n")).collect();
+        // " \n" + 126 lines of 65 bytes is the 8192-byte window exactly.
+        let text = format!("-----BEGIN PRIVATE KEY----- \n{body}-- prose");
+        let (_, _, end) = super::rule_hits(&text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert_eq!(end, text.len());
+    }
+
+    #[test]
+    fn a_key_ending_inside_the_window_is_not_extended() {
+        let line = "QUJD".repeat(16);
+        let body: String = (0..20).map(|_| format!("{line}\n")).collect();
+        let text = format!(
+            "-----BEGIN PRIVATE KEY-----\n{body}-- prose{}",
+            " ".repeat(9000)
+        );
+        let (_, _, end) = super::rule_hits(&text)
+            .into_iter()
+            .find(|(id, ..)| *id == "private_key")
+            .expect("private_key hit");
+        assert_eq!(&text[end - 4..end], "QUJD", "ends at the last key line");
     }
 }
