@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A PEM private key with no `END` line in nested tool arguments is no
+  longer cut short by an escaped `/` or `+` in a line (`\/` from PHP and
+  json-c, `\u002B` from .NET), which forwarded the rest of the key under
+  `redact` (AGENT-270). An indented blank line after `Proc-Type`/`DEK-Info`
+  no longer ends the key, and a last key line followed by a space or
+  punctuation is kept.
 - A PEM private key with no `END` line is now redacted whole when its
   line breaks are escaped (`\n` in a JSON string, as in tool arguments),
   indented, or followed by trailing spaces, and its last line runs into a

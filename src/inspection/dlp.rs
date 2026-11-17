@@ -61,6 +61,37 @@ fn is_base64(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"+/=".contains(&b)
 }
 
+/// Bytes of base64 at the start of `line`, counting `/` and `+` written
+/// as JSON escapes (`\/`, `\u002B`, at any depth) as base64 too: some
+/// encoders escape them (AGENT-270).
+fn base64_prefix(line: &str) -> usize {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if is_base64(b[i]) {
+            i += 1;
+            continue;
+        }
+        let slashes = b[i..].iter().take_while(|&&c| c == b'\\').count();
+        let rest = &b[i + slashes..];
+        let escaped = if rest.first() == Some(&b'/') {
+            1
+        } else if rest.len() >= 5
+            && rest[..4].eq_ignore_ascii_case(b"u002")
+            && matches!(rest[4], b'B' | b'b' | b'F' | b'f')
+        {
+            5
+        } else {
+            0
+        };
+        if slashes == 0 || escaped == 0 {
+            break;
+        }
+        i += slashes + escaped;
+    }
+    i
+}
+
 /// A line break in a PEM body: raw, or escaped once or more inside a
 /// JSON string, with or without a carriage return.
 static PEM_LINE_BREAK: LazyLock<Regex> =
@@ -94,7 +125,8 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
         // code) are not part of a line's content.
         let lead = t.len() - t.trim_start_matches([' ', '\t']).len();
         let body = t[lead..].trim_end_matches([' ', '\t', '\r']);
-        let base64 = !body.is_empty() && body.bytes().all(is_base64);
+        let key = base64_prefix(body);
+        let base64 = !body.is_empty() && key == body.len();
         let header = body.starts_with("Proc-Type:") || body.starts_with("DEK-Info:");
         if base64 || header {
             end = start + lead + body.len();
@@ -102,16 +134,16 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
         } else {
             // The rest of the BEGIN line, or the blank line after RFC 1421
             // headers, is skipped; anything else ends the block.
-            let skippable = (i == 0 && t.trim().is_empty()) || (t.is_empty() && after_header);
+            let skippable = (i == 0 && body.is_empty()) || (body.is_empty() && after_header);
             if !skippable {
                 // A key quoted in a string ends its last line with the
-                // closing quote (`AB==\"}`): that base64 is the key too.
-                let key = body.bytes().take_while(|b| is_base64(*b)).count();
+                // closing quote (`AB==\"}`), and prose may follow on the
+                // same line: that base64 is the key too.
                 if key > 0
                     && body
                         .as_bytes()
                         .get(key)
-                        .is_some_and(|b| b"\"'}],\\<".contains(b))
+                        .is_some_and(|b| b" \"'}],\\<);`".contains(b))
                 {
                     end = start + lead + key;
                 }
@@ -596,6 +628,65 @@ mod tests {
             Outcome::Forward { body: None, .. } => panic!("forwarded unredacted"),
             Outcome::Block { .. } => {}
         }
+    }
+
+    /// A nested-arguments body holding `pem` with each inner `from` byte
+    /// written as `to` (how some JSON encoders escape `/` and `+`).
+    fn nested_args(pem: &str, from: char, to: &str) -> String {
+        let inner = serde_json::json!({ "key": pem })
+            .to_string()
+            .replace(from, to);
+        serde_json::json!({ "args": inner }).to_string()
+    }
+
+    fn assert_redacted_whole(body: &str, parts: &[String]) {
+        match outcome("application/json", body.as_bytes(), Verdict::Redact) {
+            Outcome::Forward {
+                body: Some(b),
+                report,
+            } => {
+                let b = String::from_utf8(b).unwrap();
+                assert!(parts.iter().all(|p| !b.contains(p.as_str())), "{b}");
+                assert!(!report.redaction_incomplete);
+            }
+            Outcome::Forward { body: None, .. } => panic!("forwarded unredacted"),
+            Outcome::Block { .. } => panic!("blocked instead of redacted"),
+        }
+    }
+
+    #[test]
+    fn escaped_slash_and_plus_in_nested_pem_lines_do_not_cut_the_key() {
+        // Review finding: `\/` (PHP, json-c) or `\u002B` (.NET) inside a
+        // line ended the match there and forwarded the rest of the key.
+        let mut g = Gen(53);
+        let parts: Vec<String> = (0..6).map(|_| g.chars(AN, 20)).collect();
+        let pem = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}/{}+{}\n{}+{}/{}",
+            parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+        );
+        assert_redacted_whole(&nested_args(&pem, '/', "\\/"), &parts);
+        assert_redacted_whole(&nested_args(&pem, '+', "\\u002B"), &parts);
+    }
+
+    #[test]
+    fn an_indented_blank_line_after_rfc1421_headers_keeps_the_key() {
+        let mut g = Gen(59);
+        let line = g.chars(AN, 64);
+        let block = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n    Proc-Type: 4,ENCRYPTED\n    DEK-Info: AES-128-CBC,ABCDEF0123456789\n    \n    {line}"
+        );
+        let text = format!("{block}\n\nprose");
+        let h = &scan(&text)[0];
+        assert_eq!(&text[h.start..h.end], block);
+    }
+
+    #[test]
+    fn a_last_key_line_followed_by_a_space_is_kept() {
+        let mut g = Gen(61);
+        let line = g.chars(AN, 40);
+        let text = format!("-----BEGIN PRIVATE KEY-----\n{line} is my key");
+        let h = &scan(&text)[0];
+        assert_eq!(h.end, text.len() - " is my key".len());
     }
 
     fn outcome(content_type: &str, body: &[u8], on_hit: Verdict) -> Outcome {
