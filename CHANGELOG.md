@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A PEM private key with no `END` line is now redacted whole when its
+  line breaks are escaped (`\n` in a JSON string, as in tool arguments),
+  indented, or followed by trailing spaces, and its last line runs into a
+  closing quote (AGENT-270). Before, only the `BEGIN` line (or the first
+  lines) matched, so `redact` could forward the key body.
 - A key escaped inside JSON nested in a JSON string (`"{\"k\":\"\\u0067hp_…\"}"`)
   is now found in buffered bodies (AGENT-270). The raw view was unescaped
   once, which left the inner escapes; it is now unescaped up to four more

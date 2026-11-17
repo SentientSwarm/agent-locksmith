@@ -57,6 +57,15 @@ const PEM_HEADER_MAX: usize = 47;
 static PEM_END: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?-u)-----END [A-Z ]{0,20}PRIVATE KEY-----").expect("compiles"));
 
+fn is_base64(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"+/=".contains(&b)
+}
+
+/// A line break in a PEM body: raw, or escaped once or more inside a
+/// JSON string, with or without a carriage return.
+static PEM_LINE_BREAK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?-u)(?:\\+r)?\\+n|\r?\n").expect("compiles"));
+
 /// The whole PEM block after a BEGIN line: through the END line, or, with
 /// no END in reach, through the base64 and RFC 1421 header lines that
 /// follow. Redacting only the BEGIN line would leave the key.
@@ -71,28 +80,48 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
         return header_end + m.end();
     }
     let mut end = 0;
-    let mut offset = 0;
+    let mut start = 0;
     let mut after_header = false;
-    for (i, line) in window.split('\n').enumerate() {
-        let t = line.trim_end_matches('\r');
-        let base64 = !t.is_empty()
-            && t.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b));
-        let header = t.starts_with("Proc-Type:") || t.starts_with("DEK-Info:");
+    // AGENT-270: inside a JSON string a line break is written `\n` (or
+    // `\\n` one level deeper), so escaped breaks end lines too.
+    let mut breaks = PEM_LINE_BREAK.find_iter(window);
+    for i in 0.. {
+        let (t, next) = match breaks.next() {
+            Some(m) => (&window[start..m.start()], Some(m.end())),
+            None => (&window[start..], None),
+        };
+        // Indentation and trailing spaces (a key pasted into YAML or
+        // code) are not part of a line's content.
+        let lead = t.len() - t.trim_start_matches([' ', '\t']).len();
+        let body = t[lead..].trim_end_matches([' ', '\t', '\r']);
+        let base64 = !body.is_empty() && body.bytes().all(is_base64);
+        let header = body.starts_with("Proc-Type:") || body.starts_with("DEK-Info:");
         if base64 || header {
-            end = offset + t.len();
+            end = start + lead + body.len();
             after_header = header;
         } else {
             // The rest of the BEGIN line, or the blank line after RFC 1421
             // headers, is skipped; anything else ends the block.
             let skippable = (i == 0 && t.trim().is_empty()) || (t.is_empty() && after_header);
-            if skippable {
-                offset += line.len() + 1;
-                continue;
+            if !skippable {
+                // A key quoted in a string ends its last line with the
+                // closing quote (`AB==\"}`): that base64 is the key too.
+                let key = body.bytes().take_while(|b| is_base64(*b)).count();
+                if key > 0
+                    && body
+                        .as_bytes()
+                        .get(key)
+                        .is_some_and(|b| b"\"'}],\\<".contains(b))
+                {
+                    end = start + lead + key;
+                }
+                break;
             }
-            break;
         }
-        offset += line.len() + 1;
+        match next {
+            Some(n) => start = n,
+            None => break,
+        }
     }
     header_end + end
 }
@@ -514,6 +543,59 @@ mod tests {
             &text[h.start..h.end],
             format!("-----BEGIN PRIVATE KEY-----\n{body}")
         );
+    }
+
+    #[test]
+    fn pem_without_end_covers_escaped_body_lines() {
+        // AGENT-270: inside a JSON string the line breaks are `\n` (or
+        // `\\n` one level deeper); the whole body is still the key.
+        let mut g = Gen(41);
+        let lines = [g.chars(AN, 64), g.chars(AN, 40)];
+        for nl in ["\\n", "\\\\n", "\\r\\n"] {
+            let block = format!(
+                "-----BEGIN PRIVATE KEY-----{nl}{}{nl}{}",
+                lines[0], lines[1]
+            );
+            let text = format!("{block}{nl}{nl}After the cut.");
+            let h = &scan(&text)[0];
+            assert_eq!(h.rule, "private_key");
+            assert_eq!(&text[h.start..h.end], block, "{nl}");
+        }
+    }
+
+    #[test]
+    fn indented_pem_with_trailing_spaces_and_no_end_is_one_hit() {
+        // AGENT-270: a key pasted into YAML or code is indented, and
+        // editors leave trailing spaces.
+        let mut g = Gen(47);
+        let lines = [g.chars(AN, 64), g.chars(AN, 64), g.chars(AN, 12)];
+        let block = format!(
+            "-----BEGIN PRIVATE KEY-----\n    {}  \n    {}\t\n    {}",
+            lines[0], lines[1], lines[2]
+        );
+        let text = format!("key: |\n  {block}\nnext: value");
+        let h = &scan(&text)[0];
+        assert_eq!(h.rule, "private_key");
+        assert_eq!(&text[h.start..h.end], block);
+    }
+
+    #[test]
+    fn a_pem_key_without_end_in_nested_tool_arguments_is_removed() {
+        // Review finding: only the BEGIN line was redacted and the body
+        // was forwarded.
+        let mut g = Gen(43);
+        let lines: Vec<String> = (0..3).map(|_| g.chars(AN, 64)).collect();
+        let pem = format!("-----BEGIN RSA PRIVATE KEY-----\n{}", lines.join("\n"));
+        let inner = serde_json::json!({ "key": pem }).to_string();
+        let body = serde_json::json!({ "args": inner }).to_string();
+        match outcome("application/json", body.as_bytes(), Verdict::Redact) {
+            Outcome::Forward { body: Some(b), .. } => {
+                let b = String::from_utf8(b).unwrap();
+                assert!(lines.iter().all(|l| !b.contains(l.as_str())), "{b}");
+            }
+            Outcome::Forward { body: None, .. } => panic!("forwarded unredacted"),
+            Outcome::Block { .. } => {}
+        }
     }
 
     fn outcome(content_type: &str, body: &[u8], on_hit: Verdict) -> Outcome {
