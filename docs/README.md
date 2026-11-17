@@ -11,6 +11,8 @@ This page is the entry point. Pick the section for what you are doing.
 
 Start with the guide. Each journey is a task done end to end, and the UAT
 runs its commands as written.
+To try Locksmith on a disposable instance first, follow
+[getting started](getting-started.md).
 
 1. [Install and first run](guide/01-install.md)
 2. [Connect an HTTP service](guide/02-http-service.md)
@@ -55,6 +57,7 @@ credentials, OAuth, egress and the [threat model](concepts/threat-model.md).
 ## Agent developers
 
 An agent needs only its Locksmith token and the Locksmith URL.
+The [agent integration index](agents/README.md) lists every agent page.
 
 - [Wire contract](reference/wire-contract.md): endpoints,
   headers, error codes and streaming.

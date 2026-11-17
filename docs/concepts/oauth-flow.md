@@ -630,6 +630,6 @@ client code required on the agent side.
   `--oauth-session` flag.
 - [`trust-boundary.md`](trust-boundary.md) — broader credential
   flow covering all auth shapes.
-- [`agent-integration/hermes.md`](../agents/hermes.md)
-  and [`agent-integration/openclaw.md`](../agents/openclaw.md) —
+- [`agents/hermes.md`](../agents/hermes.md)
+  and [`agents/openclaw.md`](../agents/openclaw.md) —
   agent-side configuration to consume OAuth-backed providers.

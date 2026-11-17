@@ -83,5 +83,5 @@ never supply implicit account authority.
 
 - [trust-boundary.md](trust-boundary.md) — what the bearer protects.
 - [error-envelope.md](../reference/error-envelope.md) — exact 401 / 403 wire shapes.
-- [../agent-integration/wire-contract.md](../reference/wire-contract.md) — full HTTP contract for agents.
-- [../agent-integration/skill-reference.md](../reference/skill-reference.md) — `/skill` endpoint detail.
+- [../reference/wire-contract.md](../reference/wire-contract.md) — full HTTP contract for agents.
+- [../reference/skill-reference.md](../reference/skill-reference.md) — `/skill` endpoint detail.

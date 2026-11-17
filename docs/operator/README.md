@@ -69,9 +69,12 @@ concept, reference and change-note pages.
 
 ## Runbooks (`runbooks/`)
 
-Each runbook was written when its feature shipped in 2.x and still
-describes how that feature works. Ignore their notes about merging to
-`develop` and upgrading from earlier milestones.
+Each runbook was written when its feature shipped in 2.x. They describe
+how the listener, TLS, sealing and response features work. Ignore their
+notes about merging to `develop` and upgrading from earlier milestones;
+for access to services, follow the [guide](../guide/README.md) and the
+[CLI reference](../reference/cli-reference.md), which describe finite
+grants and explicit accounts.
 
 | Doc | Topic |
 |---|---|
@@ -81,5 +84,4 @@ describes how that feature works. Ignore their notes about merging to
 | [runbooks/mtls-migration.md](runbooks/mtls-migration.md) | Moving a bearer fleet to mTLS without downtime. |
 | [runbooks/mtls-revocation.md](runbooks/mtls-revocation.md) | Revoking a certificate: emergency blocklist and CRL refresh. |
 | [runbooks/response-controls.md](runbooks/response-controls.md) | Response size caps, content-type allowlists and redaction. |
-| [runbooks/proxy-bearer-acl.md](runbooks/proxy-bearer-acl.md) | Per-agent bearer tokens and tool ACLs on the proxy path. |
 | [runbooks/inference-hardening.md](runbooks/inference-hardening.md) | Health endpoints (`/livez`, `/readyz`, `/version`) and the shutdown drain. |
