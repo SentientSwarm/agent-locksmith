@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- `locksmith egress policy --pipelock` quotes a single-label host
+  spelled like a YAML 1.1 boolean (`yes`, `no`, `on`, `off`, `y`, `n`),
+  which a YAML 1.1 parser would otherwise read as `true` or `false`
+  (AGENT-302).
 - A request refused because its OAuth token refresh has no egress
   writes the `egress_unenforced` security audit event, as a refused
   proxied request does and as the egress docs say (AGENT-302). It was
