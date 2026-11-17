@@ -91,7 +91,10 @@ impl Fixture {
         if let Some(key) = oauth {
             c.env("LOCKSMITH_OAUTH_SEALING_KEY", key);
         }
-        c.env("RUST_LOG", "agent_locksmith=info,rmcp=trace");
+        c.env(
+            "RUST_LOG",
+            "locksmithd=info,agent_locksmith=info,rmcp=trace",
+        );
         c.stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log));
         self.daemon = Some(process::Guard(c.spawn().unwrap()));
@@ -165,16 +168,18 @@ impl Fixture {
         }
     }
     fn assert_running(&mut self) {
-        assert!(
-            self.daemon
-                .as_mut()
-                .unwrap()
-                .0
-                .try_wait()
-                .unwrap()
-                .is_none(),
-            "daemon exited during setup"
-        );
+        let status = self.daemon.as_mut().unwrap().0.try_wait().unwrap();
+        if let Some(status) = status {
+            // The log lives in the fixture's temp dir, gone after the panic;
+            // its tail is the only record of why the daemon stopped.
+            let log = std::fs::read_to_string(self.path().join("daemon.log")).unwrap_or_default();
+            let tail: Vec<&str> = log.lines().rev().take(40).collect();
+            let tail: Vec<&str> = tail.into_iter().rev().collect();
+            panic!(
+                "daemon exited during setup ({status}); log tail:\n{}",
+                tail.join("\n")
+            );
+        }
     }
     pub fn stop(&mut self) {
         let mut child = self.daemon.take().unwrap();
