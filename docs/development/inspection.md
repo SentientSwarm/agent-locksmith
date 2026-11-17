@@ -356,7 +356,10 @@ inspection:
 Each scan is one `POST /scan` over HTTP/1.1 on its own connection, with
 `{"direction", "text"}`, answered by `{"hits": [{"rule", "start", "end",
 "score"}]}` in UTF-8 byte offsets. Hits are audited under the scanner id
-`sidecar:<name>` like any built-in scanner's. A connection failure, a
+`sidecar:<name>` like any built-in scanner's. A hit's `rule` is kept to
+its first 64 characters, with any character other than an ASCII letter,
+digit, `.`, `_`, `:` or `-` written as `_`, since it reaches the audit
+row (AGENT-278). A connection failure, a
 status other than 200, a malformed answer, a hit outside the text or a
 missed `timeout_ms` is a scanner error, and the route's `on_error`
 decides. `timeout_ms` bounds each call, connecting included. A body

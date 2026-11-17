@@ -146,7 +146,7 @@ impl Scanner for Sidecar {
                     return Err(fail(format!("hit {}..{} outside the text", h.start, h.end)));
                 }
                 Ok(Hit {
-                    rule: h.rule,
+                    rule: plain_rule(&h.rule),
                     start: h.start,
                     end: h.end,
                     flag_only: false,
@@ -154,6 +154,25 @@ impl Scanner for Sidecar {
             })
             .collect()
     }
+}
+
+/// The longest rule name a sidecar hit keeps (AGENT-278).
+const MAX_RULE_LEN: usize = 64;
+
+/// A sidecar's rule name goes into the audit row, so keep it short and
+/// plain: other characters become `_`. The hit itself is kept, so a
+/// detection is never lost to an odd name.
+fn plain_rule(rule: &str) -> String {
+    rule.chars()
+        .take(MAX_RULE_LEN)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._:-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Time left before `deadline`, or the timeout error. Never under a
@@ -374,6 +393,34 @@ mod tests {
         }
         let left = remaining(Instant::now() + Duration::from_nanos(999_999_999)).unwrap();
         assert!(left >= Duration::from_micros(1));
+    }
+
+    /// AGENT-278: a sidecar's rule name reaches the audit row, so it is
+    /// cut to `MAX_RULE_LEN` characters of a plain set; the hit is kept.
+    #[test]
+    fn a_sidecar_rule_name_is_bounded_and_plain() {
+        let rule = format!("{}{}", "bad\u{1b}[31m\nrule ", "x".repeat(500));
+        let body = serde_json::json!({"hits": [{"rule": rule, "start": 0, "end": 5}]});
+        let answer: &'static str = Box::leak(
+            format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{body}")
+                .into_boxed_str(),
+        );
+        let dir = tempfile::TempDir::new().unwrap();
+        let s = Sidecar::new(
+            "pg",
+            serve(&dir, answer, Duration::ZERO),
+            Duration::from_secs(2),
+        );
+        let hits = s.scan("hello world", Direction::Response).unwrap();
+        assert_eq!(hits.len(), 1);
+        let got = &hits[0].rule;
+        assert_eq!(got.chars().count(), MAX_RULE_LEN, "{got}");
+        assert!(got.starts_with("bad__31m_rule_x"), "{got}");
+        assert!(
+            got.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c)),
+            "{got}"
+        );
     }
 
     #[test]

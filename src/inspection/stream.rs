@@ -366,14 +366,14 @@ impl StreamInspector {
             .any(|s| s.place == sse::Place::View { json: true })
             && self.on_error == OnError::FailClosed
         {
-            self.report.error = Some("stream event data is JSON that does not parse".into());
+            self.note_error("stream event data is JSON that does not parse".into());
             return self.block(step);
         }
         if spans.iter().any(|s| s.place == sse::Place::Hidden) {
             // A hidden value is scanned in its event only: one split
             // across events would be missed.
             if self.on_error == OnError::FailClosed {
-                self.report.error = Some("stream event repeats a JSON key".into());
+                self.note_error("stream event repeats a JSON key".into());
                 return self.block(step);
             }
             self.hold_overflowed = true;
@@ -391,7 +391,7 @@ impl StreamInspector {
                 continue;
             };
             let Some(lane) = self.lane(key) else {
-                self.report.error = Some("more stream outputs than can be inspected".into());
+                self.note_error("more stream outputs than can be inspected".into());
                 return self.block(step);
             };
             let state = &mut self.lanes[lane];
@@ -399,7 +399,7 @@ impl StreamInspector {
                 // Its output was said to be finished, and its held events
                 // may already be out: a match spanning the two is missed.
                 if self.on_error == OnError::FailClosed {
-                    self.report.error = Some("stream text after its output finished".into());
+                    self.note_error("stream text after its output finished".into());
                     return self.block(step);
                 }
                 self.hold_overflowed = true;
@@ -449,6 +449,13 @@ impl StreamInspector {
         }
     }
 
+    /// Record why inspection is incomplete. The first reason stays
+    /// (AGENT-278): under `fail_open` a later scan error must not hide
+    /// that a sidecar never ran.
+    fn note_error(&mut self, why: String) {
+        self.report.error.get_or_insert(why);
+    }
+
     /// Fix the stream's protocol scheme on its first event that names one.
     /// An event naming another (or whose name and `type` disagree) could be
     /// read two ways by clients: false when that blocked the stream.
@@ -457,7 +464,7 @@ impl StreamInspector {
         let changed = matches!((self.scheme, found), (Some(a), Some(b)) if a != b);
         if changed || sse::names_disagree(event) || sse::seeds_output(event) {
             if self.on_error == OnError::FailClosed {
-                self.report.error = Some(if changed || sse::names_disagree(event) {
+                self.note_error(if changed || sse::names_disagree(event) {
                     "stream event names another protocol".into()
                 } else {
                     "stream snapshot already carries output text".into()
@@ -515,7 +522,7 @@ impl StreamInspector {
         match found {
             Ok(found) => hits.extend(found.into_iter().map(|hit| LaneHit { lane, hit })),
             Err(e) => {
-                self.report.error = Some(e.0);
+                self.note_error(e.0);
                 if self.on_error == OnError::FailClosed {
                     self.block(step);
                     return false;
@@ -523,7 +530,7 @@ impl StreamInspector {
             }
         }
         if overflowed && self.on_error == OnError::FailClosed {
-            self.report.error = Some("stream text held past max_scan_bytes".into());
+            self.note_error("stream text held past max_scan_bytes".into());
             self.block(step);
             return false;
         }
@@ -538,7 +545,7 @@ impl StreamInspector {
         }
         self.hold_overflowed = true;
         if self.on_error == OnError::FailClosed {
-            self.report.error = Some("stream text held past max_scan_bytes".into());
+            self.note_error("stream text held past max_scan_bytes".into());
             self.block(step);
             return true;
         }
@@ -720,7 +727,7 @@ impl StreamInspector {
                 break;
             }
             if !safe && self.on_error == OnError::FailClosed {
-                self.report.error = Some("stream events held past max_scan_bytes".into());
+                self.note_error("stream events held past max_scan_bytes".into());
                 return self.block(step);
             }
             self.hold_overflowed |= !safe;
@@ -2422,6 +2429,39 @@ mod tests {
         ) -> Result<Vec<super::super::Hit>, super::super::ScanError> {
             Ok(Vec::new())
         }
+    }
+
+    /// A streaming scanner whose every scan fails.
+    struct Failing;
+    impl Scanner for Failing {
+        fn id(&self) -> &str {
+            "failing"
+        }
+        fn max_match_len(&self) -> usize {
+            8
+        }
+        fn scan(
+            &self,
+            _: &str,
+            _: Direction,
+        ) -> Result<Vec<super::super::Hit>, super::super::ScanError> {
+            Err(super::super::ScanError("failing: broke".into()))
+        }
+    }
+
+    /// AGENT-278: under fail_open the first error stays on the report, so
+    /// a later scan error does not hide that a sidecar never ran.
+    #[test]
+    fn the_first_stream_error_is_kept() {
+        let p = DirectionPolicy {
+            scanners: vec![Arc::new(Whole), Arc::new(Failing)],
+            on_error: OnError::FailOpen,
+            ..policy(Verdict::Redact)
+        };
+        let (out, i) = run(&p, &[chat("hello there"), DONE.to_string()]);
+        assert!(out.contains("hello there"), "{out}");
+        let error = i.report().error.clone().unwrap_or_default();
+        assert!(error.contains("sidecar:x"), "{error}");
     }
 
     #[test]

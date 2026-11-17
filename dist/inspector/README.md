@@ -99,7 +99,9 @@ POST /scan
 ```
 
 `start` and `end` are UTF-8 byte offsets into `text`. Any status other
-than 200, or a hit outside the text, is an error.
+than 200, or a hit outside the text, is an error. Keep `rule` short and
+plain: Locksmith audits its first 64 characters and writes any character
+other than an ASCII letter, digit, `.`, `_`, `:` or `-` as `_`.
 
 ## Smoke test
 

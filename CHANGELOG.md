@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A sidecar's hit `rule` is kept to 64 plain characters before it is
+  audited; other characters become `_` and the hit is kept (AGENT-278).
+  A streamed response keeps its first inspection error, so under
+  `fail_open` a later scan error no longer hides that a sidecar did not
+  run.
 - `locksmith egress policy --pipelock` quotes a single-label host
   spelled like a YAML 1.1 boolean (`yes`, `no`, `on`, `off`, `y`, `n`),
   which a YAML 1.1 parser would otherwise read as `true` or `false`
