@@ -366,7 +366,7 @@ tools:
 |---|---|---|
 | `name`, `description`, `upstream` | required | The route name (`/api/<name>/`), a description and the upstream base URL. |
 | `egress` | `direct` | `direct` or `proxied`; see [egress](#egress-egress_proxy-and-egress). |
-| `auth.header`, `auth.value` | none | Header and credential to copy into the database. Only an environment variable is copied: `"Bearer ${VAR}"`-style text or `{from_env: {var: VAR}}`. |
+| `auth.header`, `auth.value` | none | Header and credential to copy into the database. Only `{from_env: {var: VAR}}` is copied, and the variable must hold the whole header value (for example `Bearer <token>`); a `prefix` is not carried over. Text such as `"Bearer ${VAR}"` is expanded when the file is read, so it is not copied. |
 | `timeouts.request_seconds` | `30` | Total time for one upstream request. |
 | `timeouts.idle_seconds` | `60` | Longest gap between reads. |
 | `body_limit_bytes` | `10485760` | Largest request body. |
@@ -381,9 +381,10 @@ The `auth` keys matter only for the copy into the database. With the admin
 socket set, `tools` entries are copied into the database at
 startup, but only names the database does not already have; later edits to
 an entry are ignored. Only environment-variable credentials are copied.
-An entry whose `auth.value` uses `from_file_sealed` (or another backend) is
-skipped with a warning and not served. Register services with the CLI
-instead.
+An entry whose `auth.value` is anything else (text, `from_file_sealed` or
+another backend) is skipped and not served. Backends log a warning for the
+entry; text is counted only in the startup summary. Register services with
+the CLI instead.
 
 ### Deprecated keys
 
