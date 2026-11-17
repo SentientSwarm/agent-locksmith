@@ -12,8 +12,12 @@ impl Drop for ChildGuard {
         let _ = self.0.wait();
     }
 }
+/// AGENT-300: a worker re-executes this whole test binary, which can take
+/// well over 15 s while the rest of the lib suite loads the host.
+const PHASE_WAIT: Duration = Duration::from_secs(60);
+
 async fn wait(path: &Path) {
-    let reached = tokio::time::timeout(Duration::from_secs(15), async {
+    let reached = tokio::time::timeout(PHASE_WAIT, async {
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -34,6 +38,10 @@ async fn wait(path: &Path) {
                 .unwrap_or_default()
                 .replace(dir.to_str().unwrap(), "[fixture]");
             let name = log.file_name().unwrap().to_string_lossy().into_owned();
+            if text.is_empty() {
+                // The worker never got as far as its first line.
+                eprintln!("{name}: (empty)");
+            }
             let lines: Vec<_> = text.lines().collect();
             for line in &lines[lines.len().saturating_sub(40)..] {
                 eprintln!("{name}: {line}");
