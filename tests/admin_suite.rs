@@ -26,6 +26,8 @@ mod audit_proxy_test;
 mod audit_retention_test;
 #[path = "bootstrap_only_listener_test.rs"]
 mod bootstrap_only_listener_test;
+#[path = "config_reference_doc_test.rs"]
+mod config_reference_doc_test;
 #[path = "config_strict_test.rs"]
 mod config_strict_test;
 #[path = "config_test.rs"]

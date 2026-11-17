@@ -76,6 +76,8 @@ The [agent integration index](agents/README.md) lists every agent page.
 
 - [CLI reference](reference/cli-reference.md): every `locksmith` subcommand and
   flag.
+- [Configuration file](reference/config.md): every key in the daemon's YAML
+  file, its default, and the environment variables.
 - [Wire contract](reference/wire-contract.md): the
   agent-facing HTTP surface.
 - [Error envelope](reference/error-envelope.md): the JSON error shape

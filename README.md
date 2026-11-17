@@ -307,7 +307,7 @@ audit:
   sweep_interval_seconds: 3600
   jsonl_path: "/var/log/locksmith/audit.jsonl"   # optional mirror
   jsonl_max_bytes: 104857600
-  jsonl_keep_files: 7
+  jsonl_keep_files: 14
 
 operational_log:              # Phase J; defaults shown
   retention_days: 30
@@ -330,10 +330,13 @@ shutdown:
 
 # Pre-Phase-E `tools:` block is still accepted for backward compat;
 # entries are migrated into the registrations table at first boot
-# (legacy_bootstrap shim). Removed in v0.3. New deployments rely on
+# (legacy_bootstrap shim). New deployments rely on
 # the seed catalog + admin API instead.
 tools: []
 ```
+
+Every key, its default and the environment variables are in the
+[configuration file reference](docs/reference/config.md).
 
 ## Security model
 
