@@ -150,8 +150,8 @@ class RenderTest(unittest.TestCase):
             "EnvironmentFile=/srv/locksmith-edge/environment/locksmith.env",
             locksmith.splitlines(),
         )
-        pipelock = self.unit(self.out("lab-pipelock"), "pipelock")
-        self.assertNotIn("EnvironmentFile=", pipelock)
+        broker = self.unit(self.out("lab-broker"), "broker")
+        self.assertNotIn("EnvironmentFile=", broker)
 
     def test_specifiers_and_dollars_escaped(self):
         site = sitefile.parse(ESCAPES)

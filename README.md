@@ -376,8 +376,8 @@ This repository ships two ways to run the daemon:
   its placeholders.
 - **Incus edge**: [edge packaging](docs/operator/edge-packaging.md)
   (`dist/edge/`) renders hardened systemd units for Incus system
-  containers from a site file you keep privately, optionally with an
-  egress proxy and a classifier sidecar.
+  containers from a site file you keep privately, optionally with a
+  classifier sidecar and companion services such as brokers.
 
 Routes marked `egress: proxied` leave according to `egress.mode`:
 

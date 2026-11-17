@@ -1,7 +1,7 @@
 # Edge packaging: systemd units in Incus containers
 
-`dist/edge/` packages Locksmith, and optionally Pipelock and a classifier
-sidecar, as hardened systemd services, one Incus system container per
+`dist/edge/` packages Locksmith, and optionally a classifier sidecar and
+other companion services, as hardened systemd services, one Incus system container per
 instance. You describe your deployment once in a **site file** and keep it
 in your own private repository. The tools turn it into reviewable Incus
 commands and inactive unit definitions. Nothing they produce starts a
@@ -59,11 +59,12 @@ The loader refuses:
 
 Run any tool on the file to check it.
 
-Pipelock is optional. Without a Pipelock instance, set `egress.mode:
-external` in the Locksmith config and enforce egress in your network. See
+An egress proxy is optional. The usual edge setup has none: set
+`egress.mode: external` in the Locksmith config and enforce egress in your
+network, for example with the host's Incus network ACLs. See
 [what you lose without Pipelock](../concepts/egress-and-inspection.md#what-you-lose-without-pipelock).
-With Pipelock, run it in `strict` mode, because only `strict` enforces the
-host allowlist.
+If you do run Pipelock as an egress proxy, run it in `strict` mode, because
+only `strict` enforces the host allowlist.
 
 ## 2. Prepare the containers
 

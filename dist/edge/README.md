@@ -1,7 +1,7 @@
 # Edge packaging (systemd units in Incus system containers)
 
 Tools that turn a private **site file** into the definitions for running
-Locksmith and its optional companions (Pipelock, a classifier sidecar) as
+Locksmith and its optional companions (a classifier sidecar, brokers) as
 hardened systemd services, one Incus system container per instance. The
 operator guide is
 [docs/operator/edge-packaging.md](../../docs/operator/edge-packaging.md).

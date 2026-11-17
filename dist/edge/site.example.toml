@@ -31,14 +31,20 @@ command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/
 env = { HF_HOME = "/srv/locksmith-edge/models/inspector", HF_HUB_OFFLINE = "1" }
 jit = true
 
+# A second instance: a service a Locksmith brokered route points at,
+# reachable only from the Locksmith instance. These tools render inbound
+# rules only; the broker's own calls to its provider need egress rules in
+# your network.
 [[instance]]
-name = "lab-pipelock"
+name = "lab-broker"
 address = "192.0.2.11"
 cpu = 1
 memory = "1GiB"
 
 [[instance.component]]
-name = "pipelock"
-user = "pipelock"
-command = "/usr/local/bin/pipelock run --config /srv/locksmith-edge/pipelock/config.yaml"
-ingress = [{ port = 8888, from = ["192.0.2.10/32"] }]
+name = "broker"
+user = "broker"
+command = "/usr/bin/node /opt/broker/server.js --host 192.0.2.11 --port 8080"
+# Node needs writable executable memory for its JIT.
+jit = true
+ingress = [{ port = 8080, from = ["192.0.2.10/32"] }]

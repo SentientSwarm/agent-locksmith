@@ -35,9 +35,12 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(site.state_root, "/srv/locksmith-edge")
         self.assertTrue(site.require_zfs)
         names = [i.name for i in site.instances]
-        self.assertEqual(names, ["lab-locksmith", "lab-pipelock"])
+        self.assertEqual(names, ["lab-locksmith", "lab-broker"])
         inspector = site.instances[0].components[1]
         self.assertTrue(inspector.jit)
+        # The example broker runs Node, which needs JIT memory to start.
+        broker = site.instances[1].components[0]
+        self.assertTrue(broker.jit)
         self.assertEqual(inspector.env["HF_HUB_OFFLINE"], "1")
         locksmith = site.instances[0].components[0]
         self.assertTrue(locksmith.environment_file)

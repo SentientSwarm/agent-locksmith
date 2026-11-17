@@ -50,15 +50,15 @@ class IncusTest(unittest.TestCase):
         )
         self.assertIn("limits.cpu=2", locksmith)
         self.assertIn("limits.memory=4GiB", locksmith)
-        pipelock = next(
-            l for l in text.splitlines() if " init " in l and "lab-pipelock" in l
+        broker = next(
+            l for l in text.splitlines() if " init " in l and "lab-broker" in l
         )
-        self.assertIn("limits.cpu=1", pipelock)
-        self.assertIn("limits.memory=1GiB", pipelock)
+        self.assertIn("limits.cpu=1", broker)
+        self.assertIn("limits.memory=1GiB", broker)
 
     def test_dedicated_state_volume_per_instance(self):
         text = script()
-        for name in ("lab-locksmith", "lab-pipelock"):
+        for name in ("lab-locksmith", "lab-broker"):
             self.assertIn(
                 f"incus storage volume create tank {name}-state --project edge", text
             )
@@ -95,9 +95,9 @@ class IncusTest(unittest.TestCase):
 
     def test_inventory_conflict_refused(self):
         with self.assertRaises(incus.IncusError):
-            script(existing={"instances": ["lab-pipelock"], "volumes": []})
+            script(existing={"instances": ["lab-broker"], "volumes": []})
         with self.assertRaises(incus.IncusError):
-            script(existing={"instances": [], "volumes": ["lab-pipelock-state"]})
+            script(existing={"instances": [], "volumes": ["lab-broker-state"]})
         script(existing={"instances": ["other"], "volumes": ["other-state"]})
 
     def test_bad_project_or_pool_refused(self):
