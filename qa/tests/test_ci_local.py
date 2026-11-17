@@ -257,3 +257,18 @@ def test_sigterm_still_runs_cleanup():
     with pytest.raises(SystemExit) as stopped:
         ci.stop_on_sigterm(15, None)
     assert stopped.value.code == 143
+
+
+@pytest.mark.skipif(not hasattr(os, "ST_NOEXEC"), reason="no ST_NOEXEC (macOS)")
+def test_a_noexec_memory_filesystem_leaves_tmpdir_alone(tmp_path, monkeypatch):
+    # QA tests run fake binaries from temp directories; noexec would break them.
+    memory = tmp_path / "shm"
+    memory.mkdir()
+    real = os.statvfs(memory)
+    flags = real.f_flag | os.ST_NOEXEC
+    fake = os.statvfs_result((*real[:8], flags, real.f_namemax))
+    monkeypatch.setattr(ci.os, "statvfs", lambda _path: fake)
+    env = {"TMPDIR": "/caller"}
+    with ci.scratch_tmpdir(memory, env):
+        assert env["TMPDIR"] == "/caller"
+    assert list(memory.iterdir()) == []

@@ -106,14 +106,14 @@ The environment starts from a short allowlist (`HOME`, `USER`, `PATH`,
 shell. Provider API keys in your shell would otherwise switch on paid live
 tests, and `CARGO_*` or `BASH_ENV` would change what is built and run.
 
-When `/dev/shm` exists and is writable (Linux, including WSL), steps get a
-private `TMPDIR` there (tmpfs). It is removed when the run ends, including on
-failure and on SIGTERM from `timeout`; only SIGKILL leaves it behind.
-Elsewhere, such as macOS, steps keep your `TMPDIR`. The tests create many small SQLite
-databases in temp directories, and on a busy shared disk their fsyncs stalled
-past sqlx's 30-second pool timeout (AGENT-293). Hosted runners have fast local
-disks, so memory is the closer match. `RUNNER_TEMP`, which holds gigabytes of
-prior builds, stays on disk.
+When `/dev/shm` exists, is writable and is not mounted `noexec` (Linux,
+including WSL), steps get a private `TMPDIR` there (tmpfs). It is removed when
+the run ends, including on failure and on SIGTERM from `timeout`; only SIGKILL
+leaves it behind. Elsewhere, such as macOS, steps keep your `TMPDIR`. The
+tests create many small SQLite databases in temp directories, and on a busy
+shared disk their fsyncs stalled past sqlx's 30-second pool timeout
+(AGENT-293). Hosted runners have fast local disks, so memory is the closer
+match. `RUNNER_TEMP`, which holds gigabytes of prior builds, stays on disk.
 
 The runner fails closed on these settings it does not implement: any other `if:`
 expression, step settings such as `working-directory`, `shell` or

@@ -58,11 +58,19 @@ def git(*args, cwd=None, check=True):
     return out.stdout.strip()
 
 
+def usable_scratch(memory):
+    """Writable, and not noexec: QA tests run fake binaries from TMPDIR."""
+    if not memory.is_dir() or not os.access(memory, os.W_OK):
+        return False
+    # macOS has no ST_NOEXEC (and no /dev/shm); treat it as unset there.
+    return not os.statvfs(memory).f_flag & getattr(os, "ST_NOEXEC", 0)
+
+
 @contextlib.contextmanager
 def scratch_tmpdir(memory, env):
     """Point `env`'s TMPDIR at a private directory under `memory` for the
     block, and remove it afterwards. Without `memory`, TMPDIR is unchanged."""
-    if not memory.is_dir() or not os.access(memory, os.W_OK):
+    if not usable_scratch(memory):
         yield
         return
     path = tempfile.mkdtemp(prefix="locksmith-ci-", dir=memory)
