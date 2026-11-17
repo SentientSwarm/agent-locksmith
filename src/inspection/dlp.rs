@@ -149,6 +149,18 @@ fn closes(b: u8) -> bool {
     !(0x20..0x80).contains(&b) || b" \"'}],\\<>);`.!?&|".contains(&b)
 }
 
+/// Does `text[..end]` end with an END line? (A BEGIN line ends with
+/// `PRIVATE KEY-----` too.)
+fn ends_at_end_line(text: &str, end: usize) -> bool {
+    let mut from = end.saturating_sub(PEM_HEADER_MAX);
+    while !text.is_char_boundary(from) {
+        from += 1;
+    }
+    PEM_END
+        .find_iter(&text[from..end])
+        .any(|m| from + m.end() == end)
+}
+
 /// Could the key a `private_key` hit ending at `end` still go on? Only
 /// blanks, the line breaks before its next line (two, after RFC 1421
 /// headers) and an escape the text's end split may follow it.
@@ -431,7 +443,10 @@ impl Scanner for Dlp {
     }
 
     fn holds_open(&self, text: &str, hit: &Hit) -> bool {
-        hit.rule == "private_key" && pem_open(text, hit.end)
+        // A key its END line closed is over (AGENT-311): many BEGIN lines
+        // share one END, and walking the text after it once per hit would
+        // cost each scan their number times the padding.
+        hit.rule == "private_key" && !ends_at_end_line(text, hit.end) && pem_open(text, hit.end)
     }
 
     fn max_match_len(&self) -> usize {
@@ -1080,6 +1095,37 @@ mod tests {
     /// AGENT-309: wherever a stream's text stops inside a key (mid-line,
     /// mid-escape, after a line break or indentation), its hit is still
     /// open, so the window holds it.
+    /// AGENT-311: a key closed by its END line is not held open, so blank
+    /// padding after many BEGIN lines sharing one END isn't walked once per
+    /// hit on every scan.
+    #[test]
+    fn a_key_closed_by_its_end_line_is_not_open() {
+        let begins = "-----BEGIN PRIVATE KEY-----\n".repeat(300);
+        let text = format!(
+            "{begins}QUJD\n-----END PRIVATE KEY-----{}",
+            " ".repeat(4096)
+        );
+        let hits = Dlp.scan(&text, Direction::Response).unwrap();
+        let keys: Vec<_> = hits.iter().filter(|h| h.rule == "private_key").collect();
+        assert_eq!(keys.len(), 300);
+        assert!(keys.iter().all(|h| !Dlp.holds_open(&text, h)));
+    }
+
+    /// A hit that is still only its BEGIN line (the key not yet streamed)
+    /// ends with "PRIVATE KEY-----" too, and must stay open.
+    #[test]
+    fn a_begin_line_with_its_key_still_to_come_is_open() {
+        for text in [
+            "x -----BEGIN PRIVATE KEY-----",
+            "x -----BEGIN RSA PRIVATE KEY-----\n",
+            "x -----BEGIN PRIVATE KEY-----\\n  ",
+        ] {
+            let hits = Dlp.scan(text, Direction::Response).unwrap();
+            let key = hits.iter().find(|h| h.rule == "private_key").expect("hit");
+            assert!(Dlp.holds_open(text, key), "{text:?}");
+        }
+    }
+
     #[test]
     fn a_key_that_has_ended_is_not_open() {
         let key = format!("-----BEGIN PRIVATE KEY-----\n{}", "QUJD".repeat(16));

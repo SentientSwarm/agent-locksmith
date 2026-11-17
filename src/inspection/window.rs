@@ -430,4 +430,35 @@ mod tests {
             "an ended key must release the window: held {held}"
         );
     }
+
+    /// AGENT-311: scans that land after the BEGIN line, before any key
+    /// line, still hold the key that follows.
+    #[test]
+    fn a_key_streamed_after_a_lone_begin_line_is_covered() {
+        let dlp = Arc::new(crate::inspection::dlp::Dlp);
+        let mut w = TextWindow::new(vec![dlp], 1 << 20);
+        let mut hits = w.push("x -----BEGIN PRIVATE KEY-----").unwrap();
+        // Escaped blanks after BEGIN: they don't fold, so they outlast
+        // the overlap before the first key line comes.
+        for _ in 0..2000 {
+            hits.extend(w.push("\\u0020").unwrap());
+        }
+        let line = "QUJD".repeat(16);
+        let mut key = String::new();
+        for _ in 0..300 {
+            key.push('\n');
+            key.push_str(&line);
+        }
+        let key_end = w.end() + key.len();
+        for c in key.as_bytes().chunks(64) {
+            hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+        }
+        hits.extend(w.push("\n-- prose").unwrap());
+        hits.extend(w.flush().unwrap());
+        let ends = hits
+            .iter()
+            .filter(|h| h.rule == "private_key")
+            .map(|h| h.end);
+        assert_eq!(ends.max(), Some(key_end));
+    }
 }

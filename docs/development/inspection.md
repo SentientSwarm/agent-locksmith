@@ -253,7 +253,8 @@ is written. So a match split across one output's deltas is found however
 the outputs interleave. Each window keeps the last `max_match_len - 1`
 bytes of its output, measured both raw and after folding, so a match
 split across any number of deltas is found once. A `private_key` hit
-followed only by blanks, line breaks or a split escape may still grow
+not closed by its `END` line and followed only by blanks, line breaks
+or a split escape may still grow
 (a PEM key whose next line has not arrived), so the window holds it
 from its start until a scan finds it ended, or the window or the held
 events pass `max_scan_bytes` (AGENT-309). A window scans once the
