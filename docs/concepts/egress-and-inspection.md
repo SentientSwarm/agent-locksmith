@@ -47,8 +47,9 @@ egress:
   and nowhere when neither is configured (the call fails with
   `egress_proxy_unconfigured` and the session is left as it was). The
   egress policy lists those token hosts with the route. Keep them on the
-  proxy's allowlist: a refresh the proxy refuses leaves the session
-  `reconnect_required`, which needs a fresh bootstrap.
+  proxy's allowlist: a token call the proxy refuses leaves the session
+  `reconnect_required`, which needs a local revoke and then a fresh
+  bootstrap or device login.
 - Native MCP OAuth token calls (whose connections are always `direct`)
   and CRL fetches connect directly in every mode and ignore those
   variables too, so allow those hosts in your network's egress rules.

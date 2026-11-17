@@ -214,6 +214,15 @@ async fn dialect(state: &OauthAdminState, name: &str) -> Result<Dialect, Box<Res
         }
         Err(_) => return Err(Box::new(internal("registration read failed"))),
     };
+    // AGENT-302: no admission or refresh path uses an infra session.
+    if registration.kind == crate::registrations::Kind::Infra {
+        return Err(Box::new(error_envelope(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "device_login_unsupported",
+            "device login serves tool and model registrations only",
+        )));
+    }
     let egress = registration.egress;
     openai_issuer(&registration.auth)
         .map(|(issuer, client_id)| Dialect {

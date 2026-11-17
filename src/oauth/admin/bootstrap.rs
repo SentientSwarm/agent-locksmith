@@ -28,17 +28,16 @@ async fn bootstrap(
     label: &str,
     body: &BootstrapBody,
 ) -> Response {
-    let client = match validate(state, name).await {
-        Ok(client) => client,
-        Err(response) => return *response,
-    };
+    if let Err(response) = validate(state, name).await {
+        return *response;
+    }
     let lock = state.locks.get(name, label).await;
     let _guard = lock.lock().await;
     let session = match create(state, name, label, &body.refresh_token).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
-    let updated = match exchange(state, &client, &session).await {
+    let updated = match exchange(state, name, &session).await {
         Ok(s) => s,
         Err(response) => return *response,
     };
@@ -50,9 +49,10 @@ async fn bootstrap(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// The registration must be OAuth, and its route's egress must allow the
-/// token call (AGENT-269); checked before any session row is written.
-async fn validate(state: &OauthAdminState, name: &str) -> Result<reqwest::Client, Box<Response>> {
+/// The registration must be an OAuth tool or model, and its route's egress
+/// must allow the token call (AGENT-269); checked before any session row
+/// is written. The exchange re-reads the serving registration.
+async fn validate(state: &OauthAdminState, name: &str) -> Result<(), Box<Response>> {
     let registration = match state.registrations.get(name).await {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -73,10 +73,19 @@ async fn validate(state: &OauthAdminState, name: &str) -> Result<reqwest::Client
         }
     };
     validate_shape(&registration.auth)?;
+    // AGENT-302: no admission or refresh path uses an infra session.
+    if registration.kind == crate::registrations::Kind::Infra {
+        return Err(Box::new(error_envelope(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "not_oauth_registration",
+            "OAuth custody serves tool and model registrations only",
+        )));
+    }
     state
         .token_clients
         .for_egress(registration.egress)
-        .cloned()
+        .map(|_| ())
         .map_err(|cause| Box::new(egress_refused(cause)))
 }
 
@@ -128,13 +137,40 @@ pub(super) fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<R
     ))
 }
 
+/// AGENT-302: the token endpoint and the egress come from one serving
+/// registration, so an edit racing the bootstrap cannot pair them.
 async fn exchange(
     state: &OauthAdminState,
-    client: &reqwest::Client,
+    name: &str,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {
     let cat = state.catalog.load();
-    match refresh_session(&state.sessions, &cat, &state.sealing_key, client, session).await {
+    let Some(registration) = cat.lookup_active(name) else {
+        let _ = state.sessions.delete_if_current(session).await;
+        let e = crate::oauth::refresh::RefreshError::RegistrationGone(name.to_string());
+        return Err(Box::new(error_envelope(
+            StatusCode::BAD_GATEWAY,
+            "auth_error",
+            "oauth_bootstrap_failed",
+            &format!("refresh exchange failed: {e}"),
+        )));
+    };
+    let client = match state.token_clients.for_egress(registration.egress) {
+        Ok(client) => client,
+        Err(cause) => {
+            let _ = state.sessions.delete_if_current(session).await;
+            return Err(Box::new(egress_refused(cause)));
+        }
+    };
+    let refreshed = crate::oauth::refresh::refresh_selected_session(
+        &state.sessions,
+        &registration.auth,
+        &state.sealing_key,
+        client,
+        session,
+    )
+    .await;
+    match refreshed {
         Ok(updated) => Ok(updated),
         Err(e) => {
             // Only this attempt's unchanged, committed bootstrap row can be removed.

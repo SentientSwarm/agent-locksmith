@@ -295,8 +295,9 @@ Every token call (bootstrap, device login, inline and background refresh)
 takes the route's egress, as the route's own traffic does: see
 [egress modes](egress-and-inspection.md#egress-modes). Token calls never
 follow a redirect. When a `proxied` route has no usable egress, bootstrap
-and device login answer 503 `egress_proxy_unconfigured` before any
-session row is written, an inline refresh answers the same, and the
+and device login answer 503 `egress_proxy_unconfigured` and leave no
+session row (bootstrap reads the token endpoint and the egress from one
+serving registration), an inline refresh answers the same, and the
 background task skips the session with a warning without degrading it.
 
 ### Refresh failure

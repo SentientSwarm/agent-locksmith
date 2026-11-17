@@ -15,7 +15,7 @@
 //! All three are operator-credentialed. Routed under the existing
 //! operator middleware; no agent-facing surface here.
 
-use crate::oauth::refresh::{RefreshLockMap, refresh_session};
+use crate::oauth::refresh::RefreshLockMap;
 use crate::oauth::sealing::SealingKey;
 use crate::oauth::session::{DEFAULT_SESSION_LABEL, OauthSession, OauthSessionRepository};
 use crate::registrations::{AuthSpec, Catalog, RegistrationRepository};

@@ -11,6 +11,13 @@
   broker with no egress configured showed down with no reason.
 - The egress policy no longer lists proxied `infra` registrations, which
   no path calls (AGENT-269); listing them only widened the allowlist.
+  OAuth bootstrap and device login now refuse an infra registration (400
+  `not_oauth_registration` / `device_login_unsupported`), since no path
+  uses its session (AGENT-302).
+- OAuth bootstrap takes the token endpoint and the egress from the same
+  serving registration (AGENT-302). Before, an edit to the route while a
+  bootstrap was in flight could send the new endpoint's token call under
+  the old egress.
 - An OAuth route's token calls (bootstrap, device login, inline and
   background refresh) now take the route's egress (AGENT-269). Before,
   they always connected directly, so a `proxied` OAuth route's token
@@ -18,10 +25,12 @@
   egress configured still reached it. The egress policy now lists the
   token hosts of proxied OAuth routes and of the agent bindings that
   select them. **Under a Pipelock allowlist, add those token hosts before
-  upgrading** (each route's `token_url`, for example the provider's auth
-  host rather than its API host): a refresh refused at the proxy leaves
-  the session `reconnect_required`, and each such account then needs a
-  fresh bootstrap or device login. Token calls trust
+  upgrading**: the `token_url` of every proxied OAuth route and of every
+  agent binding that selects one (often the provider's auth host rather
+  than its API host). The background refresh runs at startup, and a
+  refresh, bootstrap or device login refused at the proxy leaves the
+  session `reconnect_required`: revoke it locally (`locksmith oauth
+  revoke`), then bootstrap or sign in again. Token calls trust
   `tls.upstream_ca_bundle` like routes do, and no longer follow
   redirects, which could have resent a refresh token to another host.
 - `locksmith egress policy --pipelock` writes the allowlist with a YAML

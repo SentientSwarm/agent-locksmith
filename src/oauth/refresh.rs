@@ -130,20 +130,6 @@ mod failure;
 pub use exchange::refresh_selected_session;
 use failure::record_failure;
 
-/// Operator bootstrap explicitly uses the current registration metadata.
-pub async fn refresh_session(
-    repo: &OauthSessionRepository,
-    catalog: &Catalog,
-    key: &SealingKey,
-    client: &reqwest::Client,
-    session: &OauthSession,
-) -> Result<OauthSession, RefreshError> {
-    let registration = catalog
-        .lookup_active(&session.name)
-        .ok_or_else(|| RefreshError::RegistrationGone(session.name.clone()))?;
-    refresh_selected_session(repo, &registration.auth, key, client, session).await
-}
-
 mod error;
 pub use error::RefreshError;
 

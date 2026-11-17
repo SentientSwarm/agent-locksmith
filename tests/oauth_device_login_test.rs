@@ -699,3 +699,80 @@ async fn proxied_route_without_egress_refuses_token_calls() {
         .unwrap();
     assert!(session.is_none(), "no session row may be written");
 }
+
+/// AGENT-302 — bootstrap takes the token endpoint and the egress from the
+/// same serving registration. Here the stored row says direct but the
+/// catalog still serves the proxied version, and no egress is configured:
+/// the exchange must refuse rather than send the proxied endpoint's call
+/// directly, and no session row may remain.
+#[tokio::test]
+async fn bootstrap_takes_egress_from_the_serving_registration() {
+    let h = setup().await;
+    let mut split = h.registrations.get("codex-proxied").await.unwrap().unwrap();
+    split.name = "codex-split".to_string();
+    h.registrations.create(&split).await.unwrap();
+    h.catalog.store(Arc::new(
+        Catalog::from_repo(h.registrations.as_ref()).await.unwrap(),
+    ));
+    split.egress = agent_locksmith::config::EgressMode::Direct;
+    h.registrations.upsert(&split).await.unwrap();
+    let r = h
+        .server
+        .post("/admin/operator/oauth/codex-split/bootstrap")
+        .add_header("authorization", auth(&h))
+        .json(&serde_json::json!({ "refresh_token": "refresh-x" }))
+        .await;
+    r.assert_status_service_unavailable();
+    assert_eq!(
+        r.json::<serde_json::Value>()["error"]["code"],
+        "egress_proxy_unconfigured"
+    );
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+    let session = h
+        .sessions
+        .get(&h.key, "codex-split", "default")
+        .await
+        .unwrap();
+    assert!(session.is_none(), "no session row may remain");
+}
+
+/// AGENT-302 — OAuth custody serves tool and model routes only; no path
+/// uses an infra registration's session, so bootstrap and device login
+/// refuse it before any provider call.
+#[tokio::test]
+async fn infra_registrations_refuse_oauth_custody() {
+    let h = setup().await;
+    let mut infra = h.registrations.get("codex").await.unwrap().unwrap();
+    infra.name = "codex-infra".to_string();
+    infra.kind = Kind::Infra;
+    h.registrations.create(&infra).await.unwrap();
+    h.catalog.store(Arc::new(
+        Catalog::from_repo(h.registrations.as_ref()).await.unwrap(),
+    ));
+    for (path, body, code) in [
+        (
+            "bootstrap",
+            serde_json::json!({ "refresh_token": "refresh-x" }),
+            "not_oauth_registration",
+        ),
+        (
+            "device-login",
+            serde_json::json!({}),
+            "device_login_unsupported",
+        ),
+    ] {
+        let r = h
+            .server
+            .post(&format!("/admin/operator/oauth/codex-infra/{path}"))
+            .add_header("authorization", auth(&h))
+            .json(&body)
+            .await;
+        r.assert_status_bad_request();
+        assert_eq!(
+            r.json::<serde_json::Value>()["error"]["code"],
+            code,
+            "{path}"
+        );
+    }
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+}
