@@ -2,17 +2,32 @@
 //!
 //! A JSON body is scanned string by string (after JSON unescaping), so a
 //! match is never hidden by escaping and a redaction rewrites only the
-//! string it was found in. Any other UTF-8 body is one segment.
+//! string it was found in. Every other byte of the body is kept as sent:
+//! key order, number spelling (big integers included) and whitespace
+//! (AGENT-270). Any other UTF-8 body is one segment.
 
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Byte spans to redact in one segment, with the scanner that found them.
 pub(super) type Spans = HashMap<usize, Vec<(usize, usize, String)>>;
 
 pub(super) enum Document {
-    Json(Value),
+    /// Valid JSON text and its string tokens, keys included, in order.
+    Json {
+        text: String,
+        tokens: Vec<Token>,
+    },
     Text(String),
+}
+
+/// One JSON string token: its byte range (quotes included), whether it is
+/// an object key, and which object it belongs to.
+pub(super) struct Token {
+    start: usize,
+    end: usize,
+    key: bool,
+    object: usize,
 }
 
 pub(super) struct NotText;
@@ -21,8 +36,11 @@ impl Document {
     pub(super) fn parse(content_type: Option<&str>, body: &[u8]) -> Result<Self, NotText> {
         let text = std::str::from_utf8(body).map_err(|_| NotText)?;
         let json_type = content_type.is_some_and(|c| c.to_ascii_lowercase().contains("json"));
-        if json_type && let Ok(value) = serde_json::from_str::<Value>(text) {
-            return Ok(Document::Json(value));
+        if json_type && serde_json::from_str::<Value>(text).is_ok() {
+            return Ok(Document::Json {
+                tokens: string_tokens(text),
+                text: text.to_string(),
+            });
         }
         Ok(Document::Text(text.to_string()))
     }
@@ -31,30 +49,109 @@ impl Document {
     pub(super) fn segments(&self) -> Vec<String> {
         match self {
             Document::Text(t) => vec![t.clone()],
-            Document::Json(v) => {
-                let mut out = Vec::new();
-                walk(v, &mut |s| out.push(s.to_string()));
-                out
-            }
+            Document::Json { text, tokens } => tokens
+                .iter()
+                .map(|t| unescape_token(&text[t.start..t.end]))
+                .collect(),
         }
     }
 
-    /// Replace each span with `[REDACTED:<scanner>]` and re-serialize.
+    /// Replace each span with `[REDACTED:<scanner>]`, rewriting only the
+    /// string tokens that hold one.
     pub(super) fn redact(self, spans: &Spans) -> Vec<u8> {
         match self {
             Document::Text(t) => redact_str(&t, spans.get(&0).map(Vec::as_slice)).into_bytes(),
-            Document::Json(mut v) => {
-                let mut index = 0usize;
-                walk_mut(&mut v, &mut |s| {
-                    if let Some(found) = spans.get(&index) {
-                        *s = redact_str(s, Some(found));
-                    }
-                    index += 1;
-                });
-                serde_json::to_vec(&v).unwrap_or_default()
-            }
+            Document::Json { text, tokens } => redact_tokens(&text, &tokens, spans).into_bytes(),
         }
     }
+}
+
+/// Every string token of valid JSON `text`, in document order. A `"`
+/// outside a string can only open one, so a byte scan suffices.
+fn string_tokens(text: &str) -> Vec<Token> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    // The enclosing container per depth: an object id, or None for arrays.
+    let mut stack: Vec<Option<usize>> = Vec::new();
+    let mut objects = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'{' => {
+                stack.push(Some(objects));
+                objects += 1;
+            }
+            b'[' => stack.push(None),
+            b'}' | b']' => {
+                stack.pop();
+            }
+            b'"' => {
+                let start = i;
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                let end = (i + 1).min(b.len());
+                let after = b[end..].iter().find(|c| !c.is_ascii_whitespace());
+                let object = stack.last().copied().flatten();
+                out.push(Token {
+                    start,
+                    end,
+                    key: after == Some(&b':') && object.is_some(),
+                    object: object.unwrap_or(usize::MAX),
+                });
+                i = end;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+fn unescape_token(token: &str) -> String {
+    serde_json::from_str(token).unwrap_or_default()
+}
+
+/// Copy `text`, replacing each token with spans by its redacted string.
+/// A key redacted to one already in its object is numbered, so both
+/// values survive.
+fn redact_tokens(text: &str, tokens: &[Token], spans: &Spans) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut keys: HashMap<usize, HashSet<String>> = HashMap::new();
+    let mut at = 0;
+    for (index, t) in tokens.iter().enumerate() {
+        let raw = &text[t.start..t.end];
+        let found = spans.get(&index);
+        if found.is_none() && !t.key {
+            continue;
+        }
+        let mut value = unescape_token(raw);
+        if let Some(found) = found {
+            value = redact_str(&value, Some(found));
+        }
+        if t.key {
+            let seen = keys.entry(t.object).or_default();
+            if found.is_some() && seen.contains(&value) {
+                let base = value.clone();
+                let mut n = 2;
+                while seen.contains(&value) {
+                    value = format!("{base}#{n}");
+                    n += 1;
+                }
+            }
+            seen.insert(value.clone());
+        }
+        if found.is_none() {
+            continue;
+        }
+        out.push_str(&text[at..t.start]);
+        out.push_str(&serde_json::to_string(&value).unwrap_or_default());
+        at = t.end;
+    }
+    out.push_str(&text[at..]);
+    out
 }
 
 /// How many further levels of JSON escaping the raw view is unescaped.
@@ -201,47 +298,6 @@ fn decode(s: &str, plus_is_space: bool) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn walk(v: &Value, f: &mut impl FnMut(&str)) {
-    match v {
-        Value::String(s) => f(s),
-        Value::Array(a) => a.iter().for_each(|x| walk(x, f)),
-        Value::Object(o) => o.iter().for_each(|(k, x)| {
-            f(k);
-            walk(x, f)
-        }),
-        _ => {}
-    }
-}
-
-fn walk_mut(v: &mut Value, f: &mut impl FnMut(&mut String)) {
-    match v {
-        Value::String(s) => f(s),
-        Value::Array(a) => a.iter_mut().for_each(|x| walk_mut(x, f)),
-        Value::Object(o) => {
-            // Keys are scanned too, so rebuild the map with redacted keys
-            // in the same order `walk` visits them.
-            let entries = std::mem::take(o);
-            for (k, mut x) in entries {
-                let mut key = k;
-                f(&mut key);
-                walk_mut(&mut x, f);
-                // Two keys redacted to the same marker must not overwrite
-                // each other: number the later ones.
-                if o.contains_key(&key) {
-                    let base = key.clone();
-                    let mut n = 2;
-                    while o.contains_key(&key) {
-                        key = format!("{base}#{n}");
-                        n += 1;
-                    }
-                }
-                o.insert(key, x);
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Merge overlapping spans and replace each with its marker.
 fn redact_str(text: &str, spans: Option<&[(usize, usize, String)]>) -> String {
     let Some(spans) = spans else {
@@ -293,6 +349,46 @@ mod tests {
                 "z".to_string()
             ]
         );
+    }
+
+    /// AGENT-270 — a redaction rewrites only the string it is in: key
+    /// order, big integers, number spelling and whitespace are untouched.
+    #[test]
+    fn redaction_keeps_everything_else_byte_for_byte() {
+        let body = concat!(
+            "{\"z\": 1.50, \"big\": 123456789012345678901234567890,\n",
+            " \"a\": [\"keep\", \"tok SECRET end\"], \"m\": -0}"
+        );
+        let doc = Document::parse(Some("application/json"), body.as_bytes())
+            .ok()
+            .unwrap();
+        let segments = doc.segments();
+        let at = segments.iter().position(|s| s == "tok SECRET end").unwrap();
+        let mut spans: Spans = HashMap::new();
+        spans.insert(at, vec![(4, 10, "s".to_string())]);
+        let out = String::from_utf8(doc.redact(&spans)).unwrap();
+        assert_eq!(out, body.replace("tok SECRET end", "tok [REDACTED:s] end"));
+    }
+
+    #[test]
+    fn segments_follow_document_order_and_keep_duplicate_keys() {
+        let doc = Document::parse(Some("application/json"), br#"{"b":"1","a":"2","b":"3"}"#)
+            .ok()
+            .unwrap();
+        assert_eq!(doc.segments(), vec!["b", "1", "a", "2", "b", "3"]);
+    }
+
+    #[test]
+    fn a_redacted_string_is_re_escaped() {
+        let body = r#"{"k":"line\nSECRET \"q\" \u00e9"}"#;
+        let doc = Document::parse(Some("application/json"), body.as_bytes())
+            .ok()
+            .unwrap();
+        assert_eq!(doc.segments()[1], "line\nSECRET \"q\" \u{e9}");
+        let mut spans: Spans = HashMap::new();
+        spans.insert(1, vec![(5, 11, "s".to_string())]);
+        let out: Value = serde_json::from_slice(&doc.redact(&spans)).unwrap();
+        assert_eq!(out["k"], "line\n[REDACTED:s] \"q\" \u{e9}");
     }
 
     #[test]

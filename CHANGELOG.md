@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Redacting a JSON body rewrites only the strings that held a hit
+  (AGENT-270). Before, the body was parsed and re-serialized, which
+  sorted object keys, rounded integers too big for 64 bits, and dropped
+  all but the last copy of a duplicate key. A hit in a shadowed duplicate
+  key is now redacted in place instead of blocking the request.
 - A failed broker health probe records why, as `health.cause` and in the
   `broker_down` log: `unexpected_status`, `unreachable`, or the egress
   refusal (`egress_proxy_unconfigured`, `upstream_client_unavailable`)

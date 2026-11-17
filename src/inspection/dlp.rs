@@ -906,11 +906,18 @@ mod tests {
             outcome("application/json", body.as_bytes(), Verdict::Block),
             Outcome::Block { .. }
         ));
-        // It can't be redacted where the parser can't see it: block.
-        assert!(matches!(
-            outcome("application/json", body.as_bytes(), Verdict::Redact),
-            Outcome::Block { report } if report.verdict == Verdict::Block
-        ));
+        // AGENT-270: string tokens are rewritten in place, so the shadowed
+        // copy is redacted too and the body keeps both keys.
+        match outcome("application/json", body.as_bytes(), Verdict::Redact) {
+            Outcome::Forward {
+                body: Some(out), ..
+            } => {
+                let out = String::from_utf8(out).unwrap();
+                assert!(!out.contains(&token(31)), "{out}");
+                assert!(out.ends_with(r#","q":"hi"}"#), "{out}");
+            }
+            _ => panic!("expected a redacted forward"),
+        }
     }
 
     #[test]
