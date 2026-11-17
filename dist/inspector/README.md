@@ -33,6 +33,12 @@ sudo install -m 0644 locksmith-inspector.service /etc/systemd/system/
 sudo systemctl enable --now locksmith-inspector
 ```
 
+The unit runs with `PrivateNetwork=yes` and `HF_HUB_OFFLINE=1`, so the
+weights must already be in the `locksmith` user's Hugging Face cache
+(`llamafirewall configure` above puts them there). It starts before
+`locksmith.service`, but model loading can outlast Locksmith's startup:
+scans in that window fail to connect and follow `on_error`.
+
 Run the sidecar as the **same user as `locksmithd`**. Text sent for
 scanning may contain secrets, so Locksmith checks the uid of the process
 serving the socket and refuses any other.
@@ -56,6 +62,11 @@ A policy whose only scanners are `injection` or sidecars defaults to
 answers with an error or misses `timeout_ms` is a scanner error, and the
 route's `on_error` decides what happens. Sidecars do not run on streamed
 (SSE) responses, so a streamed reply is a scanner error too.
+
+A classifier scores whole texts, and the raw body is one of the texts
+Locksmith sends it, so a sidecar hit can't be cut out of a JSON body:
+under `on_hit: redact` it blocks the body, and the audit row carries
+`redaction_incomplete: true`. Use `flag` or `block` with sidecars.
 
 Setting `on_hit: redact` or `block` also makes `on_error` default to
 `fail_closed`. The route then refuses replies while the sidecar is down,

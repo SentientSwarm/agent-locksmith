@@ -371,7 +371,11 @@ scanners, and the stream's audit row (`inspection_error`, or
 `inspection_hit` when something was also found) carries the error in
 `details.error`. A `sidecar:` scanner naming no declared
 sidecar, an empty or invalid name, a relative socket path or a zero
-timeout fails config load.
+timeout fails config load. A classifier scores whole texts, and a body's
+raw view is one of the texts it is sent, so a sidecar hit can't be cut
+out of a JSON body: under `on_hit: redact` it blocks, with
+`redaction_incomplete: true` (AGENT-278). Use `flag` or `block` with
+sidecars.
 
 `dist/inspector/` holds a reference sidecar built on LlamaFirewall, with
 its systemd unit and smoke test. The model weights are not shipped; see

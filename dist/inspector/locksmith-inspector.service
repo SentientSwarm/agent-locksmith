@@ -3,7 +3,7 @@
 # served by any other uid.
 [Unit]
 Description=agent-locksmith inspection sidecar (PromptGuard 2 / CodeShield)
-Before=locksmithd.service
+Before=locksmith.service
 
 [Service]
 User=locksmith
@@ -12,6 +12,8 @@ RuntimeDirectory=locksmith-inspector
 RuntimeDirectoryMode=0700
 ExecStart=/opt/locksmith-inspector/venv/bin/python /opt/locksmith-inspector/locksmith_inspector.py --socket /run/locksmith-inspector/inspector.sock
 Restart=on-failure
+# The weights come from the local cache; there is no network to fetch them.
+Environment=HF_HUB_OFFLINE=1
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only

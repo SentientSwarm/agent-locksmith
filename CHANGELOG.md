@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- The reference inspection sidecar's unit orders itself before
+  `locksmith.service` (it named `locksmithd.service`, which is not the
+  installed unit) and sets `HF_HUB_OFFLINE=1` to match its
+  `PrivateNetwork=yes` (AGENT-278). The docs now say that a sidecar hit
+  under `on_hit: redact` blocks the body.
 - A rate-limit change that is stored but cannot be loaded into the
   proxy returns 503 `rate_limits_not_applied` and is logged, instead of
   `rate_limits_unavailable`, which said the write had failed

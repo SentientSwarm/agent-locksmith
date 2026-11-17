@@ -27,6 +27,28 @@ fn sidecar(dir: &Path) -> PathBuf {
     path
 }
 
+/// A sidecar flagging every text it is sent whole, as a classifier does.
+fn classifier(dir: &Path) -> PathBuf {
+    let path = dir.join("cls.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { return };
+            let mut buf = vec![0u8; 1 << 20];
+            let n = conn.read(&mut buf).unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let json = raw.split("\r\n\r\n").nth(1).unwrap_or("{}");
+            let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+            let end = v["text"].as_str().map_or(0, str::len);
+            let body = format!(
+                r#"{{"hits":[{{"rule":"promptguard","start":0,"end":{end},"score":0.97}}]}}"#
+            );
+            let _ = conn.write_all(format!("HTTP/1.1 200 OK\r\n\r\n{body}").as_bytes());
+        }
+    });
+    path
+}
+
 async fn upstream() -> MockServer {
     let up = MockServer::start().await;
     Mock::given(any())
@@ -63,6 +85,28 @@ async fn sidecar_hits_are_audited_under_its_scanner_id() {
     assert_eq!(event, "inspection_hit");
     assert_eq!(details["hits"][0]["scanner"], "sidecar:pg");
     assert_eq!(details["hits"][0]["rule"], "promptguard");
+}
+
+/// AGENT-278: a classifier scores a whole text, so its hit on the raw
+/// body can't be cut out of the JSON; under `redact` a sidecar hit blocks.
+#[tokio::test]
+async fn a_sidecar_hit_under_redact_blocks() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let socket = classifier(dir.path());
+    let up = upstream().await;
+    let extra = "        on_hit: redact\n";
+    let h = harness(config(&up.uri(), &inspection(&socket, "response", extra))).await;
+    let resp = h
+        .server
+        .post("/api/out/x")
+        .json(&serde_json::json!({}))
+        .await;
+    assert_eq!(
+        resp.json::<serde_json::Value>()["error"]["code"],
+        "inspection_blocked"
+    );
+    let rows = h.inspection_rows().await;
+    assert_eq!(rows[0].2["redaction_incomplete"], true, "{rows:?}");
 }
 
 #[tokio::test]
