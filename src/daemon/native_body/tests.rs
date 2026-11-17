@@ -37,7 +37,9 @@ async fn journey(tls: bool, method: &str, path: &str) {
     let ready = f.ready().await;
     let (mut client, bytes) = f.request(path, method);
     let _ = bytes.send(Ok(bytes::Bytes::from_static(b"{"))).await;
-    let entered = tokio::time::timeout(Duration::from_secs(3), f.probe.entered())
+    // The request is argon2-checked before it enters; same contention as
+    // `ready` (AGENT-293), so the ceiling is generous.
+    let entered = tokio::time::timeout(Duration::from_secs(30), f.probe.entered())
         .await
         .is_ok();
     coord.trigger();

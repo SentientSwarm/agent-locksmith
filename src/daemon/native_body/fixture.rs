@@ -43,8 +43,12 @@ impl Fixture {
             url,
         }
     }
+    /// Startup (fresh database, migrations) plus one argon2-checked request
+    /// takes about 0.4 s alone and 2.7 s in the full debug lib suite; under a
+    /// contended host it exceeded 10 s (AGENT-293). The ceiling only bounds a
+    /// hung daemon; it is not what the test measures.
     pub async fn ready(&self) -> bool {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 if self
                     .client
