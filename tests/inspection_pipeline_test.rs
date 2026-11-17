@@ -442,7 +442,67 @@ async fn inspected_response_is_requested_uncompressed() {
         .await
         .assert_status_ok();
     let sent = &up.received_requests().await.unwrap()[0];
-    assert!(sent.headers.get("accept-encoding").is_none());
+    // AGENT-270: without the header, any coding is acceptable (RFC 9110).
+    assert_eq!(sent.headers.get("accept-encoding").unwrap(), "identity");
+}
+
+async fn compressed_upstream() -> MockServer {
+    let m = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .insert_header("content-encoding", "gzip")
+                .set_body_bytes(vec![0x1f, 0x8b, 0x08, 0x00]),
+        )
+        .mount(&m)
+        .await;
+    m
+}
+
+fn response_policy(extra: &str) -> String {
+    format!(
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n{extra}"
+    )
+}
+
+#[tokio::test]
+async fn a_compressed_reply_is_blocked_by_default_when_hits_block() {
+    // AGENT-270: an upstream that compresses anyway must not slip past a
+    // policy meant to enforce.
+    let up = compressed_upstream().await;
+    let h = harness(config(
+        &up.uri(),
+        &response_policy("        on_hit: block\n"),
+    ))
+    .await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "encoded");
+}
+
+#[tokio::test]
+async fn a_compressed_reply_passes_when_hits_only_flag() {
+    let up = compressed_upstream().await;
+    let h = harness(config(&up.uri(), &response_policy(""))).await;
+    h.server
+        .post("/api/out/x")
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "encoded");
+}
+
+#[tokio::test]
+async fn an_explicit_fail_open_still_passes_a_compressed_reply() {
+    let up = compressed_upstream().await;
+    let extra = "        on_hit: block\n        on_error: fail_open\n";
+    let h = harness(config(&up.uri(), &response_policy(extra))).await;
+    h.server
+        .post("/api/out/x")
+        .json(&json!({}))
+        .await
+        .assert_status_ok();
 }
 
 #[tokio::test]
@@ -653,8 +713,10 @@ async fn ndjson_responses_stream_unscanned() {
         )
         .mount(&up)
         .await;
+    // A blocking policy fails closed by default (AGENT-270); the operator
+    // opts in to streaming NDJSON unscanned.
     let policy = format!(
-        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n        on_hit: block\n"
+        "  routes:\n    - route: out\n      response:\n        scanners: [\"literal:{CANARY}\"]\n        on_hit: block\n        on_error: fail_open\n"
     );
     let h = harness(config(&up.uri(), &policy)).await;
     let resp = h.server.post("/api/out/x").json(&json!({})).await;
@@ -662,6 +724,27 @@ async fn ndjson_responses_stream_unscanned() {
     let rows = h.inspection_rows().await;
     assert_eq!(rows[0].0, "inspection_skipped");
     assert_eq!(rows[0].2["reason"], "streaming");
+}
+
+#[tokio::test]
+async fn ndjson_responses_are_refused_by_default_when_hits_block() {
+    let up = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("{{\"t\":\"{CANARY}\"}}\n"), "application/x-ndjson"),
+        )
+        .mount(&up)
+        .await;
+    let h = harness(config(
+        &up.uri(),
+        &response_policy("        on_hit: block\n"),
+    ))
+    .await;
+    let resp = h.server.post("/api/out/x").json(&json!({})).await;
+    assert_eq!(resp.status_code(), 502);
+    assert!(!resp.text().contains(CANARY));
+    assert_eq!(h.inspection_rows().await[0].2["reason"], "streaming");
 }
 
 #[tokio::test]

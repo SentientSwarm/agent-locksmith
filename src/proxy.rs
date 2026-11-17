@@ -638,9 +638,13 @@ async fn proxy_request(
     // the views come from the parsed upstream URL as well as the request.
     let uri_text = request_line_views(req.uri(), &upstream_url);
     // AGENT-262 — an inspected response must arrive uncompressed to be
-    // scanned, so the agent's Accept-Encoding is not forwarded.
+    // scanned, so the agent's Accept-Encoding is replaced. AGENT-270: ask
+    // for `identity` outright; with no header, any coding is acceptable.
     if inspect::response_policy(&state, &ctx.tool_name).is_some() {
-        headers.remove(axum::http::header::ACCEPT_ENCODING);
+        headers.insert(
+            axum::http::header::ACCEPT_ENCODING,
+            axum::http::HeaderValue::from_static("identity"),
+        );
     }
     let body_bytes = match read_request_body(req, target.body_limit_bytes).await {
         Ok(b) => b,

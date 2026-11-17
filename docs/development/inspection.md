@@ -31,8 +31,12 @@ inspection:
 | Setting | Request default | Response default |
 |---|---|---|
 | `on_hit` | `block` | `flag` |
-| `on_error` | `fail_closed` | `fail_open` |
+| `on_error` | `fail_closed` | `fail_open`; `fail_closed` when `on_hit` is `redact` or `block` |
 | `max_scan_bytes` | 1 MiB | 1 MiB |
+
+A response policy that redacts or blocks fails closed unless `on_error` says
+otherwise, so a reply it can't read (compressed, oversized or streamed as
+NDJSON) doesn't pass unjudged.
 
 Unknown scanner ids, an empty scanner list and a route listed twice fail
 config load.
@@ -140,8 +144,9 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
 - **Content-encoded bodies** (any `Content-Encoding` other than
   `identity`, such as gzip) can't be scanned as sent and could hide text,
   so they are audited `inspection_skipped` with reason `encoded` and
-  follow `on_error`. On a route with a response policy, Locksmith drops
-  the agent's `Accept-Encoding` so the upstream answers uncompressed.
+  follow `on_error`. On a route with a response policy, Locksmith replaces
+  the agent's `Accept-Encoding` with `identity`, so a well-behaved upstream
+  answers uncompressed.
 - **Bodies over `max_scan_bytes`** are audited `inspection_skipped` with
   reason `oversize` and follow `on_error`: forwarded under `fail_open`,
   blocked under `fail_closed`. A large response is read only up to the

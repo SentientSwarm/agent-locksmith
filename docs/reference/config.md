@@ -244,7 +244,7 @@ Content inspection for named routes.
 | `routes[].request`, `routes[].response` | none | The policy for that direction. Leave one out to skip it. |
 | `…scanners` | required | `dlp`, `injection`, `literal:<text>` (an exact string) or `sidecar:<name>`. An unknown scanner stops startup. |
 | `…on_hit` | request `block`, response `flag` | `pass`, `flag`, `redact` or `block`. A direction whose scanners are only `injection` or sidecars defaults to `flag`. |
-| `…on_error` | request `fail_closed`, response `fail_open` | What happens when a scanner fails. |
+| `…on_error` | request `fail_closed`; response `fail_open`, or `fail_closed` when `on_hit` is `redact` or `block` | What happens when a body can't be scanned (a scanner error, or a compressed, oversized or NDJSON body). |
 | `…max_scan_bytes` | `1048576` | Bytes scanned per body. |
 | `sidecars[].name` | required | Unique; lowercase letters, digits, `-` and `_`. Used as `sidecar:<name>`. |
 | `sidecars[].socket` | required | Absolute path of the sidecar's Unix socket. |

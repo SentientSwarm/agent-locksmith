@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- A compressed or NDJSON reply can no longer slip past a response policy
+  that redacts or blocks (AGENT-270). Such a policy now defaults to
+  `on_error: fail_closed`, so a reply it can't read is refused with 502
+  `inspection_blocked`; set `on_error: fail_open` to keep the old
+  behaviour. Inspected routes also ask the upstream for
+  `Accept-Encoding: identity` instead of sending no header, which RFC 9110
+  reads as accepting any coding. Policies that only flag are unchanged.
 - Agents can call an upstream's root: `/api/<route>/` now forwards to
   `<upstream>/` and `/api/<route>` to the upstream URL exactly, query kept
   (AGENT-290). Before, the router answered 404 with an empty body and never

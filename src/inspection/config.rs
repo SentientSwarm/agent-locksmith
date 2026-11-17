@@ -14,7 +14,8 @@
 //! ```
 //!
 //! Defaults: requests `block` / `fail_closed`; responses `flag` /
-//! `fail_open`; 1 MiB scan limit. A policy whose only scanners are
+//! `fail_open` (`fail_closed` when `on_hit` redacts or blocks); 1 MiB
+//! scan limit. A policy whose only scanners are
 //! `injection` or sidecars defaults to `flag` in both directions. Unknown
 //! scanners and duplicate routes fail config load.
 //!
@@ -147,17 +148,26 @@ fn direction(
     if cfg.scanners.is_empty() {
         return Err("names no scanners".into());
     }
+    let on_hit = cfg.on_hit.unwrap_or(if advisory_only(&cfg.scanners) {
+        Verdict::Flag
+    } else {
+        on_hit
+    });
+    // AGENT-270: a policy that redacts or blocks must not be bypassed by a
+    // body it can't read (a compressed reply, say), so it fails closed
+    // unless the operator says otherwise.
+    let on_error = if on_hit >= Verdict::Redact {
+        OnError::FailClosed
+    } else {
+        on_error
+    };
     Ok(Some(DirectionPolicy {
         scanners: cfg
             .scanners
             .iter()
             .map(|id| scanner(id, sidecars))
             .collect::<Result<_, _>>()?,
-        on_hit: cfg.on_hit.unwrap_or(if advisory_only(&cfg.scanners) {
-            Verdict::Flag
-        } else {
-            on_hit
-        }),
+        on_hit,
         on_error: cfg.on_error.unwrap_or(on_error),
         max_scan_bytes: cfg.max_scan_bytes.unwrap_or(DEFAULT_MAX_SCAN_BYTES),
     }))
