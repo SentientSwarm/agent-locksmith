@@ -115,36 +115,42 @@ fn unescape_token(token: &str) -> String {
 }
 
 /// Copy `text`, replacing each token with spans by its redacted string.
-/// A key redacted to one already in its object is numbered, so both
-/// values survive.
+/// A key redacted to a name already used in its object is numbered
+/// (`#2`, `#3`, ...) so no value is lost. Every unredacted key of the
+/// object is reserved first, so a redacted key never takes the name of
+/// one that follows it, and a counter per name keeps numbering linear.
 fn redact_tokens(text: &str, tokens: &[Token], spans: &Spans) -> String {
+    let mut taken: HashMap<usize, HashSet<String>> = HashMap::new();
+    for (index, t) in tokens.iter().enumerate() {
+        if t.key && !spans.contains_key(&index) {
+            taken
+                .entry(t.object)
+                .or_default()
+                .insert(unescape_token(&text[t.start..t.end]));
+        }
+    }
+    let mut next: HashMap<(usize, String), usize> = HashMap::new();
     let mut out = String::with_capacity(text.len());
-    let mut keys: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut at = 0;
     for (index, t) in tokens.iter().enumerate() {
-        let raw = &text[t.start..t.end];
-        let found = spans.get(&index);
-        if found.is_none() && !t.key {
+        let Some(found) = spans.get(&index) else {
             continue;
-        }
-        let mut value = unescape_token(raw);
-        if let Some(found) = found {
-            value = redact_str(&value, Some(found));
-        }
+        };
+        let mut value = redact_str(&unescape_token(&text[t.start..t.end]), Some(found));
         if t.key {
-            let seen = keys.entry(t.object).or_default();
-            if found.is_some() && seen.contains(&value) {
+            let used = taken.entry(t.object).or_default();
+            if used.contains(&value) {
+                let n = next.entry((t.object, value.clone())).or_insert(2);
                 let base = value.clone();
-                let mut n = 2;
-                while seen.contains(&value) {
+                loop {
                     value = format!("{base}#{n}");
-                    n += 1;
+                    *n += 1;
+                    if !used.contains(&value) {
+                        break;
+                    }
                 }
             }
-            seen.insert(value.clone());
-        }
-        if found.is_none() {
-            continue;
+            used.insert(value.clone());
         }
         out.push_str(&text[at..t.start]);
         out.push_str(&serde_json::to_string(&value).unwrap_or_default());
@@ -158,8 +164,8 @@ fn redact_tokens(text: &str, tokens: &[Token], spans: &Spans) -> String {
 pub(super) const NESTED_ESCAPE_DEPTH: usize = 4;
 
 /// Views of the raw bytes that catch what parsing hides: invalid UTF-8
-/// (read lossily), escapes left in JSON that failed to parse, values of
-/// duplicate keys the parser dropped, and form encoding. The first view
+/// (read lossily), escapes left in JSON that failed to parse, and form
+/// encoding. The first view
 /// is the JSON-unescaped body.
 pub(super) fn raw_views(content_type: Option<&str>, body: &[u8]) -> Vec<String> {
     let lossy = String::from_utf8_lossy(body);
@@ -389,6 +395,99 @@ mod tests {
         spans.insert(1, vec![(5, 11, "s".to_string())]);
         let out: Value = serde_json::from_slice(&doc.redact(&spans)).unwrap();
         assert_eq!(out["k"], "line\n[REDACTED:s] \"q\" \u{e9}");
+    }
+
+    fn json(body: &str) -> Document {
+        Document::parse(Some("application/json"), body.as_bytes())
+            .ok()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_redacted_key_never_takes_a_later_literal_key() {
+        let doc = json(r#"{"SECRET":1,"[REDACTED:s]":2}"#);
+        let mut spans: Spans = HashMap::new();
+        spans.insert(0, vec![(0, 6, "s".to_string())]);
+        let out: Value = serde_json::from_slice(&doc.redact(&spans)).unwrap();
+        let obj = out.as_object().unwrap();
+        assert_eq!(obj.len(), 2, "{out}");
+        assert_eq!(obj["[REDACTED:s]"], 2, "the literal key keeps its value");
+        assert_eq!(obj["[REDACTED:s]#2"], 1);
+    }
+
+    #[test]
+    fn keys_in_different_objects_are_numbered_apart() {
+        let doc = json(r#"{"o":{"S1":1},"p":{"S2":2}}"#);
+        let mut spans: Spans = HashMap::new();
+        // Segments: o, S1, p, S2.
+        spans.insert(1, vec![(0, 2, "s".to_string())]);
+        spans.insert(3, vec![(0, 2, "s".to_string())]);
+        let out = String::from_utf8(doc.redact(&spans)).unwrap();
+        assert_eq!(out, r#"{"o":{"[REDACTED:s]":1},"p":{"[REDACTED:s]":2}}"#);
+    }
+
+    #[test]
+    fn many_keys_redacted_to_one_marker_number_in_linear_time() {
+        let n = 30_000;
+        let body = format!(
+            "{{{}}}",
+            (0..n)
+                .map(|i| format!("\"k{i}\":0"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let doc = json(&body);
+        let spans: Spans = (0..n)
+            .map(|i| {
+                let len = format!("k{i}").len();
+                (i, vec![(0, len, "s".to_string())])
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let out: Value = serde_json::from_slice(&doc.redact(&spans)).unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(out.as_object().unwrap().len(), n);
+    }
+
+    /// The tokenizer's hard cases: a backslash before a closing quote,
+    /// brackets and quotes inside strings, whitespace before `:`, a
+    /// top-level string. With no spans the body comes back byte for
+    /// byte, and the segments are exactly the parser's strings.
+    #[test]
+    fn tokenizer_finds_every_string_in_hard_json() {
+        for body in [
+            r#"{"a\\":"x\\","k" : "v","n":{"b{[":"]}\":"}}"#,
+            r#"[ "s", {"x":["y", {"z" :"w"}]}, "t\"" ]"#,
+            r#""top \u00e9 \"""#,
+        ] {
+            let doc = json(body);
+            let mut segments = doc.segments();
+            let mut expected = Vec::new();
+            fn strings(v: &Value, out: &mut Vec<String>) {
+                match v {
+                    Value::String(s) => out.push(s.clone()),
+                    Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
+                    Value::Object(o) => o.iter().for_each(|(k, x)| {
+                        out.push(k.clone());
+                        strings(x, out)
+                    }),
+                    _ => {}
+                }
+            }
+            strings(&serde_json::from_str(body).unwrap(), &mut expected);
+            segments.sort();
+            expected.sort();
+            assert_eq!(segments, expected, "{body}");
+            assert_eq!(
+                json(body).redact(&HashMap::new()),
+                body.as_bytes(),
+                "{body}"
+            );
+        }
     }
 
     #[test]

@@ -419,7 +419,7 @@ pub fn apply_with(
         }
     }
     // What parsing hides (invalid UTF-8, escapes in unparseable JSON,
-    // shadowed duplicate keys, form encoding) and what travels outside
+    // form encoding) and what travels outside
     // the body is judged too.
     let mut views = text::raw_views(meta.content_type, body);
     let nested = text::nested_views(&views[0]);
@@ -453,7 +453,7 @@ pub fn apply_with(
     match (report.verdict, doc) {
         (Verdict::Redact, Some(doc)) if !unredactable => {
             // Only what the parser located can be rewritten. A copy left
-            // anywhere else (the query, a duplicate key, an encoded form
+            // anywhere else (the query, an escape, an encoded form
             // field) means the redaction is incomplete: block instead.
             let rewritten = doc.redact(&spans);
             match leaves_a_hit(policy, direction, meta.content_type, &rewritten, extra) {

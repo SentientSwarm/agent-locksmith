@@ -126,16 +126,17 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   duplicate key, after JSON unescaping. A redaction rewrites only that
   string or key in place; every other byte of the body is forwarded as
   sent, so key order, number spelling (integers too big for 64 bits
-  included) and whitespace are unchanged. Keys that redact to the same
-  marker in one object are numbered (`[REDACTED:dlp]#2`) so no value is
-  lost.
+  included) and whitespace are unchanged. A key redacted to a name the
+  object already uses, or uses later, is numbered (`[REDACTED:dlp]#2`) so
+  no value is lost.
 - **Other UTF-8 bodies** are scanned as one text.
 - **The raw bytes** of every body are scanned too, read as lossy UTF-8
   with JSON escapes resolved (and percent-decoded for
   `application/x-www-form-urlencoded`). This catches what parsing hides:
   a body that is not valid UTF-8, JSON that fails to parse (trailing
-  bytes, deep nesting) with escapes inside, and form encoding. A hit found only this way can't be
-  rewritten in place, so `redact` becomes `block` for it. JSON nested in
+  bytes, deep nesting) with escapes inside, and form encoding. A hit
+  found only this way can't be rewritten in place, so `redact` becomes
+  `block` for it. JSON nested in
   a JSON string (tool arguments, say) keeps its own escapes after one
   pass, so the raw view is also unescaped again, up to four more levels,
   until nothing changes. A match in those deeper views blocks under
