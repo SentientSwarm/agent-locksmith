@@ -316,10 +316,14 @@ The profile fields depend on the provider. See
 
 ## Legacy mode
 
-Without `listen.admin_socket`, Locksmith runs as it did before 2.0: there is
-no database, no per-agent identity and no admin API. It serves the services
-in the `tools` list, and `inbound_auth` is the only thing that authenticates
-agents.
+Without `listen.admin_socket` and with `listen.auth_mode: bearer`, Locksmith
+runs without per-agent identity or an admin API. Only `tools` entries
+**without** `auth` are served. An entry with `auth` is refused: requests get
+401 `agent_identity_required` and `/readyz` returns 503, because a shared
+token cannot select an account. To use credentials, set the admin socket,
+register agents and select their accounts.
+
+`inbound_auth` gates the entries that are served:
 
 | Key | Meaning |
 |---|---|
@@ -327,11 +331,12 @@ agents.
 | `inbound_auth.token` | The single token every agent presents. |
 
 > **Warning.** In legacy mode, if `inbound_auth` is absent, its `mode` is not
-> `bearer`, or it has no `token`, every request is served without
-> authentication. Keep the listener on loopback, or set the admin socket.
+> `bearer`, or it has no `token`, the served entries are open to anyone who
+> can reach the listener. Keep the listener on loopback, or set the admin
+> socket.
 
 Once `listen.admin_socket` is set, `inbound_auth` is ignored (with a warning
-if a token is set) and each agent uses its own token.
+if a token is set) and each agent uses its own token or certificate.
 
 ### `tools`
 
@@ -361,7 +366,7 @@ tools:
 |---|---|---|
 | `name`, `description`, `upstream` | required | The route name (`/api/<name>/`), a description and the upstream base URL. |
 | `egress` | `direct` | `direct` or `proxied`; see [egress](#egress-egress_proxy-and-egress). |
-| `auth.header`, `auth.value` | none | Header to inject and its credential. `value` is `"Bearer ${VAR}"`-style text, `{from_env: {var: VAR}}` or `{from_file_sealed: {path: ...}}`; see the [sealed secrets runbook](../operator/runbooks/sealed-secrets.md). |
+| `auth.header`, `auth.value` | none | Header and credential to copy into the database. Only an environment variable is copied: `"Bearer ${VAR}"`-style text or `{from_env: {var: VAR}}`. |
 | `timeouts.request_seconds` | `30` | Total time for one upstream request. |
 | `timeouts.idle_seconds` | `60` | Longest gap between reads. |
 | `body_limit_bytes` | `10485760` | Largest request body. |
@@ -372,7 +377,8 @@ tools:
 The `response` controls are described in the
 [response controls runbook](../operator/runbooks/response-controls.md).
 
-With the admin socket set, `tools` entries are copied into the database at
+The `auth` keys matter only for the copy into the database. With the admin
+socket set, `tools` entries are copied into the database at
 startup, but only names the database does not already have; later edits to
 an entry are ignored. Only environment-variable credentials are copied.
 An entry whose `auth.value` uses `from_file_sealed` (or another backend) is
