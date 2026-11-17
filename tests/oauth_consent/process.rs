@@ -52,11 +52,7 @@ impl Twin {
     }
 }
 fn configure(f: &Fixture, t: &Twin) -> u16 {
-    let callback = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let callback = super::fixture::fixed_port();
     let path = f.path().join("config.yaml");
     let mut c: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     c["oauth_consent"] = json!({"callback":{"address":format!("127.0.0.1:{callback}"),"cert_path":f.path().join("server.pem"),"key_path":f.path().join("server.key")},
@@ -78,8 +74,9 @@ async fn start(f: &mut Fixture) {
     start_binary(f, process::DAEMON).await;
 }
 async fn start_binary(f: &mut Fixture, binary: &str) {
-    // A probed callback port can be taken before the daemon binds it
-    // (#153): on that startup failure, move to a fresh port and retry.
+    // A callback port can still be taken before the daemon binds it
+    // (#153, AGENT-295): on that startup failure, move to a fresh port and
+    // retry.
     for attempt in 1..=3 {
         match try_start(f, binary).await {
             Ok(()) => return,
@@ -132,11 +129,7 @@ async fn try_start(f: &mut Fixture, binary: &str) -> Result<(), String> {
 /// Re-probe the callback port and rewrite every config value naming it.
 fn move_callback(f: &Fixture) {
     let old = bound_callback(f);
-    let new = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let new = super::fixture::fixed_port();
     let path = f.path().join("config.yaml");
     let config = std::fs::read_to_string(&path).unwrap();
     let config = config

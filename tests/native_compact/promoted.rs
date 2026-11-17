@@ -106,11 +106,7 @@ async fn pinned_controlled_customer_both_sdks_access_only() {
     s::manifest(&f);
     let up = receiver::Receiver::start(&f);
     let issuer = format!("https://127.0.0.1:{}", up.port);
-    let callback = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let callback = super::fixture::fixed_port();
     let profile = json!({"id":"controlled","kind":"controlled-linear-v1","client_id":"fixture","client_generation":1,"issuer":issuer,"authorization_endpoint":format!("{issuer}/authorize"),"token_endpoint":format!("{issuer}/token"),"resource":format!("{issuer}/mcp/readonly"),"redirect_profile_id":"local","redirect_uri":format!("https://127.0.0.1:{callback}/oauth/callback"),"expected_workspace":"00000000-0000-0000-0000-000000000041","expected_user":"00000000-0000-0000-0000-000000000042","ca_path":f.path().join("ca.pem")});
     let p: Profile = serde_json::from_value(profile.clone()).unwrap();
     let config = f.path().join("config.yaml");

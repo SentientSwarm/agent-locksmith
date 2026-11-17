@@ -1,6 +1,9 @@
 #[path = "assigned_port.rs"]
 mod assigned_port;
+#[path = "../support/fixed_port.rs"]
+mod fixed_port;
 use super::{pki::Pki, process};
+pub use fixed_port::fixed_port;
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -119,15 +122,12 @@ impl Fixture {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
-    /// Configure a fixed probed port instead of port 0. Only for prior
-    /// binaries, which log the configured rather than the bound address;
-    /// a probed port can be taken before the daemon binds it (AGENT-219).
+    /// Configure a fixed port instead of port 0. Only for prior binaries,
+    /// which log the configured rather than the bound address (AGENT-219).
+    /// It comes from below the ephemeral range, where nothing else in the
+    /// suite is handed it before the daemon binds it (AGENT-295).
     pub fn use_stable_port(&mut self) {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = fixed_port();
         let path = self.path().join("config.yaml");
         let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         config["listen"]["port"] = port.into();

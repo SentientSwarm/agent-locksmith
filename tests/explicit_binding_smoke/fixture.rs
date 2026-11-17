@@ -1,3 +1,5 @@
+#[path = "../support/fixed_port.rs"]
+mod fixed_port;
 use super::process::{self, Guard};
 use std::{
     path::PathBuf,
@@ -35,17 +37,15 @@ impl Fixture {
         let config = dir.path().join("config.yaml");
         let socket = dir.path().join("admin.sock");
         let db = dir.path().join("locksmith.db");
-        // A stable probed port, unlike the other daemon tests (AGENT-219):
-        // the upgrade probes restart the same config under prior binaries,
-        // which log the configured address rather than the bound one. A
+        // A stable port, unlike the other daemon tests (AGENT-219): the
+        // upgrade probes restart the same config under prior binaries,
+        // which log the configured address rather than the bound one. It
+        // comes from below the ephemeral range, so nothing else in the
+        // suite is handed it before the daemon binds it (AGENT-295). A
         // collision cannot be mistaken for readiness, because `ready` also
         // requires this fixture's own admin socket, which a daemon that
         // failed to bind the agent port never creates.
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = fixed_port::fixed_port();
         let operator = super::setup::operator(dir.path());
         let http = reqwest::Client::builder()
             .no_proxy()
