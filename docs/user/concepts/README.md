@@ -1,8 +1,6 @@
 # Concepts
 
-User-level mental models for working with locksmith. Distilled from the stack technical spec at `agents-stack/docs/spec/v<X.Y.Z>.md`.
-
-Authoritative versioned design lives in the stack spec; these pages exist to make the concepts accessible to users without requiring the formal spec.
+User-level mental models for working with locksmith. They describe the current release; the [CLI reference](../cli-reference.md) and [architecture](../architecture.md) pages give the operational detail.
 
 Pages:
 
@@ -12,4 +10,5 @@ Pages:
 - [`error-envelope.md`](error-envelope.md) — uniform §4.7.9 wire shape, existence-leak Q-8
 - [`per-agent-credentials.md`](per-agent-credentials.md) — per-agent credential overrides + OAuth session labels (Phase G), and when not to use them
 - [`oauth-flow.md`](oauth-flow.md) — end-to-end OAuth flow (codex / copilot / anthropic-oauth / google-gemini-cli / qwen-cli): bootstrap, refresh, per-request hot path, and the codex-specific `ChatGPT-Account-ID` injection (Phase G2)
+- [`migrating-account-bindings.md`](migrating-account-bindings.md) — offline reviewed migration to finite HTTP grants and explicit accounts
 - [`egress-and-inspection.md`](egress-and-inspection.md) — egress modes (`pipelock` / `external` / none), brokered routes, TLS interception vs per-route CAs, and the prompt-injection classifier gap

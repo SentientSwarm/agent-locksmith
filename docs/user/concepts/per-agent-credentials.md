@@ -295,8 +295,6 @@ For local setup (also see [getting started](../getting-started.md)):
 
 ## See also
 
-- [`agents-stack/docs/spec/v0.2.0.md`](https://github.com/SentientSwarm/agents-stack/blob/main/docs/spec/v0.2.0.md)
-  — formal Phase G design.
 - [`agent-identity-and-acl.md`](agent-identity-and-acl.md) — how
   agents authenticate and what audit fields are present today.
 - [`trust-boundary.md`](trust-boundary.md) — operator vs agent

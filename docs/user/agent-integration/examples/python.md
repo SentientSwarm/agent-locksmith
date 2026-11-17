@@ -1,6 +1,6 @@
 # Python recipes
 
-Routing Python agents through layer8-proxy. Works for any HTTP
+Routing Python agents through Locksmith. Works for any HTTP
 client (`httpx`, `requests`, `aiohttp`) and for the official
 provider SDKs that support `base_url`.
 
@@ -16,7 +16,7 @@ import anthropic
 import os
 
 client = anthropic.Anthropic(
-    base_url="http://layer8.lan:9200/api/anthropic",
+    base_url="http://<locksmith-host>:9200/api/anthropic",
     api_key=os.environ["LOCKSMITH_TOKEN"],     # your agent bearer
 )
 
@@ -52,7 +52,7 @@ from openai import OpenAI
 import os
 
 client = OpenAI(
-    base_url="http://layer8.lan:9200/api/openai/v1",
+    base_url="http://<locksmith-host>:9200/api/openai/v1",
     api_key=os.environ["LOCKSMITH_TOKEN"],
 )
 
@@ -77,7 +77,7 @@ locksmith's `lmstudio` registration:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://layer8.lan:9200/api/lmstudio/v1",
+    base_url="http://<locksmith-host>:9200/api/lmstudio/v1",
     api_key="locksmith-bearer-here",   # from LOCKSMITH_TOKEN env
 )
 ```
@@ -91,7 +91,7 @@ dedicated SDK:
 import httpx
 import os
 
-LOCKSMITH = "http://layer8.lan:9200"
+LOCKSMITH = "http://<locksmith-host>:9200"
 TOKEN = os.environ["LOCKSMITH_TOKEN"]
 
 resp = httpx.post(
@@ -146,7 +146,7 @@ import os
 async def main():
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            "http://layer8.lan:9200/api/anthropic/v1/messages",
+            "http://<locksmith-host>:9200/api/anthropic/v1/messages",
             headers={
                 "Authorization": f"Bearer {os.environ['LOCKSMITH_TOKEN']}",
                 "anthropic-version": "2023-06-01",
@@ -169,7 +169,7 @@ asyncio.run(main())
 import httpx, os
 
 TOKEN = os.environ["LOCKSMITH_TOKEN"]
-LOCKSMITH = "http://layer8.lan:9200"
+LOCKSMITH = "http://<locksmith-host>:9200"
 
 # What models can this agent reach?
 models = httpx.get(
@@ -232,7 +232,7 @@ from pathlib import Path
 TOKEN_FILE = Path.home() / ".hermes" / "locksmith.token"
 
 def load_locksmith_token() -> str:
-    """Convention from hermes-site/launch-hermes.sh: token in
+    """Convention from the Hermes recipe's launch-hermes.sh: token in
     ~/.hermes/locksmith.token, mode 0600, single line."""
     return TOKEN_FILE.read_text().strip()
 ```
@@ -244,9 +244,9 @@ modification:
 
 ```bash
 # Set once in the shell:
-export ANTHROPIC_BASE_URL="http://layer8.lan:9200/api/anthropic"
+export ANTHROPIC_BASE_URL="http://<locksmith-host>:9200/api/anthropic"
 export ANTHROPIC_API_KEY="lk_<your-bearer>"
-export OPENAI_BASE_URL="http://layer8.lan:9200/api/openai"
+export OPENAI_BASE_URL="http://<locksmith-host>:9200/api/openai"
 export OPENAI_API_KEY="lk_<your-bearer>"
 
 # Then any tool that uses these conventions works:

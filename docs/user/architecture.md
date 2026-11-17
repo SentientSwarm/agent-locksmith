@@ -233,5 +233,3 @@ The settings are independent.
   trust boundary, error envelope.
 - [`docs/v2/SPEC.md`](../v2/SPEC.md) — engineering spec with task
   references (T1.x, T2.x, …).
-- [`agents-stack/docs/spec/v0.2.0.md`](https://github.com/SentientSwarm/agents-stack/blob/main/docs/spec/v0.2.0.md)
-  — formal stack spec.

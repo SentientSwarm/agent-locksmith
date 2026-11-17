@@ -1,12 +1,12 @@
 # Trust boundary
 
-User-level explanation of who holds what credential and why. Authoritative version: `agents-stack/docs/spec/v<X.Y.Z>.md` and `agents-stack/docs/adrs/0001-trust-boundary.md`.
+User-level explanation of who holds what credential and why.
 
 ## The core idea
 
 **Agents never see provider API keys.** A locksmith deployment exists to make this guarantee concrete, mechanical, and auditable. Anything else — ACL, audit, scanners — is downstream of that single invariant.
 
-When an agent calls `https://api.anthropic.com/v1/messages` through layer8-proxy, the request looks like:
+When an agent calls `https://api.anthropic.com/v1/messages` through Locksmith, the request looks like:
 
 ```
 agent → POST /api/anthropic/v1/messages          Authorization: Bearer lk_<public_id>.<secret>
@@ -53,7 +53,7 @@ A token that doesn't match this shape is rejected with the same 401 + audit row 
 
 ## Operator practical guidance
 
-- **Sealing** (v0.1.0 manual, v0.2 systematized): use `secrets.bootstrap.sh` in the site repo to seal cleartext provider keys into `.creds` / `.cred` files. The sealed form is what's at rest; the cleartext only exists during the deploy shell session.
+- **Sealing**: keep provider keys as sealed `stored_*` values under `LOCKSMITH_CREDENTIAL_SEALING_KEY`, as `op://` references, or as systemd-encrypted credential files (`LoadCredentialEncrypted` in the [unit template](../../../dist/systemd/locksmith.service.template)). See [keep credentials in Locksmith](../../guide/03-credential-custody.md). Cleartext should exist only while you set the value.
 - **Distributing bearers**: operator runs `locksmith agent register --name <agent> --allowlist <tools> --format json`, captures the cleartext token from stdout once, then delivers it to the agent host via a side channel (encrypted message, paste over SSH, etc.). The locksmith DB stores only the hash.
 - **Rotation**: revoke + re-register; the agent's old bearer hard-fails with 401 immediately.
 
@@ -61,5 +61,3 @@ A token that doesn't match this shape is rejected with the same 401 + audit row 
 
 - [agent-identity-and-acl.md](agent-identity-and-acl.md) — what's inside a bearer (AgentIdentity), how ACL is enforced.
 - [error-envelope.md](error-envelope.md) — the wire shape when a bearer is missing/invalid/expired.
-- `agents-stack/docs/adrs/0001-trust-boundary.md` — formal decision record.
-- `agents-stack/docs/spec/v0.1.0.md` — full technical design.

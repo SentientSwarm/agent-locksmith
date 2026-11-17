@@ -1,6 +1,6 @@
 # Error envelope
 
-The uniform JSON shape locksmith returns for errors it generates on the agent listener and on the admin API (UDS, admin HTTPS and the bootstrap listener). It does not apply to error bodies passed through from an upstream, which reach the agent unchanged, or to native MCP JSON-RPC errors, which have their own shape (see [native MCP](../agent-integration/native-mcp.md)). User-level reference; authoritative version: `agents-stack/docs/spec/v<X.Y.Z>.md` §4.7.9 and `agents-stack/docs/adrs/0002-uniform-error-envelope.md`.
+The uniform JSON shape locksmith returns for errors it generates on the agent listener and on the admin API (UDS, admin HTTPS and the bootstrap listener). It does not apply to error bodies passed through from an upstream, which reach the agent unchanged, or to native MCP JSON-RPC errors, which have their own shape (see [native MCP](../agent-integration/native-mcp.md)). User-level reference.
 
 ## The shape
 
@@ -150,5 +150,3 @@ not binding existence or source health. See
 
 - [trust-boundary.md](trust-boundary.md)
 - [agent-identity-and-acl.md](agent-identity-and-acl.md)
-- `agents-stack/docs/adrs/0002-uniform-error-envelope.md` — formal decision record.
-- `agents-stack/docs/adrs/0003-existence-leak-q8.md` — formal Q-8 rationale.

@@ -1,6 +1,6 @@
 # Agent integration
 
-Documentation for **agent developers** wiring an agent (hermes, openhands, custom) into a layer8-proxy deployment.
+Documentation for **agent developers** wiring an agent (hermes, openhands, custom) into a Locksmith deployment.
 
 Current entry points:
 

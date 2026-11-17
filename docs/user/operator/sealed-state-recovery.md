@@ -187,7 +187,7 @@ counters distinguish arrivals from one-use token consumption. No owner state or
 external provider is used; this is not power-loss or remote-backup durability.
 
 This supplies AGENT-136's local key recovery proof and a SQLite snapshot primitive
-for AGENT-175. Layer8's configured-volume discovery, template/env forwarding,
+for AGENT-175. Deployment-side configured-volume discovery, template/env forwarding,
 packaged backup/restore commands, private-site rehearsal and upgrade automation
 remain separate work. It does not establish full AGENT-175, packaged AGENT-213,
 live OAuth compatibility or release acceptance.

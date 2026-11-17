@@ -1,8 +1,10 @@
 # 1Password Setup for Operators (Phase H)
 
-This guide describes how to use 1Password Environments + Service Accounts as the source-of-truth for site-repo `.env` files, materializing them at deploy time via the `op` CLI.
+This guide describes how to use 1Password Environments + Service Accounts as the source-of-truth for site-repo `.env` files, materializing them at deploy time via the `op` CLI. The scripts it describes are site scripts in your deployment repo, not part of this repository; adapt the names and paths to your own tooling.
 
-**The 1P substrate is opt-in.** Site repos (`openclaw-site`, `hermes-site`, `layer8-proxy-site`) work fine without it — mode-0600 `.env` on disk is a perfectly reasonable alternative for small fleets with a single operator. This guide is for operators who want one of:
+This is separate from Locksmith's own `op_header` / `op_bearer` custody, where the daemon resolves `op://` references itself (see [keep credentials in Locksmith](../../guide/03-credential-custody.md)). That needs no `.env` rendering.
+
+**The 1P substrate is opt-in.** Site repos (for example, one for Locksmith and one per agent) work fine without it — mode-0600 `.env` on disk is a perfectly reasonable alternative for small fleets with a single operator. This guide is for operators who want one of:
 
 - **Single source-of-truth** for secrets across multiple deploy hosts
 - **Operator-role separation** (a `proxy-operator` role distinct from `agent-operator`, encoded in distinct 1P Environments + Service Accounts)
@@ -15,7 +17,7 @@ If none of those motivate you, stop reading. Mode-0600 `.env` files maintained p
 
 ## Table of contents
 
-1. [What ships in v1.5.0 / v2.5.0](#what-ships)
+1. [What the substrate contains](#what-ships)
 2. [Install the op CLI (beta channel required)](#install)
 3. [Plan your deployment fleet](#plan)
 4. [Provision per (host × product)](#provision)
@@ -29,9 +31,9 @@ If none of those motivate you, stop reading. Mode-0600 `.env` files maintained p
 ---
 
 <a id="what-ships"></a>
-## 1. What ships in v1.5.0 / v2.5.0
+## 1. What the substrate contains
 
-The Phase H substrate consists of three scripts in `layer8-proxy/examples/site/scripts/`:
+The Phase H substrate consists of these site scripts, kept in your deployment repo's `scripts/` directory:
 
 | Script | Purpose |
 |---|---|
@@ -41,8 +43,6 @@ The Phase H substrate consists of three scripts in `layer8-proxy/examples/site/s
 | `lib/op-writeback.sh` | Sourceable helper for rotation toolkit hooks (best-effort 1P write-back) |
 
 Plus a hook in `rotate-operator-token.sh` that demonstrates the rotation write-back pattern (`op item edit` against the Environment's backing vault item).
-
-The full architecture is in `agents-stack/docs/spec/v0.3.0-1password-integration.md` (especially §3.5 for the SA × Env × Keychain matrix and §4 for component design). ADR-0006 captures the locked decisions.
 
 ---
 
@@ -75,7 +75,7 @@ When 1Password promotes Environments to the stable channel (no public timeline),
 Before creating anything in 1Password, sketch out:
 
 - **Hosts** you'll deploy to (e.g., `host-a`, `host-b`)
-- **Products** running on each (e.g., `openclaw`, `hermes`, `layer8-proxy`)
+- **Products** running on each (e.g., `openclaw`, `hermes`, `locksmith`)
 - **Test hosts** that need separate Environments (e.g., `test-host`)
 
 For each (host × product) tuple, you'll create:
@@ -88,8 +88,6 @@ Plus one **operator-tools Service Account** scoped to ALL the Environments above
 
 > **Important: SA scope is immutable.** Once an SA is created, you cannot change which Environments it can read. Plan all Environments first, then create SAs. Adding a new Environment later means rotating the operator SA.
 
-The full reference matrix lives in `agents-stack/docs/spec/v0.3.0-1password-integration.md` §3.5.
-
 ### Naming convention
 
 | Thing | Convention | Example |
@@ -98,7 +96,7 @@ The full reference matrix lives in `agents-stack/docs/spec/v0.3.0-1password-inte
 | Service Account | `<host>-<product>` | `host-a-openclaw` |
 | Keychain entry | `OP_SERVICE_ACCOUNT_TOKEN_<HOST>_<PRODUCT>` (upper, hyphens → `_`) | `OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW` |
 
-The host prefix on Keychain entries preserves global uniqueness across operator-personal hosts that may sync via iCloud Keychain. Production deploy hosts have isolated Keychains (no iCloud sync) per ADR-0006 D9.
+The host prefix on Keychain entries preserves global uniqueness across operator-personal hosts that may sync via iCloud Keychain. Production deploy hosts have isolated Keychains (no iCloud sync).
 
 ---
 
@@ -159,7 +157,7 @@ echo "stored length: ${#T}"   # expect ~700
 unset T
 ```
 
-> **Per-host isolation.** Production agent hosts should run with **isolated login keychains** (no iCloud Keychain sync). This means the SA token added on host-a stays on host-a — a compromise of one host doesn't leak tokens to others. Operator-personal hosts (laptop, test boxes) may sync at your discretion. See ADR-0006 D9.
+> **Per-host isolation.** Production agent hosts should run with **isolated login keychains** (no iCloud Keychain sync). This means the SA token added on host-a stays on host-a — a compromise of one host doesn't leak tokens to others. Operator-personal hosts (laptop, test boxes) may sync at your discretion.
 
 ### 4.4 Configure site.cfg on the target host
 
@@ -221,7 +219,7 @@ echo "op_environment_id=<env-id>" > site.cfg
 echo "op_keychain_service=OP_SERVICE_ACCOUNT_TOKEN_HOST_A_OPENCLAW" >> site.cfg
 
 SITE_DIR=/tmp/render-test \
-    ~/.../layer8-proxy/examples/site/scripts/render-env-from-1password.sh
+    <your-deployment-repo>/scripts/render-env-from-1password.sh
 
 # Check
 ls -la .env       # expect: -rw-------
@@ -240,11 +238,11 @@ Per-site adoption is **operator's choice** — the design ships the substrate bu
 ### 7.1 Copy the script into the site repo
 
 ```bash
-cp layer8-proxy/examples/site/scripts/render-env-from-1password.sh \
+cp <your-deployment-repo>/scripts/render-env-from-1password.sh \
    <your-site-repo>/scripts/render-env-from-1password.sh
 ```
 
-(Optional: also copy `provision-host-sa.sh`, `migrate-env-to-1password.sh`, `lib/op-writeback.sh` if you want them per-repo. They can also live solely in `layer8-proxy/examples/site/scripts/` and be referenced from there.)
+(Optional: also copy `provision-host-sa.sh`, `migrate-env-to-1password.sh`, `lib/op-writeback.sh` if you want them per-repo. They can also live solely in one deployment repo and be referenced from there.)
 
 ### 7.2 Add the launcher hook
 
@@ -396,9 +394,8 @@ Phase H ships the substrate as a **complete, optional feature**. Adopt it when y
 
 ---
 
-## Reference docs
+## Related
 
-- **Architecture:** `agents-stack/docs/spec/v0.3.0-1password-integration.md` (especially §3.5 SA × Env matrix, §4 component design, §6.1 operational gotchas)
-- **Locked decisions:** `agents-stack/docs/adrs/0006-1password-service-account-integration.md` (D1-D9)
-- **PRD:** `agents-stack/docs/prd/v0.3.0-1password-integration.md`
-- **Research notes:** `agents-stack/docs/plans/2026-05-08-1password-environments-research.md`
+- [Keep credentials in Locksmith](../../guide/03-credential-custody.md): sealed `stored_*` values and `op://` references resolved by the daemon.
+- [Edge packaging](edge-packaging.md): the root-only environment file an edge component loads.
+- [Sealed-state recovery](sealed-state-recovery.md): keeping the sealing keys recoverable.

@@ -1,6 +1,6 @@
 # Kind taxonomy (v2.0.0+)
 
-Status: **v2.0.0+** — this page describes the catalog substrate landing in agent-locksmith v2.0.0 / layer8-proxy v0.1.0 release. Tracking: Linear MVP project, Phase E.
+Status: **v2.0.0+** — this page describes the catalog substrate that landed in agent-locksmith v2.0.0 (Phase E).
 
 Until v2.0.0 ships, every registration is implicitly `kind=tool` and the `/tools` endpoint returns the homogeneous catalog. This page documents what changes.
 
@@ -70,5 +70,3 @@ v2.0.0 ships only the storage + registration surface for `kind=infra`. The actua
 - [trust-boundary.md](trust-boundary.md)
 - [agent-identity-and-acl.md](agent-identity-and-acl.md)
 - [error-envelope.md](error-envelope.md)
-- `agents-stack/docs/adrs/0004-kind-taxonomy.md` — formal decision (post-Phase E).
-- Linear MVP project, Phase E — implementation tickets.

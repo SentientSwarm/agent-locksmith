@@ -50,10 +50,9 @@ egress:
 
 ### Pipelock must run in `strict` mode to enforce an allowlist
 
-Pipelock's `balanced` mode is its default, and the one the layer8-proxy
-bundle ships. In `balanced` mode every host is reachable unless it is on
-Pipelock's blocklist, and `api_allowlist` only exempts hosts from that
-blocklist. Only `mode: strict` turns `api_allowlist` into the list of
+Pipelock's `balanced` mode is its default. In `balanced` mode every host
+is reachable unless it is on Pipelock's blocklist, and `api_allowlist`
+only exempts hosts from that blocklist. Only `mode: strict` turns `api_allowlist` into the list of
 hosts that may be reached. Without `strict`, `pipelock` mode still gives
 you Pipelock's blocklist, its checks on what it can see (for HTTPS
 without TLS interception, only the host name) and its own egress record,

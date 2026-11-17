@@ -1,6 +1,6 @@
 # TypeScript / Node recipes
 
-Routing TypeScript and Node agents through layer8-proxy. Works with
+Routing TypeScript and Node agents through Locksmith. Works with
 `fetch`, `axios`, the official Anthropic + OpenAI SDKs, and any
 client that accepts a `baseURL` constructor arg or honors
 `*_BASE_URL` env vars.
@@ -13,7 +13,7 @@ client that accepts a `baseURL` constructor arg or honors
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic({
-  baseURL: "http://layer8.lan:9200/api/anthropic",
+  baseURL: "http://<locksmith-host>:9200/api/anthropic",
   apiKey: process.env.LOCKSMITH_TOKEN,    // your agent bearer
 });
 
@@ -52,7 +52,7 @@ for await (const event of stream) {
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "http://layer8.lan:9200/api/openai/v1",
+  baseURL: "http://<locksmith-host>:9200/api/openai/v1",
   apiKey: process.env.LOCKSMITH_TOKEN!,
 });
 
@@ -74,7 +74,7 @@ becomes the full proxied path.
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "http://layer8.lan:9200/api/lmstudio/v1",
+  baseURL: "http://<locksmith-host>:9200/api/lmstudio/v1",
   apiKey: process.env.LOCKSMITH_TOKEN!,
 });
 ```
@@ -82,7 +82,7 @@ const client = new OpenAI({
 ## Raw `fetch` (Node 18+ / browsers)
 
 ```typescript
-const LOCKSMITH = "http://layer8.lan:9200";
+const LOCKSMITH = "http://<locksmith-host>:9200";
 const TOKEN = process.env.LOCKSMITH_TOKEN!;
 
 const resp = await fetch(`${LOCKSMITH}/api/anthropic/v1/messages`, {
@@ -148,7 +148,7 @@ while (true) {
 import axios from "axios";
 
 const locksmith = axios.create({
-  baseURL: "http://layer8.lan:9200",
+  baseURL: "http://<locksmith-host>:9200",
   headers: { Authorization: `Bearer ${process.env.LOCKSMITH_TOKEN}` },
 });
 
@@ -166,7 +166,7 @@ console.log(resp.data.content[0].text);
 
 ```typescript
 const TOKEN = process.env.LOCKSMITH_TOKEN!;
-const LOCKSMITH = "http://layer8.lan:9200";
+const LOCKSMITH = "http://<locksmith-host>:9200";
 
 // What models can this agent reach?
 const models = await fetch(`${LOCKSMITH}/models`, {
@@ -247,9 +247,9 @@ function loadLocksmithToken(): string {
 CLI tools that consume `*_BASE_URL` env vars work without code change:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://layer8.lan:9200/api/anthropic"
+export ANTHROPIC_BASE_URL="http://<locksmith-host>:9200/api/anthropic"
 export ANTHROPIC_API_KEY="lk_<your-bearer>"
-export OPENAI_BASE_URL="http://layer8.lan:9200/api/openai"
+export OPENAI_BASE_URL="http://<locksmith-host>:9200/api/openai"
 export OPENAI_API_KEY="lk_<your-bearer>"
 
 # Now any tool respecting these conventions routes through locksmith:

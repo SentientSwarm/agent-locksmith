@@ -1,6 +1,6 @@
-# Routing Hermes through layer8-proxy
+# Routing Hermes through Locksmith
 
-`hermes-agent` (Nous Research) integrates with layer8-proxy via a
+`hermes-agent` (Nous Research) integrates with Locksmith via a
 provider-config block in its YAML configuration. **No hermes code
 changes required** — hermes already supports per-provider `base_url`
 and `api_key` overrides, which is exactly the surface locksmith needs.
@@ -9,14 +9,17 @@ This is the ship-critical agent integration recipe.
 
 ## Prerequisites
 
-- A running layer8-proxy v1.0.0 stack (see
-  [layer8-proxy/docs/user/getting-started.md](https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/getting-started.md)).
+- A running Locksmith daemon that the hermes host can reach (see
+  [getting started](../getting-started.md) for a first instance, or
+  [edge packaging](../operator/edge-packaging.md) for an Incus deployment).
 - An agent registered in locksmith with `anthropic` (and any other
   providers hermes will call) in its allowlist:
   ```bash
   locksmith agent register --name agent-a \
       --allowlist anthropic,openai,lmstudio,ollama,tavily,github
   ```
+  Then select an account for each registration. An allowlist alone does
+  not enable calls (see [connector onboarding](../operator/connector-onboarding.md)).
 - The bearer token from `agent register` saved on the hermes host
   (conventionally at `~/.hermes/locksmith.token`, mode 0600).
 - Hermes installed and runnable on the agent host
@@ -39,16 +42,16 @@ the upstream provider:
 # ~/.hermes/config.yaml
 providers:
   anthropic:
-    base_url: http://layer8.lan:9200/api/anthropic
+    base_url: http://<locksmith-host>:9200/api/anthropic
     api_key: "${LOCKSMITH_TOKEN}"
   openai:
-    base_url: http://layer8.lan:9200/api/openai
+    base_url: http://<locksmith-host>:9200/api/openai
     api_key: "${LOCKSMITH_TOKEN}"
   lmstudio:
-    base_url: http://layer8.lan:9200/api/lmstudio
+    base_url: http://<locksmith-host>:9200/api/lmstudio
     api_key: "${LOCKSMITH_TOKEN}"
   custom:
-    base_url: http://layer8.lan:9200/api/ollama
+    base_url: http://<locksmith-host>:9200/api/ollama
     api_key: "${LOCKSMITH_TOKEN}"
     model_alias: ollama
 ```
@@ -71,9 +74,9 @@ SDK) which honor standard env-var conventions:
 
 ```bash
 export LOCKSMITH_TOKEN="$(cat ~/.hermes/locksmith.token)"
-export ANTHROPIC_BASE_URL="http://layer8.lan:9200/api/anthropic"
+export ANTHROPIC_BASE_URL="http://<locksmith-host>:9200/api/anthropic"
 export ANTHROPIC_API_KEY="$LOCKSMITH_TOKEN"
-export OPENAI_BASE_URL="http://layer8.lan:9200/api/openai"
+export OPENAI_BASE_URL="http://<locksmith-host>:9200/api/openai"
 export OPENAI_API_KEY="$LOCKSMITH_TOKEN"
 hermes
 ```
@@ -85,10 +88,10 @@ In practice you'll want **both A and B** active for full coverage —
 provider-config for the conversational hot path, env vars for SDK
 sub-clients.
 
-## Step-by-step setup (hermes-site flow)
+## Step-by-step setup (site directory)
 
-This mirrors the canonical `hermes-site` repo pattern — use it
-as a template even if you're rolling your own deployment.
+This lays out a small per-host site directory for hermes. Use it as
+a template even if you're rolling your own deployment.
 
 ### 1. Create the hermes-site directory layout
 
@@ -105,12 +108,12 @@ cat > site.cfg <<'EOF'
 site_name=host-a
 host=$(hostname)
 
-# Endpoint of the layer8-proxy stack.
+# Locksmith agent endpoint.
 #   Same-host topology:    http://127.0.0.1:9200
-#   Neutral-host topology: http://layer8.lan:9200  (or whatever DNS / IP)
+#   Neutral-host topology: http://<locksmith-host>:9200  (DNS name or IP)
 #
 # Used by hermes/hermes.config.yaml for provider base_url interpolation.
-layer8_endpoint=http://127.0.0.1:9200
+locksmith_endpoint=http://127.0.0.1:9200
 EOF
 ```
 
@@ -119,22 +122,22 @@ EOF
 ```bash
 cat > hermes/hermes.config.yaml.tmpl <<'EOF'
 # Hermes per-host config TEMPLATE. Renders to hermes.config.yaml via
-# launch-hermes.sh on each launch. ${layer8_endpoint} comes from the
+# launch-hermes.sh on each launch. ${locksmith_endpoint} comes from the
 # sibling site.cfg; ${LOCKSMITH_TOKEN} stays literal so hermes does
 # its own load-time substitution from the env var.
 
 providers:
   anthropic:
-    base_url: ${layer8_endpoint}/api/anthropic
+    base_url: ${locksmith_endpoint}/api/anthropic
     api_key: "${LOCKSMITH_TOKEN}"
   openai:
-    base_url: ${layer8_endpoint}/api/openai
+    base_url: ${locksmith_endpoint}/api/openai
     api_key: "${LOCKSMITH_TOKEN}"
   lmstudio:
-    base_url: ${layer8_endpoint}/api/lmstudio
+    base_url: ${locksmith_endpoint}/api/lmstudio
     api_key: "${LOCKSMITH_TOKEN}"
   ollama-cloud:
-    base_url: ${layer8_endpoint}/api/ollama
+    base_url: ${locksmith_endpoint}/api/ollama
     api_key: "${LOCKSMITH_TOKEN}"
 
 # Hermes' alignment / prompt-guard / code-shield scanners. Disabled
@@ -160,7 +163,7 @@ mkdir -p ~/.hermes
 chmod 700 ~/.hermes
 # Paste the bearer from `locksmith agent register --name agent-a ...`:
 cat > ~/.hermes/locksmith.token <<'EOF'
-lk_yN2vR6jFKNYfIwNjFU2MSA.1TJlTmOgmswZYZx_aQHyjaNiugeJjudytNPFJgT9aqM
+lk_EXAMPLEpublicIdXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXXXXXX
 EOF
 chmod 600 ~/.hermes/locksmith.token
 ```
@@ -185,13 +188,13 @@ SITE_CFG="$SITE_DIR/site.cfg"
 
 # shellcheck source=/dev/null
 . "$SITE_CFG"
-[[ -n "${layer8_endpoint:-}" ]] \
-    || { echo "ERROR: layer8_endpoint not set in $SITE_CFG"; exit 1; }
+[[ -n "${locksmith_endpoint:-}" ]] \
+    || { echo "ERROR: locksmith_endpoint not set in $SITE_CFG"; exit 1; }
 
-# Render the template — only ${layer8_endpoint} expands; ${LOCKSMITH_TOKEN}
+# Render the template — only ${locksmith_endpoint} expands; ${LOCKSMITH_TOKEN}
 # stays literal so hermes does its own load-time env-var substitution.
-export layer8_endpoint
-envsubst '${layer8_endpoint}' < "$TEMPLATE" > "$RENDERED"
+export locksmith_endpoint
+envsubst '${locksmith_endpoint}' < "$TEMPLATE" > "$RENDERED"
 
 TOKEN_FILE="${LOCKSMITH_TOKEN_FILE:-$HOME/.hermes/locksmith.token}"
 [[ -f "$TOKEN_FILE" ]] || {
@@ -204,9 +207,9 @@ LOCKSMITH_TOKEN=$(< "$TOKEN_FILE")
 export LOCKSMITH_TOKEN
 
 # Also export *_BASE_URL env vars for any SDK sub-paths hermes uses.
-export ANTHROPIC_BASE_URL="$layer8_endpoint/api/anthropic"
+export ANTHROPIC_BASE_URL="$locksmith_endpoint/api/anthropic"
 export ANTHROPIC_API_KEY="$LOCKSMITH_TOKEN"
-export OPENAI_BASE_URL="$layer8_endpoint/api/openai"
+export OPENAI_BASE_URL="$locksmith_endpoint/api/openai"
 export OPENAI_API_KEY="$LOCKSMITH_TOKEN"
 
 # Point hermes at the rendered config + exec.
@@ -226,10 +229,9 @@ Start hermes:
 In a separate terminal, verify the proxy is seeing hermes' calls:
 
 ```bash
-# On the locksmith host:
-LOCKSMITH_OP_TOKEN="lkop_..."
-docker exec -e LOCKSMITH_OP_TOKEN="$LOCKSMITH_OP_TOKEN" layer8-locksmith \
-    /usr/local/bin/locksmith audit query \
+# On the locksmith host (the CLI uses the admin socket):
+export LOCKSMITH_OP_TOKEN="lkop_..."
+locksmith audit query \
     --since-ms $(($(date +%s) * 1000 - 300000)) \
     --tool anthropic \
     --format json | jq '.[] | {ts: .ts_ms, agent: .agent_public_id, tool, status, auth_mode: .details.auth_mode}'
@@ -240,30 +242,30 @@ the agent's `public_id` matching what locksmith printed at registration.
 
 ## Network topology
 
-### Same-host (hermes + locksmith on one Mac)
+### Same-host (hermes + locksmith on one machine)
 
 ```
 hermes (host process)
     ↓ http://127.0.0.1:9200/api/anthropic/...
-layer8-locksmith (Docker container, port 9200 bound to localhost)
-    ↓ HTTP CONNECT through pipelock
+locksmithd (port 9200 bound to localhost)
+    ↓ through the egress proxy, or direct, per egress.mode
 api.anthropic.com
 ```
 
-`layer8_endpoint=http://127.0.0.1:9200` in `site.cfg`.
+`locksmith_endpoint=http://127.0.0.1:9200` in `site.cfg`.
 
 ### Neutral-host (hermes on laptop, locksmith on a server)
 
 ```
 hermes (laptop)
-    ↓ http://layer8.lan:9200/api/anthropic/...
-layer8-locksmith (server, port 9200 bound to 0.0.0.0 with TLS recommended)
-    ↓ HTTP CONNECT through pipelock
+    ↓ http://<locksmith-host>:9200/api/anthropic/...
+locksmithd (server or Incus container, port 9200 reachable, TLS recommended)
+    ↓ through the egress proxy, or direct, per egress.mode
 api.anthropic.com
 ```
 
-`layer8_endpoint=http://layer8.lan:9200` (or whatever DNS / IP the
-laptop reaches the server at).
+`locksmith_endpoint=http://<locksmith-host>:9200` (the DNS name or IP
+the laptop reaches the server at).
 
 For production neutral-host setups, **enable mTLS on the agent
 listener** (`listen.auth_mode: mtls`) so hermes presents a client cert
@@ -275,18 +277,18 @@ When running multiple hermes instances on one host (different users,
 isolated sessions), register one locksmith agent per instance:
 
 ```bash
-docker exec layer8-locksmith /usr/local/bin/locksmith agent register \
+locksmith agent register \
     --name hermes-alice --allowlist anthropic,openai,tavily
-docker exec layer8-locksmith /usr/local/bin/locksmith agent register \
+locksmith agent register \
     --name hermes-bob   --allowlist anthropic,lmstudio
 ```
 
 Each gets its own bearer, its own ACL, its own audit trail. Per-user
 hermes sites then reference the user-specific token file.
 
-For Docker-compose multi-agent layouts (one container per hermes user),
-see `hermes-site/docker-compose.yml` (planned at v1.1.0 / WEM-265-268)
-which threads a per-agent token into each service via injected env.
+For container layouts with one container per hermes user, give each
+container its own agent registration and inject only that agent's
+token into it.
 
 ## OAuth providers (codex, copilot, etc.)
 
@@ -295,11 +297,11 @@ For OAuth-flow providers (`codex` for ChatGPT plan auth,
 `qwen-cli`):
 
 1. Operator side: ensure `LOCKSMITH_OAUTH_SEALING_KEY` is set in the
-   locksmith container's env.
+   environment of `locksmithd`.
 2. Operator side: run the provider's own OAuth flow once to get a
    refresh token, then bootstrap:
    ```bash
-   docker exec layer8-locksmith /usr/local/bin/locksmith oauth bootstrap codex \
+   locksmith oauth bootstrap codex \
        --refresh-token "$(get-refresh-token-via-providers-flow)"
    ```
 3. Hermes side: route through locksmith just like any other provider.
@@ -308,7 +310,7 @@ For OAuth-flow providers (`codex` for ChatGPT plan auth,
    ```yaml
    providers:
      openai-codex:
-       base_url: ${layer8_endpoint}/api/codex
+       base_url: ${locksmith_endpoint}/api/codex
        api_key: "${LOCKSMITH_TOKEN}"
    ```
 
@@ -326,7 +328,7 @@ enterprise) the request hits. **Locksmith injects the header
 automatically** — hermes-agent does not need to extract or pass
 `chatgpt_account_id` itself when proxied through locksmith. From
 hermes' perspective, codex is just another HTTP backend behind
-`${layer8_endpoint}/api/codex/...`.
+`http://<locksmith-host>:9200/api/codex/...`.
 
 If you're running hermes against codex *without* locksmith (direct
 to chatgpt.com), hermes' native codex provider handles the JWT
@@ -338,7 +340,7 @@ injection), see [`docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md).
 
 ## Verifying the integration
 
-A working hermes ↔ layer8-proxy ↔ Anthropic flow exhibits all of:
+A working hermes ↔ Locksmith ↔ Anthropic flow exhibits all of:
 
 | Check | What it proves |
 |---|---|
@@ -349,7 +351,7 @@ A working hermes ↔ layer8-proxy ↔ Anthropic flow exhibits all of:
 | `/api/openai/...` call (if openai NOT in allowlist) → 403 `tool_not_allowed` | ACL deny path works |
 
 Run all five for confidence; the operator-facing
-[layer8-proxy/docs/user/troubleshoot.md](https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/troubleshoot.md)
+[account troubleshooting](../operator/account-binding-troubleshooting.md)
 covers the failure modes when one of them goes wrong.
 
 ## Migrating from a direct-API hermes deployment
@@ -357,10 +359,12 @@ covers the failure modes when one of them goes wrong.
 If you have hermes running today directly against Anthropic / OpenAI
 (no proxy):
 
-1. Stand up a layer8-proxy stack (operator side).
-2. Move provider keys from hermes' `.env` to the layer8-proxy-site
-   `.env` (operator side). Hermes no longer needs them.
-3. Register a locksmith agent for hermes (operator side).
+1. Install and start Locksmith (operator side).
+2. Move provider keys from hermes' `.env` into Locksmith's custody:
+   sealed `stored_*` values, `op://` references or the daemon's
+   environment (operator side). Hermes no longer needs them.
+3. Register a locksmith agent for hermes and select its accounts
+   (operator side).
 4. Install the bearer at `~/.hermes/locksmith.token` (agent side).
 5. Add the `providers:` block (path A) AND/OR `*_BASE_URL` env vars
    (path B) to hermes' config (agent side).
@@ -397,5 +401,6 @@ profiles).
   sees on the wire.
 - [`../concepts/agent-identity-and-acl.md`](../concepts/agent-identity-and-acl.md)
   — bearer + ACL semantics.
-- [`layer8-proxy/docs/user/getting-started.md`](https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/getting-started.md)
+- [`../getting-started.md`](../getting-started.md) and
+  [`../operator/edge-packaging.md`](../operator/edge-packaging.md)
   — operator-side deploy.

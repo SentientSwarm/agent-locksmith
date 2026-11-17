@@ -1,7 +1,7 @@
 # Wire contract (agent-developer reference)
 
 What an agent sees when calling locksmith. Use this as the spec for
-wiring any agent (hermes, openclaw, or your own) through a layer8-proxy
+wiring any agent (hermes, openclaw, or your own) through a Locksmith
 deployment.
 
 ## Authentication
@@ -14,7 +14,7 @@ Authorization: Bearer lk_<22-char-public-id>.<43-char-secret>
 ```
 
 The bearer is issued by the operator via `locksmith agent register`
-(see [add-an-agent.md](https://github.com/SentientSwarm/layer8-proxy/blob/main/docs/user/add-an-agent.md)).
+(see [connector onboarding](../operator/connector-onboarding.md)).
 It identifies the agent and carries its ACL — the agent NEVER sends
 provider API keys. Locksmith strips agent-supplied
 `Authorization` / `x-api-key` / `host` headers before forwarding
@@ -335,8 +335,8 @@ forwards untouched.
 
 ```http
 POST /api/anthropic/v1/messages HTTP/1.1
-Host: layer8.lan:9200
-Authorization: Bearer lk_yN2vR6jFKNYfIwNjFU2MSA.1TJlTmOgmswZYZx_aQHyjaNiugeJjudytNPFJgT9aqM
+Host: <locksmith-host>:9200
+Authorization: Bearer lk_EXAMPLEpublicIdXXXXX.EXAMPLE-secret-not-a-real-token-XXXXXXXXXXXXXXX
 anthropic-version: 2023-06-01
 Content-Type: application/json
 

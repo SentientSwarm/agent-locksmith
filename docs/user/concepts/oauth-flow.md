@@ -633,9 +633,3 @@ client code required on the agent side.
 - [`agent-integration/hermes.md`](../agent-integration/hermes.md)
   and [`agent-integration/openclaw.md`](../agent-integration/openclaw.md) —
   agent-side configuration to consume OAuth-backed providers.
-- [`agents-stack/docs/adrs/0005-oauth-credentials.md`](https://github.com/SentientSwarm/agents-stack/blob/main/docs/adrs/0005-oauth-credentials.md)
-  — formal design decisions.
-- [`agents-stack/docs/spec/v0.2.0.md`](https://github.com/SentientSwarm/agents-stack/blob/main/docs/spec/v0.2.0.md)
-  "OAuth credential variant (Phase F)" + "Per-agent credential
-  overrides + OAuth session labels (Phase G)" + "ChatGPT-Account-ID
-  injection (Phase G2)" — formal stack spec.

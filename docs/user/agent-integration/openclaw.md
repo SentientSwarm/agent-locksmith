@@ -1,13 +1,13 @@
-# Routing OpenClaw through layer8-proxy
+# Routing OpenClaw through Locksmith
 
-OpenClaw integrates with layer8-proxy via the standard
+OpenClaw integrates with Locksmith via the standard
 `*_BASE_URL` environment-variable convention used by the Anthropic
 and OpenAI SDKs. **No openclaw code changes required.**
 
 ## Prerequisites
 
-- A running layer8-proxy stack (see [layer8-proxy/docs/user/getting-started.md](../../../../layer8-proxy/docs/user/getting-started.md)).
-- Operator has registered an agent for openclaw via `locksmith agent register --name openclaw-host1 --allowlist anthropic,openai,...`.
+- A running Locksmith daemon that the openclaw host can reach (see [getting started](../getting-started.md) or [edge packaging](../operator/edge-packaging.md)).
+- Operator has registered an agent for openclaw via `locksmith agent register --name openclaw-host1 --allowlist anthropic,openai,...` and selected an account for each registration (see [connector onboarding](../operator/connector-onboarding.md)).
 - Bearer token from the agent registration installed on the openclaw host.
 
 ## Configuration
@@ -19,17 +19,17 @@ Set the following environment variables on the openclaw host:
 export LOCKSMITH_TOKEN=lk_pid.secret-from-locksmith-output
 
 # Route Anthropic calls via locksmith
-export ANTHROPIC_BASE_URL=http://layer8.lan:9200/api/anthropic
+export ANTHROPIC_BASE_URL=http://<locksmith-host>:9200/api/anthropic
 export ANTHROPIC_API_KEY=$LOCKSMITH_TOKEN
 
 # Route OpenAI calls via locksmith
-export OPENAI_BASE_URL=http://layer8.lan:9200/api/openai
+export OPENAI_BASE_URL=http://<locksmith-host>:9200/api/openai
 export OPENAI_API_KEY=$LOCKSMITH_TOKEN
 
 # OAuth providers (Phase F): operator runs `locksmith oauth bootstrap`
 # once per provider; subsequent calls just need the bearer.
 # Example for ChatGPT Plus subscription:
-# export OPENAI_BASE_URL=http://layer8.lan:9200/api/codex
+# export OPENAI_BASE_URL=http://<locksmith-host>:9200/api/codex
 ```
 
 ## How it works
@@ -80,27 +80,29 @@ curl -sS -X POST $ANTHROPIC_BASE_URL/v1/messages \
 
 # Audit row should appear with auth_mode=header (or auth_mode=bearer
 # depending on the registered AuthSpec) and the agent's public_id.
-docker exec layer8-locksmith /usr/local/bin/locksmith audit query --since-ms $(($(date +%s) * 1000 - 60000)) --tool anthropic
+# Run on the locksmith host with LOCKSMITH_OP_TOKEN set.
+locksmith audit query --since-ms $(($(date +%s) * 1000 - 60000)) --tool anthropic
 ```
 
 ## Migrating from openclaw-hardened
 
 `openclaw-hardened` is the legacy Ansible-roles deployment path. It
-predates layer8-proxy and bundles its own pipelock + provider auth.
+predates Locksmith and bundles its own pipelock + provider auth.
 
 To migrate:
 
-1. Stand up a layer8-proxy stack (see `layer8-proxy/docs/user/getting-started.md`).
-2. Move provider API keys from openclaw-hardened's `.env` into the
-   layer8-proxy-site `.env`.
-3. Register an openclaw agent in locksmith.
+1. Install and start Locksmith (see [getting started](../getting-started.md)).
+2. Move provider API keys from openclaw-hardened's `.env` into
+   Locksmith's custody (sealed `stored_*` values, `op://` references or
+   the daemon's environment).
+3. Register an openclaw agent in locksmith and select its accounts.
 4. Set the `*_BASE_URL` + `LOCKSMITH_TOKEN` env vars on the openclaw
    host (replace `*_API_KEY` if it referenced the provider's actual key).
 5. Restart openclaw.
 6. Decommission openclaw-hardened's pipelock binary once you've
-   confirmed all openclaw traffic flows through layer8-proxy.
+   confirmed all openclaw traffic flows through Locksmith.
 
-The openclaw-hardened deployment can run alongside layer8-proxy during
+The openclaw-hardened deployment can run alongside Locksmith during
 the migration; they don't conflict (different ports, different
 processes).
 
@@ -116,11 +118,11 @@ processes).
   refresh token via the provider's own CLI then runs `locksmith oauth
   bootstrap <name> --refresh-token <token>`". Interactive PKCE / device-
   code flows land in v1.1+.
-- **Single network namespace**: openclaw and layer8-proxy don't need
-  to be on the same Docker network. They communicate via LAN HTTP.
-  If you do colocate them via Docker, make sure layer8-proxy's
-  listen address is reachable from the openclaw container (typically
-  via host networking or an explicit network alias).
+- **Single network namespace**: openclaw and Locksmith don't need
+  to share a host or container network. They communicate via LAN HTTP.
+  If openclaw runs in a container, make sure Locksmith's listen
+  address is reachable from that container (typically via host
+  networking or an explicit network alias).
 
 ## codex specifics (Phase G2 — locksmith v2.2.0+)
 
@@ -133,7 +135,7 @@ access-token JWT itself and adds the required
 When proxied through locksmith, OpenClaw doesn't see the JWT —
 it only holds the locksmith bearer. **Locksmith handles the header
 injection automatically** (Phase G2). Set
-`OPENAI_BASE_URL=http://layer8.lan:9200/api/codex` and OpenClaw's
+`OPENAI_BASE_URL=http://<locksmith-host>:9200/api/codex` and OpenClaw's
 existing codex provider works unchanged; locksmith decodes the JWT
 at OAuth bootstrap, stores `chatgpt_account_id` on the
 `oauth_sessions` row, and adds the header on every
@@ -144,8 +146,7 @@ see [`docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md).
 
 ## See also
 
-- [`layer8-proxy/docs/user/getting-started.md`](../../../../layer8-proxy/docs/user/getting-started.md) — full deploy walkthrough.
-- [`layer8-proxy/docs/user/add-an-agent.md`](../../../../layer8-proxy/docs/user/add-an-agent.md) — agent registration.
+- [`../getting-started.md`](../getting-started.md) and [`../operator/edge-packaging.md`](../operator/edge-packaging.md) — deploy walkthroughs.
+- [`../operator/connector-onboarding.md`](../operator/connector-onboarding.md) — agent registration, grants and account selection.
 - [`agent-locksmith/docs/user/concepts/agent-identity-and-acl.md`](../concepts/agent-identity-and-acl.md) — per-agent bearer semantics.
 - [`agent-locksmith/docs/user/concepts/oauth-flow.md`](../concepts/oauth-flow.md) — end-to-end OAuth flow (bootstrap, refresh, codex header injection).
-- [`agents-stack/docs/spec/v0.2.0.md`](../../../../agents-stack/docs/spec/v0.2.0.md) — formal stack spec.

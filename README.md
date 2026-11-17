@@ -5,9 +5,9 @@ Agents never see provider API keys — locksmith injects credentials, enforces
 per-agent ACLs, audits every request, and routes outbound traffic through a
 configurable egress chain.
 
-The keystone component of the [layer8-proxy][layer8] stack.
-
-[layer8]: https://github.com/SentientSwarm/layer8-proxy
+Start with the [documentation index](docs/README.md): the operator guide,
+agent integration, reference pages and change notes. Locksmith runs as a
+native daemon, standalone or in Incus containers (see [Deployment](#deployment)).
 
 See [Cargo.toml](Cargo.toml) for the crate version and
 [explicit account binding notes](docs/user/changes/explicit-account-bindings.md)
@@ -167,14 +167,14 @@ audit:
   retention_days: 90
   sweep_interval_seconds: 3600
 
-# Optional egress chokepoint (typically Pipelock CONNECT proxy).
+# Optional: proxied routes leave through this egress proxy (egress.mode: pipelock).
 egress_proxy: "http://127.0.0.1:8888"
 ```
 
-The seed catalog at `/etc/locksmith/seed/catalog.yaml` (baked into the
-docker image) populates the registrations table on first boot. Operators
-provide credentials via env vars (or the layer8-proxy-site sealed-creds
-flow); no per-tool YAML required for the 15 default providers.
+The seed catalog at `/etc/locksmith/seed/catalog.yaml` (install it from
+`seed/catalog.yaml`) populates the registrations table on first boot. Operators
+provide credentials via env vars, sealed `stored_*` values or `op://`
+references; no per-tool YAML required for the 15 default providers.
 
 ### Run (standalone)
 
@@ -192,12 +192,12 @@ denials, reviewed migration, restart and cleanup. Existing installations need th
 [offline migration procedure](docs/user/concepts/migrating-account-bindings.md).
 Live providers and installed deployments are separate verification.
 
-### Run (production, layer8-proxy bundle)
+### Run (production)
 
-For Docker Compose deploys with pipelock + sealed-creds
-infrastructure, see [layer8-proxy][layer8]. The bundle includes
-`./scripts/init-site.sh` to bootstrap a site repo from a public
-template at `layer8-proxy/examples/site/`.
+Run `locksmithd` as a native systemd service from the hardened template in
+`dist/systemd/`, or in Incus system containers rendered by `dist/edge/` (see
+[edge packaging](docs/user/operator/edge-packaging.md)). Choose an egress
+mode for proxied routes; see [Deployment](#deployment).
 
 ## Wire surface
 
@@ -319,6 +319,8 @@ credential_store:             # Phase J; needs LOCKSMITH_CREDENTIAL_SEALING_KEY
   sweep_interval_seconds: 3600
 
 egress_proxy: "http://127.0.0.1:8888"
+egress:
+  mode: pipelock             # pipelock | external
 
 logging:
   level: info
@@ -359,52 +361,50 @@ tools: []
 
 ```
        ┌──────────┐
-agent ─┤  bearer  ├─► locksmith :9200 ──► pipelock :8888 ──► Internet
-       └──────────┘         │
-                            └──► LAN services (direct egress)
+agent ─┤  bearer  ├─► locksmith :9200 ─┬─► egress proxy ──► Internet   (egress.mode: pipelock)
+       └──────────┘                    ├─► Internet                   (egress.mode: external)
+                                       └─► LAN services               (egress: direct)
 ```
 
-To run Locksmith as native systemd services in Incus system containers
-instead, rendered from a site file you keep privately, see
-[edge packaging](docs/user/operator/edge-packaging.md) (`dist/edge/`).
+This repository ships two ways to run the daemon:
 
-For the canonical deployment story:
+- **Native systemd service**: copy the hardened unit template in
+  [`dist/systemd/`](dist/systemd/locksmith.service.template) and fill in
+  its placeholders.
+- **Incus edge**: [edge packaging](docs/user/operator/edge-packaging.md)
+  (`dist/edge/`) renders hardened systemd units for Incus system
+  containers from a site file you keep privately, optionally with an
+  egress proxy and a classifier sidecar.
 
-- **Stack bundle**: [layer8-proxy][layer8] — Docker Compose composition.
-- **Per-host site repo**: `layer8-proxy-site` (proxy operator) and
-  `hermes-site` / `openclaw-site` (agent operator).
-- **Stack docs**: `agents-stack/docs/{spec,prd,adrs,plans}/`.
+Routes marked `egress: proxied` leave according to `egress.mode`:
+
+- `pipelock` sends them through the egress proxy named by `egress_proxy`.
+  Pipelock enforces a host allowlist only in its `strict` mode.
+- `external` sends them straight to the upstream; your firewall or network
+  policy enforces egress.
+
+With neither `egress.mode` nor `egress_proxy` set, proxied routes fail
+with 503. See [egress and inspection](docs/user/concepts/egress-and-inspection.md).
 
 ## Documentation
 
-- **Stack-level (cross-repo)**:
-  - [`agents-stack/docs/spec/v0.2.0.md`][spec] — formal as-built design.
-  - [`agents-stack/docs/prd/v0.2.0.md`][prd] — user-facing requirements.
-  - [`agents-stack/docs/adrs/`][adrs] — cumulative decisions
-    (kind taxonomy, OAuth, etc.).
+Start at the [documentation index](docs/README.md). It splits the docs by
+audience:
 
-- **User docs (locksmith-side)**:
-  - [`docs/user/concepts/`](docs/user/concepts) — kind taxonomy, error
-    envelope, agent identity + ACL, trust boundary, per-agent
-    credentials + OAuth labels, and
-    [egress modes and content inspection](docs/user/concepts/egress-and-inspection.md).
-  - [`docs/user/agent-integration/`](docs/user/agent-integration) —
-    wiring agents (hermes, openclaw) into a layer8-proxy deployment.
-  - [`docs/user/cli-reference.md`](docs/user/cli-reference.md) —
-    full `locksmith` CLI surface.
-
-- **Engineering docs (per-component)**:
-  - [Bounded MCP transport prerequisite](docs/development/mcp-transport.md) —
-    separate library checks, configuration, diagnostics and integration limits.
-  - [`docs/v2/SPEC.md`](docs/v2/SPEC.md) — engineering spec with task
-    references (T1.x, T2.x, …).
-  - [`docs/v2/HANDOFF.md`](docs/v2/HANDOFF.md) — cold-start handoff for
-    contributors.
-  - [`docs/v2/runbooks/`](docs/v2/runbooks) — operational runbooks.
-
-[spec]: https://github.com/SentientSwarm/agents-stack/blob/main/docs/spec/v0.2.0.md
-[prd]: https://github.com/SentientSwarm/agents-stack/blob/main/docs/prd/v0.2.0.md
-[adrs]: https://github.com/SentientSwarm/agents-stack/blob/main/docs/adrs/
+- **Operators**: the [guide journeys](docs/guide/README.md), then the
+  [operator how-tos and concepts](docs/user/README.md), including
+  [egress modes and content inspection](docs/user/concepts/egress-and-inspection.md).
+- **Agent developers**: [`docs/user/agent-integration/`](docs/user/agent-integration)
+  covers wiring agents (Hermes, OpenClaw or your own) to Locksmith.
+- **Reference**: [`docs/user/cli-reference.md`](docs/user/cli-reference.md)
+  (the full `locksmith` CLI surface), the
+  [wire contract](docs/user/agent-integration/wire-contract.md) and the
+  [error envelope](docs/user/concepts/error-envelope.md).
+- **Contributors**: [`docs/development/`](docs/development), including the
+  [bounded MCP transport prerequisite](docs/development/mcp-transport.md).
+- **Historical**: `docs/v2/`, `docs/design/`, `docs/plans/` and the
+  top-level `SPEC.md` record earlier designs and do not describe current
+  behaviour.
 
 ## Development
 

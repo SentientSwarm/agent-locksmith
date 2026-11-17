@@ -7,7 +7,7 @@ and as a Rosetta stone to whatever language you're using.
 Set these once per shell session:
 
 ```bash
-export LOCKSMITH_URL="http://layer8.lan:9200"   # your locksmith
+export LOCKSMITH_URL="http://<locksmith-host>:9200"   # your locksmith
 export AGENT_TOKEN="lk_yN2v..."                  # your agent bearer
 export OP_TOKEN="lkop_..."                       # operator token (admin paths)
 ```
@@ -84,7 +84,7 @@ curl -sS -X POST "$LOCKSMITH_URL/api/lmstudio/v1/chat/completions" \
 curl -sS -X POST "$LOCKSMITH_URL/api/tavily/search" \
     -H "Authorization: Bearer $AGENT_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"query": "what is layer8-proxy", "max_results": 3}' | jq
+    -d '{"query": "what is a credential proxy", "max_results": 3}' | jq
 ```
 
 ### GitHub

@@ -1,6 +1,6 @@
 # Agent identity and ACL
 
-How locksmith authenticates an agent on every request and decides what tools it may call. User-level explanation; authoritative version: `agents-stack/docs/spec/v<X.Y.Z>.md`.
+How locksmith authenticates an agent on every request and decides what tools it may call. User-level explanation.
 
 ## What is an agent identity
 
@@ -70,7 +70,7 @@ never supply implicit account authority.
 - **Start narrow.** New agents register with the smallest viable allowlist. Add as you discover real needs. Denylist is rarely needed if allowlists are tight.
 - **Give each agent its own identity.** Don't reuse a bearer across agents — you lose the audit attribution. The bearer secret is cheap to mint.
 - **Rotate when in doubt.** `locksmith agent revoke <agent-public-id>` invalidates the bearer immediately; re-register with `--allowlist ...` to mint a new one.
-- **For verify-test agents:** keep them in `agents.test.yaml` (separate manifest) with deliberately-narrow allowlists so verify.sh can prove both allow and deny paths concretely. See `layer8-proxy-site/agents.test.yaml` for the convention.
+- **For verify-test agents:** keep them in a separate manifest with deliberately-narrow allowlists so a verification script can prove both allow and deny paths concretely.
 
 ## Agent-developer practical guidance
 
