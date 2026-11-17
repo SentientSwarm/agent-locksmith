@@ -162,8 +162,12 @@ async fn disconnect_removes_selection_and_reconnect_never_revives_it() {
 #[tokio::test]
 async fn expiry_is_checked_again_after_captured_snapshot() {
     let s = controlled::setup().await;
+    // AGENT-298: `store::now()` counts whole seconds, so `now + 1` left
+    // `select` anywhere from 0 to 1 s before the token expired. Give setup
+    // a wide window, then wait for the stored expiry to pass.
+    let expires = store::now() + 10;
     sqlx::query("UPDATE oauth_sessions SET access_token_expires_at=?")
-        .bind(store::now() + 1)
+        .bind(expires)
         .execute(&s.f.pool)
         .await
         .unwrap();
@@ -177,7 +181,13 @@ async fn expiry_is_checked_again_after_captured_snapshot() {
         expires_at: None,
         tools: Default::default(),
     };
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while store::now() < expires {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the stored expiry passes");
     assert_eq!(snap.fresh().unwrap_err().0, "access_expired");
     assert_eq!(
         s.rt.snapshot_for(Some("owner"), &s.agent, "native")
