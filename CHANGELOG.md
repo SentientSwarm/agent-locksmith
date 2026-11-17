@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Under `fail_open`, a streamed event too big to judge no longer
+  releases the text held before it unscanned (AGENT-273). That text is
+  judged first, so a credential that arrived too small to trigger a
+  scan is redacted, or blocks under `on_hit: block`, before anything
+  goes out.
 - A streamed response the upstream breaks off sends nothing more of
   what inspection holds; the agent gets the error (AGENT-273). Before,
   the held text was released first. A stream the agent leaves no longer

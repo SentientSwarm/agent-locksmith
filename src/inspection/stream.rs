@@ -243,6 +243,14 @@ impl StreamInspector {
             self.ended = true;
             return;
         }
+        // AGENT-273: what is held may not have been scanned yet (a window
+        // scans once enough text is new). Judge it, so its cuts are made,
+        // before it goes out.
+        self.close(&[Close::All], step);
+        if step.ended {
+            self.ended = true;
+            return;
+        }
         while let Some(h) = self.held.pop_front() {
             step.out.push(render(&h));
         }
@@ -932,6 +940,37 @@ mod tests {
         i.abandon();
         assert_eq!(i.report().verdict, Verdict::Pass, "{:?}", i.report());
         assert!(i.report().error.is_none(), "{:?}", i.report());
+    }
+
+    /// AGENT-273: an event too big to judge under `fail_open` switches the
+    /// stream to passthrough, but the text already held is judged first,
+    /// so a key that arrived too small to trigger a scan is still redacted.
+    #[test]
+    fn an_oversized_event_does_not_release_held_text_unscanned() {
+        let p = DirectionPolicy {
+            max_scan_bytes: 8192,
+            ..policy(Verdict::Redact)
+        };
+        let events = vec![
+            chat(&"x ".repeat(1000)),
+            chat(&key()),
+            chat(&"y".repeat(10_000)),
+            DONE.to_string(),
+        ];
+        let (out, i) = run(&p, &events);
+        assert!(!leaked(&out), "{out}");
+        assert!(out.contains("[REDACTED:dlp]"), "{out}");
+        assert_eq!(i.report().skipped, Some(super::super::SkipReason::Oversize));
+        // Under block it blocks there, before anything held goes out.
+        let p = DirectionPolicy {
+            max_scan_bytes: 8192,
+            ..policy(Verdict::Block)
+        };
+        let (out, i) = run(&p, &events);
+        assert!(!leaked(&out), "{out}");
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(!out.contains("yyyy"), "the oversized event went out");
+        assert_eq!(i.report().verdict, Verdict::Block);
     }
 
     #[test]
@@ -1962,10 +2001,12 @@ mod tests {
             on_error: OnError::FailOpen,
             ..policy(Verdict::Block)
         });
-        // The key arrives too small to trigger a scan: it is still
-        // unscanned when the oversize last event ends the stream.
+        // Clean text is still held when the oversize last event ends the
+        // stream: once the stream has passed through, finish() judges
+        // nothing more, so no block follows what was already sent. (A key
+        // held then is judged before anything is released; see
+        // an_oversized_event_does_not_release_held_text_unscanned.)
         let mut out = i.push(chat(&"x ".repeat(500)).as_bytes()).out;
-        out.extend(i.push(chat(&key()).as_bytes()).out);
         out.extend(i.push(big.as_bytes()).out);
         out.extend(i.finish().out);
         let out = String::from_utf8(out.concat()).unwrap();

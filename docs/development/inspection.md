@@ -295,7 +295,9 @@ past it, can't be judged within bounds. Under `fail_closed` the stream is blocke
 Under `fail_open`, held text or events past the bound are released early
 and an `inspection_hold_overflow` row is written; an oversized event and
 the rest of the stream pass through unscanned, audited
-`inspection_skipped` with reason `oversize`. An unterminated final event
+`inspection_skipped` with reason `oversize`. The text held when the
+oversized event arrives is judged first, so its hits are redacted or
+block before it is released (AGENT-273). An unterminated final event
 is scanned when the upstream closes. A content-encoded stream follows
 `on_error`, as a buffered body does. When the route also has response
 `redaction_patterns`, the inspected stream is buffered whole and the
