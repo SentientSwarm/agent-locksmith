@@ -3,8 +3,9 @@
 //! Locksmith's own curated rules (not a port of another tool's set). Every
 //! rule has a fixed upper bound on what it can match, which streaming
 //! scanning uses as its window overlap. Base64 runs of 24..=4096 characters
-//! are decoded once and the decoded text scanned with the same rules, so an
-//! encoded key is still found. A Shannon-entropy heuristic catches unknown
+//! are decoded once (at each of the four alignments, so text glued to the
+//! run's start doesn't hide it) and the decoded text scanned with the same
+//! rules, so an encoded key is still found. A Shannon-entropy heuristic catches unknown
 //! formats; it is noisy, so its hits only ever flag.
 
 use super::{Direction, Hit, ScanError, Scanner};
@@ -146,7 +147,10 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         },
         rule(
             "jwt",
-            r"(?-u)\beyJ[A-Za-z0-9_-]{5,2048}\.[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,1024}",
+            // A payload past 4096 characters (AGENT-270) is matched as
+            // its header and first 4097 payload characters: enough to
+            // remove the token without widening the stream window.
+            r"(?-u)\beyJ[A-Za-z0-9_-]{5,2048}\.(?:[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,1024}|[A-Za-z0-9_-]{4097})",
             7173,
             Some(jwt_header_has_alg),
         ),
@@ -222,13 +226,15 @@ fn base64_hits(text: &str) -> Vec<(String, usize, usize)> {
         if body.len() < BASE64_RUN.0 || body.len() > BASE64_RUN.1 {
             continue;
         }
-        let Ok(decoded) = LENIENT_BASE64.decode(body) else {
-            continue;
-        };
-        let Ok(decoded) = String::from_utf8(decoded) else {
-            continue;
-        };
-        if let Some((id, ..)) = rule_hits(&decoded).first() {
+        // AGENT-270: text glued to the run's start (`token<base64>`)
+        // shifts every quantum, so try each alignment. What the prefix
+        // decodes to is garbage, so decode lossily.
+        let found = (0..4).find_map(|skip| {
+            let decoded = LENIENT_BASE64.decode(body.get(skip..)?).ok()?;
+            let decoded = String::from_utf8_lossy(&decoded);
+            rule_hits(&decoded).first().map(|(id, ..)| *id)
+        });
+        if let Some(id) = found {
             out.push((format!("base64:{id}"), m.start(), m.end()));
         }
     }
@@ -433,6 +439,38 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(plain);
         assert!(encoded.len() > 4096);
         assert!(scan(&encoded).is_empty());
+    }
+
+    #[test]
+    fn a_base64_run_glued_to_preceding_text_is_still_decoded() {
+        // AGENT-270: letters before the run join it, shifting every
+        // quantum; the decode has to realign.
+        let mut g = Gen(19);
+        let plain = format!("aws_access_key_id = AKIA{}", g.chars(UP, 16));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(plain);
+        for prefix in ["t", "to", "tok", "toke", "token"] {
+            let body = format!(r#"{{"note":"{prefix}{encoded}"}}"#);
+            assert_eq!(
+                json_rules(&body),
+                vec!["base64:aws_access_key_id"],
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jwt_with_an_oversized_payload_is_still_found() {
+        let mut g = Gen(23);
+        let header = b64url(r#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = g.chars(ANU, 6000);
+        let jwt = format!("{header}.{payload}.{}", g.chars(ANU, 342));
+        let hits = scan(&format!("token: {jwt} end"));
+        let jwt_hit = hits.iter().find(|h| h.rule == "jwt").expect("jwt found");
+        // The span starts at the token and covers its header and
+        // the payload's first 4097 characters.
+        assert_eq!(jwt_hit.start, 7);
+        assert_eq!(jwt_hit.end - jwt_hit.start, header.len() + 1 + 4097);
+        assert!(Dlp.max_match_len() >= jwt_hit.end - jwt_hit.start);
     }
 
     #[test]

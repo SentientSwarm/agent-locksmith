@@ -839,12 +839,10 @@ mod tests {
         };
         let out = apply(&blocking, Direction::Request, JSON, br#"{"a":"SECRET"}"#);
         assert!(matches!(out, Outcome::Block { report } if !report.redaction_incomplete));
-        let out = apply(
-            &policy(OnError::FailClosed),
-            Direction::Request,
-            BodyMeta::default(),
-            b"x",
-        );
+        // A scanner error under a redact policy is an error, not a
+        // redaction that had to block.
+        let failing = redacting(Arc::new(Failing), OnError::FailClosed);
+        let out = apply(&failing, Direction::Request, BodyMeta::default(), b"x");
         assert!(matches!(out, Outcome::Block { report } if !report.redaction_incomplete));
     }
 }

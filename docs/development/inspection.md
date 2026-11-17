@@ -67,9 +67,9 @@ Locksmith's own curated set (AGENT-263), not a port of another tool's.
 | `google_api_key` | `AIza` plus 35 characters |
 | `stripe_live_key` | `sk_live_` keys |
 | `private_key` | A PEM private key: from the `-----BEGIN ... PRIVATE KEY-----` line through the `END` line (or, with no `END` within 8 KiB, through the base64 and `Proc-Type`/`DEK-Info` lines that follow), so `redact` removes the key, not just its header |
-| `jwt` | Three base64url segments whose header decodes to JSON with `alg` |
+| `jwt` | Three base64url segments whose header decodes to JSON with `alg`. A payload over 4096 characters is matched as the header and the payload's first 4097 characters, which is enough to remove the token |
 | `bearer` | The token after `Bearer`: 40+ characters, at least 3 bits/char |
-| `base64:<rule>` | A 24 to 4096 character standard-base64 run whose decoded text (UTF-8, one level) matches a rule above; the span is the whole run |
+| `base64:<rule>` | A 24 to 4096 character standard-base64 run whose decoded text (one level, at each of the four alignments so letters glued to the run's start don't hide it) matches a rule above; the span is the whole run |
 | `entropy` | A 32 to 128 character token run at 4.5 bits/char or more that no other rule covers. Flag-only |
 
 Each rule has a fixed maximum match length; the scanner's

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `dlp` finds two more encoded credentials (AGENT-270). A base64 run with
+  letters glued to its start (`token<base64>`) is decoded at each
+  alignment, so the prefix no longer garbles it, and the decoded bytes are
+  read lossily so the garbage prefix can't hide what follows. A JWT whose
+  payload is over 4096 characters is matched as its header and first 4097
+  payload characters, where before it was not matched at all.
 - A redaction that can't remove every match now says so in its audit row
   (AGENT-270): the block carries `redaction_incomplete: true`. That covers
   a match in the path or query, a body that isn't UTF-8, and a match still
