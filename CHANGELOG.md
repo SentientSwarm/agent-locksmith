@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- An OAuth session whose token call has no egress (a proxied route with
+  no egress proxy) is reported once, in the daemon log and as an
+  `oauth_refresh_skipped` operational-log warning, instead of a warning
+  every 30 s for as long as it lasts (AGENT-302). It is reported again
+  if it recurs after a refresh got a client.
 - Under `fail_open`, a streamed event too big to judge no longer
   releases the text held before it unscanned (AGENT-273). That text is
   judged first, so a credential that arrived too small to trigger a
