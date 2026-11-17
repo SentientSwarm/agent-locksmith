@@ -144,7 +144,11 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   until nothing changes. A match in those deeper views blocks under
   `redact` only if it is still there after the rewrite (see below), so a
   key the rewrite removes, such as a PEM block whose `\n` the deeper view
-  resolves, is still redacted. Streamed responses get one level only.
+  resolves, is still redacted. Streamed text is unescaped the same way,
+  up to four levels past the event's own JSON decoding; a match found
+  there is redacted where its escaped text lies, and the window keeps
+  enough of the escaped text (and holds an escaped PEM key) as it would
+  the plain form, within `max_scan_bytes` (AGENT-315).
 - **The decoded path and query** of a request are judged the same way,
   never rewritten, even when the body itself is oversized or encoded.
   Credentials that legitimately ride in a URL (presigned

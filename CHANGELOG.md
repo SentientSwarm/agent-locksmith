@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A credential in a streamed response behind a second level of JSON
+  escaping (tool arguments are JSON in a JSON string, so `g` can arrive
+  as an escaped `\u0067`) is found and redacted (AGENT-315). Before,
+  streams were unescaped one level only, and such a credential was
+  forwarded; request and buffered response bodies already caught it.
 - The reference inspection sidecar's unit orders itself before
   `locksmith.service` (it named `locksmithd.service`, which is not the
   installed unit) and sets `HF_HUB_OFFLINE=1` to match its

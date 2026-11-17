@@ -203,54 +203,116 @@ pub(super) fn json_unescape(s: &str) -> String {
         return s.to_string();
     }
     let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('r') => out.push('\r'),
-            Some('b') => out.push('\u{8}'),
-            Some('f') => out.push('\u{c}'),
-            Some('u') => out.push(unicode_escape(&mut chars)),
-            Some(other @ ('"' | '\\' | '/')) => out.push(other),
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
+    let mut rest = s;
+    while !rest.is_empty() {
+        let (chars, used) = unescape_step(rest);
+        out.extend(chars.into_iter().flatten());
+        rest = &rest[used..];
     }
     out
 }
 
-fn hex4(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<u32> {
-    let digits: String = (0..4)
-        .map_while(|_| chars.next_if(char::is_ascii_hexdigit))
-        .collect();
-    (digits.len() == 4).then(|| u32::from_str_radix(&digits, 16).ok())?
+/// AGENT-315: [`nested_views`] of `text`, each with where its bytes come
+/// from in `text`: `map[i]` is the offset of the text byte `i` was decoded
+/// from, and `map[len]` is `text.len()`, so a span `a..b` of the view
+/// came from `map[a]..map[b]`.
+pub(super) fn nested_views_mapped(text: &str) -> Vec<(String, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+    for _ in 0..NESTED_ESCAPE_DEPTH {
+        let last = out.last().map_or(text, |(v, _)| v.as_str());
+        if !last.contains('\\') {
+            break;
+        }
+        let (next, map) = unescape_mapped(last);
+        if next == last {
+            break;
+        }
+        let map = match out.last() {
+            Some((_, prev)) => map.into_iter().map(|i| prev[i]).collect(),
+            None => map,
+        };
+        out.push((next, map));
+    }
+    out
 }
 
-fn unicode_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> char {
-    let Some(high) = hex4(chars) else {
-        return char::REPLACEMENT_CHARACTER;
+fn unescape_mapped(s: &str) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(s.len());
+    let mut map = Vec::with_capacity(s.len() + 1);
+    let mut rest = s;
+    while !rest.is_empty() {
+        let at = s.len() - rest.len();
+        let (chars, used) = unescape_step(rest);
+        // An escape kept as written (`\q`) is two characters from two.
+        for (i, c) in chars.into_iter().flatten().enumerate() {
+            out.push(c);
+            map.resize(out.len(), at + i);
+        }
+        rest = &rest[used..];
+    }
+    map.push(s.len());
+    (out, map)
+}
+
+/// What [`json_unescape`] makes of the start of `rest` (one character, or
+/// a backslash and the character it does not escape), and how many bytes
+/// of `rest` that takes.
+fn unescape_step(rest: &str) -> ([Option<char>; 2], usize) {
+    let mut chars = rest.chars();
+    let c = chars.next().expect("not empty");
+    if c != '\\' {
+        return ([Some(c), None], c.len_utf8());
+    }
+    let one = |c: char| ([Some(c), None], 2);
+    match chars.next() {
+        Some('n') => one('\n'),
+        Some('t') => one('\t'),
+        Some('r') => one('\r'),
+        Some('b') => one('\u{8}'),
+        Some('f') => one('\u{c}'),
+        Some('u') => {
+            let (c, used) = unicode_escape(&rest[2..]);
+            ([Some(c), None], 2 + used)
+        }
+        Some(other @ ('"' | '\\' | '/')) => one(other),
+        Some(other) => ([Some('\\'), Some(other)], 1 + other.len_utf8()),
+        None => ([Some('\\'), None], 1),
+    }
+}
+
+/// Up to four hex digits at the start of `s`: their value when there are
+/// four, and how many there are.
+fn hex4(s: &str) -> (Option<u32>, usize) {
+    let n = s.bytes().take(4).take_while(u8::is_ascii_hexdigit).count();
+    let value = (n == 4)
+        .then(|| u32::from_str_radix(&s[..4], 16).ok())
+        .flatten();
+    (value, n)
+}
+
+/// The character a `\u` escape names, given the text after `\u`, and how
+/// many bytes of it the escape takes (a surrogate pair takes its second
+/// `\uXXXX` too). A short or lone-surrogate escape is U+FFFD.
+fn unicode_escape(s: &str) -> (char, usize) {
+    let (high, used) = hex4(s);
+    let Some(high) = high else {
+        return (char::REPLACEMENT_CHARACTER, used);
     };
     if (0xD800..0xDC00).contains(&high) {
-        let mut ahead = chars.clone();
-        let low = (ahead.next() == Some('\\') && ahead.next() == Some('u'))
-            .then(|| hex4(&mut ahead))
-            .flatten()
+        let low = s[used..]
+            .strip_prefix("\\u")
+            .and_then(|t| hex4(t).0)
             .filter(|l| (0xDC00..0xE000).contains(l));
         if let Some(low) = low {
-            *chars = ahead;
             let code = 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
-            return char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER);
+            let c = char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER);
+            return (c, used + 6);
         }
     }
-    char::from_u32(high).unwrap_or(char::REPLACEMENT_CHARACTER)
+    (
+        char::from_u32(high).unwrap_or(char::REPLACEMENT_CHARACTER),
+        used,
+    )
 }
 
 /// Percent-decode a query or form (`+` is a space), reading lossily.
@@ -340,6 +402,41 @@ fn redact_str(text: &str, spans: Option<&[(usize, usize, String)]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AGENT-315: every span of a nested view maps back to the escaped
+    /// text it was decoded from, at any depth.
+    #[test]
+    fn nested_views_map_back_to_the_escaped_text() {
+        // Two levels: `\\u0067` is `\u0067` once unescaped, then `g`.
+        let text = r#"a \\u0067hp_x \\\"q \uD83D\uDE00 z"#;
+        let views = nested_views_mapped(text);
+        assert_eq!(views.len(), 2);
+        let (view, map) = &views[1];
+        assert_eq!(map.len(), view.len() + 1);
+        let at = view.find("ghp_x").unwrap();
+        assert_eq!(&text[map[at]..map[at + 5]], r"\\u0067hp_x");
+        let at = view.find('q').unwrap();
+        assert_eq!(&text[map[at]..map[at + 1]], "q");
+        let smile = view.find('\u{1F600}').unwrap();
+        assert_eq!(&text[map[smile]..map[smile + 4]], r"\uD83D\uDE00");
+        assert_eq!(map[view.len()], text.len());
+        let (view, map) = unescape_mapped(r"a\qb");
+        assert_eq!(view, r"a\qb");
+        assert_eq!(map, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn unescaping_is_lenient() {
+        for (text, want) in [
+            (r"\u12g", "\u{FFFD}g"),
+            (r"\uD83D x", "\u{FFFD} x"),
+            (r"\q \", r"\q \"),
+            (r"\n \t \/", "\n \t /"),
+        ] {
+            assert_eq!(json_unescape(text), want, "{text}");
+            assert_eq!(unescape_mapped(text).0, want, "{text}");
+        }
+    }
 
     #[test]
     fn json_strings_are_scanned_unescaped() {

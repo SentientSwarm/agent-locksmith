@@ -847,6 +847,51 @@ mod tests {
         assert_eq!(i.report().verdict, Verdict::Redact);
     }
 
+    /// AGENT-315: tool arguments are JSON in a JSON string, so a key in
+    /// them can sit behind a second level of escaping that the event's own
+    /// decoding leaves in place (`\u0067hp_...`). It is redacted like a
+    /// plain one, even streamed a character at a time.
+    #[test]
+    fn a_key_behind_a_nested_escape_is_redacted() {
+        let k = key();
+        let args = format!("{{\"k\": \"\\u0067{}\"}}", &k[1..]);
+        let mut events = vec![chat("args: ")];
+        events.extend(args.chars().map(|c| chat(&c.to_string())));
+        events.push(chat(" done."));
+        events.push(DONE.to_string());
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+        assert!(out.contains("[REDACTED:dlp]"), "{out}");
+        assert!(out.contains("done."), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+        let (out, i) = run(&policy(Verdict::Block), &events);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
+    /// AGENT-315: a PEM key found only unescaped (one escaped dash in its
+    /// BEGIN line) is redacted whole when streamed, like a plain one.
+    #[test]
+    fn a_streamed_escaped_pem_key_is_redacted_whole() {
+        let line = "QUJD".repeat(16);
+        let mut text = String::from(r"Here: \u002d----BEGIN PRIVATE KEY-----\n");
+        for _ in 0..300 {
+            text.push_str(&line);
+            text.push_str(r"\n");
+        }
+        text.push_str("-- that is all.");
+        let mut events: Vec<String> = text
+            .as_bytes()
+            .chunks(64)
+            .map(|c| chat(std::str::from_utf8(c).unwrap()))
+            .collect();
+        events.push(DONE.to_string());
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains("QUJD"), "a key line was forwarded");
+        assert!(out.contains("that is all"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
     #[test]
     fn split_secret_redacted_before_forwarding() {
         let k = key();

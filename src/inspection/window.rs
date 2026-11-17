@@ -8,7 +8,10 @@
 //! minus one. A match can't start before that tail, so text before
 //! `base()` is final. The tail is capped at `cap` raw bytes; past the cap
 //! (whitespace or invisible padding that folds to nothing) the window
-//! overflows and a match padded that far can be missed.
+//! overflows and a match padded that far can be missed. Text with JSON
+//! escapes in it is also scanned unescaped (AGENT-315); the tail kept is
+//! then long enough for each unescaped view's overlap too, since an
+//! escaped match is longer than its unescaped form.
 //!
 //! Rescanning the whole tail on every push would cost the tail's length
 //! per push, quadratic when padding keeps the tail long. So a push scans
@@ -126,45 +129,84 @@ impl TextWindow {
         self.scanned = self.buf.len();
         let mut out = Vec::new();
         self.open = None;
-        for scanner in &self.scanners {
+        // AGENT-315: JSON escaped again inside the text (tool arguments
+        // are JSON in a JSON string) is scanned unescaped too. A hit there
+        // covers the escaped text it came from, and holds the window as a
+        // plain one would.
+        let views = super::text::nested_views_mapped(&self.buf);
+        for scanner in self.scanners.clone() {
             for hit in scanner.scan(&self.buf, Direction::Response)? {
                 if hit.end <= self.buf.len() && scanner.holds_open(&self.buf, &hit) {
                     self.open = Some(self.open.map_or(hit.start, |o| o.min(hit.start)));
                 }
-                if hit.end <= old_end {
-                    continue;
-                }
                 let Some(matched) = self.buf.get(hit.start..hit.end) else {
                     return Err(ScanError(format!("{}: hit outside the text", scanner.id())));
                 };
-                let (start, end) = (self.base + hit.start, self.base + hit.end);
-                let id = scanner.id().to_string();
-                let spans = self
-                    .reported
-                    .entry((id.clone(), hit.rule.clone()))
-                    .or_default();
-                let new = !overlaps(spans, start, end);
-                insert(spans, start, end);
-                out.push(WindowHit {
-                    scanner: id,
-                    rule: hit.rule,
-                    start,
-                    end,
-                    flag_only: hit.flag_only,
-                    sha256: sha256_hex(matched),
-                    new,
-                });
+                let span = (hit.start, hit.end, sha256_hex(matched));
+                self.report(scanner.id(), hit, span, old_end, &mut out);
+            }
+            for (view, map) in &views {
+                for hit in scanner.scan(view, Direction::Response)? {
+                    if hit.end <= view.len() && scanner.holds_open(view, &hit) {
+                        let start = map[hit.start];
+                        self.open = Some(self.open.map_or(start, |o| o.min(start)));
+                    }
+                    let Some(matched) = view.get(hit.start..hit.end) else {
+                        return Err(ScanError(format!("{}: hit outside the text", scanner.id())));
+                    };
+                    let span = (map[hit.start], map[hit.end], sha256_hex(matched));
+                    self.report(scanner.id(), hit, span, old_end, &mut out);
+                }
             }
         }
-        self.trim();
+        // An escaped match is longer than its unescaped form: keep each
+        // view's overlap, in the text it came from. An escape cut off at
+        // the end of the text decodes to junk that is not part of any
+        // match, so the overlap is measured past room for it.
+        let views_keep = views
+            .iter()
+            .map(|(view, map)| map[tail_start(view, self.overlap + PENDING_ESCAPE)])
+            .min();
+        self.trim(views_keep);
         Ok(out)
     }
 
+    /// Add `hit`, at `span` (start and end in `buf`, and the matched
+    /// text's hash), to `out` unless it ended in text already scanned.
+    fn report(
+        &mut self,
+        scanner: &str,
+        hit: super::Hit,
+        (start, end, sha256): (usize, usize, String),
+        old_end: usize,
+        out: &mut Vec<WindowHit>,
+    ) {
+        if end <= old_end {
+            return;
+        }
+        let (start, end) = (self.base + start, self.base + end);
+        let spans = self
+            .reported
+            .entry((scanner.to_string(), hit.rule.clone()))
+            .or_default();
+        let new = !overlaps(spans, start, end);
+        insert(spans, start, end);
+        out.push(WindowHit {
+            scanner: scanner.to_string(),
+            rule: hit.rule,
+            start,
+            end,
+            flag_only: hit.flag_only,
+            sha256,
+            new,
+        });
+    }
+
     /// Drop text no future match can start in, or extend.
-    fn trim(&mut self) {
-        let keep = self
-            .tail_start()
-            .min(self.open.take().unwrap_or(usize::MAX));
+    fn trim(&mut self, views_keep: Option<usize>) {
+        let keep = tail_start(&self.buf, self.overlap)
+            .min(self.open.take().unwrap_or(usize::MAX))
+            .min(views_keep.unwrap_or(usize::MAX));
         let mut cut = keep.max(self.buf.len().saturating_sub(self.cap));
         while !self.buf.is_char_boundary(cut) {
             cut += 1;
@@ -186,28 +228,34 @@ impl TextWindow {
         }
         self.reported.retain(|_, spans| !spans.is_empty());
     }
+}
 
-    /// Start of the shortest tail at least `overlap` long, raw and folded.
-    fn tail_start(&self) -> usize {
-        let (mut raw, mut folded) = (0usize, 0usize);
-        let mut later_space = false;
-        for (at, c) in self.buf.char_indices().rev() {
-            if raw >= self.overlap && folded >= self.overlap {
-                return at + c.len_utf8();
-            }
-            raw += c.len_utf8();
-            if c.is_whitespace() {
-                if !later_space {
-                    folded += 1;
-                }
-                later_space = true;
-            } else if !normalize::is_invisible(c) && !normalize::is_mark(c) {
-                folded += normalize::folded_width(c);
-                later_space = false;
-            }
+/// The most an escape cut off at the end of the text can decode to in a
+/// view: at most one unfinished escape per level, each at most a
+/// six-byte `\uXXXX` that becomes U+FFFD (three bytes) or stays as
+/// written.
+const PENDING_ESCAPE: usize = 6 * 3 * super::text::NESTED_ESCAPE_DEPTH;
+
+/// Start of the shortest tail at least `overlap` long, raw and folded.
+fn tail_start(text: &str, overlap: usize) -> usize {
+    let (mut raw, mut folded) = (0usize, 0usize);
+    let mut later_space = false;
+    for (at, c) in text.char_indices().rev() {
+        if raw >= overlap && folded >= overlap {
+            return at + c.len_utf8();
         }
-        0
+        raw += c.len_utf8();
+        if c.is_whitespace() {
+            if !later_space {
+                folded += 1;
+            }
+            later_space = true;
+        } else if !normalize::is_invisible(c) && !normalize::is_mark(c) {
+            folded += normalize::folded_width(c);
+            later_space = false;
+        }
     }
+    0
 }
 
 /// Does `[start, end)` overlap any of the disjoint `spans`? Only the
@@ -354,6 +402,25 @@ mod tests {
         );
     }
 
+    /// AGENT-315: escaped text is scanned in up to four more views, which
+    /// multiplies the cost but keeps it linear.
+    #[test]
+    fn padding_after_escapes_does_not_make_scanning_quadratic() {
+        let counting = Arc::new(Counting(Default::default()));
+        let mut w = TextWindow::new(vec![counting.clone()], 1 << 20);
+        w.push(&"\\".repeat(16)).unwrap();
+        let pushed = 50_000;
+        for _ in 0..pushed {
+            w.push(" ").unwrap();
+        }
+        w.flush().unwrap();
+        let scanned = counting.0.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            scanned <= 100 * pushed,
+            "scanned {scanned} bytes for {pushed}"
+        );
+    }
+
     #[test]
     fn flush_reports_a_match_still_unscanned() {
         let mut w = literal("SECRET42", 1 << 20);
@@ -387,6 +454,87 @@ mod tests {
         assert_eq!(keys.iter().map(|h| h.end).max(), Some(key_end));
         assert_eq!(keys.iter().filter(|h| h.new).count(), 1);
         assert!(!w.overflowed());
+    }
+
+    /// AGENT-315: a key whose BEGIN line is found only unescaped (one
+    /// escaped dash) holds the window to its end like a plain one.
+    #[test]
+    fn an_escaped_streamed_key_is_covered_to_its_end() {
+        let dlp = Arc::new(crate::inspection::dlp::Dlp);
+        let mut w = TextWindow::new(vec![dlp], 1 << 20);
+        let line = "QUJD".repeat(16);
+        let mut text = String::from(r"x \u002d----BEGIN PRIVATE KEY-----\n");
+        for _ in 0..300 {
+            text.push_str(&line);
+            text.push_str(r"\n");
+        }
+        let key_end = text.len() - 2;
+        text.push_str("-- prose, then more prose");
+        let mut hits = Vec::new();
+        for c in text.as_bytes().chunks(64) {
+            hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+        }
+        hits.extend(w.flush().unwrap());
+        let keys: Vec<_> = hits.iter().filter(|h| h.rule == "private_key").collect();
+        assert_eq!(keys.iter().map(|h| h.end).max(), Some(key_end));
+        assert!(!w.overflowed());
+    }
+
+    /// AGENT-315: an escaped match can be longer than the overlap its
+    /// unescaped form needs; the window keeps enough of it.
+    #[test]
+    fn an_escaped_match_longer_than_the_overlap_is_found_when_streamed() {
+        let mut w = literal("SECRET42", 1 << 20);
+        let mut hits = Vec::new();
+        for c in r"say \u0053ECRET42 now".chars() {
+            hits.extend(w.push(&c.to_string()).unwrap());
+        }
+        hits.extend(w.flush().unwrap());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    /// AGENT-315: an escape cut off at the end of the held text decodes
+    /// to junk; it must not count toward the overlap kept, or a needle
+    /// escaped on every character is trimmed before it completes.
+    #[test]
+    fn a_fully_escaped_literal_is_found_in_small_chunks() {
+        let escape =
+            |s: &str| -> String { s.chars().map(|c| format!(r"\u{:04x}", c as u32)).collect() };
+        let mut needle = "SECRET42".to_string();
+        for depth in 1..=3 {
+            needle = escape(&needle);
+            for chunk in [1, 4, 16] {
+                let mut w = literal("SECRET42", 1 << 20);
+                let text = format!("say {needle} now");
+                let mut hits = Vec::new();
+                for c in text.as_bytes().chunks(chunk) {
+                    hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+                }
+                hits.extend(w.flush().unwrap());
+                assert_eq!(hits.len(), 1, "depth {depth} chunk {chunk}");
+            }
+        }
+    }
+
+    /// AGENT-315: every character escaped at each of three levels (216
+    /// bytes a character) is still found, fed a few bytes at a time.
+    #[test]
+    fn a_token_escaped_three_levels_deep_is_found_when_streamed() {
+        let escape =
+            |s: &str| -> String { s.chars().map(|c| format!(r"\u{:04x}", c as u32)).collect() };
+        let token = format!(
+            "ghp_{}",
+            &"Qm7Zx2Lk9Vb4Nc8Rt1Hy6Jd3Fg5Sa0Wp".repeat(2)[..36]
+        );
+        let text = format!("a {} b", escape(&escape(&escape(&token))));
+        let dlp = Arc::new(crate::inspection::dlp::Dlp);
+        let mut w = TextWindow::new(vec![dlp], 1 << 20);
+        let mut hits = Vec::new();
+        for c in text.as_bytes().chunks(16) {
+            hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+        }
+        hits.extend(w.flush().unwrap());
+        assert!(hits.iter().any(|h| h.rule == "github_token"), "{hits:?}");
     }
 
     #[test]
