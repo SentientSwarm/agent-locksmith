@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A PEM private key with no `END` line in nested tool arguments is read
+  with every JSON escape decoded, at any depth (AGENT-270). Tab
+  indentation written as `\t` or `\u0009` no longer ends the key, and a
+  last key line followed by a tab, `.`, `!`, `?`, `&`, `>` or `|` is kept.
+  Before, each escape needed its own rule, and a missing one forwarded the
+  rest of the key under `redact`.
 - A PEM private key with no `END` line in nested tool arguments is no
   longer cut short by any `\u00XX` escape of a base64 character, or by a
   line break written as `\u000A` (AGENT-270). Before, only `\/` and

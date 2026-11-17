@@ -61,47 +61,88 @@ fn is_base64(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"+/=".contains(&b)
 }
 
-/// Bytes of base64 at the start of `line`, counting base64 characters
-/// written as JSON escapes (`\/`, `\u002B`, any `\u00XX`, at any depth)
-/// as base64 too: some encoders escape `/` and `+`, and any encoder may
-/// escape the rest (AGENT-270).
-fn base64_prefix(line: &str) -> usize {
-    let b = line.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if is_base64(b[i]) {
-            i += 1;
-            continue;
-        }
-        let slashes = b[i..].iter().take_while(|&&c| c == b'\\').count();
-        let rest = &b[i + slashes..];
-        let escaped = if rest.first() == Some(&b'/') {
-            1
-        } else if rest.len() >= 5
-            && rest.starts_with(b"u00")
-            && rest[3..5].iter().all(u8::is_ascii_hexdigit)
-            && std::str::from_utf8(&rest[3..5])
-                .ok()
-                .and_then(|h| u8::from_str_radix(h, 16).ok())
-                .is_some_and(is_base64)
-        {
-            5
-        } else {
-            0
-        };
-        if slashes == 0 || escaped == 0 {
-            break;
-        }
-        i += slashes + escaped;
-    }
-    i
+/// One character of a PEM window as a JSON reader would see it: a raw
+/// byte, or an escape decoded. `byte` is 0xFF for anything outside ASCII;
+/// `end` is where the character ends in the window.
+struct Unit {
+    byte: u8,
+    end: usize,
+    /// Written as an escape. After a key's last line any escape ends it,
+    /// as a raw backslash would.
+    escaped: bool,
 }
 
-/// A line break in a PEM body: raw, or escaped once or more inside a
-/// JSON string (`\n` or `\u000A`), with or without a carriage return.
-static PEM_LINE_BREAK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?-u)(?:\\+r|\\+u000[Dd])?(?:\\+n|\\+u000[Aa])|\r?\n").expect("compiles")
-});
+/// Decode `window` into characters (AGENT-270), lazily: the caller
+/// usually stops at the key's first non-key line. Inside a JSON string,
+/// nested to any depth, a key's line breaks, indentation and even its
+/// base64 may be escapes: a run of backslashes and what it escapes is one
+/// character. A run that escapes nothing a key uses stays a backslash.
+struct PemUnits<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl Iterator for PemUnits<'_> {
+    type Item = Unit;
+
+    fn next(&mut self) -> Option<Unit> {
+        let (b, i) = (self.b, self.i);
+        let first = *b.get(i)?;
+        if first != b'\\' {
+            self.i += 1;
+            let byte = if first.is_ascii() { first } else { 0xFF };
+            return Some(Unit {
+                byte,
+                end: self.i,
+                escaped: false,
+            });
+        }
+        let run = b[i..].iter().take_while(|&&c| c == b'\\').count();
+        let rest = &b[i + run..];
+        let (byte, len) = match rest.first() {
+            Some(b'n') => (b'\n', 1),
+            Some(b't') => (b'\t', 1),
+            Some(b'r') => (b'\r', 1),
+            Some(&c @ (b'/' | b'"')) => (c, 1),
+            Some(b'u') if rest.len() >= 5 && rest[1..5].iter().all(u8::is_ascii_hexdigit) => {
+                let hex = std::str::from_utf8(&rest[1..5]).expect("hex digits");
+                let code = u32::from_str_radix(hex, 16).expect("hex digits");
+                let byte = u8::try_from(code).ok().filter(u8::is_ascii);
+                (byte.unwrap_or(0xFF), 5)
+            }
+            _ => (b'\\', 0),
+        };
+        self.i += run + len;
+        Some(Unit {
+            byte,
+            end: self.i,
+            escaped: true,
+        })
+    }
+}
+
+/// A line without its indentation and trailing spaces (a key pasted into
+/// YAML or code).
+fn trimmed(line: &[Unit]) -> &[Unit] {
+    let blank = |u: &Unit| matches!(u.byte, b' ' | b'\t' | b'\r');
+    let start = line.iter().position(|u| !blank(u)).unwrap_or(line.len());
+    let end = line
+        .iter()
+        .rposition(|u| !blank(u))
+        .map_or(start, |p| p + 1);
+    &line[start..end]
+}
+
+fn starts_with(line: &[Unit], prefix: &[u8]) -> bool {
+    line.len() >= prefix.len() && line.iter().zip(prefix).all(|(u, b)| u.byte == *b)
+}
+
+/// What may follow a key's last line on the same line: whitespace, a
+/// closing quote or bracket, or punctuation. Not `:`, so a YAML key on
+/// the next line is not taken for base64.
+fn closes(b: u8) -> bool {
+    b" \t\r\"'}],\\<>);`.!?&|".contains(&b)
+}
 
 /// The whole PEM block after a BEGIN line: through the END line, or, with
 /// no END in reach, through the base64 and RFC 1421 header lines that
@@ -116,49 +157,41 @@ fn pem_extend(text: &str, header_end: usize) -> usize {
     if let Some(m) = PEM_END.find(window) {
         return header_end + m.end();
     }
+    let mut units = PemUnits {
+        b: window.as_bytes(),
+        i: 0,
+    };
     let mut end = 0;
-    let mut start = 0;
     let mut after_header = false;
-    // AGENT-270: inside a JSON string a line break is written `\n` (or
-    // `\\n` one level deeper), so escaped breaks end lines too.
-    let mut breaks = PEM_LINE_BREAK.find_iter(window);
+    let mut line = Vec::new();
     for i in 0.. {
-        let (t, next) = match breaks.next() {
-            Some(m) => (&window[start..m.start()], Some(m.end())),
-            None => (&window[start..], None),
-        };
-        // Indentation and trailing spaces (a key pasted into YAML or
-        // code) are not part of a line's content.
-        let lead = t.len() - t.trim_start_matches([' ', '\t']).len();
-        let body = t[lead..].trim_end_matches([' ', '\t', '\r']);
-        let key = base64_prefix(body);
-        let base64 = !body.is_empty() && key == body.len();
-        let header = body.starts_with("Proc-Type:") || body.starts_with("DEK-Info:");
-        if base64 || header {
-            end = start + lead + body.len();
-            after_header = header;
-        } else {
-            // The rest of the BEGIN line, or the blank line after RFC 1421
-            // headers, is skipped; anything else ends the block.
-            let skippable = (i == 0 && body.is_empty()) || (body.is_empty() && after_header);
-            if !skippable {
-                // A key quoted in a string ends its last line with the
-                // closing quote (`AB==\"}`), and prose may follow on the
-                // same line: that base64 is the key too.
-                if key > 0
-                    && body
-                        .as_bytes()
-                        .get(key)
-                        .is_some_and(|b| b" \"'}],\\<);`".contains(b))
-                {
-                    end = start + lead + key;
-                }
-                break;
+        line.clear();
+        let more = loop {
+            match units.next() {
+                Some(u) if u.byte == b'\n' => break true,
+                Some(u) => line.push(u),
+                None => break false,
             }
+        };
+        let body = trimmed(&line);
+        let key = body.iter().take_while(|u| is_base64(u.byte)).count();
+        let header = starts_with(body, b"Proc-Type:") || starts_with(body, b"DEK-Info:");
+        if (key > 0 && key == body.len()) || header {
+            end = body.last().map_or(end, |u| u.end);
+            after_header = header;
+        } else if !(body.is_empty() && (i == 0 || after_header)) {
+            // Anything but the rest of the BEGIN line or the blank line
+            // after RFC 1421 headers ends the block. A key quoted in a
+            // string ends its last line with the closing quote
+            // (`AB==\"}`), and prose may follow on the same line: that
+            // base64 is the key too.
+            if key > 0 && body.get(key).is_some_and(|u| u.escaped || closes(u.byte)) {
+                end = body[key - 1].end;
+            }
+            break;
         }
-        match next {
-            Some(n) => start = n,
-            None => break,
+        if !more {
+            break;
         }
     }
     header_end + end
@@ -687,6 +720,50 @@ mod tests {
         let body = nested_args(&pem, '=', "\\u003D");
         let body = body.replace("\\\\n", "\\\\u000A");
         assert!(body.contains("u003D") && body.contains("u000A"), "{body}");
+        assert_redacted_whole(&body, &parts);
+    }
+
+    #[test]
+    fn escaped_whitespace_and_any_hex_case_in_nested_pem_keep_the_key_whole() {
+        // Review finding: tab indentation is `\t` inside a string, which
+        // ended the block. Escapes are decoded as a JSON reader would.
+        let mut g = Gen(71);
+        let parts: Vec<String> = (0..6).map(|_| g.chars(AN, 20)).collect();
+        let lines = format!(
+            "\n\t{}={}\n\t{}={}\r\n\t{}={}",
+            parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+        );
+        let pem = format!("-----BEGIN RSA PRIVATE KEY-----{lines}");
+        assert_redacted_whole(&nested_args(&pem, '~', "~"), &parts);
+        // Lowercase hex, a `\u0009` tab, and CR LF as `\u` escapes.
+        let body = nested_args(&pem, '=', "\\u003d")
+            .replace("\\\\t", "\\\\u0009")
+            .replace("\\\\r\\\\n", "\\\\u000D\\\\u000a");
+        assert!(body.contains("u0009") && body.contains("u000a"), "{body}");
+        assert_redacted_whole(&body, &parts);
+    }
+
+    #[test]
+    fn a_last_nested_key_line_before_an_escaped_tab_or_full_stop_is_kept() {
+        // Codex review: decoding `\t` dropped the last line that a bare
+        // `\` terminator used to keep.
+        let mut g = Gen(73);
+        let parts: Vec<String> = (0..2).map(|_| g.chars(AN, 40)).collect();
+        for tail in ["\t(note)", ". Thanks", "\r\t", "&more"] {
+            let pem = format!(
+                "-----BEGIN RSA PRIVATE KEY-----\n{}\n{}{tail}",
+                parts[0], parts[1]
+            );
+            assert_redacted_whole(&nested_args(&pem, '~', "~"), &parts);
+        }
+        // Round 2 review: an ASCII-only encoder (Python's default) writes
+        // a closing curly quote as `\u201d`; any escape ends the line.
+        let pem = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}\n{}\u{201d}",
+            parts[0], parts[1]
+        );
+        let body = nested_args(&pem, '\u{201d}', "\\u201d");
+        assert!(body.contains("u201d"), "{body}");
         assert_redacted_whole(&body, &parts);
     }
 
