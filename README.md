@@ -402,9 +402,9 @@ audience:
   [error envelope](docs/user/concepts/error-envelope.md).
 - **Contributors**: [`docs/development/`](docs/development), including the
   [bounded MCP transport prerequisite](docs/development/mcp-transport.md).
-- **Historical**: `docs/v2/`, `docs/design/`, `docs/plans/` and the
-  top-level `SPEC.md` record earlier designs and do not describe current
-  behaviour.
+- **Historical**: [`docs/archive/`](docs/archive/) holds the 2.x spec,
+  design notes, plans and the original pre-v2 `SPEC.md`. They record
+  earlier designs and do not describe current behaviour.
 
 ## Development
 

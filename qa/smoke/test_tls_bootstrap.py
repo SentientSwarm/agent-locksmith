@@ -1,6 +1,6 @@
 """Bootstrap-only enrolment listener (listen.bootstrap_only).
 
-Docs: docs/v2/runbooks/m6-mtls-onboarding.md §4 and §7 (lines 61-86, 128-156) and
+Docs: docs/archive/v2/runbooks/m6-mtls-onboarding.md §4 and §7 (lines 61-86, 128-156) and
 CHANGELOG.md 3.0.0 lines 5-12 (binds; needs admin_socket; host must be an IP;
 port and certificate must be usable; the bootstrap secret is verified before the
 agent is created).

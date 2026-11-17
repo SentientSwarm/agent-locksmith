@@ -8,7 +8,7 @@
 //!
 //! Locksmith does NOT do AEAD itself. The threat boundary is "anything
 //! readable by the locksmith uid is already trusted." See
-//! `docs/v2/threat-model.md` for the full rationale.
+//! `docs/archive/v2/threat-model.md` for the full rationale.
 //!
 //! On `Drop` the cached bytes are zeroized via `zeroize::Zeroize` (the
 //! `secrecy` crate guarantees this for `SecretString`).

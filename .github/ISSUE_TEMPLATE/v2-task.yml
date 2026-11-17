@@ -1,5 +1,5 @@
 name: v2 Task
-description: A task derived from `docs/v2/SPEC.md` §6.2.
+description: A task derived from `docs/archive/v2/SPEC.md` §6.2.
 title: "M{N} (R-F{X}, R-N{Y}): T{N}.{M} — <task name>"
 labels: []
 body:
@@ -13,7 +13,7 @@ body:
     attributes:
       label: Task
       description: Reference the task ID from SPEC.md §6.2 and a one-line description.
-      placeholder: T1.1 from `docs/v2/SPEC.md` §6.2 — Failing integration test for SSE passthrough timing.
+      placeholder: T1.1 from `docs/archive/v2/SPEC.md` §6.2 — Failing integration test for SSE passthrough timing.
     validations:
       required: true
 

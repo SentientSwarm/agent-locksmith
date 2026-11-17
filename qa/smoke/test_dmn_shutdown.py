@@ -1,4 +1,4 @@
-"""Graceful shutdown and the drain window (docs/v2/runbooks/m1-inference-hardening.md section 6).
+"""Graceful shutdown and the drain window (docs/archive/v2/runbooks/m1-inference-hardening.md section 6).
 
 A slow loopback upstream holds a proxied request open while the test signals
 the daemon, so the request is provably in flight.

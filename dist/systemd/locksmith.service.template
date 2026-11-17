@@ -3,10 +3,10 @@
 # Operators copy this to /etc/systemd/system/locksmith.service and edit
 # the placeholders marked with %%PLACEHOLDER%%. The directives below are
 # the M5 hardening baseline; remove or relax only with deliberate
-# justification (and update docs/v2/threat-model.md if you do).
+# justification (and update docs/archive/v2/threat-model.md if you do).
 #
 # Each directive comment names the threat it blunts. See
-# docs/v2/runbooks/m5-sealed-secrets.md and docs/v2/threat-model.md for
+# docs/archive/v2/runbooks/m5-sealed-secrets.md and docs/archive/v2/threat-model.md for
 # the full rationale.
 
 [Unit]

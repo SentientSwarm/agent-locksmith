@@ -1,6 +1,6 @@
 """mTLS revocation on the agent listener: CRL and the local emergency blocklist.
 
-Docs: docs/v2/runbooks/m6-mtls-revocation.md and CHANGELOG.md 3.0.0 ("Enforce mTLS
+Docs: docs/archive/v2/runbooks/m6-mtls-revocation.md and CHANGELOG.md 3.0.0 ("Enforce mTLS
 revocation on the agent listener", lines 29-53). The cases run in order against
 one daemon: no CRL ever in force, an untrusted CRL, a trusted CRL, a CRL
 revocation, then the blocklist. The CRL is served by fakes.tls_crl on 127.0.0.1.

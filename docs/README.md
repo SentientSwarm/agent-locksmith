@@ -103,9 +103,9 @@ Contributor documentation is in [`development/`](development/):
 These record earlier designs and plans. They do not describe current
 behaviour; use the pages above instead.
 
-- [`v2/`](v2/): the 2.x engineering spec, PRD, handoff and runbooks.
-- [`design/`](design/): design notes for the explicit account and HTTP
+- [`archive/v2/`](archive/v2/): the 2.x engineering spec, PRD, handoff and runbooks.
+- [`archive/design/`](archive/design/): design notes for the explicit account and HTTP
   grant work.
-- [`plans/`](plans/): early implementation plans.
-- [`../SPEC.md`](../SPEC.md): the original pre-v2 specification, kept for
+- [`archive/plans/`](archive/plans/): early implementation plans.
+- [`archive/SPEC.md`](archive/SPEC.md): the original pre-v2 specification, kept for
   reference only.

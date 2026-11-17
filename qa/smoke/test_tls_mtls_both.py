@@ -1,6 +1,6 @@
 """Agent listener in auth_mode both: mTLS and bearer each authenticate.
 
-Docs: docs/v2/runbooks/m6-mtls-migration.md:26-41 (stage A: "Now both bearer AND
+Docs: docs/archive/v2/runbooks/m6-mtls-migration.md:26-41 (stage A: "Now both bearer AND
 mTLS work; either authenticates an agent"; audit auth_method shows which),
 docs/user/architecture.md:195-201.
 """

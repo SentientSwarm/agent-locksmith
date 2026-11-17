@@ -5,7 +5,7 @@ authenticates with a client cert issued by [smallstep](https://smallstep.com/)'s
 step-ca. Operators get the same path for the admin HTTPS listener.
 
 This example targets the M6 mTLS surface (T6.1–T6.10). Read
-`docs/v2/runbooks/m6-mtls-onboarding.md` first for the threat model
+`docs/archive/v2/runbooks/m6-mtls-onboarding.md` first for the threat model
 and rotation procedure.
 
 ---
@@ -150,7 +150,7 @@ journalctl -u locksmith | grep CRL
 - An expired cert is rejected immediately.
 - A cert issued by a different CA is rejected immediately.
 
-See `docs/v2/threat-model.md` §2 T4–T5 for the full posture.
+See `docs/archive/v2/threat-model.md` §2 T4–T5 for the full posture.
 
 ---
 
@@ -164,5 +164,5 @@ See `docs/v2/threat-model.md` §2 T4–T5 for the full posture.
 | `mtls_auth_failure reason=revoked_by_blocklist` | Operator added this serial to the local blocklist. Working as intended. |
 | `mtls_auth_failure reason=revoked_by_crl` | step-ca issued a CRL update revoking this serial. Working as intended. |
 
-See `docs/v2/runbooks/m6-mtls-revocation.md` for the incident-response
+See `docs/archive/v2/runbooks/m6-mtls-revocation.md` for the incident-response
 procedure.

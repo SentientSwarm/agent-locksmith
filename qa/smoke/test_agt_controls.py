@@ -1,4 +1,4 @@
-"""M7 response controls on config.tools entries (docs/v2/runbooks/m7-response-controls.md,
+"""M7 response controls on config.tools entries (docs/archive/v2/runbooks/m7-response-controls.md,
 docs/user/agent-integration/wire-contract.md:192-235)."""
 
 import hashlib

@@ -4,7 +4,7 @@
 //! agent listener's validator: a client cert whose serial is in the local
 //! emergency blocklist (including one added by `locksmith mtls revoke`
 //! while the daemon runs) or in the configured CRL is refused, as
-//! `docs/v2/runbooks/m6-mtls-revocation.md` promises.
+//! `docs/archive/v2/runbooks/m6-mtls-revocation.md` promises.
 
 use agent_locksmith::config::parse_config_str;
 use agent_locksmith::repo::AgentRepository;

@@ -4,7 +4,7 @@ Companion to [Explicit account bindings](2026-10-18-d1-explicit-account-bindings
 Target: existing agent-locksmith HTTP proxy and custody implementations, local
 synthetic accounts only. This historical matrix defines required acceptance;
 results must name their exact revision and executed environment. See the
-[saved smoke](../development/explicit-account-bindings-smoke.md) for the
+[saved smoke](../../development/explicit-account-bindings-smoke.md) for the
 repeatable actual-daemon/CLI checks and their limits.
 
 ## Enforcement and account attribution
@@ -89,7 +89,7 @@ CLI help/reference, getting-started/configuration, upgrade/migration procedure,
 troubleshooting/error behavior and release notes. Remove advice that clearing a
 selection restores a default account. List actual changed paths; QA/review must
 check examples and smoke evidence before the project is marked complete. Follow
-the [shared completion gate](../development/project-completion.md) for later projects.
+the [shared completion gate](../../development/project-completion.md) for later projects.
 
 ## Evidence required per issue
 

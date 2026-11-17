@@ -112,7 +112,7 @@ def test_modify_to_unknown_connection_is_refused_unchanged(t1, managed):
 )
 def test_set_and_clear_cert_identity(t1, managed):
     """`set-cert-identity` binds an identity visible via `agent get`; `--clear` removes
-    it (cli-reference.md:91, docs/v2/runbooks/m6-mtls-onboarding.md:76-86)."""
+    it (cli-reference.md:91, docs/archive/v2/runbooks/m6-mtls-onboarding.md:76-86)."""
     bind = t1.cli("agent", "set-cert-identity", managed["id"], "adm-managed.qa.local")
     assert bind.code == 0, bind.err
     assert (

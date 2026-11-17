@@ -1,7 +1,7 @@
 # Explicit HTTP grants: cutover and acceptance contract
 
 This contract covers finite HTTP grants, migration, coherent admission and
-activation, plus the process journey and [consumer entry point](../user/getting-started.md).
+activation, plus the process journey and [consumer entry point](../../user/getting-started.md).
 It narrows the conceptual [integration boundaries](http-integration-boundaries.md)
 to the existing HTTP proxy, local operator/agent identity and D1 account selection.
 The original implementation was accepted locally at `ad0025a`; this public
@@ -131,4 +131,4 @@ missing-binding diagnosis and deliberate operator repair guidance.
 
 Tests use temporary state and synthetic local accounts. None establishes live
 provider or enterprise-platform compatibility. Record revision, environment, command, exit
-and sanitized observations per [project completion](../development/project-completion.md).
+and sanitized observations per [project completion](../../development/project-completion.md).

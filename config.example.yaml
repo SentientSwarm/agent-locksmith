@@ -1,5 +1,5 @@
 # /etc/locksmith/config.yaml — example v2 configuration.
-# See docs/v2/runbooks/m1-inference-hardening.md for migration from M0.
+# See docs/archive/v2/runbooks/m1-inference-hardening.md for migration from M0.
 
 listen:
   host: "127.0.0.1"

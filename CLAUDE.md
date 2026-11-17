@@ -11,7 +11,7 @@ pull request, after the tiered local checks and a two-engine
 test-only changes. `develop` is retired. Optional
 `release/<major>.<minor>` branches stabilize a release while new work continues
 on `main`. See [Branching and releases](docs/development/branching.md); historical
-`docs/v2/` branch instructions are superseded. Read Cargo.toml and tags for
+`docs/archive/v2/` branch instructions are superseded. Read Cargo.toml and tags for
 version/release state. This policy does not authorize publication.
 
 Recent phase shipments:
@@ -85,12 +85,14 @@ The authoritative stack-level docs live at `agents-stack/docs/`:
 - `agents-stack/docs/adrs/0004-kind-taxonomy.md` — kind enum decision.
 - `agents-stack/docs/adrs/0005-oauth-credentials.md` — OAuth design (Phase F + G2 + G3 + G4 addenda).
 
-In-repo per-component engineering docs are at `docs/v2/SPEC.md` (with
-`SPEC.state.md` for "what's actually in code") + `docs/v2/HANDOFF.md`
-(cold-start handoff for contributors). User docs are at `docs/user/`
-(concepts, agent-integration recipes).
+Start at `docs/README.md`. User docs are at `docs/user/` (concepts,
+agent-integration recipes) and the operator journeys at `docs/guide/`.
+`docs/archive/` is historical: the 2.x engineering spec
+(`docs/archive/v2/SPEC.md`, with `SPEC.state.md`), its handoff, design
+notes and plans. They explain old task tags but do not describe current
+behaviour.
 
-**Ignore the top-level `SPEC.md`.** It's the deprecated M0-era "Secure Agent Proxy (SAP)" document — the project was renamed to agent-locksmith and v2 explicitly removed the `/llm/*`, `/mcp/*`, `/a2a/*` namespaces and the wire-level scanner sidecar described there. It's kept only for archaeology and carries a deprecation banner at the top.
+**Ignore `docs/archive/SPEC.md`.** It's the deprecated M0-era "Secure Agent Proxy (SAP)" document — the project was renamed to agent-locksmith and v2 explicitly removed the `/llm/*`, `/mcp/*`, `/a2a/*` namespaces and the wire-level scanner sidecar described there. It's kept only for archaeology and carries a deprecation banner at the top.
 
 ## Common commands
 
@@ -240,7 +242,7 @@ seed/catalog.yaml          Phase E.7: bundled default registrations (15 entries 
 dist/systemd/              hardened unit template (NoNewPrivileges, ProtectSystem=strict, …)
 dist/examples/             smallstep mTLS + sealed-secrets worked examples
 docs/user/                 User docs (concepts, agent-integration recipes)
-docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineering)
+docs/archive/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineering)
 ```
 
 ## Conventions worth knowing
@@ -251,7 +253,7 @@ docs/v2/                   SPEC, PRD, HANDOFF, threat-model, runbooks (engineeri
 - **Auth surfaces are independent.** Agent listener (`listen.auth_mode`) and admin HTTPS (`listen.admin_https.auth_mode`) each pick `bearer | mtls | both` separately. The UDS admin listener uses operator bearer tokens only (peer-uid gate is the OS).
 - **Audit is one schema, two sinks.** Every event goes through `AuditRepository::record`, which writes to SQLite and optionally appends to a size-rotating JSONL mirror. New event types extend `EventClass` / `event` strings — keep them stable; runbooks and CLI queries grep against them.
 - **Cloud routing.** Tools mark `egress: proxied` (preferred) or legacy `cloud: true` to route through `egress_proxy` (typically Pipelock). LAN tools use `egress: direct` and bypass the CONNECT proxy.
-- **Comments.** Existing source comments often cite SPEC tasks (`T6.5`, `INF-3`, `D-10`, `R-N6`, etc.) — those tags map to `docs/v2/SPEC.md` / `PRD.md`. Preserve that vocabulary when adding new code so future archaeology stays cheap.
+- **Comments.** Existing source comments often cite SPEC tasks (`T6.5`, `INF-3`, `D-10`, `R-N6`, etc.) — those tags map to `docs/archive/v2/SPEC.md` / `PRD.md`. Preserve that vocabulary when adding new code so future archaeology stays cheap.
 
 ## Stack-root context
 

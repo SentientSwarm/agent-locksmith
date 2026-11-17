@@ -47,4 +47,4 @@ GitHub's default branch is already `main`. The stack manifest sets agent-locksmi
 
 At the transition check, `origin/main` contained all commits from `origin/develop`, and no open PR targeted `develop`. The local checkout was fast-forwarded to current `origin/main`, preserving existing uncommitted instruction/ignore changes and draft architecture documents. Existing develop references may remain as historical pointers; new work does not use them.
 
-Historical files under `docs/v2/` describe earlier releases and workflows. Their develop references, standing direct-merge instructions and old branch/version tables are not current operating instructions. Use this policy and the actual Git refs/tags for current work.
+Historical files under `docs/archive/v2/` describe earlier releases and workflows. Their develop references, standing direct-merge instructions and old branch/version tables are not current operating instructions. Use this policy and the actual Git refs/tags for current work.

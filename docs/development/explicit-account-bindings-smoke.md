@@ -67,8 +67,8 @@ See [setup](../user/getting-started.md),
 [CLI](../user/cli-reference.md),
 [troubleshooting](../user/operator/account-binding-troubleshooting.md),
 [change notes](../user/changes/explicit-account-bindings.md),
-[contract](../design/2026-10-18-d1-explicit-account-bindings.md) and
-[acceptance matrix](../design/2026-10-18-d1-acceptance-tests.md).
+[contract](../archive/design/2026-10-18-d1-explicit-account-bindings.md) and
+[acceptance matrix](../archive/design/2026-10-18-d1-acceptance-tests.md).
 
 Run full `cargo test --locked --all`, `cargo clippy --locked --all-targets -- -D warnings`,
 `cargo fmt --check` and `cargo build --locked --bins` as separate checks.

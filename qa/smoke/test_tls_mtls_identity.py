@@ -1,6 +1,6 @@
 """Agent listener in auth_mode mtls: certificate identity maps to an agent.
 
-Docs: docs/v2/runbooks/m6-mtls-onboarding.md (§2-§6), m6-mtls-migration.md
+Docs: docs/archive/v2/runbooks/m6-mtls-onboarding.md (§2-§6), m6-mtls-migration.md
 (stage B and failure modes), docs/user/cli-reference.md:91. Identity is the
 CN, else the first SAN DNS, else the first SAN URI (CLAUDE.md agent listener;
 `locksmith agent set-cert-identity --help`: "CN, SAN_DNS, or SAN_URI string").

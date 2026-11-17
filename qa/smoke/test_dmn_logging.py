@@ -47,7 +47,7 @@ def test_warn_level_suppresses_info(target_factory, t1):
 
 @case("SMK-DMN-061", area="DMN", kind="positive", covers=[LOGGING])
 def test_debug_level_emits_debug_json_lines(target_factory):
-    """config.example.yaml:34-35 and docs/v2/SPEC.md:252: logging.level debug adds
+    """config.example.yaml:34-35 and docs/archive/v2/SPEC.md:252: logging.level debug adds
     DEBUG entries; every line is a JSON object."""
     t = target_factory(
         label="dmn-log-debug", upstream=False, config={"logging": {"level": "debug"}}

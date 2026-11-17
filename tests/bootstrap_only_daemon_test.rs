@@ -2,7 +2,7 @@
 //!
 //! `listen.bootstrap_only.enabled = true` must start a TLS listener that
 //! accepts only `POST /admin/agent/register`, as
-//! `docs/v2/runbooks/m6-mtls-onboarding.md` §7 promises. The router itself
+//! `docs/archive/v2/runbooks/m6-mtls-onboarding.md` §7 promises. The router itself
 //! is covered in-process by `bootstrap_only_listener_test.rs`; this file
 //! covers the daemon wiring.
 

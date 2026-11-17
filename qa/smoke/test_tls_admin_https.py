@@ -1,8 +1,8 @@
 """Admin HTTPS listener (listen.admin_https) in bearer, mtls and both modes.
 
-Docs: docs/v2/runbooks/m4-remote-management.md (bearer, CLI over --admin-url /
+Docs: docs/archive/v2/runbooks/m4-remote-management.md (bearer, CLI over --admin-url /
 LOCKSMITH_ADMIN_URL with a CA bundle, bootstrap register without operator auth),
-docs/v2/runbooks/m6-mtls-onboarding.md §5 (operator cert_identity in operators.yaml),
+docs/archive/v2/runbooks/m6-mtls-onboarding.md §5 (operator cert_identity in operators.yaml),
 docs/user/architecture.md:195-201 (admin HTTPS picks bearer | mtls | both).
 """
 

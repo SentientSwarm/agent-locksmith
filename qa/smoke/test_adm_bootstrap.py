@@ -1,5 +1,5 @@
 """Bootstrap tokens and agent self-service over the admin socket
-(docs/user/cli-reference.md:127-143, 295-303; docs/v2/SPEC.md:2769-2788)."""
+(docs/user/cli-reference.md:127-143, 295-303; docs/archive/v2/SPEC.md:2769-2788)."""
 
 import time
 

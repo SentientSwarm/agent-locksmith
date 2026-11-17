@@ -207,6 +207,6 @@ curl -sS -w '\nHTTP %{http_code}\n' --cacert ca.pem --cert edge-bot.pem --key ed
 
 For a fleet, publish a CRL from your CA and set `mtls.crl_url`: the daemon
 refreshes it in the background. The blocklist is the local override for
-emergencies. See the [revocation runbook](../v2/runbooks/m6-mtls-revocation.md).
+emergencies. See the [revocation runbook](../archive/v2/runbooks/m6-mtls-revocation.md).
 
 Next: connect a service that uses OAuth.

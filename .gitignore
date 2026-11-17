@@ -4,6 +4,6 @@ __pycache__/
 *.swo
 .DS_Store
 
-# v2 handoff archive (contents already in docs/v2/{kickoff,roadmap}.md)
-docs/v2/files.zip
+# v2 handoff archive (contents already in docs/archive/v2/{kickoff,roadmap}.md)
+docs/archive/v2/files.zip
 .qa-venv/

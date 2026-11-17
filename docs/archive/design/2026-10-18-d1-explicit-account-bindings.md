@@ -2,8 +2,8 @@
 
 Status: Historical D1 technical contract, implemented in the accepted local
 D1 source at `1fab249`. Local acceptance does not establish remote integration,
-a version tag or publication. See the [change guide](../user/changes/explicit-account-bindings.md)
-and [repeatable smoke](../development/explicit-account-bindings-smoke.md).
+a version tag or publication. See the [change guide](../../user/changes/explicit-account-bindings.md)
+and [repeatable smoke](../../development/explicit-account-bindings-smoke.md).
 Repo: `agent-locksmith`; start from current `origin/main`, not retired develop.
 This replaces D1's earlier promise to preserve implicit registration defaults.
 
@@ -89,7 +89,7 @@ The release must include enforcement and upgrade support together.
 
 ## Test and release gate
 
-The [project completion gate](../development/project-completion.md) applies:
+The [project completion gate](../../development/project-completion.md) applies:
 D1 must deliver a repeatable actual-daemon/CLI smoke command and documentation
 updates, with QA/reviewed evidence before completion. AGENT-179 owns that final
 gate; AGENT-176–178 retain their per-change tests and relevant docs.

@@ -3,8 +3,8 @@
 How agent-locksmith composes at runtime — the user-level mental model
 of what happens when you start the daemon and send it a request.
 
-For the engineering view (every task, every callsite),
-see [`docs/v2/SPEC.md`](../v2/SPEC.md).
+The historical 2.x engineering spec, which explains old task tags, is
+[`docs/archive/v2/SPEC.md`](../archive/v2/SPEC.md); it is not current.
 
 OAuth exchanges persist against a non-reused incarnation and token version;
 late results cannot overwrite a replacement or return uncommitted credentials.
@@ -231,5 +231,5 @@ The settings are independent.
   units in Incus containers, rendered from a private site file.
 - [`concepts/`](concepts/) — kind taxonomy, agent identity + ACL,
   trust boundary, error envelope.
-- [`docs/v2/SPEC.md`](../v2/SPEC.md) — engineering spec with task
-  references (T1.x, T2.x, …).
+- [`docs/archive/v2/SPEC.md`](../archive/v2/SPEC.md) — historical 2.x spec;
+  explains task references (T1.x, T2.x, …).

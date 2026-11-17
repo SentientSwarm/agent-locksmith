@@ -38,6 +38,6 @@ original older 5d606d5 diagnostic had 16/23 safe contracts and five additional
 D1 credential fallback failures; those are historical too, not current behavior.
 
 For current acceptance, run the unchanged
-[saved process smoke](../development/explicit-account-bindings-smoke.md) and
+[saved process smoke](../../development/explicit-account-bindings-smoke.md) and
 focused grant/activation tests on the received candidate. Keep actual revision,
 environment, command, exit and scope separate from these historical counts.
