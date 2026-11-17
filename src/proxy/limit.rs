@@ -38,13 +38,21 @@ async fn refuse(
     } else {
         "rate"
     };
-    let mut event = ctx.audit_event_base();
-    event.event_class = EventClass::Security;
-    event.event = "rate_limited".to_string();
-    event.status = Some(429);
-    event.decision = Decision::Denied;
-    event.details = Some(json!({ "reason": reason, "retry_after": limited.retry_after_secs }));
-    audit_record(audit, event).await;
+    // AGENT-272: at most one row per (agent, route) a minute; the row
+    // counts the refusals since the slot's previous one.
+    if let Some(suppressed) = limited.audit {
+        let mut event = ctx.audit_event_base();
+        event.event_class = EventClass::Security;
+        event.event = "rate_limited".to_string();
+        event.status = Some(429);
+        event.decision = Decision::Denied;
+        event.details = Some(json!({
+            "reason": reason,
+            "retry_after": limited.retry_after_secs,
+            "suppressed": suppressed,
+        }));
+        audit_record(audit, event).await;
+    }
     let mut resp = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({ "error": {

@@ -250,3 +250,75 @@ async fn limits_are_refused_on_routes_the_proxy_does_not_serve() {
     }
     assert_eq!(count(&h, "rate_limit_set").await, 0);
 }
+
+/// AGENT-272: a hammering agent writes one `rate_limited` row a minute,
+/// not one per refusal; the next row counts the refusals in between.
+#[tokio::test]
+async fn refusals_write_one_audit_row_a_minute() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    set(&h, json!({ "requests_per_minute": 1 })).await;
+    h.call("up", "/x").await.assert_status_ok();
+    for _ in 0..5 {
+        assert_eq!(
+            h.call("up", "/x").await.status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    assert_eq!(count(&h, "rate_limited").await, 1);
+    assert_eq!(h.last_audit("rate_limited").await["suppressed"], 0);
+}
+
+/// AGENT-272: the set and delete audit rows carry the limit they replaced.
+#[tokio::test]
+async fn audit_rows_carry_the_previous_limit() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    set(&h, json!({ "requests_per_minute": 2 })).await;
+    assert!(
+        h.last_audit("rate_limit_set")
+            .await
+            .get("previous")
+            .is_none()
+    );
+    set(&h, json!({ "requests_per_minute": 3, "max_concurrent": 1 })).await;
+    let previous = &h.last_audit("rate_limit_set").await["previous"];
+    assert_eq!(previous["requests_per_minute"], 2);
+    h.op_req(Method::DELETE, "/rate-limits/up")
+        .await
+        .assert_status_no_content();
+    let previous = &h.last_audit("rate_limit_deleted").await["previous"];
+    assert_eq!(previous["requests_per_minute"], 3);
+    assert_eq!(previous["max_concurrent"], 1);
+}
+
+/// AGENT-272: a limit that is stored but cannot be loaded into the proxy
+/// answers 503 `rate_limits_not_applied`, and the row stays stored.
+#[tokio::test]
+async fn a_stored_limit_that_cannot_load_says_so() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    // Another route's row the loader cannot read (over u32).
+    sqlx::query(
+        "INSERT INTO rate_limits (route, agent_id, requests_per_minute, updated_at) \
+         VALUES ('other', NULL, 5000000000, 0)",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    let r = h
+        .op_req(Method::PUT, "/rate-limits/up")
+        .json(&json!({ "requests_per_minute": 2 }))
+        .await;
+    assert_eq!(r.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        r.json::<Value>()["error"]["code"],
+        "rate_limits_not_applied"
+    );
+    let stored: i64 =
+        sqlx::query_scalar("SELECT requests_per_minute FROM rate_limits WHERE route = 'up'")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, 2);
+}

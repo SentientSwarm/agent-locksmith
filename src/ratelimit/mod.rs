@@ -14,7 +14,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub use repo::{RateLimitRepository, RateLimitRow};
 
@@ -24,11 +24,20 @@ pub struct Limit {
     pub max_concurrent: Option<u32>,
 }
 
+/// A slot's refusals write at most one audit row per this interval
+/// (AGENT-272), so an agent hammering a limited route cannot turn each
+/// refusal into an audit write.
+pub const AUDIT_EVERY: Duration = Duration::from_secs(60);
+
 /// Why a request was refused, and when a retry can succeed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limited {
     pub retry_after_secs: u64,
     pub concurrency: bool,
+    /// `Some(n)`: write an audit row for this refusal, which also stands
+    /// for the `n` refusals on the slot since its previous row. `None`:
+    /// counted toward the next row instead.
+    pub audit: Option<u64>,
 }
 
 /// Limits by route, then by agent id (`None` is the route default).
@@ -48,6 +57,9 @@ struct Slot {
     /// life, so a changed cap still counts what is already in flight
     /// (AGENT-272); it counts even while the route has no cap.
     inflight: Arc<AtomicUsize>,
+    /// When a refusal last wrote an audit row, and refusals since.
+    audited_at: Option<Instant>,
+    unaudited: u64,
 }
 
 /// One admitted request, held until its response body is dropped.
@@ -67,6 +79,26 @@ impl Slot {
             tokens: f64::from(limit.requests_per_minute),
             at: now,
             inflight: Arc::new(AtomicUsize::new(0)),
+            audited_at: None,
+            unaudited: 0,
+        }
+    }
+
+    fn refuse(&mut self, now: Instant, retry_after_secs: u64, concurrency: bool) -> Limited {
+        let audit = match self.audited_at {
+            Some(at) if now.saturating_duration_since(at) < AUDIT_EVERY => {
+                self.unaudited += 1;
+                None
+            }
+            _ => {
+                self.audited_at = Some(now);
+                Some(std::mem::take(&mut self.unaudited))
+            }
+        };
+        Limited {
+            retry_after_secs,
+            concurrency,
+            audit,
         }
     }
 
@@ -117,10 +149,7 @@ impl RateLimiter {
         if let Some(cap) = limit.max_concurrent
             && slot.inflight.load(Ordering::Acquire) >= cap as usize
         {
-            return Err(Limited {
-                retry_after_secs: 1,
-                concurrency: true,
-            });
+            return Err(slot.refuse(now, 1, true));
         }
         slot.inflight.fetch_add(1, Ordering::AcqRel);
         // Dropped on a rate refusal below, which undoes the count.
@@ -132,10 +161,7 @@ impl RateLimiter {
         if slot.tokens < 1.0 {
             // The epsilon keeps float error from adding a second.
             let wait = ((1.0 - slot.tokens) / rate - 1e-9).ceil() as u64;
-            return Err(Limited {
-                retry_after_secs: wait.max(1),
-                concurrency: false,
-            });
+            return Err(slot.refuse(now, wait.max(1), false));
         }
         slot.tokens -= 1.0;
         Ok(permit)
@@ -280,6 +306,45 @@ mod tests {
             },
         )]);
         l
+    }
+
+    /// AGENT-272: a hammering agent gets one audit row per slot per
+    /// `AUDIT_EVERY`, and the next row counts the refusals in between.
+    #[test]
+    fn refusals_are_audited_once_a_minute_with_a_count() {
+        let l = limiter(1, None);
+        // The next refusal at `at`, past any token the bucket refilled.
+        let refusal = |agent, at| loop {
+            if let Err(e) = l.check_at(agent, "r", at) {
+                break e.audit;
+            }
+        };
+        let t0 = Instant::now();
+        assert_eq!(refusal(1, t0), Some(0));
+        for _ in 0..5 {
+            assert_eq!(refusal(1, t0), None);
+        }
+        // Another agent's slot is audited on its own.
+        assert_eq!(refusal(2, t0), Some(0));
+        assert_eq!(
+            refusal(1, t0 + AUDIT_EVERY - Duration::from_millis(1)),
+            None
+        );
+        let next = t0 + AUDIT_EVERY;
+        assert_eq!(refusal(1, next), Some(6));
+        assert_eq!(refusal(1, next), None);
+    }
+
+    /// Concurrency refusals are coalesced the same way.
+    #[test]
+    fn concurrency_refusals_are_coalesced_too() {
+        let l = limiter(1000, Some(1));
+        let t0 = Instant::now();
+        let _held = l.check_at(1, "r", t0).unwrap();
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, Some(0));
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
+        let next = t0 + AUDIT_EVERY;
+        assert_eq!(l.check_at(1, "r", next).unwrap_err().audit, Some(1));
     }
 
     #[test]

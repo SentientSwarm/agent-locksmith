@@ -410,7 +410,10 @@ bucket of that many requests, refilled continuously over a minute, and
 its body ends. An `--agent` row replaces the route default for that agent.
 Over the limit the proxy answers 429 `rate_limited` with `Retry-After` in
 seconds, before any credential is resolved or anything is sent upstream,
-and writes a `rate_limited` security audit row. Requests without an agent
+and writes a `rate_limited` security audit row. An agent kept over its
+limit gets at most one such row per route a minute; each row's
+`details.suppressed` counts the refusals since the previous one, and
+refusals after the last row are not recorded. Requests without an agent
 identity (legacy deployments) are not limited.
 
 Changes apply at once, without a restart, and are audited
