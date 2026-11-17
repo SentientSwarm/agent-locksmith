@@ -62,21 +62,11 @@ pub(super) const NESTED_ESCAPE_DEPTH: usize = 4;
 
 /// Views of the raw bytes that catch what parsing hides: invalid UTF-8
 /// (read lossily), escapes left in JSON that failed to parse, values of
-/// duplicate keys the parser dropped, escapes of JSON nested in a JSON
-/// string (up to `NESTED_ESCAPE_DEPTH` more levels), and form encoding.
+/// duplicate keys the parser dropped, and form encoding. The first view
+/// is the JSON-unescaped body.
 pub(super) fn raw_views(content_type: Option<&str>, body: &[u8]) -> Vec<String> {
     let lossy = String::from_utf8_lossy(body);
     let mut views = vec![json_unescape(&lossy)];
-    // AGENT-270: tool arguments are often JSON inside a JSON string, so
-    // one unescape leaves the inner escapes in place.
-    for _ in 0..NESTED_ESCAPE_DEPTH {
-        let last = views.last().expect("one view");
-        let next = json_unescape(last);
-        if next == *last {
-            break;
-        }
-        views.push(next);
-    }
     let form = content_type.is_some_and(|c| {
         c.to_ascii_lowercase()
             .contains("application/x-www-form-urlencoded")
@@ -85,6 +75,22 @@ pub(super) fn raw_views(content_type: Option<&str>, body: &[u8]) -> Vec<String> 
         views.push(percent_decode(&lossy));
     }
     views
+}
+
+/// AGENT-270: JSON nested in a JSON string (tool arguments) keeps its
+/// own escapes after one unescape. `view` unescaped again, up to
+/// `NESTED_ESCAPE_DEPTH` more levels, stopping when nothing changes.
+pub(super) fn nested_views(view: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for _ in 0..NESTED_ESCAPE_DEPTH {
+        let last = out.last().map_or(view, String::as_str);
+        let next = json_unescape(last);
+        if next == last {
+            break;
+        }
+        out.push(next);
+    }
+    out
 }
 
 /// Resolve JSON string escapes anywhere in `s`, leniently: a lone

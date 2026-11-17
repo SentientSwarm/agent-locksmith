@@ -131,11 +131,14 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   `application/x-www-form-urlencoded`). This catches what parsing hides:
   a body that is not valid UTF-8, JSON that fails to parse (trailing
   bytes, deep nesting) with escapes inside, the earlier value of a
-  duplicate key, and form encoding. JSON nested in a JSON string (tool
-  arguments, say) keeps its own escapes after one pass, so the raw view
-  is unescaped again, up to four more levels, until nothing changes. A
-  hit found only this way can't be rewritten in place, so `redact`
-  becomes `block` for it. Streamed responses get one level only.
+  duplicate key, and form encoding. A hit found only this way can't be
+  rewritten in place, so `redact` becomes `block` for it. JSON nested in
+  a JSON string (tool arguments, say) keeps its own escapes after one
+  pass, so the raw view is also unescaped again, up to four more levels,
+  until nothing changes. A match in those deeper views blocks under
+  `redact` only if it is still there after the rewrite (see below), so a
+  key the rewrite removes, such as a PEM block whose `\n` the deeper view
+  resolves, is still redacted. Streamed responses get one level only.
 - **The decoded path and query** of a request are judged the same way,
   never rewritten, even when the body itself is oversized or encoded.
   Credentials that legitimately ride in a URL (presigned

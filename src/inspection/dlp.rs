@@ -577,13 +577,36 @@ mod tests {
     }
 
     #[test]
-    fn nested_unescaping_stops_at_a_bounded_depth() {
-        let views = super::super::text::raw_views(None, "\\\\".repeat(64).as_bytes());
-        assert!(
-            views.len() <= 1 + super::super::text::NESTED_ESCAPE_DEPTH,
-            "{}",
-            views.len()
+    fn a_private_key_in_nested_tool_arguments_still_redacts() {
+        // Review finding: the deeper view turns the segment's `\n` into
+        // a real newline, so the same key hashes differently there. It
+        // must not count as a copy the rewrite can't reach.
+        let mut g = Gen(37);
+        let lines: Vec<String> = (0..4).map(|_| g.chars(AN, 64)).collect();
+        let pem = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----",
+            lines.join("\n")
         );
+        let inner = serde_json::json!({ "key": pem }).to_string();
+        let body = serde_json::json!({ "args": inner }).to_string();
+        let out = outcome("application/json", body.as_bytes(), Verdict::Redact);
+        let Outcome::Forward {
+            body: Some(rewritten),
+            report,
+        } = out
+        else {
+            panic!("blocked instead of redacted");
+        };
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(!rewritten.contains(&lines[1]), "{rewritten}");
+        assert!(rewritten.contains("[REDACTED:dlp]"), "{rewritten}");
+        assert!(!report.redaction_incomplete);
+    }
+
+    #[test]
+    fn nested_unescaping_stops_at_a_bounded_depth() {
+        let views = super::super::text::nested_views(&"\\\\".repeat(64));
+        assert_eq!(views.len(), super::super::text::NESTED_ESCAPE_DEPTH);
     }
 
     #[test]

@@ -422,12 +422,20 @@ pub fn apply_with(
     // shadowed duplicate keys, form encoding) and what travels outside
     // the body is judged too.
     let mut views = text::raw_views(meta.content_type, body);
+    let nested = text::nested_views(&views[0]);
     views.retain(|v| segments.len() != 1 || segments[0] != *v);
     // A redact-level hit only the raw views see can't be rewritten.
     let mut unredactable = false;
     for view in &views {
         let found = scan_text(policy, direction, view, &mut report, &mut seen);
         unredactable |= found.iter().any(|f| f.new && f.verdict >= Verdict::Redact);
+    }
+    // Deeper unescapes (AGENT-270) change the bytes of a match the
+    // rewrite does reach (a PEM key's `\n`), so its hash looks new. They
+    // only add hits; the rescan of the rewritten body decides whether a
+    // copy survived.
+    for view in &nested {
+        scan_text(policy, direction, view, &mut report, &mut seen);
     }
     // Nor can any in the path or query, even a copy of one the body
     // holds: they are never rewritten (AGENT-270).
@@ -497,6 +505,7 @@ fn leaves_a_hit(
     extra: &[String],
 ) -> Rescan {
     let mut views = text::raw_views(content_type, body);
+    views.extend(text::nested_views(&views[0]));
     views.extend(extra.iter().cloned());
     let mut error = None;
     for view in &views {
