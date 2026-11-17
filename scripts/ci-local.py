@@ -306,6 +306,9 @@ def main():
         help="post local-ci/<job> commit statuses to GitHub",
     )
     args = ap.parse_args()
+    # Hosted runners' umask, for the checkouts, RUNNER_TEMP and cached builds
+    # the driver makes itself; steps get it too (AGENT-294).
+    os.umask(0o022)
 
     unknown = set(args.jobs.split(",")) - set(JOBS)
     if unknown:

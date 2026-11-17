@@ -69,6 +69,20 @@ def test_steps_run_with_the_hosted_runner_umask(tmp_path):
     assert (tmp_path / "umask.txt").read_text().strip() == "0022"
 
 
+def test_the_driver_itself_runs_with_the_hosted_runner_umask(monkeypatch):
+    # AGENT-294 follow-up: checkouts, RUNNER_TEMP and cached builds are made
+    # by the driver, not by a step, so the driver sets 022 for itself.
+    monkeypatch.setattr("sys.argv", ["ci-local.py", "--jobs", "no-such-job"])
+    old = os.umask(0o002)
+    try:
+        with pytest.raises(SystemExit):
+            ci.main()
+        seen = os.umask(old)
+    finally:
+        os.umask(old)
+    assert seen == 0o022
+
+
 def test_a_failure_step_is_skipped_on_success(tmp_path):
     ok, steps = run([{"name": "f", "if": "failure()", "run": "false"}], tmp_path)
     assert ok and steps == [("f", "skipped")]

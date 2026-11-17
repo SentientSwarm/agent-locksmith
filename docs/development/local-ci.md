@@ -97,6 +97,9 @@ against that commit. A failed post stops the run with `gh`'s error.
 `run:` steps execute as written, with `bash -eo pipefail`,
 `GITHUB_WORKSPACE`, `RUNNER_TEMP`, `GITHUB_SHA` and a working `GITHUB_ENV`.
 `if: always()`, `if: failure()` and `if: success()` behave as on GitHub.
+The driver and every step run with umask 022, as hosted runners do, so
+tests that check file modes (the edge guard refuses group-writable paths)
+behave the same whatever your login umask is.
 
 The environment starts from a short allowlist (`HOME`, `USER`, `PATH`,
 `TMPDIR`, locale, `CARGO_HOME`, `RUSTUP_HOME` and a few more), not your
