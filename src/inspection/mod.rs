@@ -824,5 +824,27 @@ mod tests {
             panic!("the query copy was forwarded");
         };
         assert!(report.redaction_incomplete);
+        assert!(
+            report.error.is_none(),
+            "blocked by the rescan, not up front"
+        );
+    }
+
+    #[test]
+    fn only_a_redaction_that_has_to_block_is_marked_incomplete() {
+        let literal = || Arc::new(literal::Literal::new("SECRET").unwrap()) as Arc<dyn Scanner>;
+        let blocking = DirectionPolicy {
+            on_hit: Verdict::Block,
+            ..redacting(literal(), OnError::FailOpen)
+        };
+        let out = apply(&blocking, Direction::Request, JSON, br#"{"a":"SECRET"}"#);
+        assert!(matches!(out, Outcome::Block { report } if !report.redaction_incomplete));
+        let out = apply(
+            &policy(OnError::FailClosed),
+            Direction::Request,
+            BodyMeta::default(),
+            b"x",
+        );
+        assert!(matches!(out, Outcome::Block { report } if !report.redaction_incomplete));
     }
 }

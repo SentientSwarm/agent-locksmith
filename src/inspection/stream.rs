@@ -417,6 +417,7 @@ impl StreamInspector {
         if verdict == Verdict::Redact {
             self.cut_all(&hits);
             if self.unrewritable() {
+                self.report.redaction_incomplete = true;
                 return self.block(step);
             }
         }
@@ -1940,6 +1941,20 @@ mod tests {
             assert!(!out.contains(&k[1..9]), "{out}");
             assert_eq!(i.report().verdict, Verdict::Block);
         }
+    }
+
+    #[test]
+    fn a_redaction_no_rewrite_can_reach_is_marked_incomplete() {
+        // AGENT-270: as for a buffered body, a redact that has to block
+        // says why in the audit row.
+        let k = key();
+        let plain = format!("data: key \\u0067{} end\n\n", &k[1..]);
+        let (out, i) = run(&policy(Verdict::Redact), std::slice::from_ref(&plain));
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+        assert!(i.report().redaction_incomplete);
+        let (_, i) = run(&policy(Verdict::Block), std::slice::from_ref(&plain));
+        assert!(!i.report().redaction_incomplete, "a block policy");
     }
 
     #[test]

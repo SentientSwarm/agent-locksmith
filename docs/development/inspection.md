@@ -308,8 +308,8 @@ Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.
 At most 64 distinct hits are listed; `count` includes the rest and
 `truncated: true` marks the row. A scanner error adds `error`, a skip adds
-`reason`, and a redaction that turned into a block adds
-`redaction_incomplete: true`.
+`reason`, and a redaction that turned into a block (buffered, or a streamed
+event no rewrite can reach) adds `redaction_incomplete: true`.
 The matched text itself is never recorded.
 
 ## Sidecars
