@@ -883,7 +883,6 @@ async fn more_hits_than_an_audit_row_lists_are_counted_and_marked_truncated() {
     // Distinct tokens, assembled at run time: no credential literal in the repo.
     let tokens: Vec<String> = (0..n)
         .map(|i| format!("ghp_{:0>36}", format!("{i}Zq9Lk4Vb7Nc2Rt8Hy5Jd1Fg6Sa3Wp")))
-        .map(|t| t[..40].to_string())
         .collect();
     let resp = h
         .server
@@ -896,7 +895,7 @@ async fn more_hits_than_an_audit_row_lists_are_counted_and_marked_truncated() {
     let details = &rows[0].2;
     assert_eq!(details["truncated"], true, "{details}");
     assert_eq!(details["hits"].as_array().unwrap().len(), MAX_AUDITED_HITS);
-    assert!(details["count"].as_u64().unwrap() >= n as u64, "{details}");
+    assert_eq!(details["count"], n as u64, "{details}");
 }
 
 /// AGENT-270: a reply too large to inspect under `fail_open` streams on
@@ -905,7 +904,9 @@ async fn more_hits_than_an_audit_row_lists_are_counted_and_marked_truncated() {
 /// unredacted.
 #[tokio::test]
 async fn an_unscanned_reply_too_large_for_response_controls_is_refused() {
-    let body = vec![b'a'; 64 * 1024 * 1024 + 1];
+    // One byte over `UNSCANNED_CONTROLS_LIMIT` (src/proxy.rs, private).
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let body = vec![b'a'; LIMIT as usize + 1];
     let up = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(
@@ -941,10 +942,11 @@ inspection:
     let h = harness(parse_config_str(&yaml).unwrap()).await;
     let resp = h.server.post("/api/out/x").json(&json!({})).await;
     assert_eq!(resp.status_code(), 502);
-    let (event,): (String,) =
-        sqlx::query_as("SELECT event FROM audit WHERE event = 'response_size_exceeded'")
+    let (details,): (String,) =
+        sqlx::query_as("SELECT details FROM audit WHERE event = 'response_size_exceeded'")
             .fetch_one(&h.pool)
             .await
             .unwrap();
-    assert_eq!(event, "response_size_exceeded");
+    let details: Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(details["cap_bytes"], LIMIT, "{details}");
 }
