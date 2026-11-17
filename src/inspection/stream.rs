@@ -254,6 +254,19 @@ impl StreamInspector {
         self.passthrough = true;
     }
 
+    /// AGENT-273: the upstream broke off or the agent left. Judge what is
+    /// held for the audit, but send none of it. A half-received last event
+    /// is not an event: judging it could block a stream that was simply
+    /// cut off.
+    pub fn abandon(&mut self) -> Step {
+        if !self.ended {
+            let _ = self.parser.finish();
+        }
+        let mut step = self.finish();
+        step.out.clear();
+        step
+    }
+
     /// The upstream ended: judge what is left, then send what is held.
     pub fn finish(&mut self) -> Step {
         let mut step = Step::default();
@@ -890,6 +903,35 @@ mod tests {
         assert!(!out.contains("QUJD"), "a key line was forwarded");
         assert!(out.contains("that is all"), "{out}");
         assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    /// AGENT-273: a stream the upstream broke off or the agent left is
+    /// judged for the audit, but nothing it holds is sent.
+    #[test]
+    fn an_abandoned_stream_sends_nothing_it_holds() {
+        let mut i = StreamInspector::new(&policy(Verdict::Redact));
+        let mut out = Vec::new();
+        for e in stream(chat, DONE).iter().take(20) {
+            out.extend(i.push(e.as_bytes()).out);
+        }
+        let held = i.held.len();
+        assert!(held > 0, "nothing held to drop");
+        let step = i.abandon();
+        assert!(step.out.is_empty(), "abandon sent held events");
+        assert!(step.ended);
+        assert!(i.push(chat("more").as_bytes()).out.is_empty());
+    }
+
+    /// AGENT-273 (M1): the half event a disconnect leaves behind is not
+    /// judged as an event, so it cannot write a false block row.
+    #[test]
+    fn an_abandoned_partial_event_is_not_judged() {
+        let mut i = StreamInspector::new(&closed(1 << 20, Verdict::Redact));
+        i.push(chat("fine").as_bytes());
+        i.push(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\\nb");
+        i.abandon();
+        assert_eq!(i.report().verdict, Verdict::Pass, "{:?}", i.report());
+        assert!(i.report().error.is_none(), "{:?}", i.report());
     }
 
     #[test]

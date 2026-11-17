@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- A streamed response the upstream breaks off sends nothing more of
+  what inspection holds; the agent gets the error (AGENT-273). Before,
+  the held text was released first. A stream the agent leaves no longer
+  judges the half event it was cut in, which under `fail_closed` wrote
+  a false `inspection_error` block row.
 - A credential in a streamed response behind a second level of JSON
   escaping (tool arguments are JSON in a JSON string, so `g` can arrive
   as an escaped `\u0067`) is found and redacted (AGENT-315). Before,

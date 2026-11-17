@@ -253,7 +253,8 @@ async fn drive(
         };
         let (step, failure) = match next {
             Some(Ok(chunk)) => (inspector.push(&chunk), None),
-            Some(Err(e)) => (inspector.finish(), Some(e)),
+            // AGENT-273: a broken-off stream sends nothing more it holds.
+            Some(Err(e)) => (inspector.abandon(), Some(e)),
             None => (inspector.finish(), None),
         };
         let mut gone = false;
@@ -272,8 +273,8 @@ async fn drive(
         }
     }
     // A disconnect leaves text unscanned: judge it for the audit (what
-    // it would send has nowhere to go).
-    let _ = inspector.finish();
+    // it would send has nowhere to go), but not the half event it cut.
+    let _ = inspector.abandon();
     record_event(&audit, base.clone(), inspector.report(), None).await;
     if inspector.hold_overflowed() {
         let mut event = base;
@@ -511,6 +512,44 @@ mod tests {
             .await
             .expect("drive kept the upstream open after the agent left")
             .unwrap();
+    }
+
+    /// AGENT-273: an upstream that fails mid-stream gets its error passed
+    /// on, and the text the inspector holds is dropped, not released.
+    #[tokio::test]
+    async fn an_upstream_error_drops_what_the_stream_holds() {
+        let policy = DirectionPolicy {
+            scanners: vec![std::sync::Arc::new(crate::inspection::dlp::Dlp)],
+            on_hit: Verdict::Redact,
+            on_error: inspection::OnError::FailOpen,
+            max_scan_bytes: 1 << 20,
+        };
+        // An invalid URL: the request fails to build, giving a real error.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let failure = client.get("http://").build().unwrap_err();
+        let event = json!({"choices": [{"index": 0, "delta": {"content": "held text"}}]});
+        let upstream: UpstreamStream = Box::pin(futures_util::stream::iter(vec![
+            Ok(Bytes::from(format!("data: {event}\n\n"))),
+            Err(failure),
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(drive(
+            StreamInspector::new(&policy),
+            upstream,
+            tx,
+            None,
+            AuditEvent::default(),
+        ));
+        let mut sent = Vec::new();
+        while let Some(item) = rx.recv().await {
+            sent.push(item);
+        }
+        assert!(
+            matches!(sent.last(), Some(Err(_))),
+            "the error is passed on"
+        );
+        let text: Vec<_> = sent.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert!(text.is_empty(), "held text was released: {text:?}");
     }
 
     #[tokio::test]
