@@ -43,6 +43,19 @@ Run the sidecar as the **same user as `locksmithd`**. Text sent for
 scanning may contain secrets, so Locksmith checks the uid of the process
 serving the socket and refuses any other.
 
+Sharing that uid puts the sidecar inside Locksmith's trust boundary.
+Install `locksmithd` root-owned and execute-only:
+
+```bash
+sudo install -o root -g root -m 0711 locksmithd /usr/local/bin/
+```
+
+The kernel then makes the daemon non-dumpable from the moment it starts,
+so the sidecar can't read its environment (the sealing keys) or memory.
+A compromised sidecar can still stop `locksmithd`, and it sees every text
+sent for scanning; treat it as having every secret the service account
+can reach (AGENT-288).
+
 ## Configure Locksmith
 
 ```yaml

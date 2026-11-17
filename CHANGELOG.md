@@ -207,7 +207,10 @@
     component with an environment file unless its executable is
     root-owned and execute-only (mode 0711), which makes the process
     non-dumpable from exec. **Upgrade note:** reinstall `locksmithd`
-    with `install -m 0711` and re-render the edge units.
+    with `install -m 0711` and re-render the edge units. The guard
+    covers edge units only; other deployments that run the reference
+    sidecar must install `locksmithd` that way themselves, as
+    `dist/inspector/README.md` now says (AGENT-288).
 - The edge model installer (`dist/edge/install_model.py`) now refuses a
   cache under a directory that is not root-owned or is group- or
   world-writable, so a service-owned parent cannot be used to swap the
