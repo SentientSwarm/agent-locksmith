@@ -43,6 +43,10 @@ pub struct TextWindow {
     base: usize,
     /// Bytes of `buf` already scanned.
     scanned: usize,
+    /// Start of the earliest hit the last scan found still open
+    /// (`Scanner::holds_open`: a PEM key whose next line has not come),
+    /// so it stays held (AGENT-309).
+    open: Option<usize>,
     overflowed: bool,
     /// Spans already reported per (scanner, rule): disjoint intervals
     /// by start, so finding an overlap is a lookup, not a search.
@@ -63,6 +67,7 @@ impl TextWindow {
             buf: String::new(),
             base: 0,
             scanned: 0,
+            open: None,
             overflowed: false,
             reported: HashMap::new(),
         }
@@ -104,6 +109,7 @@ impl TextWindow {
         self.base += self.buf.len();
         self.buf = String::new();
         self.scanned = 0;
+        self.open = None;
         self.reported = HashMap::new();
     }
 
@@ -119,8 +125,12 @@ impl TextWindow {
         let old_end = self.scanned;
         self.scanned = self.buf.len();
         let mut out = Vec::new();
+        self.open = None;
         for scanner in &self.scanners {
             for hit in scanner.scan(&self.buf, Direction::Response)? {
+                if hit.end <= self.buf.len() && scanner.holds_open(&self.buf, &hit) {
+                    self.open = Some(self.open.map_or(hit.start, |o| o.min(hit.start)));
+                }
                 if hit.end <= old_end {
                     continue;
                 }
@@ -150,9 +160,11 @@ impl TextWindow {
         Ok(out)
     }
 
-    /// Drop text no future match can start in.
+    /// Drop text no future match can start in, or extend.
     fn trim(&mut self) {
-        let keep = self.tail_start();
+        let keep = self
+            .tail_start()
+            .min(self.open.take().unwrap_or(usize::MAX));
         let mut cut = keep.max(self.buf.len().saturating_sub(self.cap));
         while !self.buf.is_char_boundary(cut) {
             cut += 1;
@@ -352,5 +364,70 @@ mod tests {
         hits.extend(w.push("SECRET42").unwrap());
         hits.extend(w.flush().unwrap());
         assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    #[test]
+    fn a_streamed_key_longer_than_the_overlap_is_covered_to_its_end() {
+        let dlp = Arc::new(crate::inspection::dlp::Dlp);
+        let mut w = TextWindow::new(vec![dlp], 1 << 20);
+        let line = "QUJD".repeat(16);
+        let mut text = String::from("x -----BEGIN PRIVATE KEY-----\n");
+        for _ in 0..300 {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        let key_end = text.len() - 1;
+        text.push_str("-- prose, then more prose");
+        let mut hits = Vec::new();
+        for c in text.as_bytes().chunks(64) {
+            hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+        }
+        hits.extend(w.flush().unwrap());
+        let keys: Vec<_> = hits.iter().filter(|h| h.rule == "private_key").collect();
+        assert_eq!(keys.iter().map(|h| h.end).max(), Some(key_end));
+        assert_eq!(keys.iter().filter(|h| h.new).count(), 1);
+        assert!(!w.overflowed());
+    }
+
+    #[test]
+    fn a_finished_literal_hit_does_not_hold_the_window() {
+        let mut w = literal("X", 1024);
+        assert_eq!(w.push("X").unwrap().len(), 1);
+        for _ in 0..20 {
+            w.push("y").unwrap();
+        }
+        assert!(w.held() <= 8, "held {}", w.held());
+    }
+
+    /// AGENT-309: however wide the gap between a streamed key's lines
+    /// (trailing blanks, escaped indentation), the key stays held, and a
+    /// key that has ended releases the window.
+    #[test]
+    fn a_streamed_key_with_wide_line_gaps_is_covered_and_then_released() {
+        let dlp = Arc::new(crate::inspection::dlp::Dlp);
+        let mut w = TextWindow::new(vec![dlp], 1 << 20);
+        let line = "QUJD".repeat(16);
+        let gap = " ".repeat(300);
+        let mut text = String::from("x -----BEGIN PRIVATE KEY-----\n");
+        for _ in 0..200 {
+            text.push_str(&line);
+            text.push_str(&gap);
+            text.push('\n');
+        }
+        let key_end = text.trim_end().len();
+        text.push_str(&"-- prose ".repeat(4000));
+        let mut hits = Vec::new();
+        for c in text.as_bytes().chunks(100) {
+            hits.extend(w.push(std::str::from_utf8(c).unwrap()).unwrap());
+        }
+        let held = w.held();
+        hits.extend(w.flush().unwrap());
+        let keys: Vec<_> = hits.iter().filter(|h| h.rule == "private_key").collect();
+        assert_eq!(keys.iter().map(|h| h.end).max(), Some(key_end));
+        assert!(!w.overflowed());
+        assert!(
+            held < 20_000,
+            "an ended key must release the window: held {held}"
+        );
     }
 }

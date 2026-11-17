@@ -66,7 +66,7 @@ Locksmith's own curated set (AGENT-263), not a port of another tool's.
 | `anthropic_key` | `sk-ant-` keys |
 | `google_api_key` | `AIza` plus 35 characters |
 | `stripe_live_key` | `sk_live_` keys |
-| `private_key` | A PEM private key: from the `-----BEGIN ... PRIVATE KEY-----` line through the `END` line (or, with no `END` within 8 KiB, through the base64 and `Proc-Type`/`DEK-Info` lines that follow, indented or not, and with JSON escapes at any nesting depth read as the characters they stand for (`\n`, `\t`, `\r`, `\/`, `\"`, and `\uXXXX` of an ASCII character), as in a key inside tool arguments; any other escape, a control or non-ASCII character, a quote, bracket or common punctuation ends a key line, and the base64 before it is kept as the key's last line), so `redact` removes the key, not just its header. A key still running 8 KiB past its `BEGIN` line (escapes can double its size) is covered to the end of the text. In a JSON body that span reaches past the string, so `redact` cannot rewrite it and the body is blocked. A stream holds about 8 KiB, so there a key body longer than that can still pass its tail (AGENT-309) |
+| `private_key` | A PEM private key: from the `-----BEGIN ... PRIVATE KEY-----` line through an `END` line within 8 KiB (or else through the base64 and `Proc-Type`/`DEK-Info` lines that follow, indented or not, and with JSON escapes at any nesting depth read as the characters they stand for (`\n`, `\t`, `\r`, `\/`, `\"`, and `\uXXXX` of an ASCII character), as in a key inside tool arguments; any other escape, a control or non-ASCII character, a quote, bracket or common punctuation ends a key line, and the base64 before it is kept as the key's last line), so `redact` removes the key, not just its header. The key is followed to its last line however long it is (AGENT-309); only the two lines after `BEGIN` can be headers. In a stream, a key still arriving is held until its last line, within `max_scan_bytes` |
 | `jwt` | Three base64url segments whose header decodes to JSON with `alg`. A payload over 4096 characters is matched as the header and the payload's first 4097 characters, which is enough to remove the token |
 | `bearer` | The token after `Bearer`: 40+ characters, at least 3 bits/char |
 | `base64:<rule>` | A 24 to 4096 character standard-base64 run whose decoded text (one level, at each of the four alignments so letters glued to the run's start don't hide it) matches a rule above; the span is the whole run |
@@ -75,6 +75,8 @@ Locksmith's own curated set (AGENT-263), not a port of another tool's.
 Each rule has a fixed maximum match length; the scanner's
 `max_match_len` is the largest (`private_key`, 8,239 bytes). Longer runs
 are not matched, so a 50 KiB inline image is neither decoded nor flagged.
+The length bounds the regex match; a `private_key` hit then grows over
+the key's lines, which can make it longer.
 
 ### `injection` rules
 
@@ -250,7 +252,11 @@ stream is blocked, under `fail_open` an `inspection_hold_overflow` row
 is written. So a match split across one output's deltas is found however
 the outputs interleave. Each window keeps the last `max_match_len - 1`
 bytes of its output, measured both raw and after folding, so a match
-split across any number of deltas is found once. A window scans once the
+split across any number of deltas is found once. A `private_key` hit
+followed only by blanks, line breaks or a split escape may still grow
+(a PEM key whose next line has not arrived), so the window holds it
+from its start until a scan finds it ended, or the window or the held
+events pass `max_scan_bytes` (AGENT-309). A window scans once the
 text it has not scanned reaches an eighth of what it holds, so padding
 that keeps the window long cannot make scanning quadratic. Up to 31
 unfinished outputs (1023 in all) get their own window; a finished

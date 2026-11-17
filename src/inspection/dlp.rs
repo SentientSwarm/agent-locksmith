@@ -36,9 +36,12 @@ struct Rule {
     max_len: usize,
     /// Extra test on the reported span.
     check: Option<fn(&str) -> bool>,
-    /// Grows a match past what the pattern matched (text, match end).
-    extend: Option<fn(&str, usize) -> usize>,
+    /// Grows a match past what the pattern matched.
+    extend: Option<Extend>,
 }
+
+/// Grows a match past its regex: `(text, match end, END lines)`.
+type Extend = fn(&str, usize, &[(usize, usize)]) -> usize;
 
 fn rule(id: &'static str, pattern: &str, max_len: usize, check: Option<fn(&str) -> bool>) -> Rule {
     Rule {
@@ -50,7 +53,8 @@ fn rule(id: &'static str, pattern: &str, max_len: usize, check: Option<fn(&str) 
     }
 }
 
-/// Longest PEM body (between the BEGIN and END lines) redacted as one key.
+/// Longest PEM body an END line is looked for across. Past it, or with
+/// no END, the key is followed line by line to its end.
 const PEM_BODY_MAX: usize = 8192;
 const PEM_HEADER_MAX: usize = 47;
 
@@ -145,71 +149,103 @@ fn closes(b: u8) -> bool {
     !(0x20..0x80).contains(&b) || b" \"'}],\\<>);`.!?&|".contains(&b)
 }
 
-/// Did the window cut this, its last line, inside the key: in its base64,
-/// in an escape the cut split (the `\` of a `\/`, or of the line break
-/// after a trailing blank or escaped `\r`), or right after one of its
-/// lines? Prose after a BEGIN line is not a key.
-fn cut_inside_key(body: &[Unit], last_was_key: bool) -> bool {
-    let mut body = body;
-    // A split escape reads as a lone backslash, then what was cut of a
-    // `\uXXXX`.
-    if let Some(p) = body.iter().rposition(|u| u.escaped && u.byte == b'\\') {
-        let tail = &body[p + 1..];
-        let hex = |u: &Unit| !u.escaped && u.byte.is_ascii_hexdigit();
-        let cut_u = tail.first().is_some_and(|u| !u.escaped && u.byte == b'u')
-            && tail.len() <= 4
-            && tail[1..].iter().all(hex);
-        if tail.is_empty() || cut_u {
-            body = trimmed(&body[..p]);
+/// Could the key a `private_key` hit ending at `end` still go on? Only
+/// blanks, the line breaks before its next line (two, after RFC 1421
+/// headers) and an escape the text's end split may follow it.
+fn pem_open(text: &str, end: usize) -> bool {
+    let mut units = PemUnits {
+        b: &text.as_bytes()[end..],
+        i: 0,
+    };
+    let (mut breaks, mut tail) = (0, Vec::new());
+    for u in &mut units {
+        match u.byte {
+            b' ' | b'\t' | b'\r' if tail.is_empty() => {}
+            b'\n' if tail.is_empty() && breaks < 2 => breaks += 1,
+            _ if tail.len() < 5 => tail.push(u),
+            _ => return false,
         }
     }
-    let key = body.iter().take_while(|u| is_base64(u.byte)).count();
-    key == body.len() && (key > 0 || last_was_key)
+    // A split escape: a lone backslash, then what was cut of a `\uXXXX`.
+    let hex = |u: &Unit| !u.escaped && u.byte.is_ascii_hexdigit();
+    match tail.split_first() {
+        None => true,
+        Some((first, rest)) => {
+            first.escaped
+                && first.byte == b'\\'
+                && rest.first().is_none_or(|u| !u.escaped && u.byte == b'u')
+                && rest.iter().skip(1).all(hex)
+        }
+    }
 }
 
-/// The whole PEM block after a BEGIN line: through the END line, or, with
-/// no END in reach, through the base64 and RFC 1421 header lines that
-/// follow. Redacting only the BEGIN line would leave the key. A key still
-/// running where the window ends (AGENT-270: escapes can double its size)
-/// is covered to the end of the text: failing safe costs prose, not a key.
-fn pem_extend(text: &str, header_end: usize) -> usize {
-    let rest = &text[header_end..];
-    let mut limit = rest.len().min(PEM_BODY_MAX);
-    while !rest.is_char_boundary(limit) {
-        limit -= 1;
+/// Read one line of a PEM body into `line`; false at the end of the text.
+/// A line that cannot be key or header stops a few characters past its
+/// first such character (enough to see a split escape), so packed BEGIN
+/// lines cost linear time; true then, as more of it follows.
+fn read_line(units: &mut PemUnits, line: &mut Vec<Unit>, may_be_header: bool) -> bool {
+    let mut odd = None;
+    let mut header = false;
+    loop {
+        match units.next() {
+            Some(u) if u.byte == b'\n' => return true,
+            Some(u) => {
+                let blank = matches!(u.byte, b' ' | b'\t' | b'\r');
+                if odd.is_none() && !blank && !is_base64(u.byte) {
+                    odd = Some(line.len());
+                }
+                line.push(u);
+            }
+            None => return false,
+        }
+        if !header && odd.is_some_and(|o| line.len() == o + 9) {
+            // Decided once: a header line is read whole.
+            header = may_be_header && is_header(trimmed(line));
+            if !header {
+                return true;
+            }
+        }
     }
-    let truncated = limit < rest.len();
-    let window = &rest[..limit];
-    if let Some(m) = PEM_END.find(window) {
-        return header_end + m.end();
+}
+
+fn is_header(body: &[Unit]) -> bool {
+    starts_with(body, b"Proc-Type:") || starts_with(body, b"DEK-Info:")
+}
+
+/// The whole PEM block after a BEGIN line: through an END line within
+/// `PEM_BODY_MAX`, or else through the base64 and RFC 1421 header lines
+/// that follow, however long (AGENT-309). Redacting only the BEGIN line
+/// would leave the key. Where a stream's text stops inside the key, the
+/// hit ends at or just before that point, so the window holds it open.
+fn pem_extend(text: &str, header_end: usize, ends: &[(usize, usize)]) -> usize {
+    let next = ends.partition_point(|&(start, _)| start < header_end);
+    if let Some(&(_, end)) = ends
+        .get(next)
+        .filter(|(_, e)| e - header_end <= PEM_BODY_MAX)
+    {
+        return end;
     }
     let mut units = PemUnits {
-        b: window.as_bytes(),
+        b: &text.as_bytes()[header_end..],
         i: 0,
     };
     let mut end = 0;
     let mut after_header = false;
-    let mut last_was_key = false;
+    let mut seen_key = false;
     let mut line = Vec::new();
     for i in 0.. {
         line.clear();
-        let more = loop {
-            match units.next() {
-                Some(u) if u.byte == b'\n' => break true,
-                Some(u) => line.push(u),
-                None => break false,
-            }
-        };
+        // RFC 1421 headers (`Proc-Type`, `DEK-Info`) are the two lines
+        // after BEGIN: more would let packed headers walk the whole text.
+        let may_be_header = (1..=2).contains(&i) && !seen_key;
+        let more = read_line(&mut units, &mut line, may_be_header);
         let body = trimmed(&line);
         let key = body.iter().take_while(|u| is_base64(u.byte)).count();
-        let header = starts_with(body, b"Proc-Type:") || starts_with(body, b"DEK-Info:");
-        if !more && truncated && cut_inside_key(body, last_was_key) {
-            return text.len();
-        }
+        let header = may_be_header && is_header(body);
         if (key > 0 && key == body.len()) || header {
             end = body.last().map_or(end, |u| u.end);
             after_header = header;
-            last_was_key = true;
+            seen_key |= !header;
         } else if !(body.is_empty() && (i == 0 || after_header)) {
             // Anything but the rest of the BEGIN line or the blank line
             // after RFC 1421 headers ends the block. A key quoted in a
@@ -337,11 +373,22 @@ fn jwt_header_has_alg(m: &str) -> bool {
 /// Every named-rule match in `text`, as (rule, start, end).
 fn rule_hits(text: &str) -> Vec<(&'static str, usize, usize)> {
     let mut out = Vec::new();
+    // END lines, found once: looking for one after each BEGIN would cost
+    // the window per BEGIN.
+    let pem_ends = std::cell::OnceCell::<Vec<(usize, usize)>>::new();
     for r in RULES.iter() {
         for caps in r.re.captures_iter(text) {
             let m = caps.get(1).or_else(|| caps.get(0)).expect("group 0");
             if m.len() <= r.max_len && r.check.is_none_or(|c| c(m.as_str())) {
-                let end = r.extend.map_or(m.end(), |grow| grow(text, m.end()));
+                let end = r.extend.map_or(m.end(), |grow| {
+                    let ends = pem_ends.get_or_init(|| {
+                        PEM_END
+                            .find_iter(text)
+                            .map(|e| (e.start(), e.end()))
+                            .collect()
+                    });
+                    grow(text, m.end(), ends)
+                });
                 out.push((r.id, m.start(), end));
             }
         }
@@ -381,6 +428,10 @@ pub(crate) struct Dlp;
 impl Scanner for Dlp {
     fn id(&self) -> &str {
         "dlp"
+    }
+
+    fn holds_open(&self, text: &str, hit: &Hit) -> bool {
+        hit.rule == "private_key" && pem_open(text, hit.end)
     }
 
     fn max_match_len(&self) -> usize {
@@ -1010,9 +1061,8 @@ mod tests {
         ));
     }
 
-    /// AGENT-270: a key line still running when the 8 KiB window ends
-    /// (a long or heavily escaped key) is not cut there: the hit runs to
-    /// the end of the text, so no tail of the key is forwarded.
+    /// AGENT-270/309: a key longer than 8 KiB (a long or heavily escaped
+    /// key) is followed to its end, so no tail of it is forwarded.
     #[test]
     fn a_key_running_past_the_window_is_covered_to_the_end() {
         let line = "QUJD".repeat(16); // 64 base64 characters
@@ -1027,27 +1077,49 @@ mod tests {
         assert_eq!(end, text.len(), "the key's tail must be covered");
     }
 
-    /// `n` key lines whose `\n` breaks are JSON escapes, each line
-    /// starting with `lead`, padded so the window ends `cut` bytes into
-    /// the line after them.
-    fn cut_key(lead: &str, n: usize, cut: usize) -> String {
-        let line = format!("{lead}{}", "QUJD".repeat(16));
-        let head = "-----BEGIN PRIVATE KEY-----";
-        let used = n * (line.len() + 2);
-        let pad = super::PEM_BODY_MAX - used - cut - 2;
-        let body: String = (0..=n + 40).map(|_| format!("{line}\\n")).collect();
-        format!("{head}{}\\n{body}end", " ".repeat(pad))
-    }
-
+    /// AGENT-309: wherever a stream's text stops inside a key (mid-line,
+    /// mid-escape, after a line break or indentation), its hit is still
+    /// open, so the window holds it.
     #[test]
-    fn a_window_cut_inside_a_leading_escape_fails_safe() {
-        for (lead, cut) in [("\\/", 1), ("\\t", 1), ("\\u0020", 3)] {
-            let text = cut_key(lead, 100, cut);
+    fn a_key_that_has_ended_is_not_open() {
+        let key = format!("-----BEGIN PRIVATE KEY-----\n{}", "QUJD".repeat(16));
+        for after in ["\n-- prose", "\"}", "\n\n\nmore", "  x", "\\x and more"] {
+            let text = format!("{key}{after}");
             let (_, _, end) = super::rule_hits(&text)
                 .into_iter()
                 .find(|(id, ..)| *id == "private_key")
                 .expect("private_key hit");
-            assert_eq!(end, text.len(), "lead {lead}");
+            assert!(!super::pem_open(&text, end), "after {after:?}");
+        }
+    }
+
+    #[test]
+    fn text_ending_anywhere_in_a_key_leaves_its_hit_open() {
+        for sep in [
+            "\\n",
+            "\\r\\n",
+            "\\\\r\\\\n",
+            "\\u000d\\u000a",
+            " \\n",
+            "\\t\\n",
+            "\n",
+            "\r\n",
+        ] {
+            for lead in ["", "\\/", "\\t", "\\u0020", "  "] {
+                let line = format!("{lead}{}{sep}", "QUJD".repeat(16));
+                let full = format!("-----BEGIN PRIVATE KEY-----{sep}{}", line.repeat(3));
+                for cut in full.len() - 2 * line.len()..=full.len() {
+                    let text = &full[..cut];
+                    let (_, _, end) = super::rule_hits(text)
+                        .into_iter()
+                        .find(|(id, ..)| *id == "private_key")
+                        .expect("private_key hit");
+                    assert!(
+                        super::pem_open(text, end),
+                        "sep {sep:?} lead {lead:?} cut {cut} end {end}"
+                    );
+                }
+            }
         }
     }
 
@@ -1062,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn an_outsized_key_in_a_json_string_blocks_the_body() {
+    fn an_outsized_key_in_a_json_string_is_redacted() {
         let line = "QUJD".repeat(16);
         let pem: String = (0..200).map(|_| format!("{line}\n")).collect();
         let body = serde_json::json!({
@@ -1070,12 +1142,33 @@ mod tests {
             "other": "hello",
         })
         .to_string();
-        let Outcome::Block { report } =
-            outcome("application/json", body.as_bytes(), Verdict::Redact)
+        let Outcome::Forward {
+            body: Some(rewritten),
+            report,
+        } = outcome("application/json", body.as_bytes(), Verdict::Redact)
         else {
-            panic!("an outsized key in JSON must not be forwarded");
+            panic!("an outsized key in JSON must be redacted, not blocked or forwarded");
         };
-        assert!(report.redaction_incomplete);
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(!rewritten.contains(&line), "{rewritten}");
+        assert!(rewritten.contains("\"other\":\"hello\""), "{rewritten}");
+        assert!(!report.redaction_incomplete);
+    }
+
+    #[test]
+    fn begin_lines_packed_on_one_line_scan_in_linear_time() {
+        for unit in [
+            "-----BEGIN PRIVATE KEY-----QUJD",
+            "-----BEGIN PRIVATE KEY-----\nDEK-Info: ",
+            "-----BEGIN PRIVATE KEY----- \\",
+        ] {
+            let text = unit.repeat((1 << 20) / unit.len());
+            let started = std::time::Instant::now();
+            let hits = super::rule_hits(&text);
+            assert!(hits.len() > 1000);
+            let took = started.elapsed();
+            assert!(took.as_secs() < 5, "{unit:?} took {took:?}");
+        }
     }
 
     #[test]
@@ -1105,16 +1198,20 @@ mod tests {
     }
 
     #[test]
-    fn a_window_cut_just_after_a_key_line_fails_safe() {
+    fn a_key_past_the_window_ends_at_its_last_line() {
         let line = "QUJD".repeat(16);
-        let body: String = (0..126).map(|_| format!("{line}\n")).collect();
-        // " \n" + 126 lines of 65 bytes is the 8192-byte window exactly.
-        let text = format!("-----BEGIN PRIVATE KEY----- \n{body}-- prose");
-        let (_, _, end) = super::rule_hits(&text)
-            .into_iter()
-            .find(|(id, ..)| *id == "private_key")
-            .expect("private_key hit");
-        assert_eq!(end, text.len());
+        for n in [126, 200] {
+            let body: String = (0..n).map(|_| format!("{line}\n")).collect();
+            let text = format!(
+                "-----BEGIN PRIVATE KEY----- \n{body}-- prose {}",
+                "x".repeat(9000)
+            );
+            let (_, _, end) = super::rule_hits(&text)
+                .into_iter()
+                .find(|(id, ..)| *id == "private_key")
+                .expect("private_key hit");
+            assert_eq!(&text[end..end + 9], "\n-- prose", "n {n}");
+        }
     }
 
     #[test]

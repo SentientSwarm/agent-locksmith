@@ -825,6 +825,29 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_pem_key_longer_than_the_overlap_is_redacted_whole() {
+        let line = "QUJD".repeat(16);
+        let mut text = String::from("Here: -----BEGIN PRIVATE KEY-----\n");
+        for _ in 0..300 {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text.push_str("-- that is all.");
+        let mut events: Vec<String> = text
+            .as_bytes()
+            .chunks(64)
+            .map(|c| chat(std::str::from_utf8(c).unwrap()))
+            .collect();
+        events.push(DONE.to_string());
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains("QUJD"), "a key line was forwarded");
+        assert!(out.contains("that is all"), "{out}");
+        assert!(!out.contains("inspection_blocked"), "{out}");
+        assert!(!i.hold_overflowed());
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    #[test]
     fn split_secret_redacted_before_forwarding() {
         let k = key();
         for (event, tail) in [

@@ -118,9 +118,17 @@ pub trait Scanner: Send + Sync {
     /// Upper bound on the length (in bytes) of anything this scanner can
     /// match. Streaming scanning keeps this much overlap between windows.
     /// A scanner that folds its input (`injection`) bounds the folded
-    /// text; its window must carry that much folded text.
+    /// text; its window must carry that much folded text. A hit that
+    /// grows past its match (a PEM key's lines) may be longer: a window
+    /// holds one that reaches its end open (AGENT-309).
     fn max_match_len(&self) -> usize;
     fn scan(&self, text: &str, direction: Direction) -> Result<Vec<Hit>, ScanError>;
+    /// Could `hit` still grow if more text followed `text` (a PEM key
+    /// whose next line has not arrived)? A stream holds such a hit, from
+    /// its start, until a scan finds it ended (AGENT-309).
+    fn holds_open(&self, _text: &str, _hit: &Hit) -> bool {
+        false
+    }
     /// Does this scanner take part in streamed-response windows? A
     /// classifier that scores whole texts (a sidecar) does not.
     fn streams(&self) -> bool {
