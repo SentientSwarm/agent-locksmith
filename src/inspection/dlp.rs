@@ -58,6 +58,9 @@ fn rule(id: &'static str, pattern: &str, max_len: usize, check: Option<fn(&str) 
 const PEM_BODY_MAX: usize = 8192;
 const PEM_HEADER_MAX: usize = 47;
 
+const PEM_BEGIN_PATTERN: &str = r"(?-u)-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----";
+static PEM_BEGIN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(PEM_BEGIN_PATTERN).expect("compiles"));
 static PEM_END: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?-u)-----END [A-Z ]{0,20}PRIVATE KEY-----").expect("compiles"));
 
@@ -147,6 +150,18 @@ fn starts_with(line: &[Unit], prefix: &[u8]) -> bool {
 /// the next line is not taken for base64.
 fn closes(b: u8) -> bool {
     !(0x20..0x80).contains(&b) || b" \"'}],\\<>);`.!?&|".contains(&b)
+}
+
+/// Did `pem_extend` stop the key starting at `start` at the END line
+/// `text[..end]` ends with? Only one within `PEM_BODY_MAX` of the BEGIN
+/// line counts: past it the key is walked, and a walked header line may
+/// end in END text with the key lines still to come (AGENT-311).
+fn closed_by_end_line(text: &str, start: usize, end: usize) -> bool {
+    let begin = PEM_BEGIN
+        .find_at(text, start)
+        .filter(|m| m.start() == start);
+    begin.is_some_and(|b| end >= b.end() && end - b.end() <= PEM_BODY_MAX)
+        && ends_at_end_line(text, end)
 }
 
 /// Does `text[..end]` end with an END line? (A BEGIN line ends with
@@ -259,8 +274,11 @@ fn pem_extend(text: &str, header_end: usize, ends: &[(usize, usize)]) -> usize {
             after_header = header;
             seen_key |= !header;
         } else if !(body.is_empty() && (i == 0 || after_header)) {
-            // Anything but the rest of the BEGIN line or the blank line
-            // after RFC 1421 headers ends the block. A key quoted in a
+            // Anything but the rest of the BEGIN line or a blank line
+            // after RFC 1421 headers ends the block. Blank lines after
+            // headers are not limited to one: covering more of a body is
+            // the safe side, and a stream keeps the BEGIN line held
+            // across them as whitespace (AGENT-311). A key quoted in a
             // string ends its last line with the closing quote
             // (`AB==\"}`), and prose may follow on the same line: that
             // base64 is the key too.
@@ -319,7 +337,7 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             extend: Some(pem_extend),
             ..rule(
                 "private_key",
-                r"(?-u)-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----",
+                PEM_BEGIN_PATTERN,
                 PEM_HEADER_MAX + PEM_BODY_MAX,
                 None,
             )
@@ -446,7 +464,9 @@ impl Scanner for Dlp {
         // A key its END line closed is over (AGENT-311): many BEGIN lines
         // share one END, and walking the text after it once per hit would
         // cost each scan their number times the padding.
-        hit.rule == "private_key" && !ends_at_end_line(text, hit.end) && pem_open(text, hit.end)
+        hit.rule == "private_key"
+            && !closed_by_end_line(text, hit.start, hit.end)
+            && pem_open(text, hit.end)
     }
 
     fn max_match_len(&self) -> usize {
@@ -1092,22 +1112,21 @@ mod tests {
         assert_eq!(end, text.len(), "the key's tail must be covered");
     }
 
-    /// AGENT-309: wherever a stream's text stops inside a key (mid-line,
-    /// mid-escape, after a line break or indentation), its hit is still
-    /// open, so the window holds it.
     /// AGENT-311: a key closed by its END line is not held open, so blank
     /// padding after many BEGIN lines sharing one END isn't walked once per
     /// hit on every scan.
     #[test]
     fn a_key_closed_by_its_end_line_is_not_open() {
-        let begins = "-----BEGIN PRIVATE KEY-----\n".repeat(300);
+        // Within PEM_BODY_MAX of the END, so every hit ends at it.
+        let begins = "-----BEGIN PRIVATE KEY-----\n".repeat(250);
         let text = format!(
             "{begins}QUJD\n-----END PRIVATE KEY-----{}",
             " ".repeat(4096)
         );
         let hits = Dlp.scan(&text, Direction::Response).unwrap();
         let keys: Vec<_> = hits.iter().filter(|h| h.rule == "private_key").collect();
-        assert_eq!(keys.len(), 300);
+        assert_eq!(keys.len(), 250);
+        assert!(keys.iter().all(|h| h.end == keys[0].end));
         assert!(keys.iter().all(|h| !Dlp.holds_open(&text, h)));
     }
 
@@ -1139,6 +1158,23 @@ mod tests {
         }
     }
 
+    /// AGENT-311: an END line closes a key only where the walk would stop
+    /// at it. A header line longer than the END search that ends in END
+    /// text is walked past, so in a stream the key lines after it are
+    /// still to come and the hit must stay open.
+    #[test]
+    fn a_header_line_ending_in_end_text_does_not_close_its_key() {
+        let header = format!("Proc-Type: 4,{}", "x".repeat(super::PEM_BODY_MAX));
+        let text = format!("-----BEGIN PRIVATE KEY-----\n{header}-----END PRIVATE KEY-----");
+        let hits = Dlp.scan(&text, Direction::Response).unwrap();
+        let key = hits.iter().find(|h| h.rule == "private_key").expect("hit");
+        assert_eq!(key.end, text.len());
+        assert!(Dlp.holds_open(&text, key));
+    }
+
+    /// AGENT-309: wherever a stream's text stops inside a key (mid-line,
+    /// mid-escape, after a line break or indentation), its hit is still
+    /// open, so the window holds it.
     #[test]
     fn text_ending_anywhere_in_a_key_leaves_its_hit_open() {
         for sep in [

@@ -25,6 +25,8 @@
   in a body or a streamed response; a stream now holds such a key until
   its last line, within `max_scan_bytes`. Scanning a body packed with
   `BEGIN` lines is linear again, not 8 KiB per `BEGIN`.
+  A stream no longer releases a key at END text that ends a long
+  header line (AGENT-311).
 - Redacting a JSON body rewrites only the strings that held a hit
   (AGENT-270). Before, the body was parsed and re-serialized, which
   sorted object keys, rounded integers too big for 64 bits, and dropped
