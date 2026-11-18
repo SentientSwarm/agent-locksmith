@@ -437,10 +437,13 @@ async fn same_authority(
         .ok()
         .filter(|d| d.egress == a.egress);
     let stored = stored.map(|d| (d.issuer, d.client_id));
+    // AGENT-302: checked as the start checked it; a catalog that lags a
+    // re-create as infra serves no session.
     let serving = state
         .catalog
         .load()
         .lookup_active(&a.name)
+        .filter(|r| r.kind != crate::registrations::Kind::Infra)
         .map(|r| r.auth.clone());
     let template = serving.filter(|auth| {
         stored.as_ref() == Some(&want) && openai_issuer(auth).as_ref() == Some(&want)

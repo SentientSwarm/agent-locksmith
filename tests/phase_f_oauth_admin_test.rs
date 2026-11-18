@@ -29,6 +29,8 @@ struct Harness {
     server: TestServer,
     op_token: String,
     mock: MockServer,
+    /// The serving catalog, which a test can make lag the database.
+    catalog: Arc<ArcSwap<Catalog>>,
 }
 
 async fn setup() -> Harness {
@@ -103,7 +105,7 @@ async fn setup() -> Harness {
             registrations,
             sessions,
             sealing_key,
-            catalog: catalog_arc,
+            catalog: catalog_arc.clone(),
             locks: RefreshLockMap::new(),
             device_logins: Default::default(),
             token_clients: agent_locksmith::client_pool::unproxied_default().into(),
@@ -123,7 +125,65 @@ async fn setup() -> Harness {
         server,
         op_token: op_token_wire,
         mock,
+        catalog: catalog_arc,
     }
+}
+
+/// The bootstrap answers 502 `oauth_bootstrap_failed`, leaves no session
+/// row and never calls the token endpoint.
+async fn assert_refused_without_session(h: &Harness) {
+    let resp = h
+        .server
+        .post("/admin/operator/oauth/codex/bootstrap")
+        .add_header("authorization", format!("Bearer {}", h.op_token))
+        .json(&serde_json::json!({"refresh_token": "initial-refresh"}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::BAD_GATEWAY);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["error"]["code"], "oauth_bootstrap_failed");
+    let status = h
+        .server
+        .get("/admin/operator/oauth/codex")
+        .add_header("authorization", format!("Bearer {}", h.op_token))
+        .await;
+    status.assert_status_ok();
+    assert_eq!(status.json::<serde_json::Value>()["present"], false);
+    assert!(h.mock.received_requests().await.unwrap().is_empty());
+}
+
+// ─── AGENT-302: the serving registration is gone by the exchange ───────────
+#[tokio::test]
+async fn bootstrap_whose_registration_left_the_catalog_removes_its_row() {
+    let h = setup().await;
+    h.catalog.store(Arc::new(Catalog::default()));
+    assert_refused_without_session(&h).await;
+}
+
+// ─── AGENT-302: the serving registration became infra by the exchange ──────
+#[tokio::test]
+async fn bootstrap_rechecks_the_serving_registration_kind() {
+    let h = setup().await;
+    // A catalog that lags a delete and re-create of `codex` as infra.
+    let dir = TempDir::new().unwrap();
+    let pool = open_and_migrate(&dir.path().join("lag.db")).await.unwrap();
+    let repo = RegistrationRepository::new(pool);
+    let infra = Registration::new(
+        "codex".to_string(),
+        Kind::Infra,
+        "Re-created as infra".to_string(),
+        "https://api.openai.example.com".to_string(),
+        AuthSpec::OauthDeviceCode {
+            client_id: "test-client".to_string(),
+            scopes: vec!["openai-api".to_string()],
+            device_url: format!("{}/device", h.mock.uri()),
+            token_url: format!("{}/token", h.mock.uri()),
+            session_label: None,
+        },
+    );
+    repo.create(&infra).await.unwrap();
+    h.catalog
+        .store(Arc::new(Catalog::from_repo(&repo).await.unwrap()));
+    assert_refused_without_session(&h).await;
 }
 
 // ─── TS-210: bootstrap exchanges refresh→access, persists session ──────────

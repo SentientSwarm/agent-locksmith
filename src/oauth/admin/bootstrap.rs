@@ -138,14 +138,19 @@ pub(super) fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<R
 }
 
 /// AGENT-302: the token endpoint and the egress come from one serving
-/// registration, so an edit racing the bootstrap cannot pair them.
+/// registration, so an edit racing the bootstrap cannot pair them. That
+/// registration is checked again as `validate` checked the database row:
+/// a catalog that lags a delete and re-create as infra serves no session.
 async fn exchange(
     state: &OauthAdminState,
     name: &str,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {
     let cat = state.catalog.load();
-    let Some(registration) = cat.lookup_active(name) else {
+    let serving = cat
+        .lookup_active(name)
+        .filter(|r| r.kind != crate::registrations::Kind::Infra);
+    let Some(registration) = serving else {
         let _ = state.sessions.delete_if_current(session).await;
         let e = crate::oauth::refresh::RefreshError::RegistrationGone(name.to_string());
         return Err(Box::new(error_envelope(

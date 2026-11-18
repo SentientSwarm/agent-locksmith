@@ -22,6 +22,13 @@
 
 ### Fixed
 
+- An OAuth bootstrap or device login no longer stores a session for a
+  registration its serving catalog shows as infra (AGENT-302). Both
+  refuse infra registrations up front from the database; a catalog that
+  lagged a delete and re-create as infra let the exchange go on. The
+  bootstrap now answers 502 `oauth_bootstrap_failed` and the device
+  login 409 `authority_changed`, with no session row left.
+
 - A large MCP task list (`tasks/list`), or an MCP server's own request
   (`sampling/createMessage`, `elicitation/create`), streamed over SSE is
   no longer blocked under `fail_closed` past 255 strings (AGENT-323).

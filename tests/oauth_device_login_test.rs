@@ -377,6 +377,38 @@ fn code_exchanged(requests: &[wiremock::Request]) -> bool {
     })
 }
 
+/// AGENT-302: a serving catalog that lags a delete and re-create of the
+/// registration as infra serves the login no session, as an infra
+/// registration is refused from the start.
+#[tokio::test]
+async fn a_registration_serving_as_infra_never_receives_the_new_tokens() {
+    let h = setup().await;
+    let attempt = pending_attempt(&h).await;
+    let dir = TempDir::new().unwrap();
+    let lag =
+        RegistrationRepository::new(open_and_migrate(&dir.path().join("lag.db")).await.unwrap());
+    let mut r = h.registrations.get("codex").await.unwrap().unwrap();
+    r.kind = Kind::Infra;
+    lag.create(&r).await.unwrap();
+    h.catalog
+        .store(Arc::new(Catalog::from_repo(&lag).await.unwrap()));
+
+    let changed = poll(&h, &attempt).await;
+    changed.assert_status(axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        changed.json::<serde_json::Value>()["error"]["code"],
+        "authority_changed"
+    );
+    assert!(!code_exchanged(&h.mock.received_requests().await.unwrap()));
+    assert!(
+        h.sessions
+            .get(&h.key, "codex", "default")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn a_changed_issuer_never_receives_the_new_tokens() {
     let h = setup().await;
