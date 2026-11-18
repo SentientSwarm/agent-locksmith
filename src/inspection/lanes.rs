@@ -110,6 +110,12 @@ pub enum Close {
     /// Lanes carrying every one of these tags (an Anthropic block or a
     /// Responses output finished).
     Tagged(Vec<(&'static str, i64)>),
+    /// A chat choice's tool calls (lanes under `calls`, then `#<n>/`)
+    /// numbered below `index`: a chat stream sends its calls one after
+    /// another, so a later call starting finishes the earlier ones
+    /// (AGENT-273). An upstream that interleaves calls then writes to a
+    /// finished output, which `fail_closed` blocks.
+    Earlier { calls: String, index: i64 },
 }
 
 impl Close {
@@ -118,6 +124,12 @@ impl Close {
             Close::All => true,
             Close::Under(prefix) => lane.path.starts_with(prefix),
             Close::Tagged(tags) => !tags.is_empty() && tags.iter().all(|t| lane.tags.contains(t)),
+            Close::Earlier { calls, index } => lane
+                .path
+                .strip_prefix(calls.as_str())
+                .and_then(|rest| rest.strip_prefix('#')?.split_once('/'))
+                .and_then(|(n, _)| n.parse::<i64>().ok())
+                .is_some_and(|n| n < *index),
         }
     }
 }
@@ -142,8 +154,22 @@ pub fn closes(kind: Option<&str>, scheme: Option<Scheme>, value: &Value) -> Vec<
         .flatten()
         .enumerate()
     {
+        let at = element(choice, i);
+        let latest = choice
+            .pointer("/delta/tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|call| call.get("index").and_then(index))
+            .max();
+        if let Some(latest) = latest {
+            out.push(Close::Earlier {
+                calls: format!("/choices/{at}/delta/tool_calls/"),
+                index: latest,
+            });
+        }
         if choice.get("finish_reason").is_some_and(|r| !r.is_null()) {
-            out.push(Close::Under(format!("/choices/{}/", element(choice, i))));
+            out.push(Close::Under(format!("/choices/{at}/")));
         }
     }
     out
@@ -226,6 +252,34 @@ impl<'de> Visitor<'de> for &mut Hidden {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// AGENT-273: a tool call starting finishes the lower-numbered calls
+    /// of its own choice, compared as numbers, and nothing else.
+    #[test]
+    fn a_later_tool_call_finishes_the_earlier_ones_in_its_choice() {
+        let v = json!({"choices": [{"index": 1, "delta": {"tool_calls": [
+            {"index": 3, "function": {"arguments": "x"}},
+            {"index": 10, "function": {"arguments": "y"}}]}}]});
+        let c = closes(None, None, &v);
+        assert_eq!(c.len(), 1, "{c:?}");
+        let covers = |path: &str| {
+            c[0].covers(&Lane {
+                path: path.into(),
+                tags: vec![],
+            })
+        };
+        assert!(covers("/choices/#1/delta/tool_calls/#2/function/arguments"));
+        assert!(covers("/choices/#1/delta/tool_calls/#9/function/name"));
+        assert!(!covers(
+            "/choices/#1/delta/tool_calls/#10/function/arguments"
+        ));
+        assert!(!covers("/choices/#1/delta/tool_calls/#11/function/name"));
+        assert!(!covers(
+            "/choices/#0/delta/tool_calls/#2/function/arguments"
+        ));
+        assert!(!covers("/choices/#1/delta/content"));
+        assert!(!covers("/choices/#1/delta/tool_calls/2/function/arguments"));
+    }
 
     #[test]
     fn hidden_strings_are_found_at_any_depth() {

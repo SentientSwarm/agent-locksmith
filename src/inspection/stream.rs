@@ -438,7 +438,13 @@ impl StreamInspector {
         if self.over_cap(step) {
             return;
         }
-        let closes = sse::closes(&event, self.scheme);
+        let mut closes = sse::closes(&event, self.scheme);
+        // A later tool call finishing the earlier ones only matters where
+        // held events can't be released early: under `fail_open` they are
+        // (audited), and an interleaving upstream would split a match there.
+        if self.on_error == OnError::FailOpen {
+            closes.retain(|c| !matches!(c, Close::Earlier { .. }));
+        }
         let verdict = self.judge(&hits, step);
         if step.ended {
             return;
@@ -1240,6 +1246,31 @@ mod tests {
         assert!(!leaked(&out), "{out}");
     }
 
+    /// AGENT-273: under `fail_closed` a later tool call finishes the
+    /// earlier ones, so an upstream that interleaves them writes to a
+    /// finished output and the stream is blocked, not leaked.
+    #[test]
+    fn interleaved_tool_calls_block_under_fail_closed() {
+        let call = |n: usize, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{n},\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        let mut events = Vec::new();
+        for c in key().chars() {
+            events.push(call(0, &c.to_string()));
+            events.push(call(1, "{}"));
+        }
+        events.push(DONE.to_string());
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!leaked(&out), "{out}");
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("stream text after its output finished")
+        );
+    }
+
     #[test]
     fn padding_fields_do_not_split_a_match() {
         let mut events = Vec::new();
@@ -1598,8 +1629,9 @@ mod tests {
         passes_whole(&events);
     }
 
-    /// A chat stream of `n` parallel tool calls, each opened with its
-    /// name and then given its arguments in the pieces `args` returns.
+    /// A chat stream of `n` parallel tool calls as OpenAI sends them, one
+    /// after another: each opened with its name, then given its arguments
+    /// in the pieces `args` returns.
     fn parallel_tool_calls(n: usize, args: impl Fn(usize) -> Vec<String>) -> Vec<String> {
         use serde_json::json;
         let chunk = |v: serde_json::Value| format!("data: {v}\n\n");
@@ -1615,8 +1647,6 @@ mod tests {
                 t,
                 json!({"name": format!("tool_{t}"), "arguments": ""}),
             ));
-        }
-        for t in 0..n {
             for piece in args(t) {
                 events.push(call(t, json!({ "arguments": piece })));
             }
@@ -1638,13 +1668,28 @@ mod tests {
     }
 
     /// Token-sized pieces: 40 calls of 300 bytes of arguments each, sent
-    /// 6 bytes at a time. Held events are released in order, so the
-    /// whole tool-call section must fit in `max_scan_bytes` as raw SSE
-    /// (here about 0.4 MiB of 1 MiB); past that the stream still blocks.
+    /// 6 bytes at a time.
     #[test]
     fn forty_token_streamed_tool_calls_pass_whole_under_fail_closed() {
         let args = format!("{{\"q\": \"{}\"}}", "word ".repeat(58));
         let events = parallel_tool_calls(40, |_| {
+            args.as_bytes()
+                .chunks(6)
+                .map(|c| String::from_utf8(c.to_vec()).unwrap())
+                .collect()
+        });
+        passes_whole(&events);
+    }
+
+    /// AGENT-273: a call is finished once the next one starts, so its held
+    /// events go then. Before, every call's events queued behind the first
+    /// call's held tail until the whole tool-call section, as raw SSE,
+    /// passed `max_scan_bytes`: 20 calls of 5 KB sent 6 bytes at a time
+    /// (about 2.5 MiB of SSE) blocked at 1 MiB.
+    #[test]
+    fn a_call_is_released_when_the_next_one_starts() {
+        let args = format!("{{\"q\": \"{}\"}}", "word ".repeat(1000));
+        let events = parallel_tool_calls(20, |_| {
             args.as_bytes()
                 .chunks(6)
                 .map(|c| String::from_utf8(c.to_vec()).unwrap())
@@ -1691,8 +1736,6 @@ mod tests {
                 t,
                 json!({"name": format!("tool_{t}"), "arguments": ""}),
             ));
-        }
-        for t in 0..10 {
             events.push(call(t, json!({"arguments": "{\"n\": "})));
             events.push(call(t, json!({"arguments": format!("{t}}}")})));
         }

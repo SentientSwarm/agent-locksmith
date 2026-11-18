@@ -293,10 +293,14 @@ takes two outputs, its name and its arguments (AGENT-273). Under
 `max_scan_bytes`, and a window gives back memory when it trims, so the
 higher limit adds little; each unfinished output keeps up to the longest
 match's length of text, so many long outputs reach `max_scan_bytes`
-before there are 255. Held events still go out in order, so a chat
-stream's tool calls, which stay unfinished until `finish_reason`, must fit
-in `max_scan_bytes` as raw SSE; a larger tool-call section is blocked
-under `fail_closed`.
+before there are 255. Held events go out in order, so under `fail_closed`
+a chat tool call is finished when a later-numbered call in its choice
+starts (AGENT-273): a chat stream sends its calls one after another, and
+only the call in progress then needs to fit in `max_scan_bytes` as raw
+SSE. An upstream that interleaves calls writes to a finished output, so
+under `fail_closed` its stream is blocked. Under `fail_open` the calls
+stay open until `finish_reason`, and held events past `max_scan_bytes`
+go early.
 Past that, or when non-empty text arrives for an output the protocol
 already said was finished, a match could be missed: under `fail_closed`
 the stream is blocked, under `fail_open` the outputs share one window (or

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Under `fail_closed`, a streamed chat reply with many or long tool calls
+  is no longer blocked once the whole tool-call section, as raw SSE,
+  passes `max_scan_bytes` (AGENT-273). A tool call is now finished, judged
+  and released when a later-numbered call in its choice starts, so only
+  the call in progress must fit. An upstream that interleaves tool calls
+  is blocked under `fail_closed`; `fail_open` is unchanged.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`
