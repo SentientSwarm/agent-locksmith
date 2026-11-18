@@ -7,6 +7,24 @@ pub(super) async fn record_failure(
     emitter: Option<&crate::operational_log_sink::OperationalLogEmitter>,
 ) {
     if repo.mark_degraded(session).await.is_err() {
+        // AGENT-302: a failure after the refresh claimed the session leaves
+        // it pending (custody uncertain), so it can't be marked degraded.
+        // It needs signing in again all the same, so say so.
+        if repo.held_by_claim(session).await.unwrap_or(false) {
+            warn!(name = %session.name, session_label = %session.session_label,
+                cause = error.audit_cause(), "oauth refresh failed; session needs reconnecting");
+            if let Some(emitter) = emitter {
+                emitter.emit(
+                    crate::repo::LogLevel::Warn,
+                    crate::repo::LogComponent::Oauth,
+                    "oauth_refresh_reconnect_required",
+                    "oauth refresh failed after its claim; session must be signed in again",
+                    Some(serde_json::json!({"registration": session.name,
+                        "session_label": session.session_label, "cause": error.audit_cause()})),
+                );
+            }
+            return;
+        }
         warn!(name = %session.name, session_label = %session.session_label,
             cause = error.audit_cause(), "oauth refresh failed; degradation not committed");
         return;

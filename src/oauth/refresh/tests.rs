@@ -46,3 +46,108 @@ async fn lock_map_distinguishes_labels_under_same_name() {
     assert!(!Arc::ptr_eq(&l_hermes, &l_openclaw));
     assert!(!Arc::ptr_eq(&l_default, &l_openclaw));
 }
+
+/// AGENT-302 — a token call that fails after its claim leaves the session
+/// `reconnect_required` (custody is uncertain), so it can't be marked
+/// degraded; it must still reach the operational log.
+mod failure_events {
+    use super::super::record_failure;
+    use super::*;
+    use crate::migrations::open_and_migrate;
+    use crate::operational_log_sink::OperationalLogEmitter;
+    use crate::repo::{LogFilter, OperationalLogRecord, OperationalLogStore};
+    use tempfile::TempDir;
+
+    async fn setup() -> (
+        TempDir,
+        OauthSessionRepository,
+        SealingKey,
+        OperationalLogStore,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let pool = open_and_migrate(&dir.path().join("db.sqlite"))
+            .await
+            .unwrap();
+        let key = SealingKey::generate().unwrap();
+        (
+            dir,
+            OauthSessionRepository::new(pool.clone()),
+            key,
+            OperationalLogStore::new(pool),
+        )
+    }
+
+    async fn logged(store: &OperationalLogStore) -> Vec<OperationalLogRecord> {
+        let filter = LogFilter {
+            limit: 10,
+            ..LogFilter::default()
+        };
+        for _ in 0..100 {
+            let rows = store.query(&filter).await.unwrap();
+            if !rows.is_empty() {
+                return rows;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Vec::new()
+    }
+
+    #[tokio::test]
+    async fn a_failure_after_the_claim_is_logged_as_reconnect_required() {
+        let (_d, repo, key, store) = setup().await;
+        let log = OperationalLogEmitter::spawn(store.clone(), 16);
+        let session = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        repo.begin_refresh(&key, &session).await.unwrap();
+        let error = RefreshError::Revoked { status: 401 };
+        record_failure(&repo, &session, &error, Some(&log)).await;
+        let rows = logged(&store).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].event, "oauth_refresh_reconnect_required");
+        assert_eq!(rows[0].level, "warn");
+        let fields = rows[0].fields.clone().unwrap();
+        assert_eq!(fields["registration"], "codex");
+        assert_eq!(fields["session_label"], "default");
+        assert_eq!(fields["cause"], "revoked");
+    }
+
+    #[tokio::test]
+    async fn a_failure_before_the_claim_is_logged_as_degraded() {
+        let (_d, repo, key, store) = setup().await;
+        let log = OperationalLogEmitter::spawn(store.clone(), 16);
+        let session = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        let error = RefreshError::BadResponse("empty refresh token".into());
+        record_failure(&repo, &session, &error, Some(&log)).await;
+        let rows = logged(&store).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].event, "oauth_refresh_degraded");
+    }
+
+    #[tokio::test]
+    async fn a_session_changed_by_someone_else_logs_nothing() {
+        // A revoke (or a new sign-in) between the read and the failure is
+        // not this refresh's outcome to report.
+        let (_d, repo, key, store) = setup().await;
+        let log = OperationalLogEmitter::spawn(store.clone(), 16);
+        let session = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        repo.delete(&session.name, &session.session_label)
+            .await
+            .unwrap();
+        let error = RefreshError::Revoked { status: 401 };
+        record_failure(&repo, &session, &error, Some(&log)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let filter = LogFilter {
+            limit: 10,
+            ..LogFilter::default()
+        };
+        assert!(store.query(&filter).await.unwrap().is_empty());
+    }
+}

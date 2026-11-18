@@ -58,6 +58,29 @@ impl OauthSessionRepository {
     }
 }
 
+impl OauthSessionRepository {
+    /// Whether the row is still exactly as a refresh claim of `expected`
+    /// left it: same incarnation, the claim's token version, pending and
+    /// not degraded. Reads no sealed column.
+    pub async fn held_by_claim(&self, expected: &OauthSession) -> Result<bool, OauthSessionError> {
+        let Some(claimed) = expected.token_version.checked_add(1) else {
+            return Ok(false);
+        };
+        let held: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM oauth_sessions WHERE kind = 'legacy' AND incarnation = ? \
+             AND name = ? AND session_label = ? AND token_version = ? \
+             AND refresh_pending = 1 AND degraded = 0",
+        )
+        .bind(expected.incarnation)
+        .bind(&expected.name)
+        .bind(&expected.session_label)
+        .bind(claimed)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(held == 1)
+    }
+}
+
 fn require_one(rows: u64) -> Result<(), OauthSessionError> {
     if rows == 1 {
         Ok(())
