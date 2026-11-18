@@ -32,11 +32,16 @@ const TAGS: [(&str, &str); 4] = [
 /// An index as a lenient client reads it: an integer, an integer-valued
 /// float, or a string holding one.
 fn index(value: &Value) -> Option<i64> {
+    let whole = |f: f64| (f.is_finite() && f.fract() == 0.0).then_some(f as i64);
     match value {
-        Value::Number(n) => n
-            .as_i64()
-            .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
-        Value::String(s) => s.trim().parse().ok(),
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().and_then(whole)),
+        // A string holding `1.0` reads as 1 too (AGENT-317).
+        Value::String(s) => {
+            let s = s.trim();
+            s.parse()
+                .ok()
+                .or_else(|| s.parse::<f64>().ok().and_then(whole))
+        }
         _ => None,
     }
 }

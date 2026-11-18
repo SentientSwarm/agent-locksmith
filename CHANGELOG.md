@@ -26,7 +26,9 @@
   blocked (AGENT-317). That call was inspected in a fresh window, so a key
   split between it and the call before was never seen whole, though a
   client merging calls by position would join them. A choice or tool
-  call sent without an `index` among indexed ones is blocked too.
+  call sent without an `index` among indexed ones is blocked too, as is
+  one past the first of its chunk in a stream that sends no index. An
+  index sent as a string such as `"1.0"` is read as the number.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`

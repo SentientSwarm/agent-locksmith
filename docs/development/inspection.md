@@ -306,7 +306,9 @@ one that starts a call below a higher-numbered call of its choice, or
 with a negative index: that call gets a fresh window, while a client
 merging calls by position would join it to the call before (AGENT-317).
 A choice or tool call sent without an `index` among ones sent with it is
-blocked for the same reason. Under `fail_open` the calls stay open until
+blocked for the same reason, and so is one past the first of its chunk's
+array in a stream that sends no index, since a client may merge
+index-less entries into one. Under `fail_open` the calls stay open until
 `finish_reason`, and held events past `max_scan_bytes` go early.
 Past that, or when non-empty text arrives for an output the protocol
 already said was finished, a match could be missed: under `fail_closed`

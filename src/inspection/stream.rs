@@ -395,6 +395,12 @@ impl StreamInspector {
             if *self.indexed.entry(array.to_string()).or_insert(by_index) != by_index {
                 return Some("stream outputs addressed both by index and by position");
             }
+            // With no index, only the first element of each chunk's array
+            // is unambiguous: a client may merge index-less entries into
+            // one slot, joining a later element to the first.
+            if !by_index && !lane.path[array.len()..].starts_with("0/") {
+                return Some("stream outputs addressed only by position");
+            }
         }
         let (calls, n) = super::lanes::tool_call(&lane.path)?;
         let last = self.last_call.get(calls).copied();
@@ -1410,6 +1416,40 @@ mod tests {
         assert_eq!(out, events.concat());
     }
 
+    /// AGENT-317: with no index anywhere, an element past the first of
+    /// its array gets a lane of its own while a client that merges
+    /// index-less entries into one slot joins it to the others, so under
+    /// `fail_closed` the stream is blocked. One element per chunk passes.
+    #[test]
+    fn a_second_index_less_output_blocks_under_fail_closed() {
+        let k = key();
+        let calls = |args: &[&str]| {
+            let list: Vec<String> = args
+                .iter()
+                .map(|a| format!("{{\"function\":{{\"arguments\":{}}}}}", q(a)))
+                .collect();
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{}]}}}}]}}\n\n",
+                list.join(",")
+            )
+        };
+        let events = vec![
+            calls(&["{}", &k[..20]]),
+            calls(&[&k[20..]]),
+            DONE.to_string(),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..20]), "{out}");
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("stream outputs addressed only by position")
+        );
+        let events = vec![calls(&["{}"]), calls(&["{}"]), DONE.to_string()];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert_eq!(i.report().error, None);
+        assert_eq!(out, events.concat());
+    }
+
     #[test]
     fn padding_fields_do_not_split_a_match() {
         let mut events = Vec::new();
@@ -1517,7 +1557,7 @@ mod tests {
         let k = key();
         let mut events = Vec::new();
         for (n, c) in k.chars().enumerate() {
-            let index = ["0", "0.0", "\"0\""][n % 3];
+            let index = ["0", "0.0", "\"0\"", "\"0.0\""][n % 4];
             events.push(format!(
                 "data: {{\"choices\":[{{\"index\":{index},\"delta\":{{\"content\":{}}}}}]}}\n\n",
                 q(&c.to_string())
