@@ -41,7 +41,8 @@ def call(rl, who):
     covers=[PUT, LIST, "cli.rate-limit.set", "cli.rate-limit.list", LIMIT],
 )
 def test_limit_is_set_and_listed(rl):
-    """`rate-limit set` stores a route default; `rate-limit list` shows it."""
+    """`rate-limit set` stores a route default; `rate-limit list` shows it,
+    enforced on a live HTTP route."""
     t = rl["t"]
     put = t.cli("rate-limit", "set", "agt-limited", "--rpm", "1")
     assert put.code == 0, put.err
@@ -55,6 +56,7 @@ def test_limit_is_set_and_listed(rl):
             "requests_per_minute": 1,
             "max_concurrent": None,
             "updated_at": rows[0]["updated_at"],
+            "enforced": True,
         }
     ]
 
