@@ -5,7 +5,7 @@
 //! default applies to every agent separately; an agent row overrides it.
 //! Each (agent, route) gets a token bucket of `requests_per_minute`
 //! tokens, refilled continuously, and, with `max_concurrent`, a cap on
-//! an in-flight count the request holds until its body is dropped.
+//! requests in flight; each counts until its response body is dropped.
 
 pub mod repo;
 
@@ -370,7 +370,8 @@ mod tests {
         assert!(!rate.concurrency);
         assert_eq!(rate.audit, Some(0), "its own first row and count");
         assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
-        // Each kind's next row counts only its own refusals.
+        // The next concurrency row counts only the held-back concurrency
+        // refusal, not the rate one.
         let next = t0 + AUDIT_EVERY;
         let _held = l.check_at(1, "r", next).unwrap();
         assert_eq!(l.check_at(1, "r", next).unwrap_err().audit, Some(1));

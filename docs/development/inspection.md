@@ -36,15 +36,16 @@ inspection:
 | `max_scan_bytes` | 1 MiB | 1 MiB |
 
 A response policy that redacts or blocks fails closed unless `on_error` says
-otherwise, so a reply it can't judge doesn't pass unjudged. A buffered
-reply that is compressed, oversized or hit by a scanner error or timeout
-is refused with 502, as is a compressed or NDJSON stream. Under
-`fail_closed`, so is any SSE stream on a policy with a sidecar scanner,
-since sidecars don't scan streams: that is known before anything is sent.
-An SSE stream that hits a scanner error, an event or held text past
-`max_scan_bytes`, or anything else the scanners stop being able to
-follow part-way through has already sent its headers, so it ends with an
-error event instead.
+otherwise, so a reply it can't judge doesn't pass unjudged. Under
+`fail_closed`, a buffered reply that is compressed, oversized or hit by a
+scanner error or timeout is refused with 502, as is a compressed or NDJSON
+stream and any SSE stream on a policy with a sidecar scanner, since
+sidecars don't scan streams: that is known before anything is sent. An SSE
+stream that hits a scanner error, an event or held text past
+`max_scan_bytes`, or anything else the scanners stop being able to follow
+part-way through has already sent its headers, so under `fail_closed` it
+ends with an error event instead. Under `fail_open` each of these passes,
+audited.
 
 Unknown scanner ids, an empty scanner list and a route listed twice fail
 config load.
@@ -291,10 +292,11 @@ takes two outputs, its name and its arguments (AGENT-273). Under
 `fail_closed` the text all windows hold is already limited to
 `max_scan_bytes`, and a window gives back memory when it trims, so the
 higher limit adds little; each unfinished output keeps up to the longest
-match's length of text, so many long outputs reach `max_scan_bytes` before
-255. Held events still go out in order, so a chat stream's tool calls,
-which stay unfinished until `finish_reason`, must fit in `max_scan_bytes`
-as raw SSE; a larger tool-call section is blocked under `fail_closed`.
+match's length of text, so many long outputs reach `max_scan_bytes`
+before there are 255. Held events still go out in order, so a chat
+stream's tool calls, which stay unfinished until `finish_reason`, must fit
+in `max_scan_bytes` as raw SSE; a larger tool-call section is blocked
+under `fail_closed`.
 Past that, or when non-empty text arrives for an output the protocol
 already said was finished, a match could be missed: under `fail_closed`
 the stream is blocked, under `fail_open` the outputs share one window (or

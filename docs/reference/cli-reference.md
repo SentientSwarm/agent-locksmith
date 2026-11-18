@@ -418,8 +418,8 @@ limit gets at most one such row per route a minute for rate refusals and
 one for concurrency refusals; each row's `details.suppressed` counts the
 refusals of that kind since the previous one. A changed limit starts a
 new minute, so its first refusal is recorded. Refusals after the last row
-are not recorded, nor are those pending when the route's limit is
-removed. Requests without an agent
+are not recorded, nor are those pending when the route loses its last
+limit. Requests without an agent
 identity (legacy deployments) are not limited.
 
 Changes apply at once, without a restart, and are audited

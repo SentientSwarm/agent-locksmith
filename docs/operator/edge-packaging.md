@@ -44,11 +44,11 @@ never put a secret there; use `environment_file` for secrets.
 `private_network = true` gives the component no network beyond loopback
 (`PrivateNetwork=yes`), for one that reaches nothing over the network,
 such as the classifier sidecar running offline. Unix sockets on the
-filesystem still work. It cannot be combined with `ingress`, and `closed`
-adds nothing for it, though its ports are still closed to the container's
-other listeners. Once the service runs (step 6), check it took effect by
-listing its network interfaces from the container; only `lo` should
-appear:
+filesystem still work. It cannot be combined with `ingress`. `closed` adds
+nothing to its own isolation, but a port it lists there is still rejected
+for anything else in the container listening on that port. Once the
+service runs (step 6), check it took effect by listing its network
+interfaces from the container; only `lo` should appear:
 
 ```bash
 nsenter -n -t "$(systemctl show -P MainPID locksmith-edge-inspector)" ip -br link
