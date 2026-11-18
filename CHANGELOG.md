@@ -21,6 +21,11 @@
   and released when a later-numbered call in its choice starts, so only
   the call in progress must fit. An upstream that interleaves tool calls
   is blocked under `fail_closed`; `fail_open` is unchanged.
+- Under `fail_closed`, a streamed chat reply that starts a tool call below
+  a higher-numbered call of its choice, or with a negative index, is now
+  blocked (AGENT-317). That call was inspected in a fresh window, so a key
+  split between it and the call before was never seen whole, though a
+  client merging calls by position would join them.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`

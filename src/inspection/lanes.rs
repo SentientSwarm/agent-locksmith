@@ -100,6 +100,19 @@ pub fn element(item: &Value, i: usize) -> String {
     }
 }
 
+/// For a chat tool call's lane, the path prefix of its choice's calls
+/// and the call's index (`/choices/#0/delta/tool_calls/` and `3` for
+/// `/choices/#0/delta/tool_calls/#3/function/arguments`).
+pub fn tool_call(path: &str) -> Option<(&str, i64)> {
+    const CALLS: &str = "/delta/tool_calls/#";
+    if !path.starts_with("/choices/") {
+        return None;
+    }
+    let at = path.find(CALLS)? + CALLS.len();
+    let (n, _) = path[at..].split_once('/')?;
+    Some((&path[..at - 1], n.parse().ok()?))
+}
+
 /// Which lanes an event finishes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Close {
@@ -252,6 +265,27 @@ impl<'de> Visitor<'de> for &mut Hidden {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_tool_call_lane_names_its_choice_and_index() {
+        let call = "/choices/#0/delta/tool_calls/#3/function/arguments";
+        assert_eq!(tool_call(call), Some(("/choices/#0/delta/tool_calls/", 3)));
+        let negative = "/choices/#1/delta/tool_calls/#-1/function/name";
+        assert_eq!(
+            tool_call(negative),
+            Some(("/choices/#1/delta/tool_calls/", -1))
+        );
+        assert_eq!(tool_call("/choices/#0/delta/content"), None);
+        assert_eq!(
+            tool_call("/choices/#0/delta/tool_calls/2/function/name"),
+            None
+        );
+        assert_eq!(
+            tool_call("/choices/#0/delta/tool_calls/#x/function/name"),
+            None
+        );
+        assert_eq!(tool_call("/delta/tool_calls/#1/function/name"), None);
+    }
 
     /// AGENT-273: a tool call starting finishes the lower-numbered calls
     /// of its own choice, compared as numbers, and nothing else.

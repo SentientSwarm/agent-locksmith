@@ -301,7 +301,10 @@ starts (AGENT-273): a chat stream sends its calls one after another, and
 only the call in progress then needs to fit in `max_scan_bytes` as raw
 SSE. An upstream that interleaves calls writes to a finished output, so
 under `fail_closed` its stream is blocked; that needs held events, so
-`pass` and `flag` are unaffected. Under `fail_open` the calls
+`pass` and `flag` are unaffected. So is one that starts a call below a
+higher-numbered call of its choice, or with a negative index: that call
+gets a fresh window, while a client merging calls by position would join
+it to the call before (AGENT-317). Under `fail_open` the calls
 stay open until `finish_reason`, and held events past `max_scan_bytes`
 go early.
 Past that, or when non-empty text arrives for an output the protocol

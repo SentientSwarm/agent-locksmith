@@ -134,6 +134,8 @@ pub struct StreamInspector {
     wholes: usize,
     /// Bytes of lane paths remembered, held to `max_scan_bytes`.
     lane_bytes: usize,
+    /// The highest tool-call index seen in each chat choice (AGENT-317).
+    last_call: HashMap<String, i64>,
     /// Short texts scanned alone and found clean.
     clean: HashSet<String>,
     /// A configured scanner can't judge streams and `on_error` is
@@ -191,6 +193,7 @@ impl StreamInspector {
             passthrough: false,
             wholes: 0,
             lane_bytes: 0,
+            last_call: HashMap::new(),
             clean: HashSet::new(),
             unjudged: false,
             scheme: None,
@@ -371,6 +374,30 @@ impl StreamInspector {
         Some(i)
     }
 
+    /// A chat tool call first seen below a higher-numbered call of its
+    /// choice, or with a negative index (AGENT-317). Its lane is new, so
+    /// a match split between it and the call before is in no one window,
+    /// while a client merging calls by position joins them. Only matters
+    /// where events are held under `fail_closed`.
+    /// Tracked only there, so the map grows only with lanes, which are
+    /// bounded (`lane` blocks past them under `fail_closed`).
+    fn call_out_of_order(&mut self, lane: &Lane) -> bool {
+        if !self.hold || self.on_error != OnError::FailClosed {
+            return false;
+        }
+        let Some((calls, n)) = super::lanes::tool_call(&lane.path) else {
+            return false;
+        };
+        let last = self.last_call.get(calls).copied();
+        if !self.by_lane.contains_key(lane) && (n < 0 || last.is_some_and(|m| n < m)) {
+            return true;
+        }
+        if last.is_none_or(|m| n > m) {
+            self.last_call.insert(calls.to_string(), n);
+        }
+        false
+    }
+
     fn event(&mut self, event: SseEvent, step: &mut Step) {
         if let Some(p) = sse::protocol(&event) {
             self.protocol = p;
@@ -412,6 +439,10 @@ impl StreamInspector {
                 });
                 continue;
             };
+            if self.call_out_of_order(key) {
+                self.note_error("stream tool call out of order".into());
+                return self.block(step);
+            }
             let Some(lane) = self.lane(key) else {
                 self.note_error("more stream outputs than can be inspected".into());
                 return self.block(step);
@@ -1284,6 +1315,45 @@ mod tests {
         };
         let events = vec![call(0), call(1), call(0), DONE.to_string()];
         let (out, i) = run(&closed(1 << 20, Verdict::Flag), &events);
+        assert_eq!(i.report().error, None);
+        assert_eq!(out, events.concat());
+    }
+
+    /// AGENT-317: a tool call first seen below a higher-numbered one, or
+    /// with a negative index, opens a fresh lane, so a key split between
+    /// it and the call before is never contiguous in any window. A client
+    /// merging calls by position rebuilds it, so under `fail_closed` the
+    /// stream is blocked.
+    #[test]
+    fn a_tool_call_out_of_order_blocks_under_fail_closed() {
+        let call = |n: i64, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{n},\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        let k = key();
+        for (first, second) in [(2, 1), (0, -1)] {
+            let mut events = vec![call(0, "{}")];
+            events.push(call(first, &k[..20]));
+            events.push(call(second, &k[20..]));
+            events.push(DONE.to_string());
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(&k[..20]), "{first},{second}: {out}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream tool call out of order"),
+                "{first},{second}"
+            );
+        }
+        // In order, the same calls pass.
+        let events = vec![
+            call(0, "{}"),
+            call(1, "{}"),
+            call(2, "{}"),
+            DONE.to_string(),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
         assert_eq!(i.report().error, None);
         assert_eq!(out, events.concat());
     }
