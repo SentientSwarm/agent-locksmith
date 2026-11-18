@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- A route whose upstream base path holds an encoded separator
+  (`/projects/group%2Fproj`) no longer lets a request climb out of it
+  and spell the decoded base again (`%2e%2e/%2e%2e/projects/group/proj`),
+  which an upstream reading `%2F` as data serves as another resource
+  (AGENT-287). Each decoding of the path is now held to the same
+  decoding of the base, and so is a reading that splits the path first
+  and decodes each segment on its own, as an upstream that keeps `%2F`
+  as data but decodes `%252e%252e` to `..` does.
 - A PEM private key joined onto its `BEGIN` line with spaces, headers
   and all, with no `END` line within 8 KiB, is redacted to its last
   base64 word, in a body or a streamed response (AGENT-311). Before,

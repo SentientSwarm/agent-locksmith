@@ -1401,19 +1401,71 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     if out.origin() != base.origin() {
         return false;
     }
-    // Each reading of the path must sit under some reading of the base, so
-    // a base with its own escapes (`/v1/%7Euser`) still matches.
+    // Each reading of the path must sit under the same reading of the base
+    // (AGENT-287): the URL is the base, a `/` and the path, and no escape
+    // can span that `/` (it is not a hex digit), so both decode alike, and
+    // a base with its own escapes (`/v1/%7Euser`) matches. Comparing with
+    // any reading would let a path that climbs out of `group%2Fproj` and
+    // spells `group/proj` pass, though an upstream reading `%2F` as data
+    // serves another resource there. The shorter list repeats its last.
     let readings = |path: &str| {
         std::iter::once(path.to_string())
             .chain(crate::inspection::path_views(path))
             .collect::<Vec<_>>()
     };
     let bases = readings(base.path());
-    let prefixes: Vec<Vec<&str>> = bases.iter().filter_map(|b| upstream_segments(b)).collect();
-    readings(out.path()).iter().all(|view| {
-        upstream_segments(view)
-            .is_some_and(|segs| prefixes.iter().any(|prefix| segs.starts_with(prefix)))
-    })
+    let views = readings(out.path());
+    let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
+    let whole = (0..bases.len().max(views.len())).all(|i| {
+        let (base, view) = (at(&bases, i), at(&views, i));
+        match (upstream_segments(&base), upstream_segments(&view)) {
+            (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+            _ => false,
+        }
+    });
+    // An upstream may also split first and decode each segment, so an
+    // encoded `/` stays data while `%252e%252e` becomes `..` of the whole
+    // segment before it.
+    whole
+        && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
+            match (
+                segmentwise(base.path(), rounds),
+                segmentwise(out.path(), rounds),
+            ) {
+                (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+                _ => false,
+            }
+        })
+}
+
+/// How many times [`segmentwise`] decodes a segment, as `path_views` does
+/// a whole path.
+const SEGMENT_DECODE_ROUNDS: usize = 4;
+
+/// AGENT-287 — the path as an upstream that splits before decoding reads
+/// it: split on its literal separators, each segment percent-decoded up
+/// to `rounds` times, `;` parameters dropped and dot segments resolved.
+/// `None` when `..` climbs above the root.
+fn segmentwise(path: &str, rounds: usize) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in path.split(['/', '\\']) {
+        let mut segment = raw.to_string();
+        for _ in 0..rounds {
+            let next = crate::inspection::percent_decode_path(&segment);
+            if next == segment {
+                break;
+            }
+            segment = next;
+        }
+        match segment.split(';').next().unwrap_or("") {
+            "" | "." => {}
+            ".." => {
+                out.pop()?;
+            }
+            other => out.push(other.to_string()),
+        }
+    }
+    Some(out)
 }
 
 /// Path segments as a normalising upstream resolves them, or `None` when
@@ -1969,6 +2021,42 @@ mod base_path_tests {
             "https://h/v1/%7Euser",
             "https://h/v1/%7Euser/..%2F..%2Fx"
         ));
+    }
+
+    /// AGENT-287: a base holding an encoded separator is one segment to an
+    /// upstream that reads `%2F` as data. A path that climbs out of it and
+    /// spells the decoded base again is another resource there, so each
+    /// reading of the path is held to the same reading of the base.
+    #[test]
+    fn an_encoded_separator_in_the_base_is_compared_level_by_level() {
+        let base = "https://h/projects/group%2Fproj";
+        assert!(ok(base, "https://h/projects/group%2Fproj/x"));
+        assert!(ok(base, "https://h/projects/group%2Fproj/x%252Fy"));
+        assert!(!ok(
+            base,
+            "https://h/projects/group%2Fproj/%2e%2e/%2e%2e/projects/group/proj/x"
+        ));
+        assert!(!ok(base, "https://h/projects/group/proj/x"));
+    }
+
+    /// An upstream may read `%2F` as data yet decode each segment fully,
+    /// so `group%2Fproj/%252e%252e` is `..` of the one segment
+    /// `group/proj`: each segment is also decoded on its own, and that
+    /// reading too must stay under the base's.
+    #[test]
+    fn segments_decoded_one_by_one_stay_under_the_base() {
+        let base = "https://h/projects/group%2Fproj";
+        assert!(!ok(
+            base,
+            "https://h/projects/group%2Fproj/%252e%252e/proj/x"
+        ));
+        assert!(!ok(base, "https://h/projects/group%2Fproj/%252e%252e"));
+        assert!(!ok(
+            base,
+            "https://h/projects/group%2Fproj/%25252e%25252e/proj/x"
+        ));
+        assert!(ok(base, "https://h/projects/group%2Fproj/a/%252e%252e/b"));
+        assert!(ok(base, "https://h/projects/group%2Fproj/a%252Fb/x"));
     }
 }
 
