@@ -1507,7 +1507,7 @@ impl Dots {
 /// UTF-8 form (`%c0%ae`, `%e0%80%af`) or IIS `%uXXXX`, either of which
 /// can spell `.`, `/` or `\`. No valid UTF-8 path needs one, so a path
 /// holding one in any reading is refused, not modelled. A lead that can
-/// start an overlong form (`%C0`, `%C1`, `%E0`, `%F0`, `%F8`-`%FF`) is
+/// start an overlong or invalid form (`%C0`, `%C1`, `%E0`, `%F0`-`%FF`) is
 /// read with the bytes after it, escaped or literal, as a decoder that
 /// skips the continuation check would, and refused when the value is
 /// below the least its length may encode, so overlong whatever it spells
@@ -1542,14 +1542,15 @@ fn escaped_byte(b: &[u8], i: usize) -> Option<u8> {
 
 /// Whether `lead`, with the bytes from `at` as its continuation, is an
 /// overlong form to a decoder that keeps only each continuation's low six
-/// bits: a value below the least its length may encode, or, for a 5-byte
-/// or longer form, ASCII once cut to 21 or 16 bits. `%FE` and `%FF` are
-/// read as 7-byte leads. Valid UTF-8 never matches.
+/// bits: a value below the least its length may encode, or, for a form
+/// never valid (5 bytes or longer, or above U+10FFFF), ASCII once cut to
+/// 21 or 16 bits. `%FE` and `%FF` are read as 7-byte leads. Valid UTF-8
+/// never matches.
 fn overlong_lead(text: &str, mut at: usize, lead: u8) -> bool {
     let (bits, count) = match lead {
         0xC0 | 0xC1 => (lead & 0x1F, 1),
         0xE0 => (0, 2),
-        0xF0 => (0, 3),
+        0xF0..=0xF7 => (lead & 0x07, 3),
         0xF8..=0xFB => (lead & 0x03, 4),
         0xFC | 0xFD => (lead & 0x01, 5),
         0xFE | 0xFF => (0, 6),
@@ -1577,9 +1578,9 @@ fn overlong_lead(text: &str, mut at: usize, lead: u8) -> bool {
         value = (value << 6) | u64::from(byte & 0x3F);
     }
     const LEAST: [u64; 6] = [0x80, 0x800, 0x1_0000, 0x20_0000, 0x400_0000, 1 << 31];
-    // A decoder may also keep only the low 21 or 16 bits of a 5-byte or
-    // longer form, which is never valid UTF-8.
-    let cut = |mask: u64| count >= 4 && value & mask < 0x80;
+    // A decoder may also keep only the low 21 or 16 bits of a form that
+    // is never valid UTF-8: 5 bytes or longer, or above U+10FFFF.
+    let cut = |mask: u64| (count >= 4 || value > 0x10_FFFF) && value & mask < 0x80;
     value < LEAST[count - 1] || cut(0x1F_FFFF) || cut(0xFFFF)
 }
 
@@ -2362,6 +2363,8 @@ mod base_path_tests {
             "%FEte/%FFx",
             "Espa%F1a/x",
             "%F0%A0%80%80/x",
+            "%F4%8F%BF%BF/x",
+            "K%F6ln/x",
         ] {
             assert!(ok(base, &format!("https://h/v1/api/{path}")), "{path}");
         }
@@ -2386,6 +2389,8 @@ mod base_path_tests {
             "%F8H@@./x",
             "%FCD@@@./x",
             "%FEB@@@@./x",
+            "%F5%80%80%AE%F5%80%80%AE/x",
+            "%F4%90%80%AF",
         ] {
             assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
         }

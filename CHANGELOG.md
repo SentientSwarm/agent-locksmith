@@ -17,8 +17,8 @@
   that is overlong, whatever it spells: `%E0@n` and `%e0%40%6e` (`.`),
   an overlong `．`, and a continuation encoded at another depth or
   joined by a `%` after a decode (`%25e0%80%ae`, `%e0%2580%25ae`).
-  `%F8`-`%FF` forms, never valid UTF-8, are also refused when their
-  value is ASCII once cut to 21 or 16 bits. Valid UTF-8 always passes,
+  Forms never valid in UTF-8 (`%F8`-`%FF`, or above U+10FFFF) are also
+  refused when their value is ASCII once cut to 21 or 16 bits. Valid UTF-8 always passes,
   and most Latin-1 letters do (`s%F8ren`, `voil%E0/x`, `%FC%FD`); a few
   pairs are refused: `À` or `Á` (`%C0`, `%C1`) before anything, `à`
   before an uppercase letter or `_`, and `ð`, `ø`, `ü`, `þ` or `ÿ`
