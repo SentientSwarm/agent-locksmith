@@ -138,6 +138,8 @@ pub struct StreamInspector {
     last_call: HashMap<String, i64>,
     /// Whether each chat array's elements came by `index` (AGENT-317).
     indexed: HashMap<String, bool>,
+    /// Gemini candidates (by position) whose answer text has started.
+    answered: HashSet<usize>,
     /// Short texts scanned alone and found clean.
     clean: HashSet<String>,
     /// A configured scanner can't judge streams and `on_error` is
@@ -197,6 +199,7 @@ impl StreamInspector {
             lane_bytes: 0,
             last_call: HashMap::new(),
             indexed: HashMap::new(),
+            answered: HashSet::new(),
             clean: HashSet::new(),
             unjudged: false,
             scheme: None,
@@ -433,6 +436,23 @@ impl StreamInspector {
         {
             self.note_error("stream output index is not a plain integer".into());
             return self.block(step);
+        }
+        if self.hold && self.on_error == OnError::FailClosed {
+            // AGENT-322: a thought after its candidate's answer would sit
+            // between two pieces of answer a client joins without it.
+            let Some(parts) = sse::gemini_parts(&event) else {
+                self.note_error("stream Gemini candidate or part reads two ways".into());
+                return self.block(step);
+            };
+            for (candidate, thought) in parts {
+                if thought && self.answered.contains(&candidate) {
+                    self.note_error("stream Gemini thought after its answer".into());
+                    return self.block(step);
+                }
+                if !thought {
+                    self.answered.insert(candidate);
+                }
+            }
         }
         if spans
             .iter()
@@ -1653,6 +1673,197 @@ mod tests {
             let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
             assert!(!out.contains(a), "{out}");
             assert!(!out.contains(b), "{out}");
+        }
+    }
+
+    /// A Gemini chunk from candidates given as JSON values.
+    fn gemini_chunk(candidates: serde_json::Value) -> String {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({ "candidates": candidates })
+        )
+    }
+
+    /// AGENT-322: clients read a Gemini candidate by its position
+    /// (`candidates[0]`), not its `index`, so varying or dropping `index`
+    /// cannot split a key across windows.
+    #[test]
+    fn a_gemini_candidate_is_windowed_by_position() {
+        use serde_json::json;
+        let k = key();
+        let (a, b) = (&k[..20], &k[20..]);
+        let text = |t: &str| json!({"parts": [{"text": t}], "role": "model"});
+        for (first, second) in [
+            (json!({"index": 0}), json!({"index": 1})),
+            (json!({}), json!({"index": 0})),
+        ] {
+            let mut x = first.clone();
+            x["content"] = text(&format!("here: {a}"));
+            let mut y = second.clone();
+            y["content"] = text(b);
+            let events = vec![gemini_chunk(json!([x])), gemini_chunk(json!([y]))];
+            let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(
+                !out.contains(a) && !out.contains(b),
+                "{first} {second}: {out}"
+            );
+        }
+    }
+
+    /// AGENT-322: clients leave a thought part out of the answer's text
+    /// (`chunk.text`), so one between two halves of a key cannot hide it.
+    #[test]
+    fn a_thought_part_does_not_hide_a_split_answer() {
+        use serde_json::json;
+        let k = key();
+        let (a, b) = (&k[..20], &k[20..]);
+        let candidate =
+            |parts: serde_json::Value| json!([{"content": {"parts": parts}, "index": 0}]);
+        let thought = json!({"text": " ... ", "thought": true});
+        for events in [
+            vec![
+                gemini_chunk(candidate(json!([{"text": format!("here: {a}")}]))),
+                gemini_chunk(candidate(json!([thought]))),
+                gemini_chunk(candidate(json!([{"text": b}]))),
+            ],
+            vec![gemini_chunk(candidate(
+                json!([{"text": format!("here: {a}")}, thought, {"text": b}]),
+            ))],
+        ] {
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(a) && !out.contains(b), "{out}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream Gemini thought after its answer")
+            );
+        }
+    }
+
+    /// A client that prints thought parts inline joins them with the
+    /// answer, so a key running through a thought part is redacted too.
+    #[test]
+    fn a_key_through_a_gemini_thought_part_is_redacted() {
+        use serde_json::json;
+        let k = key();
+        let (a, m, b) = (&k[..14], &k[14..28], &k[28..]);
+        let candidate =
+            |parts: serde_json::Value| json!([{"content": {"parts": parts}, "index": 0}]);
+        let events = vec![
+            gemini_chunk(candidate(json!([{"text": format!("here: {a}")}]))),
+            gemini_chunk(candidate(json!([{"text": m, "thought": true}]))),
+            gemini_chunk(candidate(json!([{"text": b}]))),
+        ];
+        let (out, _) = run(&policy(Verdict::Redact), &events);
+        assert!(
+            !out.contains(a) && !out.contains(m) && !out.contains(b),
+            "{out}"
+        );
+    }
+
+    /// AGENT-322: top-level indexes name nothing in a Gemini chunk, even
+    /// after another protocol's event fixed the stream's scheme.
+    #[test]
+    fn top_level_indexes_do_not_split_gemini_text() {
+        let k = key();
+        let ping = "event: ping\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        let tagged = |n: u8, t: &str| gemini(t).replacen("{", &format!("{{\"index\":{n},"), 1);
+        let events = vec![
+            ping,
+            tagged(0, &format!("here: {}", &k[..20])),
+            tagged(1, &k[20..]),
+        ];
+        let (out, _) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains(&k[..20]) && !out.contains(&k[20..]), "{out}");
+    }
+
+    /// AGENT-322: an empty `choices` beside `candidates` (a Gemini client
+    /// reads the candidates) does not make the text whole per event.
+    #[test]
+    fn an_empty_choices_does_not_unwindow_gemini_text() {
+        let k = key();
+        let with_choices = |t: &str| gemini(t).replacen("{", "{\"choices\":[],", 1);
+        let events = vec![
+            with_choices(&format!("here: {}", &k[..20])),
+            with_choices(&k[20..]),
+        ];
+        let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..20]) && !out.contains(&k[20..]), "{out}");
+    }
+
+    /// AGENT-322: clients read a Gemini candidate by position or by
+    /// `index`, and a non-boolean `thought` as true (JavaScript) or by
+    /// its words (Python), so under `fail_closed` either blocks.
+    #[test]
+    fn an_ambiguous_gemini_chunk_blocks_under_fail_closed() {
+        use serde_json::json;
+        let part = |p: serde_json::Value| json!({"content": {"parts": [p]}});
+        for (candidates, why) in [
+            (
+                json!([{"index": 1, "content": {"parts": [{"text": "x"}]}}]),
+                "position",
+            ),
+            (
+                json!([part(json!({"text": "x", "thought": "false"}))]),
+                "thought",
+            ),
+            (json!([part(json!({"text": "x", "thought": 1}))]), "thought"),
+            (
+                json!([part(json!({"text": "x"})), part(json!({"text": "y"}))]),
+                "index-less",
+            ),
+            (
+                json!({"0": {"content": {"parts": [{"text": "x"}]}}}),
+                "candidates",
+            ),
+            (
+                json!([{"content": {"parts": {"0": {"text": "x"}}}}]),
+                "parts",
+            ),
+        ] {
+            let (out, i) = run(
+                &closed(1 << 20, Verdict::Redact),
+                &[gemini_chunk(candidates)],
+            );
+            assert!(out.contains("inspection_blocked"), "{why}: {out}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream Gemini candidate or part reads two ways"),
+                "{why}"
+            );
+        }
+        // `null` candidates (a gateway writing absent fields) name nothing.
+        let (_, i) = run(
+            &closed(1 << 20, Verdict::Redact),
+            &[gemini_chunk(json!(null))],
+        );
+        assert_eq!(i.report().error, None);
+        // Plain ones pass: `index` at its position, a boolean `thought`.
+        let plain = json!([
+            {"index": 0, "content": {"parts": [{"text": "x", "thought": true}, {"text": "y"}]}},
+            {"index": 1, "content": {"parts": [{"text": "z", "thought": false}]}},
+        ]);
+        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[gemini_chunk(plain)]);
+        assert_eq!(i.report().error, None);
+    }
+
+    /// AGENT-322: a protocol `type` beside `candidates` (no real event has
+    /// both) does not take the candidates' text out of its window.
+    #[test]
+    fn a_protocol_type_does_not_unwindow_gemini_text() {
+        let k = key();
+        let (a, b) = (format!("here: {}", &k[..20]), k[20..].to_string());
+        for kind in ["response.output_text.delta", "content_block_delta", "ping"] {
+            let typed = |t: &str| gemini(t).replacen("{", &format!("{{\"type\":\"{kind}\","), 1);
+            let named = |t: &str| format!("event: {kind}\n{}", gemini(t));
+            for events in [vec![typed(&a), typed(&b)], vec![named(&a), named(&b)]] {
+                for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+                    let (out, _) = run(&p, &events);
+                    assert!(
+                        !out.contains(&k[..20]) && !out.contains(&k[20..]),
+                        "{kind}: {out}"
+                    );
+                }
+            }
         }
     }
 

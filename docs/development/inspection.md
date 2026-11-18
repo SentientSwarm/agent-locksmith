@@ -250,11 +250,12 @@ protocol metadata (`type`, `id`, `object`, `model`, `role`,
 `finish_reason`, `stop_reason`, `system_fingerprint`, `status`,
 `item_id`, `call_id`, `response_id`, `obfuscation`, `service_tier`,
 `instructions`), such as a delta's `role` or a tool call's `id`. In a
-Gemini chunk (a `candidates` array, no `choices` and no other protocol's
-event type) the same holds for its `modelVersion`, `responseId` and
-`usageMetadata`, each candidate's `content.role` and `finishReason`, and a
-part's `thoughtSignature`, matched by place (AGENT-273). Only fields later
-events extend go to a window: a chat or completions choice's `delta` and
+Gemini chunk (any event with a `candidates` array, whatever `choices`,
+`type` or event name it also carries) the same holds for its
+`modelVersion`, `responseId` and `usageMetadata`, each candidate's
+`content.role` and `finishReason`, and a part's `thoughtSignature`,
+matched by place (AGENT-273). Only fields later events extend go to a
+window: a chat or completions choice's `delta` and
 `text`, a Responses `*.delta`, an Anthropic block's text, thinking and
 tool input, and the opening text clients start them from
 (`content_block_start`, a Responses `.added` part's text or refusal, or a
@@ -262,73 +263,78 @@ call's arguments). An event a redaction rewrites loses its
 `logprobs` (`null`, or `[]` where it is a list): its tokens, their bytes
 and alternatives would spell the text the cut removed.
 
-Each of those goes to the window of the output it belongs to, the way a
-client rebuilds the stream: each chat choice and each tool call by its
-`index` inside `choices`, each Anthropic content block by its `index`,
-each Responses content part by `output_index` and `content_index`, each
-reasoning summary by `output_index` and `summary_index`, any other
-Responses output (a call's arguments) by `output_index`, and all of a
-Gemini candidate's text parts, in order, by the candidate's `index`, since
-clients join them (AGENT-321). A stream's
-protocol is fixed by its first protocol event, and only the indexes its
-clients use for that event's type count, so an upstream cannot split one
-output across windows by adding or varying others (a top-level `index` on
-a chat chunk names nothing, and an empty `choices` on another protocol's
-event changes nothing). An event naming another protocol, or whose event
-name and `type` differ where either names a protocol event (the SSE
-default name `message` names none), could be read two ways; and a snapshot
+Each of those goes to the window of the output it belongs to, the way a client
+rebuilds the stream: each chat choice and each tool call by its `index` inside
+`choices`, each Anthropic content block by its `index`, each Responses content
+part by `output_index` and `content_index`, each reasoning summary by
+`output_index` and `summary_index`, any other Responses output (a call's
+arguments) by `output_index`, and all of a Gemini candidate's text parts, in
+order, by the candidate's position in `candidates` (clients read
+`candidates[0]` and ignore its `index`), thought parts included, since clients
+join the answer's parts and some print thoughts inline (AGENT-321, AGENT-322).
+A client that leaves thoughts out would join two pieces of answer around a
+thought, so under `fail_closed` with held events a thought part after its
+candidate's answer text blocks; Gemini streams its thoughts first. Clients
+also disagree on a `candidates` or `parts` that is not an array, a candidate
+whose `index` is not its position or that has none past position 0, and a
+`thought` that is not a boolean (the JavaScript SDK takes only `true`, Python
+reads `"false"` by its words), so under `fail_closed` with held events each of
+these blocks too. A stream's protocol is fixed by its first protocol event,
+and only the indexes its clients use for that event's type count, so an
+upstream cannot split one output across windows by adding or varying others (a
+top-level `index` on a chat chunk names nothing, and an empty `choices` on
+another protocol's event changes nothing). An event naming another protocol,
+or whose event name and `type` differ where either names a protocol event (the
+SSE default name `message` names none), could be read two ways; and a snapshot
 clients append deltas to (Responses `response.created` output, an
 `output_item.added` item's content or summary, Anthropic `message_start`
 content) carrying text, which real streams send empty, would split a match
-from its deltas. Either way, under `fail_closed` the stream is blocked,
-under `fail_open` an `inspection_hold_overflow` row is written. So a match
-split across one output's deltas is found however the outputs interleave,
-except that interleaved chat tool calls are blocked under `fail_closed`
-(see below).
-Each window keeps the last `max_match_len - 1` bytes of its output,
-measured both raw and after folding, so a match split across any number of
-deltas is found once. A `private_key` hit not closed by its `END` line and
-followed only by blanks, line breaks or a split escape may still grow (a
-PEM key whose next line has not arrived), so the window holds it from its
-start until a scan finds it ended, or the window or the held events pass
-`max_scan_bytes` (AGENT-309). A window scans once the text it has not
-scanned reaches an eighth of what it holds, so padding that keeps the
-window long cannot make scanning quadratic. Up to 31 unfinished outputs
-under `fail_open`, or 255 under `fail_closed` (1023 in all), get their own
-window; a finished output's window drops its text. Each parallel tool call
-takes two outputs, its name and its arguments (AGENT-273). Under
-`fail_closed` the text all windows hold is already limited to
-`max_scan_bytes`, and a window gives back memory when it trims, so the
-higher limit adds little; each unfinished output keeps up to the longest
-match's length of text, so many long outputs reach `max_scan_bytes`
-before there are 255. Held events go out in order, so under `fail_closed`
-a chat tool call is finished when a later-numbered call in its choice
-starts (AGENT-273): a chat stream sends its calls one after another, and
-only the call in progress then needs to fit in `max_scan_bytes` as raw
-SSE. An upstream that interleaves calls writes to a finished output, so
-under `fail_closed` its stream is blocked; that needs held events, so
-`pass` and `flag` are unaffected. Under `fail_closed` the same holds for one
-that starts a call below a higher-numbered call of its choice, or with a
-negative index: that call gets a fresh window, while a client merging calls
-by position would join it to the call before (AGENT-317). A choice or tool
-call sent without an `index` among ones sent with it is blocked for the same
-reason, and so is one past the first of its chunk's array in a stream that
-sends no index, since a client may merge index-less entries into one;
-servers that send parallel tool calls in one chunk without an index are
-blocked. So is an index that is not a plain JSON integer up to 2^53
-(`"1.0"`, `1e0`, `"1"`, `null`): one client reads it as the number, another
-as a key of its own. That covers the top-level indexes the stream's protocol
-names outputs by and the `index` of an array element at any depth, such as
-OpenRouter `reasoning_details` (AGENT-319); a top-level `index` the protocol
-does not use is not checked. Under `fail_open` the calls stay open until
-`finish_reason`, and held events past `max_scan_bytes` go early.
-Past that, or when non-empty text arrives for an output the protocol
-already said was finished, a match could be missed: under `fail_closed`
-the stream is blocked, under `fail_open` the outputs share one window (or
-the finished one reopens) and an `inspection_hold_overflow` row is
+from its deltas. Either way, under `fail_closed` the stream is blocked, under
+`fail_open` an `inspection_hold_overflow` row is written. So a match split
+across one output's deltas is found however the outputs interleave, except
+that interleaved chat tool calls are blocked under `fail_closed` (see below).
+Each window keeps the last `max_match_len - 1` bytes of its output, measured
+both raw and after folding, so a match split across any number of deltas is
+found once. A `private_key` hit not closed by its `END` line and followed only
+by blanks, line breaks or a split escape may still grow (a PEM key whose next
+line has not arrived), so the window holds it from its start until a scan
+finds it ended, or the window or the held events pass `max_scan_bytes`
+(AGENT-309). A window scans once the text it has not scanned reaches an eighth
+of what it holds, so padding that keeps the window long cannot make scanning
+quadratic. Up to 31 unfinished outputs under `fail_open`, or 255 under
+`fail_closed` (1023 in all), get their own window; a finished output's window
+drops its text. Each parallel tool call takes two outputs, its name and its
+arguments (AGENT-273). Under `fail_closed` the text all windows hold is
+already limited to `max_scan_bytes`, and a window gives back memory when it
+trims, so the higher limit adds little; each unfinished output keeps up to the
+longest match's length of text, so many long outputs reach `max_scan_bytes`
+before there are 255. Held events go out in order, so under `fail_closed` a
+chat tool call is finished when a later-numbered call in its choice starts
+(AGENT-273): a chat stream sends its calls one after another, and only the
+call in progress then needs to fit in `max_scan_bytes` as raw SSE. An upstream
+that interleaves calls writes to a finished output, so under `fail_closed` its
+stream is blocked; that needs held events, so `pass` and `flag` are
+unaffected. Under `fail_closed` the same holds for one that starts a call
+below a higher-numbered call of its choice, or with a negative index: that
+call gets a fresh window, while a client merging calls by position would join
+it to the call before (AGENT-317). A choice or tool call sent without an
+`index` among ones sent with it is blocked for the same reason, and so is one
+past the first of its chunk's array in a stream that sends no index, since a
+client may merge index-less entries into one; servers that send parallel tool
+calls in one chunk without an index are blocked. So is an index that is not a
+plain JSON integer up to 2^53 (`"1.0"`, `1e0`, `"1"`, `null`): one client
+reads it as the number, another as a key of its own. That covers the top-level
+indexes the stream's protocol names outputs by and the `index` of an array
+element at any depth, such as OpenRouter `reasoning_details` (AGENT-319); a
+top-level `index` the protocol does not use is not checked. Under `fail_open`
+the calls stay open until `finish_reason`, and held events past
+`max_scan_bytes` go early. Past that, or when non-empty text arrives for an
+output the protocol already said was finished, a match could be missed: under
+`fail_closed` the stream is blocked, under `fail_open` the outputs share one
+window (or the finished one reopens) and an `inspection_hold_overflow` row is
 written. An `index` is read as clients read it: an integer, a whole-number
-float or a numeric string (under `fail_closed` with held events, anything
-but a plain integer blocks, as above).
+float or a numeric string (under `fail_closed` with held events, anything but
+a plain integer blocks, as above).
 
 How the stream is forwarded depends on `on_hit`:
 

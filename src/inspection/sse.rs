@@ -207,6 +207,52 @@ pub fn indexes_are_plain(event: &SseEvent, scheme: Option<lanes::Scheme>) -> boo
     json(event).is_none_or(|v| lanes::indexes_are_plain(scheme, kind(event, &v).as_deref(), &v))
 }
 
+/// A Gemini chunk's text parts in order, as (candidate position, is a
+/// thought), or `None` when clients read the chunk in different ways
+/// (AGENT-322): a `candidates` or `parts` that is not an array, a
+/// candidate whose `index` is not its position (clients read either) or
+/// that has none past position 0, or
+/// a `thought` that is not a boolean (the JavaScript SDK takes only `true`
+/// as a thought, Python reads `"false"` or `"0"` by its words, a raw
+/// reader by truthiness). An event without `candidates`, and data that
+/// is not JSON, name none.
+pub fn gemini_parts(event: &SseEvent) -> Option<Vec<(usize, bool)>> {
+    let Some(value) = json(event) else {
+        return Some(Vec::new());
+    };
+    let Some(candidates) = value.get("candidates").filter(|c| !c.is_null()) else {
+        return Some(Vec::new());
+    };
+    let mut parts = Vec::new();
+    for (at, c) in candidates.as_array()?.iter().enumerate() {
+        // A client keying candidates by `index` may read a missing one as
+        // 0, so past position 0 one must name its own.
+        if c.get("index")
+            .map_or(at > 0, |i| i.as_u64() != Some(at as u64))
+        {
+            return None;
+        }
+        let Some(list) = c.pointer("/content/parts") else {
+            continue;
+        };
+        for part in list.as_array()? {
+            let thought = match part.get("thought") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => return None,
+            };
+            if part
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+            {
+                parts.push((at, thought));
+            }
+        }
+    }
+    Some(parts)
+}
+
 fn json(event: &SseEvent) -> Option<Value> {
     serde_json::from_str(event.data.as_deref()?).ok()
 }
@@ -343,9 +389,10 @@ pub fn extract_within(
     let kind = kind(event, &value);
     let chat = value.get("choices").is_some_and(Value::is_array)
         && kind.as_deref().and_then(lanes::scheme_of).is_none();
-    let gemini = !chat
-        && value.get("candidates").is_some_and(Value::is_array)
-        && kind.as_deref().and_then(lanes::scheme_of).is_none();
+    // A Gemini chunk. A `choices` array or a protocol `type` beside
+    // `candidates` (no real event has both) changes nothing for the
+    // candidates a Gemini client reads (AGENT-322).
+    let gemini = value.get("candidates").is_some_and(Value::is_array);
     let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
@@ -355,31 +402,32 @@ pub fn extract_within(
     if walk.over {
         return None;
     }
-    let mut out: Vec<TextSpan> = walk
-        .found
-        .into_iter()
-        .map(|(place, path, text)| TextSpan {
-            place,
-            lane: path
-                .and_then(|path| match gemini {
-                    true if gemini_whole(&path) => None,
-                    true => {
-                        gemini_text(&path).or_else(|| stream_path(kind.as_deref(), chat, &path))
-                    }
-                    false => stream_path(kind.as_deref(), chat, &path),
-                })
-                .map(|path| Lane {
-                    // A choice is named by its `#index` in the path.
-                    tags: if path.starts_with("/choices/") {
-                        Vec::new()
-                    } else {
-                        tags.clone()
-                    },
-                    path,
-                }),
-            text,
-        })
-        .collect();
+    let mut out: Vec<TextSpan> =
+        walk.found
+            .into_iter()
+            .map(|(place, path, text)| {
+                let lane = path
+                    .and_then(|path| match (gemini, &place) {
+                        (true, _) if gemini_whole(&path) => None,
+                        (true, Place::Json(pointer)) => gemini_text(pointer)
+                            .or_else(|| stream_path(kind.as_deref(), chat, &path)),
+                        _ => stream_path(kind.as_deref(), chat, &path),
+                    })
+                    .map(|path| Lane {
+                        // A choice is named by its `#index` in the path, a
+                        // Gemini candidate by its position (AGENT-322).
+                        tags: if path.starts_with("/choices/")
+                            || (gemini && path.starts_with("/candidates/"))
+                        {
+                            Vec::new()
+                        } else {
+                            tags.clone()
+                        },
+                        path,
+                    });
+                TextSpan { place, lane, text }
+            })
+            .collect();
     if let Some(hidden) = lanes::hidden_strings(data) {
         // At least one hidden span, even empty, so the repeat is visible.
         let mut texts: Vec<String> = hidden.into_iter().filter(|t| !t.is_empty()).collect();
@@ -424,13 +472,17 @@ fn gemini_whole(path: &str) -> bool {
         .is_some_and(|(_, leaf)| leaf == "thoughtSignature")
 }
 
-/// The one window a Gemini candidate's text parts share: a client joins
-/// every text part of a candidate in order (`chunk.text`), within a chunk
-/// and across chunks, so a match split across parts is found (AGENT-321).
-/// `/candidates/#0/content/parts/2/text` → `/candidates/#0/content/parts/text`.
-fn gemini_text(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("/candidates/")?;
-    let (candidate, field) = rest.split_once('/')?;
+/// The window a Gemini candidate's text parts share, from a part's JSON
+/// `pointer`. A client joins every text part of a candidate in order
+/// (`chunk.text`), within a chunk and across chunks, so they share one
+/// window (AGENT-321); one that prints thoughts inline joins those too, so
+/// thought parts share it (a thought after the answer blocks under
+/// `fail_closed`, see `gemini_parts`). A client reads a candidate by its
+/// position (`candidates[0]`), so the window is named by position, not
+/// `index` (AGENT-322). `/candidates/0/content/parts/2/text` →
+/// `/candidates/0/content/parts/text`.
+fn gemini_text(pointer: &str) -> Option<String> {
+    let (candidate, field) = pointer.strip_prefix("/candidates/")?.split_once('/')?;
     let (_, leaf) = field.strip_prefix("content/parts/")?.split_once('/')?;
     (leaf == "text").then(|| format!("/candidates/{candidate}/content/parts/text"))
 }

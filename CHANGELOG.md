@@ -25,7 +25,15 @@
 - A key split across a streamed Gemini candidate's text parts, within one
   chunk or from one chunk's later part to the next chunk's first, is now
   redacted (AGENT-321). Each part had its own window, while clients join
-  every text part of a candidate in order; the parts now share one.
+  every text part of a candidate in order; the parts, thoughts included, now
+  share one, named by the candidate's position, since clients ignore its
+  `index`, whatever `choices`, `type` or event name the chunk also carries
+  (AGENT-322). Under `fail_closed` with held events, a thought part after
+  its candidate's answer text is blocked (a client leaving thoughts out
+  would join the answer around it), as is a chunk clients read in different
+  ways: a `candidates` (other than `null`) or `parts` that is not an array,
+  a candidate whose `index` is not its position or that has none past
+  position 0, or a `thought` that is not a boolean.
 
 - A streamed Gemini reply under `redact` or `block` is no longer held
   longer than its text needs (AGENT-273). Its `modelVersion`,
