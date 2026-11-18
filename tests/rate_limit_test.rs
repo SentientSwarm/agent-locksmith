@@ -268,6 +268,56 @@ async fn list_marks_limits_whose_route_is_gone() {
     assert_eq!(list["rate_limits"][0]["enforced"], false, "{list}");
 }
 
+async fn enforced(h: &H) -> Value {
+    let list: Value = h.op_req(Method::GET, "/rate-limits").await.json();
+    list["rate_limits"][0]["enforced"].clone()
+}
+
+/// AGENT-272: admission refuses a disabled route before the limiter runs,
+/// so its limit is listed as not enforced until the route is enabled.
+#[tokio::test]
+async fn list_marks_a_disabled_route_not_enforced() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    set(&h, json!({ "requests_per_minute": 5 })).await;
+    let regs = agent_locksmith::registrations::RegistrationRepository::new(h.pool.clone());
+    regs.set_disabled("up", true).await.unwrap();
+    assert_eq!(enforced(&h).await, false);
+    regs.set_disabled("up", false).await.unwrap();
+    assert_eq!(enforced(&h).await, true);
+}
+
+/// AGENT-272: a limit follows its route name. Recreated as a native MCP
+/// route it is not enforced; recreated as HTTP it limits again.
+#[tokio::test]
+async fn a_limit_follows_its_route_through_recreation() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    set(&h, json!({ "requests_per_minute": 1 })).await;
+    h.op_req(Method::DELETE, "/models/up")
+        .await
+        .assert_status_no_content();
+    h.op_req(Method::PUT, "/tools/up")
+        .json(&json!({
+            "upstream": "https://example.com/mcp", "auth": { "kind": "none" },
+            "egress": "direct", "protocol": "mcp_streamable_http",
+            "mcp": { "protocol_version": "2025-11-25" }
+        }))
+        .await
+        .assert_status_ok();
+    assert_eq!(enforced(&h).await, false);
+    h.op_req(Method::DELETE, "/tools/up")
+        .await
+        .assert_status_no_content();
+    let _up = route(&h).await;
+    assert_eq!(enforced(&h).await, true);
+    h.call("up", "/x").await.assert_status_ok();
+    assert_eq!(
+        h.call("up", "/x").await.status_code(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
 /// AGENT-272: a hammering agent writes one `rate_limited` row a minute,
 /// not one per refusal; the next row counts the refusals in between.
 #[tokio::test]

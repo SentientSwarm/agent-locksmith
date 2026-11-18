@@ -427,16 +427,17 @@ Changes apply at once, without a restart, and are audited (`rate_limit_set`,
 bucket. `PUT /admin/operator/rate-limits/{route}` takes
 `{requests_per_minute, max_concurrent?, agent?}`; `DELETE` takes `?agent=`.
 A zero value returns 400 `invalid_rate_limit`, an unknown route 404
-`route_not_found`. Limits apply
-only to HTTP `model` and `tool` routes served under `/api`; a native MCP or
-`infra` registration returns 400 `route_not_limitable`. A limit outlives its
-route: `list` marks it `enforced: false` while the route is missing or not an
-HTTP `model` or `tool`, and it applies again if the route comes back as one. A
-database failure returns 503 `rate_limits_unavailable`. If the change is
-stored but the proxy cannot load it, the request returns 503
-`rate_limits_not_applied` and the daemon logs an error; the old limits stay in
-force until the next change or a restart. Buckets are held in memory, so a
-restart refills them.
+`route_not_found`. Limits apply only to HTTP `model` and `tool` routes
+served under `/api`; a native MCP or `infra` registration returns 400
+`route_not_limitable`. A limit outlives its route: `list` marks it
+`enforced: false` while the route is missing, disabled, or not an HTTP
+`model` or `tool`, and it applies again once the route is an enabled one.
+A database failure returns 503 `rate_limits_unavailable`. If the change
+is stored but the proxy cannot load it, the request returns 503
+`rate_limits_not_applied` and the daemon logs an error; the old limits
+stay in force until the next change or a restart, though `list` already
+shows the stored ones. Buckets are held in memory, so a restart refills
+them.
 
 ### Per-route upstream CA
 

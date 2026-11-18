@@ -30,9 +30,9 @@
   into `$R/models/inspector` and delete the old copy, and to set
   `fs.suid_dumpable` on the Incus host, since a container cannot.
 - `locksmith rate-limit list` (`GET /admin/operator/rate-limits`) gives
-  each limit `enforced`, false when its route is gone or is no longer an
-  HTTP model or tool route. Such a limit is kept, and applies again if
-  the route comes back as one (AGENT-272).
+  each limit `enforced`, false when its route is gone, disabled, or no
+  longer an HTTP model or tool route. Such a limit is kept, and applies
+  again once the route is an enabled one (AGENT-272).
 - The `injection` scanner also reads a phrase that combines a glued
   emoji letter (a flag, `ℹ️`, `Ⓜ️`) with a look-alike only the new fold
   reads, such as `ígnore previous instructions🇺🇸` (AGENT-315).

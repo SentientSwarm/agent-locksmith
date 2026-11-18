@@ -100,8 +100,8 @@ fn limitable(r: &crate::registrations::Registration) -> bool {
 
 /// `GET /admin/operator/rate-limits`. With registrations wired, each row
 /// says whether its route is currently one the proxy limits (AGENT-272):
-/// a limit outlives its registration and applies again if the route
-/// returns as an HTTP model or tool.
+/// an enabled HTTP model or tool. A limit outlives its registration and
+/// applies again if the route returns as one, or is enabled again.
 pub(super) async fn op_list(
     State(state): State<UdsState>,
     Extension(_op): Extension<OperatorIdentity>,
@@ -123,7 +123,7 @@ pub(super) async fn op_list(
                 None => match regs.get(&row.route).await {
                     Ok(r) => *seen
                         .entry(row.route.clone())
-                        .or_insert(r.as_ref().is_some_and(limitable)),
+                        .or_insert(r.is_some_and(|r| limitable(&r) && !r.disabled)),
                     Err(_) => return unavailable(),
                 },
             };
