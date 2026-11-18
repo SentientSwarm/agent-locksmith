@@ -48,6 +48,7 @@ struct Harness {
     bindings: agent_locksmith::repo::AgentCredentialRepository,
     catalog: Arc<ArcSwap<Catalog>>,
     registrations: Arc<RegistrationRepository>,
+    oplog: agent_locksmith::repo::OperationalLogStore,
 }
 
 async fn setup() -> Harness {
@@ -127,7 +128,11 @@ async fn setup_with(proxied: bool, egress_proxy: Option<&str>) -> Harness {
         token_clients,
     };
 
-    let app = build_app_full_with_phase_g(
+    let oplog = agent_locksmith::repo::OperationalLogStore::new(pool.clone());
+    let emitter = Arc::new(
+        agent_locksmith::operational_log_sink::OperationalLogEmitter::spawn(oplog.clone(), 16),
+    );
+    let app = agent_locksmith::app::build_app_full_with_phase_k(
         cfg_arc,
         Some(audit.clone()),
         Arc::new(ArcSwap::from_pointee(Default::default())),
@@ -137,6 +142,10 @@ async fn setup_with(proxied: bool, egress_proxy: Option<&str>) -> Harness {
         catalog_arc.clone(),
         Some(runtime),
         Some(account_bindings.clone()),
+        None,
+        None,
+        Some(emitter),
+        None,
     );
     let server = TestServer::new(app);
 
@@ -152,7 +161,24 @@ async fn setup_with(proxied: bool, egress_proxy: Option<&str>) -> Harness {
         bindings: account_bindings,
         catalog: catalog_arc,
         registrations,
+        oplog,
     }
+}
+
+/// Operational-log events written so far, waiting briefly for the drain.
+async fn oplog_events(h: &Harness) -> Vec<agent_locksmith::repo::OperationalLogRecord> {
+    let filter = agent_locksmith::repo::LogFilter {
+        limit: 20,
+        ..Default::default()
+    };
+    for _ in 0..100 {
+        let rows = h.oplog.query(&filter).await.unwrap();
+        if !rows.is_empty() {
+            return rows;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    Vec::new()
 }
 
 /// Helper: directly seed an OAuth session in the DB (simulates the
@@ -333,6 +359,31 @@ async fn ts224_refresh_failure_requires_reconnect() {
     assert_eq!(h.mock.received_requests().await.unwrap().len(), 1);
 }
 
+/// AGENT-302 — a refresh made for a request fails after its claim like a
+/// background one, and the operational log says the session needs
+/// reconnecting.
+#[tokio::test]
+async fn an_inline_refresh_failure_is_logged() {
+    let h = setup().await;
+    seed_session(&h, "rt-bad", Some("at"), Some(unix_now() - 60)).await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("invalid_grant"))
+        .mount(&h.mock)
+        .await;
+    h.server
+        .get("/api/codex/v1/whatever")
+        .add_header("authorization", &h.bearer_header)
+        .await
+        .assert_status_service_unavailable();
+    let events = oplog_events(&h).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].event, "oauth_refresh_reconnect_required");
+    let fields = events[0].fields.clone().unwrap();
+    assert_eq!(fields["registration"], "codex");
+    assert_eq!(fields["cause"], "revoked");
+}
+
 // ─── TS-225: audit row carries auth_mode + oauth_session_id ────────────────
 #[tokio::test]
 async fn ts225_audit_records_oauth_auth_mode_and_session_id() {
@@ -458,6 +509,7 @@ async fn setup_codex_shaped_with(
         locks: RefreshLockMap::new(),
         token_clients: reqwest::Client::new().into(),
     };
+    let pool_for_log = pool.clone();
 
     let app = build_app_full_with_phase_g(
         cfg_arc,
@@ -484,6 +536,7 @@ async fn setup_codex_shaped_with(
         bindings: account_bindings,
         catalog: catalog_arc,
         registrations,
+        oplog: agent_locksmith::repo::OperationalLogStore::new(pool_for_log),
     }
 }
 

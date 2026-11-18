@@ -149,25 +149,31 @@ curl -fsS --unix-socket "$LOCKSMITH_SOCKET" -H "Authorization: Bearer $LOCKSMITH
 ![Recent operational events](img/07-audit-and-monitor/oplog.svg)
 
 Three `oauth` warnings are worth an alert. Each names the registration,
-session label and cause in `details`:
+session label and cause in `fields`:
 
-- `oauth_refresh_reconnect_required`: a background refresh reached the
-  token endpoint and failed (the provider refused the refresh token or
-  errored, the network or egress proxy failed, the answer was malformed,
-  or the new tokens could not be stored). Whether the provider rotated the refresh token is
-  unknown, so the session is left `reconnect_required` and requests on
-  it fail with 503 `oauth_reconnect_required` until it is signed in
+- `oauth_refresh_reconnect_required`: a refresh tried the token
+  endpoint and failed (the provider refused the refresh token or
+  errored, the network or egress proxy failed, the answer was
+  malformed, or the new tokens could not be stored). Whether the
+  provider rotated the refresh token is unknown, so the session is left
+  `reconnect_required` and requests on it fail with 503
+  `oauth_reconnect_required` until it is signed in again.
+- `oauth_refresh_degraded`: a refresh failed before trying the provider
+  (unusable token metadata, an empty refresh token, or the refresh
+  could not be recorded) and the session is marked degraded. Requests
+  on it fail with 503 `oauth_refresh_failed` until it is signed in
   again.
-- `oauth_refresh_degraded`: a background refresh failed before reaching
-  the provider (unusable token metadata, an empty refresh token, or the
-  refresh could not be recorded) and the session is marked degraded.
-  Requests on it fail with 503 `oauth_refresh_failed` until it is signed
-  in again.
-- `oauth_refresh_skipped`: a `proxied` route's session is due a refresh,
-  but its token call has no egress (no usable `egress_proxy`), so the
-  refresh was not tried. It is reported once per session while the
-  daemon runs, and again only after a refresh of that session has had
-  egress.
+- `oauth_refresh_skipped`: a `proxied` route's session is due a
+  background refresh, but its token call has no egress (no usable
+  `egress_proxy`), so the refresh was not tried. It is reported once per
+  session while the daemon runs, and again only after a refresh of that
+  session has had egress.
+
+The first two come from the background refresh and from a refresh made
+for a request alike; the request that hit the failure gets 503
+`oauth_refresh_failed`. A daemon stopped mid-refresh writes no event,
+so also check `locksmith oauth status`, which shows any session that
+needs reconnecting.
 
 For a device-login route, signing in again is `locksmith oauth
 device-login`; for others, revoke the session locally and bootstrap it.

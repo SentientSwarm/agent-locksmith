@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) async fn record_failure(
+/// Mark a failed refresh: degraded when it failed before its claim,
+/// reported as needing reconnection when after it, and in both cases
+/// written to the operational log (AGENT-302). Background and inline
+/// refreshes both end here.
+pub(crate) async fn record_failure(
     repo: &OauthSessionRepository,
     session: &OauthSession,
     error: &RefreshError,

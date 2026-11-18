@@ -68,7 +68,7 @@ async fn resolve(
     let session = current(rt, target, label).await?;
     validate(&session)?;
     let active = if needs_refresh(&session) {
-        refresh(rt, target, &session).await?
+        refresh(rt, target, &session, state.operational_log.as_deref()).await?
     } else {
         session
     };
@@ -153,6 +153,7 @@ async fn refresh(
     rt: &OauthRuntime,
     target: &ProxyTarget,
     session: &OauthSession,
+    log: Option<&crate::operational_log_sink::OperationalLogEmitter>,
 ) -> Result<OauthSession, OauthUnavailable> {
     let selected = target.oauth_selection.as_ref().ok_or_else(|| {
         unavailable(
@@ -176,7 +177,7 @@ async fn refresh(
     {
         Ok(committed) => Ok(committed),
         Err(e) => {
-            let _ = rt.sessions.mark_degraded(session).await;
+            crate::oauth::refresh::record_failure(&rt.sessions, session, &e, log).await;
             Err(refresh_failure(target, &e))
         }
     }

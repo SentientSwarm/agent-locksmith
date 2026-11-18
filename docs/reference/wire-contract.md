@@ -281,7 +281,8 @@ Codes:
 | 503 | `availability_error` | `connection_not_active` | Registration is not active in the running daemon (for example, persisted and runtime state differ). |
 | 503 | `auth_error` | `credential_unresolved` | Selected source unavailable; no alternate/default dispatch. |
 | 503 | `auth_error` | `oauth_session_missing` | OAuth tool but no session bootstrapped. |
-| 503 | `auth_error` | `oauth_refresh_failed` | OAuth session degraded; operator action required. |
+| 503 | `auth_error` | `oauth_refresh_failed` | OAuth session degraded, or this request's refresh failed; operator action required. |
+| 503 | `auth_error` | `oauth_reconnect_required` | An earlier refresh failed after trying the token endpoint; the session must be signed in again. |
 | 503 | `auth_error` | `oauth_sealing_key_unset` | OAuth tool but daemon has no sealing key. |
 | 504 | `timeout` | `timeout` | Upstream took longer than configured timeout. |
 

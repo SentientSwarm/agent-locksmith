@@ -128,7 +128,7 @@ pub use owner::RefreshOwner;
 mod exchange;
 mod failure;
 pub use exchange::refresh_selected_session;
-use failure::record_failure;
+pub(crate) use failure::record_failure;
 
 mod error;
 pub use error::RefreshError;

@@ -129,6 +129,40 @@ mod failure_events {
     }
 
     #[tokio::test]
+    async fn a_recreated_session_claimed_at_the_same_version_is_not_ours() {
+        // Revoked and signed in again, then claimed by another refresh: the
+        // new row has this claim's token version but another incarnation.
+        let (_d, repo, key, store) = setup().await;
+        let log = OperationalLogEmitter::spawn(store.clone(), 16);
+        let old = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        repo.delete(&old.name, &old.session_label).await.unwrap();
+        let new = repo
+            .create(&key, "codex", "default", "rt2", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        assert_eq!(new.token_version, old.token_version);
+        assert_ne!(new.incarnation, old.incarnation);
+        repo.begin_refresh(&key, &new).await.unwrap();
+        assert!(!repo.held_by_claim(&old).await.unwrap());
+        record_failure(
+            &repo,
+            &old,
+            &RefreshError::Revoked { status: 401 },
+            Some(&log),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let filter = LogFilter {
+            limit: 10,
+            ..LogFilter::default()
+        };
+        assert!(store.query(&filter).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_session_changed_by_someone_else_logs_nothing() {
         // A revoke (or a new sign-in) between the read and the failure is
         // not this refresh's outcome to report.

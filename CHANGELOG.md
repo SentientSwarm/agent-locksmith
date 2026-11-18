@@ -4,10 +4,11 @@
 
 ### Fixed
 
-- A background OAuth refresh whose token call fails now writes an
+- An OAuth refresh whose token call fails now writes an
   `oauth_refresh_reconnect_required` operational-log warning (AGENT-302).
-  The session was already left `reconnect_required`, but only a failure
-  before the token call reached the operational log.
+  The session was already left `reconnect_required`, but only a
+  background failure before the token call reached the operational
+  log, and a refresh made for a request wrote nothing at all.
 - A streamed response on a route whose `fail_closed` policy includes a
   sidecar is refused with 502 `inspection_blocked` before any header is
   sent, instead of 200 headers and an SSE error event, which was framed
