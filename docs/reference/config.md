@@ -323,8 +323,14 @@ misconfigured, anything that could reach the listener could use those
 entries (AGENT-297). The daemon now refuses to start without
 `listen.admin_socket`, `database.path` and `operator_credentials_path`.
 Register agents and select their accounts; `tools` entries are imported as
-registrations at startup. `inbound_auth` is still accepted, ignored with a
-warning if it has a token.
+registrations at startup.
+
+Old configs may still carry the shared-token block; it has no effect:
+
+| Key | Meaning |
+|---|---|
+| `inbound_auth.mode` | Accepted and ignored. |
+| `inbound_auth.token` | Accepted and ignored, with a startup warning when set. |
 
 ### `tools`
 

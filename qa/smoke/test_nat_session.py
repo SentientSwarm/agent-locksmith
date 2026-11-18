@@ -304,3 +304,20 @@ def test_account_reselection_retires_open_sessions(env):
         assert fresh.call("ping").status == 200
         fresh.delete()
     no_arrivals(env, before)
+
+
+@case("SMK-NAT-013", area="NAT", kind="refusal", covers=[STD, CMP], codes=[])
+def test_shared_gateway_config_refuses_to_start(target_factory):
+    """Native access needs an actual registered agent. A shared gateway bearer or
+    identityless setup used to answer 401; since 3.0.0 such a config (no admin socket)
+    does not start at all (docs/reference/config.md, AGENT-297)."""
+    gateway = target_factory(
+        start=False,
+        config={"listen": {"admin_socket": None},
+                "inbound_auth": {"mode": "bearer", "token": "qa-nat-shared-gateway-value"}},
+        label="nat-gateway", upstream=False,
+    )
+    once = gateway.run_daemon_once(timeout=15)
+    output = once.stdout + once.stderr
+    assert once.returncode != 0, output
+    assert "listen.admin_socket" in output, output
