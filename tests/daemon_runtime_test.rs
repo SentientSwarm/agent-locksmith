@@ -136,6 +136,36 @@ tools:
     );
 }
 
+/// AGENT-318: the refusal comes before the state lock, so a config
+/// naming a database but no admin socket leaves no trace on disk.
+#[tokio::test]
+async fn refusal_without_an_admin_socket_creates_no_lock_file() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("state/locksmith.db");
+    let yaml = format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 0
+database:
+  path: "{}"
+tools: []
+"#,
+        db.display()
+    );
+    let cfg = parse_config_str(&yaml).unwrap();
+    let coord = agent_locksmith::shutdown::ShutdownCoordinator::new(Duration::from_secs(2));
+    let result = timeout(Duration::from_secs(10), daemon::run(cfg, coord))
+        .await
+        .expect("refuses at startup");
+    let msg = format!("{}", result.expect_err("daemon must refuse"));
+    assert!(msg.contains("listen.admin_socket"), "got: {msg}");
+    assert!(
+        !dir.path().join("state").exists(),
+        "refusal created the database directory or lock file"
+    );
+}
+
 #[tokio::test]
 async fn daemon_rejects_admin_socket_without_database() {
     let f = build_fixture();

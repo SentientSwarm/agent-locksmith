@@ -12,6 +12,8 @@
   `listen.admin_socket`, `database.path` and `operator_credentials_path`,
   then enroll agents; `tools` entries are imported as registrations.
   `config.example.yaml` now sets all three.
+  The refusal comes before the daemon creates the database directory or
+  its lock file (AGENT-318).
 
 ### Fixed
 

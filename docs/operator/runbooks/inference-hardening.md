@@ -149,7 +149,8 @@ Verify locally:
 ```bash
 # Terminal 1: start a Locksmith with a small drain window for quick observation.
 d=$(mktemp -d)
-locksmith bootstrap-operator --name admin > "$d/operators.yaml" 2>/dev/null
+cargo run -q --bin locksmith -- bootstrap-operator --name admin \
+  > "$d/operators.yaml" 2>/dev/null
 cat > "$d/locksmith.yaml" <<EOF
 listen:
   host: 127.0.0.1

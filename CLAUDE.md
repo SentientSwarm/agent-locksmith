@@ -126,7 +126,9 @@ cargo test path::to::module::test_name                 # for unit tests in src/
 # Audit-write benchmark (criterion)
 cargo bench --bench audit_write_bench
 
-# Run daemon against the example config (tools degrade unless env vars are set)
+# Run daemon against the example config (tools degrade unless env vars are
+# set). It names /run, /var/lib and /etc paths; for a local run use the
+# config in docs/guide/01-install.md.
 GITHUB_TOKEN=... ANTHROPIC_API_KEY=... TAVILY_API_KEY=... \
   target/release/locksmithd --config config.example.yaml
 
@@ -157,7 +159,7 @@ Library code (everything in `src/lib.rs`) is shared between both binaries and th
    - **Phase E registrations path**: after seed_loader + legacy_bootstrap populate the registrations table, `secret::resolve_registration_creds_sync_env_only` walks `AuthSpec::Header` / `AuthSpec::Bearer` entries and resolves their env vars into the same map. OAuth registrations skip this path (their tokens live in the `oauth_sessions` cache).
 
    Tools whose secrets fail to resolve are inactive (degraded per INF-4) but the daemon still boots.
-3. **Admin substrate** (built only when `listen.admin_socket` is set) — opens the SQLite pool (`migrations::open_and_migrate`), constructs `AgentRepository`, `BootstrapTokenRepository`, `AuditRepository`, `RegistrationRepository` (Phase E), `OauthSessionRepository` (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set), the `BearerAuthenticator` (for agents), the `OperatorAuthenticator` (loaded from `operator_credentials_path`), and the `AdminService`. Runs the seed loader (Phase E.7) and the `legacy_bootstrap` shim (config.tools → registrations migration). The audit repository is **shared** with the agent listener so proxy and admin writes hit the same SQLite pool and JSONL mirror.
+3. **Admin substrate** (required: the daemon refuses to start without `listen.admin_socket`, `database.path` and `operator_credentials_path`, before it takes the state lock) — opens the SQLite pool (`migrations::open_and_migrate`), constructs `AgentRepository`, `BootstrapTokenRepository`, `AuditRepository`, `RegistrationRepository` (Phase E), `OauthSessionRepository` (Phase F, when `LOCKSMITH_OAUTH_SEALING_KEY` is set), the `BearerAuthenticator` (for agents), the `OperatorAuthenticator` (loaded from `operator_credentials_path`), and the `AdminService`. Runs the seed loader (Phase E.7) and the `legacy_bootstrap` shim (config.tools → registrations migration). The audit repository is **shared** with the agent listener so proxy and admin writes hit the same SQLite pool and JSONL mirror.
 4. **Retention sweepers** — independent tokio intervals that co-terminate with the shutdown signal: audit (bounded `DELETE WHERE ts < cutoff`), operational logs (Phase J), and the credential store (Phase J — tombstones unreferenced sealed values past the orphan grace window, then hard-deletes tombstoned rows past retention; runs only when `LOCKSMITH_CREDENTIAL_SEALING_KEY` is set). The Phase J `OpResolver` is also built here and synced from the catalog + per-agent overrides before traffic starts.
 5. **Agent listener** — switches on `listen.auth_mode`:
    - `Bearer`: plain TCP + axum.

@@ -121,7 +121,9 @@ Read it first if you're contributing code. It does (in order):
    see [Changing configuration](#changing-configuration).
 3. Resolve `tool.auth.value: SecretRef` for legacy config.tools entries
    (env vars + sealed files + Vault/AWS stubs).
-4. **Build admin substrate** (only when `listen.admin_socket` is set):
+4. **Build admin substrate** (required: the daemon refuses to start
+   without `listen.admin_socket`, `database.path` and
+   `operator_credentials_path`):
    - Open SQLite pool, run migrations.
    - Construct repositories (AgentRepository, BootstrapTokenRepository,
      AuditRepository, RegistrationRepository, OauthSessionRepository).

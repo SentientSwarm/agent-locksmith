@@ -70,8 +70,36 @@ pub async fn run_reporting(
 ) -> Result<(), DaemonError> {
     // Outbound TLS also needs a provider when every inbound listener is plain.
     crate::admin::https::install_crypto_provider_once();
+    require_admin(&config)?;
     let _state_lock = state_lock::acquire(config.database.as_ref().map(|db| db.path.as_path()))?;
     oauth::owned(config, coord, bound).await
+}
+
+/// Refuse a config without the admin substrate, before anything touches
+/// disk (AGENT-318). AGENT-297: legacy mode (no admin socket, so no
+/// per-agent identity) was removed in 3.0.0. Missing or misconfigured
+/// `inbound_auth` left it relaying to authless `tools` entries for any
+/// caller.
+fn require_admin(config: &AppConfig) -> Result<(), DaemonError> {
+    if config.listen.admin_socket.is_none() {
+        return Err(DaemonError::AdminConfig(
+            "`listen.admin_socket` is required: legacy mode without per-agent identity was \
+             removed in 3.0.0. Set `listen.admin_socket`, `database.path` and \
+             `operator_credentials_path`, then enroll agents"
+                .into(),
+        ));
+    }
+    if config.database.is_none() {
+        return Err(DaemonError::AdminConfig(
+            "listen.admin_socket is set but `database.path` is missing".into(),
+        ));
+    }
+    if config.operator_credentials_path.is_none() {
+        return Err(DaemonError::AdminConfig(
+            "listen.admin_socket is set but `operator_credentials_path` is missing".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A listener's serve future, bound and fully prepared but not yet spawned.
@@ -139,29 +167,6 @@ async fn run_owned(
 ) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
-    // AGENT-297: legacy mode (no admin socket, so no per-agent identity)
-    // was removed in 3.0.0. Missing or misconfigured `inbound_auth` left
-    // it relaying to authless `tools` entries for any caller.
-    if !admin_enabled {
-        return Err(DaemonError::AdminConfig(
-            "`listen.admin_socket` is required: legacy mode without per-agent identity was \
-             removed in 3.0.0. Set `listen.admin_socket`, `database.path` and \
-             `operator_credentials_path`, then enroll agents"
-                .into(),
-        ));
-    }
-    if admin_enabled {
-        if config.database.is_none() {
-            return Err(DaemonError::AdminConfig(
-                "listen.admin_socket is set but `database.path` is missing".into(),
-            ));
-        }
-        if config.operator_credentials_path.is_none() {
-            return Err(DaemonError::AdminConfig(
-                "listen.admin_socket is set but `operator_credentials_path` is missing".into(),
-            ));
-        }
-    }
 
     // M9 / v2.0.0: warn once when an operator carries `inbound_auth.token`
     // forward into a deployment with the admin substrate enabled. The
