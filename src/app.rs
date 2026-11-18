@@ -67,8 +67,9 @@ pub struct AppState {
     pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
     /// Phase E.6 — in-memory `Catalog` mirror of the registrations
     /// table. Empty when registrations isn't wired (a test router built
-    /// without the admin substrate). The proxy hot path looks up by name; the discovery
-    /// handlers can iterate by kind without round-tripping the DB.
+    /// without the admin substrate). The proxy hot path looks up by name;
+    /// the discovery handlers can iterate by kind without round-tripping
+    /// the DB.
     /// Refreshed by admin handlers after upsert/delete/enable so
     /// runtime state matches the DB without a daemon restart.
     pub catalog: Arc<ArcSwap<crate::registrations::Catalog>>,
@@ -78,12 +79,11 @@ pub struct AppState {
     /// proxy hot path. `Some` enables proxy-side access-token
     /// injection + on-401 refresh + audit `oauth_session_id`.
     pub oauth: Option<OauthRuntime>,
-    /// Phase G — per-agent credential overrides. `None` only in tests
-    /// built without the admin substrate (AGENT-297). `Some` enables the
-    /// proxy hot path's override-then-default credential resolution.
-    /// An empty repository (no rows) is functionally equivalent to
-    /// `None` — every lookup is `Ok(None)` and the registration's
-    /// default `auth_spec` always wins.
+    /// Phase G / D1 — per-agent account bindings: the credential each
+    /// agent explicitly selected for a registration. There is no template
+    /// fallback: an agent with no binding for a registration gets 403.
+    /// `None` only in tests built without the admin substrate (AGENT-297),
+    /// where every proxied request fails 503 (store unavailable).
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
     /// Phase J (ADR-0008) — credential-store sealing key. `None` when
     /// `LOCKSMITH_CREDENTIAL_SEALING_KEY` is unset: the stored-credential
@@ -98,9 +98,9 @@ pub struct AppState {
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
     /// Phase J / M2 (LOG-2) — non-blocking operational-log emitter. `None`
     /// only in tests built without the admin substrate (AGENT-297); the
-    /// proxy hot path then skips operational-log emits entirely. `Some` lets the proxy
-    /// record degraded/credential-unresolved events on the operational-log
-    /// stream (distinct from audit, secret-free).
+    /// proxy hot path then skips operational-log emits entirely. `Some`
+    /// lets the proxy record degraded/credential-unresolved events on the
+    /// operational-log stream (distinct from audit, secret-free).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     /// Brokered routes phase 3 — last health probe per broker route.
     pub broker_health: crate::registrations::broker_health::BrokerHealth,

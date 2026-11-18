@@ -117,7 +117,7 @@ impl UdsState {
 /// Phase E.6 — `catalog` and `resolved_creds` are optional refs into
 /// the agent router's runtime state. When `Some`, admin writes refresh
 /// both so the proxy hot path picks up changes without a daemon
-/// restart. When `None` (legacy / non-daemon paths), admin writes
+/// restart. When `None` (a test router), admin writes
 /// still hit the repo but no in-memory cache exists to invalidate.
 fn build_registrations_admin_router(
     repo: Arc<crate::registrations::RegistrationRepository>,
