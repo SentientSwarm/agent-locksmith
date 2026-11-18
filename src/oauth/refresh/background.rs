@@ -11,9 +11,9 @@ struct Task {
     skipped: Skipped,
 }
 
-/// A skip that goes on is reported again this often, so the operational
-/// log, which keeps rows for `operational_log.retention_days`, always holds
-/// a recent one while the session goes unrefreshed (AGENT-302).
+/// A skip that goes on is reported again this often, so with the default
+/// `operational_log.retention_days` (30) the operational log holds a row at
+/// most a day old while the session goes unrefreshed (AGENT-302).
 const SKIP_REPORT_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// AGENT-302: sessions whose refresh was skipped for want of egress, with

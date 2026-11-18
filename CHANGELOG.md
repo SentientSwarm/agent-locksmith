@@ -22,18 +22,12 @@
 
 ### Fixed
 
-- A background OAuth refresh skipped for want of egress
-  (`oauth_refresh_skipped`) is reported again once a day while the skip
-  lasts (AGENT-302). It was reported once per daemon run, so after
-  `operational_log.retention_days` the log held no sign of a session
-  still going unrefreshed.
-
 - An OAuth bootstrap or device login no longer stores a session for a
   registration its serving catalog shows as infra (AGENT-302). Both
   refuse infra registrations up front from the database, but a catalog
   that still showed the name as infra (after a failed catalog refresh,
   or a change during the call) let the exchange go on. Both now answer
-  409 `authority_changed` ("start again"), with no session row left.
+  409 `authority_changed` ("start again") and store no new session.
 
 - A large MCP task list (`tasks/list`), or an MCP server's own request
   (`sampling/createMessage`, `elicitation/create`), streamed over SSE is
@@ -214,7 +208,8 @@
   no egress proxy) is reported once, in the daemon log and as an
   `oauth_refresh_skipped` operational-log warning, instead of a warning
   every 30 s for as long as it lasts (AGENT-302). It is reported again
-  if it recurs after a refresh got a client.
+  once a day while it lasts, and at once if it recurs after a refresh
+  got a client.
 - Under `fail_open`, a streamed event too big to judge no longer
   releases the text held before it unscanned (AGENT-273). That text is
   judged first, so a credential that arrived too small to trigger a

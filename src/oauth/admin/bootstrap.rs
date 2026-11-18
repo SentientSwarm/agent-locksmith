@@ -156,7 +156,7 @@ async fn exchange(
             StatusCode::CONFLICT,
             "conflict",
             "authority_changed",
-            "the serving registration does not match the stored one; start again once it does",
+            "the registration is not being served as an OAuth tool or model; start again",
         )));
     }
     let Some(registration) = serving else {

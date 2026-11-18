@@ -173,7 +173,7 @@ async fn bootstrap_rechecks_the_serving_registration_kind() {
     let infra = Registration::new(
         "codex".to_string(),
         Kind::Infra,
-        "Re-created as infra".to_string(),
+        "Serving as infra".to_string(),
         "https://api.openai.example.com".to_string(),
         AuthSpec::OauthDeviceCode {
             client_id: "test-client".to_string(),
