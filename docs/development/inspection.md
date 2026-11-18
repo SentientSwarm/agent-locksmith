@@ -36,13 +36,15 @@ inspection:
 | `max_scan_bytes` | 1 MiB | 1 MiB |
 
 A response policy that redacts or blocks fails closed unless `on_error` says
-otherwise, so a reply it can't judge doesn't pass unjudged. A reply that is
-compressed, oversized, streamed as NDJSON, or hit by a scanner error or
-timeout is refused with 502. So is any SSE stream on a policy with a sidecar
-scanner, since sidecars don't scan streams: that is known before anything is
-sent. An SSE stream that hits a scanner error, or that the scanners stop
-being able to follow, part-way through has already sent its headers, so it
-ends with an error event instead.
+otherwise, so a reply it can't judge doesn't pass unjudged. A buffered
+reply that is compressed, oversized or hit by a scanner error or timeout
+is refused with 502, as is a compressed or NDJSON stream. Under
+`fail_closed`, so is any SSE stream on a policy with a sidecar scanner,
+since sidecars don't scan streams: that is known before anything is sent.
+An SSE stream that hits a scanner error, an event or held text past
+`max_scan_bytes`, or anything else the scanners stop being able to
+follow part-way through has already sent its headers, so it ends with an
+error event instead.
 
 Unknown scanner ids, an empty scanner list and a route listed twice fail
 config load.
@@ -251,9 +253,9 @@ fields later events extend go to a window: a chat or completions
 choice's `delta` and `text`, a Responses `*.delta`, an Anthropic block's
 text, thinking and tool input, and the opening text clients start them
 from (`content_block_start`, a Responses `.added` part's text or refusal,
-or a call's arguments). An event a redaction rewrites loses its `logprobs` (`null`,
-or `[]` where it is a list): its tokens, their bytes and alternatives
-would spell the text the cut removed.
+or a call's arguments). An event a redaction rewrites loses its
+`logprobs` (`null`, or `[]` where it is a list): its tokens, their bytes
+and alternatives would spell the text the cut removed.
 
 Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
@@ -263,43 +265,42 @@ reasoning summary by `output_index` and `summary_index`, and any other
 Responses output (a call's arguments) by `output_index`. A stream's
 protocol is fixed by its first protocol event, and only the indexes its
 clients use for that event's type count, so an upstream cannot split one
-output across windows by adding or varying others (a top-level `index`
-on a chat chunk names nothing, and an empty `choices` on another
-protocol's event changes nothing). An event naming another protocol, or
-whose event name and `type` differ where either names a protocol event
-(the SSE default name `message` names none), could be read two ways; and
-a snapshot clients append deltas to (Responses `response.created`
-output, an `output_item.added` item's content or summary, Anthropic
-`message_start` content) carrying text, which real streams send empty,
-would split a match from its deltas. Either way, under `fail_closed` the
-stream is blocked, under `fail_open` an `inspection_hold_overflow` row
-is written. So a match split across one output's deltas is found however
-the outputs interleave. Each window keeps the last `max_match_len - 1`
-bytes of its output, measured both raw and after folding, so a match
-split across any number of deltas is found once. A `private_key` hit
-not closed by its `END` line and followed only by blanks, line breaks
-or a split escape may still grow
-(a PEM key whose next line has not arrived), so the window holds it
-from its start until a scan finds it ended, or the window or the held
-events pass `max_scan_bytes` (AGENT-309). A window scans once the
-text it has not scanned reaches an eighth of what it holds, so padding
-that keeps the window long cannot make scanning quadratic. Up to 31
-unfinished outputs under `fail_open`, or 255 under `fail_closed`
-(1023 in all), get their own window; a finished output's window drops
-its text. Each parallel tool call takes two outputs, its name and its
-arguments (AGENT-273). Under `fail_closed` the text all windows hold is
-already limited to `max_scan_bytes`, and a window gives back memory
-when it trims, so the higher limit adds little; each unfinished output
-keeps up to the longest match's length of text, so many long outputs
-reach `max_scan_bytes` before 255. Held events still go out in order,
-so a chat stream's tool calls, which stay unfinished until
-`finish_reason`, must fit in `max_scan_bytes` as raw SSE; a larger
-tool-call section is blocked under `fail_closed`. Past that, or when non-empty text
-arrives for an output the protocol already said was finished, a match
-could be missed: under `fail_closed` the stream is blocked, under
-`fail_open` the outputs share one window (or the finished one reopens)
-and an `inspection_hold_overflow` row is written. An `index` is read as
-clients read it: an integer, a whole-number float or a numeric string.
+output across windows by adding or varying others (a top-level `index` on
+a chat chunk names nothing, and an empty `choices` on another protocol's
+event changes nothing). An event naming another protocol, or whose event
+name and `type` differ where either names a protocol event (the SSE
+default name `message` names none), could be read two ways; and a snapshot
+clients append deltas to (Responses `response.created` output, an
+`output_item.added` item's content or summary, Anthropic `message_start`
+content) carrying text, which real streams send empty, would split a match
+from its deltas. Either way, under `fail_closed` the stream is blocked,
+under `fail_open` an `inspection_hold_overflow` row is written. So a match
+split across one output's deltas is found however the outputs interleave.
+Each window keeps the last `max_match_len - 1` bytes of its output,
+measured both raw and after folding, so a match split across any number of
+deltas is found once. A `private_key` hit not closed by its `END` line and
+followed only by blanks, line breaks or a split escape may still grow (a
+PEM key whose next line has not arrived), so the window holds it from its
+start until a scan finds it ended, or the window or the held events pass
+`max_scan_bytes` (AGENT-309). A window scans once the text it has not
+scanned reaches an eighth of what it holds, so padding that keeps the
+window long cannot make scanning quadratic. Up to 31 unfinished outputs
+under `fail_open`, or 255 under `fail_closed` (1023 in all), get their own
+window; a finished output's window drops its text. Each parallel tool call
+takes two outputs, its name and its arguments (AGENT-273). Under
+`fail_closed` the text all windows hold is already limited to
+`max_scan_bytes`, and a window gives back memory when it trims, so the
+higher limit adds little; each unfinished output keeps up to the longest
+match's length of text, so many long outputs reach `max_scan_bytes` before
+255. Held events still go out in order, so a chat stream's tool calls,
+which stay unfinished until `finish_reason`, must fit in `max_scan_bytes`
+as raw SSE; a larger tool-call section is blocked under `fail_closed`.
+Past that, or when non-empty text arrives for an output the protocol
+already said was finished, a match could be missed: under `fail_closed`
+the stream is blocked, under `fail_open` the outputs share one window (or
+the finished one reopens) and an `inspection_hold_overflow` row is
+written. An `index` is read as clients read it: an integer, a whole-number
+float or a numeric string.
 
 How the stream is forwarded depends on `on_hit`:
 
@@ -320,15 +321,15 @@ An event longer than `max_scan_bytes`, one whose strings and their JSON
 locations together pass it (long keys repeated over many values), held
 text or events past it (counting the copies of the fields a held event
 keeps: those later text can reach, and those to rewrite), or lane paths
-past it, can't be judged within bounds. Under `fail_closed` the stream is blocked.
-Under `fail_open`, held text or events past the bound are released early
-and an `inspection_hold_overflow` row is written; an oversized event and
-the rest of the stream pass through unscanned, audited
+past it, can't be judged within bounds. Under `fail_closed` the stream is
+blocked. Under `fail_open`, held text or events past the bound are
+released early and an `inspection_hold_overflow` row is written; an
+oversized event and the rest of the stream pass through unscanned, audited
 `inspection_skipped` with reason `oversize`. The text held when the
-oversized event arrives is judged first, so its hits are redacted or
-block before it is released (AGENT-273). An unterminated final event
-is scanned when the upstream closes. A content-encoded stream follows
-`on_error`, as a buffered body does. When the route also has response
+oversized event arrives is judged first, so its hits are redacted or block
+before it is released (AGENT-273). An unterminated final event is scanned
+when the upstream closes. A content-encoded stream follows `on_error`, as
+a buffered body does. When the route also has response
 `redaction_patterns`, the inspected stream is buffered whole and the
 patterns run on it, as for any response with redaction patterns.
 
