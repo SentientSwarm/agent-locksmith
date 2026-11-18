@@ -10,12 +10,16 @@
 //!   ASCII.
 //! - [`fold_strict`] is the fold before AGENT-315: Cyrillic, Greek,
 //!   fullwidth and mathematical letters only, and Latin-block marks.
+//! - [`fold_symbols_kept`] is the full fold with symbol letters (flags,
+//!   `ℹ`, circled and squared letters) kept as themselves.
 //!
 //! The full fold turns some characters that used to be non-word bytes
 //! into letters (`é`, `ℹ`, flags), which glue onto a neighbouring word
 //! and break a rule's `\b`. [`needs_strict`] says when a text holds one,
-//! and the scanner then matches both folds, so no phrase the previous
-//! fold caught is missed.
+//! and the scanner then matches the strict fold too, so no phrase the
+//! previous fold caught is missed; with a symbol letter present
+//! ([`needs_symbols_kept`]) it also matches the symbol view, so a glued
+//! emoji cannot hide a trick only the full fold reads.
 
 use unicode_normalization::char::{decompose_compatible, is_combining_mark};
 
@@ -257,6 +261,24 @@ fn fold_old(c: char, emit: impl FnMut(char)) {
     c.to_lowercase().for_each(emit);
 }
 
+/// Symbols that fold to a letter: the information sign, parenthesized and
+/// circled letters, and the enclosed alphanumeric supplement (squared,
+/// negative circled and squared letters, regional indicators). Many are
+/// emoji, so they sit next to words; folded, they glue onto one.
+fn is_symbol_letter(c: char) -> bool {
+    matches!(c as u32, 0x2139 | 0x249C..=0x24E9 | 0x1F110..=0x1F1FF)
+}
+
+/// Emit what non-whitespace `c` folds to in the symbol view: the full
+/// fold, but a symbol letter keeps its own (lower-cased) form.
+fn fold_symbols(c: char, emit: impl FnMut(char)) {
+    if is_symbol_letter(c) {
+        c.to_lowercase().for_each(emit);
+    } else {
+        fold_full(c, emit);
+    }
+}
+
 /// Whether `c` folds differently in the two folds. Each fold emits at
 /// most five characters (`no_character_folds_to_much_more_than_itself`).
 fn folds_differ(c: char) -> bool {
@@ -271,17 +293,18 @@ fn folds_differ(c: char) -> bool {
     collect(|c, emit| fold_full(c, emit)) != collect(|c, emit| fold_old(c, emit))
 }
 
-/// Bytes `c` contributes to either folded text, at most: the smaller of
-/// the two, ignoring whitespace-run collapsing (the caller counts a run
-/// once). A window that keeps this much keeps enough of both.
+/// Bytes `c` contributes to any folded view, at most: the smallest of
+/// the three, ignoring whitespace-run collapsing (the caller counts a run
+/// once). A window that keeps this much keeps enough of each.
 pub(super) fn folded_width(c: char) -> usize {
     if c.is_whitespace() {
         return 1;
     }
-    let (mut full, mut old) = (0, 0);
+    let (mut full, mut old, mut kept) = (0, 0, 0);
     fold_full(c, |f| full += f.len_utf8());
     fold_old(c, |f| old += f.len_utf8());
-    full.min(old)
+    fold_symbols(c, |f| kept += f.len_utf8());
+    full.min(old).min(kept)
 }
 
 fn push(out: &mut String, map: &mut Vec<usize>, at: usize, c: char) {
@@ -322,6 +345,19 @@ pub(super) fn fold(text: &str) -> (String, Vec<usize>) {
 /// The strict (pre-AGENT-315) fold of `text`, with its offset map.
 pub(super) fn fold_strict(text: &str) -> (String, Vec<usize>) {
     fold_with(text, |c, emit| fold_old(c, emit))
+}
+
+/// The full fold of `text` with symbol letters kept as themselves, with
+/// its offset map: a phrase spelled with a trick only the full fold reads
+/// and glued to an emoji letter is still read (AGENT-315).
+pub(super) fn fold_symbols_kept(text: &str) -> (String, Vec<usize>) {
+    fold_with(text, |c, emit| fold_symbols(c, emit))
+}
+
+/// Whether `text` holds a symbol letter, so a scan must match
+/// [`fold_symbols_kept`] too.
+pub(super) fn needs_symbols_kept(text: &str) -> bool {
+    text.chars().any(is_symbol_letter)
 }
 
 /// Whether `text` holds a character the two folds treat differently, so
@@ -429,11 +465,15 @@ mod tests {
     fn no_character_folds_to_much_more_than_itself() {
         // AGENT-315: bounds folded text (and its offset map) by the input.
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
-            let (mut full, mut old) = (0, 0);
+            let (mut full, mut old, mut kept) = (0, 0, 0);
             fold_full(c, |f| full += f.len_utf8());
             fold_old(c, |f| old += f.len_utf8());
+            fold_symbols(c, |f| kept += f.len_utf8());
             let most = c.len_utf8() + MAX_EXTRA_BYTES;
-            assert!(full <= most && old <= most, "{c:?}: {full} / {old}");
+            assert!(
+                full <= most && old <= most && kept <= most,
+                "{c:?}: {full} / {old} / {kept}"
+            );
         }
         assert_eq!(fold("\u{FDFA}").0, "\u{FDFA}");
     }
@@ -444,6 +484,17 @@ mod tests {
         // marks stay; Cyrillic, fullwidth and math letters still fold.
         let text = "\u{00ED}\u{212A}\u{1F1FA}\u{0456}\u{FF29}\u{1D422}\u{0951}\u{0301}";
         assert_eq!(fold_strict(text).0, "\u{00ED}k\u{1F1FA}iii\u{0951}");
+    }
+
+    #[test]
+    fn the_symbol_view_keeps_symbol_letters_and_folds_the_rest() {
+        let text = "\u{1F1FA}\u{00ED}\u{2139}\u{026A}\u{24C2}\u{1F17F}\u{24A4}\u{1F130}x";
+        assert_eq!(
+            fold_symbols_kept(text).0,
+            "\u{1F1FA}i\u{2139}i\u{24DC}\u{1F17F}\u{24A4}\u{1F130}x"
+        );
+        assert!(needs_symbols_kept("a\u{1F1FA}"));
+        assert!(!needs_symbols_kept("caf\u{00E9} \u{0456}"));
     }
 
     #[test]
@@ -465,7 +516,11 @@ mod tests {
         let sample = "Ab\u{212A}\u{216B}\u{24A4}\u{1F158}\u{00ED}\u{1D6A8}\u{FDFA}\u{AC00}\u{00B4}\u{0301}\u{200B}\u{FB01}\u{0130}\u{1D400}\u{1F1FA}\u{0951}";
         for c in sample.chars() {
             let one = c.to_string();
-            let want = fold(&one).0.len().min(fold_strict(&one).0.len());
+            let want = fold(&one)
+                .0
+                .len()
+                .min(fold_strict(&one).0.len())
+                .min(fold_symbols_kept(&one).0.len());
             assert_eq!(folded_width(c), want, "{c:?}");
         }
     }

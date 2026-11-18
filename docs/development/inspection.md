@@ -97,7 +97,11 @@ onto a phrase's first or last word and break its `\b` (`instructionsé`,
 a flag or `ℹ️` before `Ignore`), so when a text holds a character this
 fold treats differently from the fold before AGENT-315 (Cyrillic, Greek,
 fullwidth and mathematical letters and Latin-block marks only), that
-stricter fold is matched as well and the hits are merged. Hits are reported at their
+stricter fold is matched as well and the hits are merged. A text holding
+a symbol letter (a flag, `ℹ`, a circled or squared letter) is also
+matched with the full fold but those symbols kept as themselves, so a
+glued emoji cannot hide a phrase spelled with a trick only the full fold
+reads (`ígnore previous instructions🇺🇸`). Hits are reported at their
 original byte offsets, extended over combining marks on the last letter,
 so `redact` removes what was really sent.
 
