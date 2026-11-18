@@ -361,10 +361,12 @@ pub fn extract_within(
         .map(|(place, path, text)| TextSpan {
             place,
             lane: path
-                .and_then(|path| {
-                    (!(gemini && gemini_whole(&path)))
-                        .then(|| stream_path(kind.as_deref(), chat, &path))
-                        .flatten()
+                .and_then(|path| match gemini {
+                    true if gemini_whole(&path) => None,
+                    true => {
+                        gemini_text(&path).or_else(|| stream_path(kind.as_deref(), chat, &path))
+                    }
+                    false => stream_path(kind.as_deref(), chat, &path),
                 })
                 .map(|path| Lane {
                     // A choice is named by its `#index` in the path.
@@ -420,6 +422,17 @@ fn gemini_whole(path: &str) -> bool {
         .strip_prefix("content/parts/")
         .and_then(|part| part.split_once('/'))
         .is_some_and(|(_, leaf)| leaf == "thoughtSignature")
+}
+
+/// The one window a Gemini candidate's text parts share: a client joins
+/// every text part of a candidate in order (`chunk.text`), within a chunk
+/// and across chunks, so a match split across parts is found (AGENT-321).
+/// `/candidates/#0/content/parts/2/text` → `/candidates/#0/content/parts/text`.
+fn gemini_text(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/candidates/")?;
+    let (candidate, field) = rest.split_once('/')?;
+    let (_, leaf) = field.strip_prefix("content/parts/")?.split_once('/')?;
+    (leaf == "text").then(|| format!("/candidates/{candidate}/content/parts/text"))
 }
 
 /// The lane path of a field later events extend, or `None` for one

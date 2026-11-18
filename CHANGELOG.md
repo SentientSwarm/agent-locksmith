@@ -22,6 +22,11 @@
 
 ### Fixed
 
+- A key split across a streamed Gemini candidate's text parts, within one
+  chunk or from one chunk's later part to the next chunk's first, is now
+  redacted (AGENT-321). Each part had its own window, while clients join
+  every text part of a candidate in order; the parts now share one.
+
 - A streamed Gemini reply under `redact` or `block` is no longer held
   longer than its text needs (AGENT-273). Its `modelVersion`,
   `responseId`, `usageMetadata`, each candidate's `role` and

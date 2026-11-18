@@ -1629,6 +1629,33 @@ mod tests {
         assert_eq!(first_release(gemini_signed, gemini), chat);
     }
 
+    /// AGENT-321: a client joins every text part of a candidate in order
+    /// (`chunk.text`), so a key split across parts, in one chunk or from
+    /// one chunk's later part to the next chunk's first, is redacted.
+    #[test]
+    fn a_key_split_across_gemini_parts_is_redacted() {
+        let k = key();
+        let parts = |texts: &[&str]| {
+            let parts: Vec<_> = texts
+                .iter()
+                .map(|t| serde_json::json!({"text": t}))
+                .collect();
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"candidates": [{"content": {"parts": parts, "role": "model"}, "index": 0}]})
+            )
+        };
+        let (a, b) = (&k[..20], &k[20..]);
+        for events in [
+            vec![parts(&["here: ", a]), parts(&[b])],
+            vec![parts(&[&format!("here: {a}"), b])],
+        ] {
+            let (out, _) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(a), "{out}");
+            assert!(!out.contains(b), "{out}");
+        }
+    }
+
     #[test]
     fn a_key_split_across_gemini_chunks_is_redacted() {
         let k = key();

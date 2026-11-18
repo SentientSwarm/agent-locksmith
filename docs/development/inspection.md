@@ -266,8 +266,10 @@ Each of those goes to the window of the output it belongs to, the way a
 client rebuilds the stream: each chat choice and each tool call by its
 `index` inside `choices`, each Anthropic content block by its `index`,
 each Responses content part by `output_index` and `content_index`, each
-reasoning summary by `output_index` and `summary_index`, and any other
-Responses output (a call's arguments) by `output_index`. A stream's
+reasoning summary by `output_index` and `summary_index`, any other
+Responses output (a call's arguments) by `output_index`, and all of a
+Gemini candidate's text parts, in order, by the candidate's `index`, since
+clients join them (AGENT-321). A stream's
 protocol is fixed by its first protocol event, and only the indexes its
 clients use for that event's type count, so an upstream cannot split one
 output across windows by adding or varying others (a top-level `index` on
