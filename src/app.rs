@@ -23,9 +23,10 @@ pub struct AppState {
     pub config: Arc<ArcSwap<AppConfig>>,
     pub started_at: Instant,
     pub client_pool: ClientPool,
-    /// Audit sink (T3.1). `None` for M0/M1 deployments without admin
-    /// substrate; the proxy hot path then skips audit writes entirely
-    /// rather than fail.
+    /// Audit sink (T3.1). `None` only in tests that build the router
+    /// without the admin substrate (the daemon always has one since 3.0.0,
+    /// AGENT-297); the proxy hot path then skips audit writes rather than
+    /// fail.
     pub audit: Option<AuditRepository>,
     /// Resolved credential map (M5 / T5.1). Populated at startup by
     /// the daemon (`secret::resolve_tool_creds`) or by the eager
@@ -60,13 +61,13 @@ pub struct AppState {
     /// Phase E.3 — registrations repo for the public discovery
     /// endpoints `/tools` and `/models`. Same Arc as
     /// `UdsState.registrations` (shared across admin + discovery).
-    /// `None` for M0/M1 deployments without admin substrate; the
-    /// discovery handlers then fall back to the YAML-loaded
-    /// `config.tools` so existing M9 tests stay green.
+    /// `None` only in tests that build the router without the admin
+    /// substrate; the daemon always has it since 3.0.0 (AGENT-297); the
+    /// discovery handlers then fall back to the YAML-loaded `config.tools`.
     pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
     /// Phase E.6 — in-memory `Catalog` mirror of the registrations
-    /// table. Empty when registrations isn't wired (M0/M1 / M9 test
-    /// path). The proxy hot path looks up by name; the discovery
+    /// table. Empty when registrations isn't wired (a test router built
+    /// without the admin substrate). The proxy hot path looks up by name; the discovery
     /// handlers can iterate by kind without round-tripping the DB.
     /// Refreshed by admin handlers after upsert/delete/enable so
     /// runtime state matches the DB without a daemon restart.
@@ -77,8 +78,8 @@ pub struct AppState {
     /// proxy hot path. `Some` enables proxy-side access-token
     /// injection + on-401 refresh + audit `oauth_session_id`.
     pub oauth: Option<OauthRuntime>,
-    /// Phase G — per-agent credential overrides. `None` for M0/M1
-    /// deployments without admin substrate. `Some` enables the
+    /// Phase G — per-agent credential overrides. `None` only in tests
+    /// built without the admin substrate (AGENT-297). `Some` enables the
     /// proxy hot path's override-then-default credential resolution.
     /// An empty repository (no rows) is functionally equivalent to
     /// `None` — every lookup is `Ok(None)` and the registration's
@@ -96,8 +97,8 @@ pub struct AppState {
     /// `secret_ref` and unseals with `credential_sealing_key` (T1.6).
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
     /// Phase J / M2 (LOG-2) — non-blocking operational-log emitter. `None`
-    /// for M0/M1 deployments without admin substrate; the proxy hot path
-    /// then skips operational-log emits entirely. `Some` lets the proxy
+    /// only in tests built without the admin substrate (AGENT-297); the
+    /// proxy hot path then skips operational-log emits entirely. `Some` lets the proxy
     /// record degraded/credential-unresolved events on the operational-log
     /// stream (distinct from audit, secret-free).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
@@ -671,8 +672,8 @@ async fn models_handler(
 ///
 /// When the registrations repo is wired (Phase E.3+), reads from the
 /// registrations table — kind-discriminated, ACL-filtered, drops
-/// `disabled=true` rows. When the repo is `None` (M0/M1 / M9 test
-/// path without admin substrate), falls back to the YAML-loaded
+/// `disabled=true` rows. When the repo is `None` (a test router built
+/// without the admin substrate, AGENT-297), falls back to the YAML-loaded
 /// `config.tools` for `/tools` and returns an empty array for
 /// `/models` (pre-Phase-E deployments had no model concept).
 async fn catalog_listing(

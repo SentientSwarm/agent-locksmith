@@ -486,7 +486,7 @@ async fn proxy_request(
 
     // AGENT-266: per-agent rate limits, after admission and before any
     // credential is resolved or anything is sent upstream.
-    match limit::check(&state, &ctx, Some(&identity)).await {
+    match limit::check(&state, &ctx, &identity).await {
         Ok(p) => *permit = p,
         Err(refused) => return refused,
     }

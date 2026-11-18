@@ -12,16 +12,13 @@ use axum::response::{IntoResponse, Json, Response};
 use futures_util::StreamExt;
 use serde_json::json;
 
-/// Admit the request or answer 429. Identity-less (legacy) requests are
-/// never limited: limits are per agent.
+/// Admit the agent's request or answer 429. Limits are per agent, and
+/// every proxied request has one since 3.0.0 (AGENT-297).
 pub(super) async fn check(
     state: &AppState,
     ctx: &RequestCtx,
-    identity: Option<&crate::auth_v2::AgentIdentity>,
+    identity: &crate::auth_v2::AgentIdentity,
 ) -> Result<Option<Permit>, Response> {
-    let Some(identity) = identity else {
-        return Ok(None);
-    };
     match state.rate_limits.check(identity.id, &ctx.tool_name) {
         Ok(permit) => Ok(permit),
         Err(limited) => Err(refuse(&state.audit, ctx, limited).await),

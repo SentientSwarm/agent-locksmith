@@ -269,9 +269,9 @@ pub struct ListenConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    /// Optional admin Unix-domain-socket listener (M2). When present the
-    /// daemon binds the admin router (C-2) at this path with mode 0660.
-    /// Absent ⇒ M0/M1 backward-compat behavior (TCP listener only).
+    /// Admin Unix-domain-socket listener (M2): the daemon binds the admin
+    /// router (C-2) at this path with mode 0660. Optional in the schema,
+    /// but the daemon refuses to start without it since 3.0.0 (AGENT-297).
     pub admin_socket: Option<AdminSocketConfig>,
     /// Optional admin HTTPS listener (M4 / C-3, SPEC §4.2.5). When present
     /// AND `enabled: true`, the daemon binds a TLS-terminated TCP listener

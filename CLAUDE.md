@@ -34,9 +34,9 @@ Recent phase shipments:
   (`OpenAI-Beta: responses=experimental` + `originator: <agent>`).
   Forces `OpenAI-Beta`; preserves agent-supplied `originator` else
   injects `AgentIdentity.name` (`locksmith-proxy` is a defensive
-  fallback; every request has an identity since 3.0.0). After G4, agents can call codex through
-  locksmith with only `Authorization` + minimal body — locksmith
-  owns every codex-specific wire piece.
+  fallback; every request has an identity since 3.0.0). After G4,
+  agents can call codex through locksmith with only `Authorization`
+  + minimal body — locksmith owns every codex-specific wire piece.
   See `docs/concepts/oauth-flow.md` for the end-to-end flow.
 - **Phase G5** (v2.5.2): codex `max_output_tokens` strip. The codex
   Responses backend rejects `max_output_tokens`; `codex_body::fixup`

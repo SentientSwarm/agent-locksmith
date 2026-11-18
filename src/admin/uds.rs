@@ -47,9 +47,9 @@ pub struct UdsState {
     /// `auth_mode=bearer` mode). `Some(ctx)` ⇒ admin HTTPS with mTLS.
     pub operator_mtls: Option<OperatorMtlsContext>,
     /// Phase E.3 — registrations repo for `/admin/operator/{tools,models,
-    /// infra}/<name>` routes. `None` for M0/M1 deployments without admin
-    /// substrate; the registrations routes are then absent from the
-    /// router entirely.
+    /// infra}/<name>` routes. `None` only in tests built without the
+    /// admin substrate (AGENT-297); the registrations routes are then
+    /// absent from the router entirely.
     pub registrations: Option<Arc<crate::registrations::RegistrationRepository>>,
     /// Phase E.6 — agent router's in-memory `Catalog` cache. Threaded
     /// through so admin write handlers refresh it after upsert/delete/
@@ -67,8 +67,8 @@ pub struct UdsState {
     /// Phase G — per-agent credential override repository. Threaded
     /// through so the admin endpoints
     /// `PUT /agents/{id}/credentials/{registration}` and friends can
-    /// persist overrides. `None` for M0/M1 deployments without admin
-    /// substrate.
+    /// persist overrides. `None` only in tests built without the admin
+    /// substrate (AGENT-297).
     pub agent_creds: Option<crate::repo::AgentCredentialRepository>,
     /// Phase J (ADR-0008) — credential-store sealing key. Threaded into
     /// the registrations admin router so the
@@ -82,12 +82,12 @@ pub struct UdsState {
     pub credential_secrets: Option<crate::repo::CredentialSecretsRepository>,
     /// Phase J / M2 (LOG-2) — operational-log emitter, threaded into the
     /// registrations admin router so registration create/update/delete
-    /// records a `registry` operational-log event. `None` for M0/M1
-    /// deployments without the operational-log substrate.
+    /// records a `registry` operational-log event. `None` only in tests
+    /// built without the operational-log substrate (AGENT-297).
     pub operational_log: Option<Arc<crate::operational_log_sink::OperationalLogEmitter>>,
     /// Phase J / M2 (LOG-3) — operational-log store, read by the
-    /// `GET /admin/operator/logs` query route. `None` for M0/M1
-    /// deployments; the route then returns an empty result set.
+    /// `GET /admin/operator/logs` query route. `None` only in tests built
+    /// without it (AGENT-297); the route then returns an empty result set.
     pub operational_log_store: Option<crate::repo::OperationalLogStore>,
     /// Phase J / M2 (CCS-8, T2.2) — `op://` resolver cache, shared with the
     /// proxy hot path. Admin writes that change which `op` references are
@@ -856,7 +856,7 @@ struct LogQueryParams {
 /// table, separate handler, `{"logs":[...]}` envelope. `400`s on an
 /// invalid `level` or `component`, mirroring `/audit`'s
 /// invalid_event_class / invalid_decision handling. When the store isn't
-/// wired (M0/M1), returns an empty result set.
+/// wired (a test router), returns an empty result set.
 async fn op_query_logs(
     State(state): State<UdsState>,
     Extension(_op): Extension<OperatorIdentity>,
