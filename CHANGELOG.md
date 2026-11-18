@@ -22,6 +22,16 @@
 
 ### Fixed
 
+- A large MCP result streamed over SSE (a `tools/list`, `resources/list`
+  or `prompts/list` result, a read or a tool call's output) is no longer
+  blocked under `fail_closed` with held events (AGENT-273). Each of its
+  strings took a window of its own, so past 255 the stream was refused.
+  An MCP result is complete in its event and is now scanned whole; other
+  JSON-RPC (A2A or ACP chunks, which clients join) keeps its windows. A
+  JSON-RPC stream that later sends JSON that is not JSON-RPC now blocks
+  under `fail_closed` ("stream event names another protocol"); under
+  `fail_open` it keeps its windows and is audited as a hold overflow.
+
 - A key split across a streamed Gemini candidate's text parts, within one
   chunk or from one chunk's later part to the next chunk's first, is now
   redacted (AGENT-321). Each part had its own window, while clients join

@@ -253,6 +253,63 @@ pub fn gemini_parts(event: &SseEvent) -> Option<Vec<(usize, bool)>> {
     Some(parts)
 }
 
+/// Whether the event is JSON-RPC 2.0 (a message or a batch of them), or
+/// `None` when its data is not JSON. A stream's first JSON event fixes
+/// whether the stream is JSON-RPC, as its first protocol event fixes its
+/// scheme, so a `jsonrpc` field added mid-stream scans nothing whole.
+pub fn is_jsonrpc(event: &SseEvent) -> Option<bool> {
+    let value = json(event)?;
+    let message = |v: &Value| v.get("jsonrpc").and_then(Value::as_str) == Some("2.0");
+    Some(match &value {
+        Value::Array(batch) => !batch.is_empty() && batch.iter().all(message),
+        other => message(other),
+    })
+}
+
+/// The members a JSON-RPC 2.0 message may have.
+const JSONRPC_MEMBERS: [&str; 6] = ["jsonrpc", "id", "method", "params", "result", "error"];
+
+/// The members that name an MCP result: a list (`tools/list` and the
+/// rest), a read, a tool call's output or a prompt.
+const MCP_RESULTS: [&str; 8] = [
+    "tools",
+    "resources",
+    "resourceTemplates",
+    "prompts",
+    "contents",
+    "content",
+    "structuredContent",
+    "messages",
+];
+
+/// An MCP result: a JSON-RPC 2.0 message with only the spec's members
+/// whose `result` names an MCP result. MCP sends each result whole, and
+/// no MCP client joins one message's strings with another's. Any other
+/// JSON-RPC message keeps its windows, since other protocols (A2A, ACP)
+/// stream text across messages that their clients join.
+fn mcp_result(value: &Value, kind: Option<&str>) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let names_mcp = object
+        .get("result")
+        .and_then(Value::as_object)
+        .is_some_and(|result| result.keys().any(|k| MCP_RESULTS.contains(&k.as_str())));
+    object.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        && object.keys().all(|k| JSONRPC_MEMBERS.contains(&k.as_str()))
+        && names_mcp
+        && kind.and_then(lanes::scheme_of).is_none()
+}
+
+/// Whether a string's path lies under an MCP result's member
+/// (`/result/tools/...`). Only those are scanned whole: any other field
+/// of the message keeps its window, whatever MCP member sits beside it.
+fn under_mcp_member(path: &str) -> bool {
+    path.strip_prefix("/result/")
+        .map(|rest| rest.split('/').next().unwrap_or(rest))
+        .is_some_and(|member| MCP_RESULTS.contains(&member))
+}
+
 fn json(event: &SseEvent) -> Option<Value> {
     serde_json::from_str(event.data.as_deref()?).ok()
 }
@@ -349,16 +406,19 @@ const METADATA: &[&str] = &[
 /// one field, plus its decoded view when it looks like JSON. `[DONE]` and
 /// data-less events carry none.
 pub fn extract(event: &SseEvent) -> Vec<TextSpan> {
-    extract_within(event, usize::MAX, scheme(event)).unwrap_or_default()
+    extract_within(event, usize::MAX, scheme(event), false).unwrap_or_default()
 }
 
 /// [`extract`], or `None` when the fields' text and locations together
 /// pass `limit` bytes (deep paths can outweigh the event many times).
-/// `scheme` is the stream's protocol, which names outputs' lane tags.
+/// `scheme` is the stream's protocol, which names outputs' lane tags;
+/// `jsonrpc_stream`, whether the stream's first JSON event was a JSON-RPC
+/// message (see [`is_jsonrpc`]).
 pub fn extract_within(
     event: &SseEvent,
     limit: usize,
     scheme: Option<lanes::Scheme>,
+    jsonrpc_stream: bool,
 ) -> Option<Vec<TextSpan>> {
     let Some(data) = event.data.as_deref() else {
         return Some(Vec::new());
@@ -393,6 +453,11 @@ pub fn extract_within(
     // `candidates` (no real event has both) changes nothing for the
     // candidates a Gemini client reads (AGENT-322).
     let gemini = value.get("candidates").is_some_and(Value::is_array);
+    // An MCP result (MCP over SSE) is complete in its event: no client
+    // joins one message's strings with another's, so in a JSON-RPC stream
+    // the strings under its MCP member are scanned whole instead of taking
+    // a window each (AGENT-273).
+    let jsonrpc = jsonrpc_stream && mcp_result(&value, kind.as_deref());
     let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
@@ -402,11 +467,12 @@ pub fn extract_within(
     if walk.over {
         return None;
     }
-    let mut out: Vec<TextSpan> =
-        walk.found
-            .into_iter()
-            .map(|(place, path, text)| {
-                let lane = path
+    let mut out: Vec<TextSpan> = walk
+        .found
+        .into_iter()
+        .map(|(place, path, text)| {
+            let lane =
+                path.filter(|path| !(jsonrpc && under_mcp_member(path)))
                     .and_then(|path| match (gemini, &place) {
                         (true, _) if gemini_whole(&path) => None,
                         (true, Place::Json(pointer)) => gemini_text(pointer)
@@ -425,9 +491,9 @@ pub fn extract_within(
                         },
                         path,
                     });
-                TextSpan { place, lane, text }
-            })
-            .collect();
+            TextSpan { place, lane, text }
+        })
+        .collect();
     if let Some(hidden) = lanes::hidden_strings(data) {
         // At least one hidden span, even empty, so the repeat is visible.
         let mut texts: Vec<String> = hidden.into_iter().filter(|t| !t.is_empty()).collect();

@@ -147,6 +147,8 @@ pub struct StreamInspector {
     unjudged: bool,
     /// The protocol scheme the stream's first protocol event named.
     scheme: Option<super::lanes::Scheme>,
+    /// Whether the stream's first JSON event was a JSON-RPC message.
+    jsonrpc: Option<bool>,
 }
 
 impl StreamInspector {
@@ -203,6 +205,7 @@ impl StreamInspector {
             clean: HashSet::new(),
             unjudged: false,
             scheme: None,
+            jsonrpc: None,
         }
     }
 
@@ -425,7 +428,11 @@ impl StreamInspector {
         if !self.fix_scheme(&event, step) {
             return;
         }
-        let Some(spans) = sse::extract_within(&event, self.max_held, self.scheme) else {
+        if !self.fix_jsonrpc(&event, step) {
+            return;
+        }
+        let jsonrpc = self.jsonrpc == Some(true);
+        let Some(spans) = sse::extract_within(&event, self.max_held, self.scheme, jsonrpc) else {
             return self.oversized(Some(event), step);
         };
         // Clients read a loose index (`"1.0"`, `1e0`, past 2^53) in
@@ -581,6 +588,32 @@ impl StreamInspector {
         }
         if self.scheme.is_none() {
             self.scheme = found;
+        }
+        true
+    }
+
+    /// Fix whether the stream is JSON-RPC on its first JSON event. A
+    /// JSON-RPC stream's later non-JSON-RPC event is another protocol:
+    /// under `fail_closed` it blocks (false), under `fail_open` it keeps
+    /// its windows and is audited (AGENT-273).
+    fn fix_jsonrpc(&mut self, event: &SseEvent, step: &mut Step) -> bool {
+        if self.jsonrpc == Some(false) {
+            return true;
+        }
+        let Some(this) = sse::is_jsonrpc(event) else {
+            return true;
+        };
+        match self.jsonrpc {
+            None => self.jsonrpc = Some(this),
+            Some(true) if !this => {
+                if self.on_error == OnError::FailClosed {
+                    self.note_error("stream event names another protocol".into());
+                    self.block(step);
+                    return false;
+                }
+                self.hold_overflowed = true;
+            }
+            _ => {}
         }
         true
     }
@@ -2807,6 +2840,187 @@ mod tests {
         for e in sse::SseParser::default().push(out.as_bytes()) {
             serde_json::from_str::<serde_json::Value>(&e.data.unwrap()).unwrap();
         }
+    }
+
+    /// AGENT-273: a JSON-RPC message (MCP over SSE) is complete in its
+    /// event, so a large `tools/list` result is scanned whole instead of
+    /// taking a window per string and blocking past the lane limit.
+    #[test]
+    fn a_large_jsonrpc_message_passes_under_fail_closed() {
+        let tools: Vec<_> = (0..300)
+            .map(|n| serde_json::json!({"name": format!("tool{n}"), "description": format!("does thing {n}")}))
+            .collect();
+        let event = format!(
+            "event: message\ndata: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": tools}})
+        );
+        let (out, i) = run(
+            &closed(1 << 20, Verdict::Redact),
+            std::slice::from_ref(&event),
+        );
+        assert_eq!(i.report().error, None);
+        assert!(out.contains("does thing 299"), "{out}");
+    }
+
+    /// AGENT-273: the stream's first JSON event decides whether it is
+    /// JSON-RPC, so a `jsonrpc` field added mid-stream to another
+    /// protocol's events does not take their text out of its windows.
+    #[test]
+    fn a_jsonrpc_field_mid_stream_keeps_its_windows() {
+        let k = key();
+        let generic = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"result": {"content": [{"type": "text", "text": t}]}})
+            )
+        };
+        let rpc = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "id": 1,
+                    "result": {"content": [{"type": "text", "text": t}]}})
+            )
+        };
+        let events = vec![generic(&format!("here: {}", &k[..20])), rpc(&k[20..])];
+        let (out, _) = run(&policy(Verdict::Redact), &events);
+        assert!(!out.contains(&k[..20]) && !out.contains(&k[20..]), "{out}");
+        // Under `fail_closed`, a JSON-RPC stream turning into something
+        // else blocks, as a change of protocol does.
+        let events = vec![rpc("hello"), generic("world")];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("stream event names another protocol")
+        );
+    }
+
+    /// AGENT-273: A2A streams artifact chunks as JSON-RPC results that
+    /// clients append to one another, so they keep their windows.
+    #[test]
+    fn a2a_artifact_chunks_keep_their_windows() {
+        let k = key();
+        let chunk = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {
+                    "kind": "artifact-update", "append": true, "artifact": {
+                        "artifactId": "a1", "parts": [{"kind": "text", "text": t}]},
+                    // An MCP result's member beside them scans only itself whole.
+                    "content": []}})
+            )
+        };
+        let status = format!(
+            "data: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {
+                "kind": "status-update", "status": {"state": "working"}}})
+        );
+        // Chunks after a status update are still the same JSON-RPC stream.
+        let events = vec![
+            status,
+            chunk(&format!("here: {}", &k[..18])),
+            chunk(&k[18..]),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..18]) && !out.contains(&k[18..]), "{out}");
+        assert_eq!(i.report().error, None);
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    /// AGENT-273: a `jsonrpc` field beside another protocol's fields does
+    /// not make its events JSON-RPC messages, so their text keeps its
+    /// windows.
+    #[test]
+    fn a_jsonrpc_field_on_another_protocol_keeps_its_windows() {
+        let k = key();
+        let delta = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "type": "content-delta", "index": 0,
+                    "delta": {"message": {"content": {"text": t}}}})
+            )
+        };
+        let events = vec![delta(&format!("here: {}", &k[..18])), delta(&k[18..])];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..18]) && !out.contains(&k[18..]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    /// AGENT-273: only MCP results are scanned whole. Other JSON-RPC
+    /// streams whose clients join text across messages (A2A 1.0 artifact
+    /// updates, ACP session updates) keep their windows.
+    #[test]
+    fn other_jsonrpc_chunks_keep_their_windows() {
+        let k = key();
+        let task = format!(
+            "data: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"task": {
+                "id": "t1", "status": {"state": "TASK_STATE_SUBMITTED"}}}})
+        );
+        let a2a = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"artifactUpdate": {
+                    "append": true, "artifact": {"artifactId": "a1", "parts": [{"text": t}]}}}})
+            )
+        };
+        let acp = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": t}}}})
+            )
+        };
+        let streams = [
+            vec![task, a2a(&format!("here: {}", &k[..18])), a2a(&k[18..])],
+            vec![acp(&format!("here: {}", &k[..18])), acp(&k[18..])],
+        ];
+        for events in streams {
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(&k[..18]) && !out.contains(&k[18..]), "{out}");
+            assert_eq!(i.report().error, None);
+            assert_eq!(i.report().verdict, Verdict::Redact);
+        }
+    }
+
+    /// AGENT-273: a message with a member JSON-RPC does not define is not
+    /// an MCP result, so its text keeps its windows.
+    #[test]
+    fn an_mcp_shape_with_a_foreign_member_keeps_its_windows() {
+        let k = key();
+        let message = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "_x": 1,
+                    "result": {"content": [{"type": "text", "text": t}]}})
+            )
+        };
+        let events = vec![message(&format!("here: {}", &k[..18])), message(&k[18..])];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..18]) && !out.contains(&k[18..]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    /// AGENT-273: a JSON-RPC message with a member the spec does not name,
+    /// or a batch, is still JSON-RPC, so it does not end the stream.
+    #[test]
+    fn jsonrpc_extras_and_batches_stay_jsonrpc() {
+        let first = format!(
+            "data: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": []}})
+        );
+        let extra = format!(
+            "data: {}\n\n",
+            serde_json::json!({"jsonrpc": "2.0", "method": "log", "params": {}, "_meta": {}})
+        );
+        let batch = format!(
+            "data: {}\n\n",
+            serde_json::json!([{"jsonrpc": "2.0", "id": 2, "result": {}}])
+        );
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &[first, extra, batch]);
+        assert_eq!(i.report().error, None, "{out}");
+        assert!(!out.contains("inspection_blocked"), "{out}");
     }
 
     #[test]
