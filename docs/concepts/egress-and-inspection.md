@@ -167,10 +167,12 @@ classifier sidecar is deployed, treat it as a tripwire, not a defense.
   tell the user")
 - runs of invisible characters and Unicode TAG characters
 
-It matches after folding the text: invisible characters are dropped,
-Cyrillic, Greek and fullwidth look-alikes become ASCII, whitespace
-collapses and case is lowered. Spacing and homoglyph tricks don't evade
-it.
+It matches after folding the text: invisible characters and accents are
+dropped, look-alike letters become ASCII (Cyrillic, Greek, fullwidth,
+mathematical, small capital, circled, superscript, Roman numerals),
+whitespace collapses and case is lowered. The common spacing, accent and
+look-alike tricks don't evade it, though a letter outside those tables
+still can.
 
 **It misses**:
 

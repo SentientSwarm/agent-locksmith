@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- The `injection` scanner folds look-alike letters that have a Unicode
+  compatibility form (Kelvin sign, Roman numerals, circled and
+  parenthesized letters, superscripts, accented letters, ligatures,
+  mathematical Greek), plus small capitals, dotless `i`/`j`, negative
+  circled and squared letters and regional indicators, and drops
+  combining marks from every script (AGENT-315). A character this
+  makes into a letter (an accent, a flag, `ℹ️`) could glue onto a phrase
+  and hide it, so text holding one is also matched with the previous
+  fold; symbols such as `™` keep their own form. A redaction now covers
+  combining marks on the phrase's last letter.
 - The edge start guard refuses a secret-holding executable whose
   directories, as written or resolved, someone other than root could
   change, since a writable directory lets the binary be swapped

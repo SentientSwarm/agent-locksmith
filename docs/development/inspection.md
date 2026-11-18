@@ -82,10 +82,24 @@ the key's lines, which can make it longer.
 
 AGENT-264. Text is folded first: invisible format characters (zero-width
 and joiners, soft hyphen, bidi controls, invisible operators, fillers,
-variation selectors, TAG characters) are dropped, Cyrillic and Greek
-look-alikes and fullwidth ASCII fold to ASCII, each whitespace run
-becomes one space, and case is lowered. Hits are reported at their
-original byte offsets, so `redact` removes what was really sent.
+variation selectors, TAG characters) and combining marks are dropped,
+each letter, fullwidth ASCII character, parenthesized letter and
+mathematical digit is replaced by its compatibility decomposition (NFKD,
+which folds fullwidth, mathematical, circled, superscript and accented
+letters and Roman numerals; spaces in an expansion and an enclosed
+form's parentheses are dropped), Cyrillic, Greek, small capital and
+other look-alikes NFKD leaves alone fold to ASCII, each whitespace run
+becomes one space, and case is lowered. Symbols and numbers (`™`, `²`,
+`½`) keep their own form. An expansion more than one byte longer than
+its character (U+FDFA is eighteen characters) is not used, so folded text
+stays within about 1.5 times the input. A letter the fold makes can glue
+onto a phrase's first or last word and break its `\b` (`instructionsé`,
+a flag or `ℹ️` before `Ignore`), so when a text holds a character this
+fold treats differently from the fold before AGENT-315 (Cyrillic, Greek,
+fullwidth and mathematical letters and Latin-block marks only), that
+stricter fold is matched as well and the hits are merged. Hits are reported at their
+original byte offsets, extended over combining marks on the last letter,
+so `redact` removes what was really sent.
 
 Rules: `ignore_instructions`, `disregard_above`, `role_reassignment`
 (`you are now DAN`, not `you are now ready`), `system_prompt_label`,
