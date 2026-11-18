@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- A sidecar scanner that reads a large request slowly can no longer hold
+  a scan past `timeout_ms` or the scan's deadline: the request is
+  written in small pieces, each given only the time left (AGENT-278).
 - The `injection` scanner folds look-alike letters that have a Unicode
   compatibility form (Kelvin sign, Roman numerals, circled and
   parenthesized letters, superscripts, accented letters, ligatures,

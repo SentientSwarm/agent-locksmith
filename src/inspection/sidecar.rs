@@ -72,12 +72,7 @@ impl Sidecar {
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
-        stream
-            .set_write_timeout(Some(remaining(deadline)?))
-            .map_err(|e| e.to_string())?;
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("write: {e}"))?;
+        send(&mut stream, request.as_bytes(), deadline)?;
         let mut answer = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
@@ -175,11 +170,47 @@ fn plain_rule(rule: &str) -> String {
         .collect()
 }
 
+/// Most bytes handed to one `write`. A socket's send timeout bounds each
+/// wait for buffer space, and one large `write` can wait many times, so
+/// writes stay small enough to wait about once (AGENT-278).
+const WRITE_CHUNK: usize = 16 << 10;
+
+/// Write `bytes` within `deadline`: each write gets only the time left,
+/// so a sidecar that reads slowly cannot stretch the call past it.
+fn send(stream: &mut UnixStream, bytes: &[u8], deadline: Instant) -> Result<(), String> {
+    let mut sent = 0;
+    while sent < bytes.len() {
+        stream
+            .set_write_timeout(Some(remaining(deadline)?))
+            .map_err(|e| e.to_string())?;
+        let end = bytes.len().min(sent + WRITE_CHUNK);
+        match stream.write(&bytes[sent..end]) {
+            Ok(0) => return Err("write: closed".into()),
+            Ok(n) => sent += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err("write: timed out".into());
+            }
+            Err(e) => return Err(format!("write: {e}")),
+        }
+    }
+    Ok(())
+}
+
 /// Time left before `deadline`, or the timeout error. Never under a
 /// microsecond: socket2 truncates to microseconds, and a zero socket
 /// timeout means none at all.
 fn remaining(deadline: Instant) -> Result<Duration, String> {
-    let left = deadline.saturating_duration_since(Instant::now());
+    at_least_a_microsecond(deadline.saturating_duration_since(Instant::now()))
+}
+
+/// `left`, raised to a microsecond, or the timeout error when it is zero.
+fn at_least_a_microsecond(left: Duration) -> Result<Duration, String> {
     if left.is_zero() {
         return Err("timed out".into());
     }
@@ -338,6 +369,41 @@ mod tests {
         drop((listener, queued));
     }
 
+    /// AGENT-278 (Codex Medium) — a sidecar that reads a large request
+    /// slowly, but never slowly enough for one write to time out, cannot
+    /// hold the call past its deadline.
+    #[test]
+    fn a_slow_reading_sidecar_cannot_outrun_the_deadline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("slow.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::thread::spawn(move || {
+            let Ok((mut conn, _)) = listener.accept() else {
+                return;
+            };
+            // 64 KiB every 100 ms: each write makes progress well within
+            // 300 ms, but the 4 MiB request takes over six seconds.
+            let mut buf = vec![0u8; 64 << 10];
+            while matches!(conn.read(&mut buf), Ok(n) if n > 0) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let s = Sidecar::new("pg", path, Duration::from_millis(300));
+        let text = "x".repeat(4 << 20);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = s.scan(&text, Direction::Response);
+            let _ = tx.send((result.map_err(|e| e.0), start.elapsed()));
+        });
+        let (result, took) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the write must honour timeout_ms");
+        let err = result.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(took < Duration::from_secs(2), "{took:?}");
+    }
+
     /// Codex P2 — a malformed answer's own text never reaches the error,
     /// which is written to the audit row.
     #[test]
@@ -364,11 +430,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let s = Sidecar::new(
             "pg",
-            serve(&dir, HIT, Duration::from_millis(150)),
-            Duration::from_secs(1),
+            serve(&dir, HIT, Duration::from_millis(300)),
+            Duration::from_secs(2),
         );
         let start = Instant::now();
-        let results = crate::inspection::with_deadline(start + Duration::from_millis(200), || {
+        // The first call takes 300 ms of a 400 ms deadline; the second
+        // would need 600 ms.
+        let results = crate::inspection::with_deadline(start + Duration::from_millis(400), || {
             (0..10)
                 .map(|_| s.scan("hello world", Direction::Response).is_ok())
                 .collect::<Vec<_>>()
@@ -376,7 +444,7 @@ mod tests {
         assert!(results[0], "the first call fits in the deadline");
         assert!(results[1..].iter().all(|ok| !ok), "{results:?}");
         assert!(
-            start.elapsed() < Duration::from_millis(800),
+            start.elapsed() < Duration::from_millis(1500),
             "{:?}",
             start.elapsed()
         );
@@ -387,12 +455,16 @@ mod tests {
     #[test]
     fn time_left_is_never_below_a_microsecond() {
         for nanos in [1, 500, 999] {
-            if let Ok(left) = remaining(Instant::now() + Duration::from_nanos(nanos)) {
-                assert!(left >= Duration::from_micros(1), "{left:?}");
-            }
+            assert_eq!(
+                at_least_a_microsecond(Duration::from_nanos(nanos)),
+                Ok(Duration::from_micros(1))
+            );
         }
-        let left = remaining(Instant::now() + Duration::from_nanos(999_999_999)).unwrap();
-        assert!(left >= Duration::from_micros(1));
+        assert_eq!(
+            at_least_a_microsecond(Duration::from_millis(5)),
+            Ok(Duration::from_millis(5))
+        );
+        assert!(at_least_a_microsecond(Duration::ZERO).is_err());
     }
 
     /// AGENT-278: a sidecar's rule name reaches the audit row, so it is

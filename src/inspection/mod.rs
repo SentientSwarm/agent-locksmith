@@ -534,6 +534,24 @@ fn leaves_a_hit(
 mod tests {
     use super::*;
 
+    /// AGENT-278 — `with_deadline` puts back the outer deadline when it
+    /// returns, nested or unwinding from a panic.
+    #[test]
+    fn with_deadline_restores_the_outer_deadline() {
+        use std::time::{Duration, Instant};
+        let outer = Instant::now() + Duration::from_secs(5);
+        let inner = outer + Duration::from_secs(5);
+        assert_eq!(scan_deadline(), None);
+        with_deadline(outer, || {
+            with_deadline(inner, || assert_eq!(scan_deadline(), Some(inner)));
+            assert_eq!(scan_deadline(), Some(outer));
+            let caught = std::panic::catch_unwind(|| with_deadline(inner, || panic!("scanner")));
+            assert!(caught.is_err());
+            assert_eq!(scan_deadline(), Some(outer));
+        });
+        assert_eq!(scan_deadline(), None);
+    }
+
     struct Failing;
     impl Scanner for Failing {
         fn id(&self) -> &str {
