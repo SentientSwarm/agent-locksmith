@@ -40,9 +40,9 @@ struct RequestCtx {
     /// `"bearer"` or `"mtls"`, derived from `AuthenticatedAs` in
     /// request extensions.
     auth_method: &'static str,
-    /// Stamped only when the bearer or mTLS path resolved an
-    /// `AgentIdentity` into request extensions (M0/M1 deployments
-    /// without admin substrate leave this `None`).
+    /// From the `AgentIdentity` the bearer or mTLS path stamped into
+    /// request extensions. Every proxied request has one since 3.0.0
+    /// (AGENT-318); `None` only on a miswired router, which refuses it.
     agent_public_id: Option<String>,
     /// Phase G4 — human-readable agent name from `AgentIdentity.name`.
     /// Used as the `originator` header value on codex hot-path

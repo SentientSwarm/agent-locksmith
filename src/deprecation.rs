@@ -109,10 +109,11 @@ pub fn default_registry() -> DeprecationRegistry {
             since_version: "0.2.0",
             removal_target: Some("0.3.0"),
         },
-        // M9 / v2.0.0 — `inbound_auth.token` is silently ignored when
-        // the admin substrate is enabled (per-agent bearer authentication
-        // takes over). Operators upgrading from M0/M1 must register
-        // agents and use per-agent tokens.
+        // M9 / v2.0.0 — `inbound_auth.token` is ignored: legacy
+        // shared-bearer mode was removed in 3.0.0 and every request
+        // authenticates as an enrolled agent (AGENT-318). Operators
+        // upgrading from M0/M1 must register agents and use per-agent
+        // tokens.
         DeprecationEntry {
             field_path: "inbound_auth.token",
             disposition: DeprecationDisposition::Deprecated,

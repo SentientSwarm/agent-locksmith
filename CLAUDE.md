@@ -33,8 +33,8 @@ Recent phase shipments:
 - **Phase G4** (v2.4.0): codex required-header injection
   (`OpenAI-Beta: responses=experimental` + `originator: <agent>`).
   Forces `OpenAI-Beta`; preserves agent-supplied `originator` else
-  injects `AgentIdentity.name` (fallback `locksmith-proxy` for
-  identityless paths). After G4, agents can call codex through
+  injects `AgentIdentity.name` (`locksmith-proxy` is a defensive
+  fallback; every request has an identity since 3.0.0). After G4, agents can call codex through
   locksmith with only `Authorization` + minimal body — locksmith
   owns every codex-specific wire piece.
   See `docs/concepts/oauth-flow.md` for the end-to-end flow.

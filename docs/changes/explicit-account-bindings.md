@@ -21,7 +21,8 @@ an installed deployment.
   without the admin socket, and the 401 `agent_identity_required` code is gone.)
 - An explicit no-auth selection is different from a missing source. It still
   obeys agent authentication and ACLs; caller Authorization/API-key headers are
-  stripped. Authless identityless routes retain the pre-existing admission policy.
+  stripped. (Authless identityless routes kept the pre-existing admission
+  policy until 3.0.0 removed identityless mode.)
 - OAuth selections capture client/endpoints/mechanism plus a literal nonempty
   label, including `default`. Consistent selections can share one account/session.
   Old empty placeholders require deliberate re-selection. Conflicting bindings
