@@ -17,6 +17,8 @@ an installed deployment.
 - Missing/wrong/revoked caller: 401 `invalid_credential`. Credentialed identityless
   legacy routes: 401 `agent_identity_required`; enable actual registered-agent
   authentication rather than inventing a privileged compatibility identity.
+  (3.0.0 removed identityless legacy mode entirely: the daemon refuses to start
+  without the admin socket, and the 401 `agent_identity_required` code is gone.)
 - An explicit no-auth selection is different from a missing source. It still
   obeys agent authentication and ACLs; caller Authorization/API-key headers are
   stripped. Authless identityless routes retain the pre-existing admission policy.

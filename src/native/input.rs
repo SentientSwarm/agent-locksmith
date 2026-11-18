@@ -48,7 +48,9 @@ pub(super) fn identity(req: &Request) -> Result<AgentIdentity, Failure> {
     req.extensions()
         .get::<AgentIdentity>()
         .cloned()
-        .ok_or(Failure(401, "agent_identity_required"))
+        // auth_middleware stamps it on every /mcp request; its absence
+        // is a miswired router (AGENT-318).
+        .ok_or(Failure(500, "internal_error"))
 }
 pub(super) fn cancellation(req: &Request) -> Result<CancellationToken, Failure> {
     req.extensions()

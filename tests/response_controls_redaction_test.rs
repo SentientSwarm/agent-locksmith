@@ -1,24 +1,15 @@
 //! T7.4 — regex redaction end-to-end with audit hashing.
 
-use agent_locksmith::app::build_app_with_audit;
+#[path = "support/registered_legacy.rs"]
+mod registered_legacy;
+
 use agent_locksmith::config::parse_config_str;
-use agent_locksmith::migrations::open_and_migrate;
-use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository};
-use arc_swap::ArcSwap;
-use axum_test::TestServer;
-use std::sync::Arc;
-use tempfile::TempDir;
+use agent_locksmith::repo::audit::{AuditFilter, AuditPage};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn pattern_match_redacts_response_body_and_records_hash() {
-    let dir = TempDir::new().unwrap();
-    let pool = open_and_migrate(&dir.path().join("locksmith.db"))
-        .await
-        .unwrap();
-    let audit = AuditRepository::new(pool);
-
     let mock = MockServer::start().await;
     let leaky = "{\"data\":\"key=sk-ABCDEF123456 done\"}";
     Mock::given(method("GET"))
@@ -45,9 +36,8 @@ tools:
         upstream = mock.uri()
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(cfg).await;
+    let (server, audit) = (&f.server, &f.audit);
     let resp = server.get("/api/t/leak").await;
     resp.assert_status_ok();
     let body = resp.text();
@@ -106,7 +96,8 @@ tools:
         upstream = mock.uri()
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let server = TestServer::new(agent_locksmith::app::build_app(cfg));
+    let f = registered_legacy::authed(cfg).await;
+    let server = &f.server;
     let resp = server.get("/api/t/clean").await;
     resp.assert_status_ok();
     assert!(resp.text().contains("clean"));

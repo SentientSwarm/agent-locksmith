@@ -67,6 +67,8 @@ async fn second_get_has_typed_backoff_and_retires_session() {
     released(&f).await;
 }
 #[tokio::test]
+/// A router without an agent authenticator fails closed (AGENT-318), so a
+/// shared `inbound_auth` token or no credential cannot start a session.
 async fn shared_and_identityless_modes_cannot_enter_native_lifecycle() {
     for auth in [
         "",
@@ -85,7 +87,7 @@ async fn shared_and_identityless_modes_cannot_enter_native_lifecycle() {
             .header("accept", "application/json, text/event-stream")
             .body(Body::from(init(0).to_string()))
             .unwrap();
-        assert_eq!(app.oneshot(req).await.unwrap().status(), 401);
+        assert_eq!(app.oneshot(req).await.unwrap().status(), 500);
     }
 }
 #[tokio::test]

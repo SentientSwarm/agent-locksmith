@@ -616,7 +616,7 @@ request to a route whose effective profile is
 | Header | Value | Behavior |
 |---|---|---|
 | `OpenAI-Beta` | `responses=experimental` | **Forced** — locksmith strips any agent-supplied value and injects this constant. The endpoint is beta-gated and rejects requests without it. |
-| `originator` | `<agent-name>` | **Preserved if agent supplies one**, else injected from `AgentIdentity.name` (or `"locksmith-proxy"` for paths without an identity). Codex uses originator for request attribution; preserving the agent's value lets agents that already track this (e.g., `originator: codex_cli_rs` from a wrapper) keep their existing identity. |
+| `originator` | `<agent-name>` | **Preserved if agent supplies one**, else injected from `AgentIdentity.name`. Codex uses originator for request attribution; preserving the agent's value lets agents that already track this (e.g., `originator: codex_cli_rs` from a wrapper) keep their existing identity. |
 
 Together with G2 (`ChatGPT-Account-ID`) and G3 (body fields), G4
 closes the codex integration loop. Agents now call codex through

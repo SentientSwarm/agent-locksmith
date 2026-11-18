@@ -4,14 +4,8 @@ use crate::{auth_v2::AgentIdentity, registrations::admission::activation};
 pub(super) async fn target(
     state: &AppState,
     ctx: &RequestCtx,
-    extensions: &axum::http::Extensions,
+    identity: &AgentIdentity,
 ) -> Result<ProxyTarget, Box<Response>> {
-    let Some(identity) = extensions.get::<AgentIdentity>() else {
-        return Err(Box::new(
-            selection::record_failure(&state.audit, ctx, selection::Failure::IdentityRequired)
-                .await,
-        ));
-    };
     if state.agent_creds.is_none() {
         return Err(Box::new(
             selection::record_failure(&state.audit, ctx, selection::Failure::StoreUnavailable)

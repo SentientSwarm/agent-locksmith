@@ -3,7 +3,6 @@ use super::*;
 use crate::auth_v2::AgentIdentity;
 
 pub(super) enum Failure {
-    IdentityRequired,
     Missing,
     StoreUnavailable,
     CredentialUnavailable,
@@ -12,16 +11,8 @@ pub(super) enum Failure {
 pub(super) async fn apply(
     state: &AppState,
     target: &mut ProxyTarget,
-    extensions: &axum::http::Extensions,
+    identity: &AgentIdentity,
 ) -> Result<(), Failure> {
-    // Only explicitly authless targets may proceed without an agent identity.
-    let Some(identity) = extensions.get::<AgentIdentity>() else {
-        return if matches!(target.auth, ProxyAuth::None) {
-            Ok(())
-        } else {
-            Err(Failure::IdentityRequired)
-        };
-    };
     let repo = state
         .agent_creds
         .as_ref()
@@ -113,23 +104,6 @@ pub(super) async fn record_failure(
     failure: Failure,
 ) -> Response {
     match failure {
-        Failure::IdentityRequired => {
-            let mut event = ctx.audit_event_base();
-            event.event_class = EventClass::Security;
-            event.event = "authz_denied".into();
-            event.status = Some(401);
-            event.decision = Decision::Denied;
-            event.details = Some(json!({"reason":"agent_identity_required"}));
-            audit_record(audit, event).await;
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error":{
-                    "type":"auth_error", "code":"agent_identity_required",
-                    "message": crate::legacy_admission::UPGRADE_MESSAGE,
-                }})),
-            )
-                .into_response()
-        }
         Failure::Missing => record_authz_denied(audit, ctx, "account_binding_missing").await,
         other => {
             let cause = match other {

@@ -1,12 +1,8 @@
 use axum::{
-    Json,
     extract::{Request, State},
-    http::StatusCode,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use secrecy::ExposeSecret;
-use serde_json::json;
 use std::sync::Arc;
 
 use crate::agent_listener::PeerCertDer;
@@ -19,7 +15,7 @@ use crate::config::AuthMode;
 /// `auth_method` audit column (T6.10).
 #[derive(Clone, Debug)]
 pub enum AuthenticatedAs {
-    /// M0/M1 shared bearer or M2 per-agent bearer.
+    /// Per-agent bearer.
     Bearer,
     /// M6 client certificate.
     Mtls,
@@ -66,7 +62,7 @@ pub async fn auth_middleware(
                     "auth_mode={:?} but no mtls_authenticator wired in AppState",
                     auth_mode
                 );
-                return auth_error_response(&AuthError::MtlsMisconfigured);
+                return auth_error_response(&AuthError::Misconfigured);
             };
             return match authn.authenticate_cert(&cert).await {
                 Ok(identity) => {
@@ -95,42 +91,12 @@ pub async fn auth_middleware(
         return run_bearer_branch(authn.as_ref(), req, next).await;
     }
 
-    // M0/M1 shared-bearer fallback. Preserves pre-v2 behavior for
-    // deployments that haven't enabled the admin substrate
-    // (`listen.admin_socket` + `database.path`). When the admin
-    // substrate IS enabled, the branch above handles the request and
-    // this fallback is unreachable.
-    let config = state.config.load();
-    let auth_config = match &config.inbound_auth {
-        Some(auth) if auth.mode == "bearer" => auth,
-        _ => {
-            req.extensions_mut().insert(AuthenticatedAs::Bearer);
-            return next.run(req).await;
-        }
-    };
-    let expected_token = match &auth_config.token {
-        Some(t) => t,
-        None => {
-            req.extensions_mut().insert(AuthenticatedAs::Bearer);
-            return next.run(req).await;
-        }
-    };
-    let auth_header = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok());
-    let provided_token = auth_header.and_then(|h| h.strip_prefix("Bearer "));
-    match provided_token {
-        Some(token) if token == expected_token.expose_secret() => {
-            req.extensions_mut().insert(AuthenticatedAs::Bearer);
-            next.run(req).await
-        }
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": {"message": "Unauthorized", "type": "auth_error"}})),
-        )
-            .into_response(),
-    }
+    // Legacy shared-bearer mode was removed in 3.0.0 (AGENT-297,
+    // AGENT-318): the daemon refuses to start without the admin
+    // substrate, so an app without an agent authenticator is miswired.
+    // Fail closed rather than serve an identityless request.
+    tracing::error!("no agent authenticator wired in AppState");
+    auth_error_response(&AuthError::Misconfigured)
 }
 
 /// Per-agent bearer branch (M9). Always routes through the authenticator

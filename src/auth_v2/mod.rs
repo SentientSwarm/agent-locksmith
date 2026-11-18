@@ -56,12 +56,12 @@ pub enum AuthError {
     /// match on the variant directly.
     #[error("internal error")]
     Backend(String),
-    /// mTLS-specific misconfiguration on the daemon side (e.g. auth_mode
-    /// requires mTLS but the authenticator wasn't wired). 500. Like
+    /// Daemon-side misconfiguration: the authenticator a request needs
+    /// (agent bearer, or mTLS under an mTLS auth mode) wasn't wired. 500. Like
     /// `Backend`, the wire renders a generic message; the discriminating
     /// detail is logged at `tracing::error!` only.
     #[error("internal error")]
-    MtlsMisconfigured,
+    Misconfigured,
 }
 
 impl AuthError {
@@ -73,7 +73,7 @@ impl AuthError {
             | AuthError::Revoked
             | AuthError::Expired => 401,
             AuthError::RateLimited { .. } => 429,
-            AuthError::Backend(_) | AuthError::MtlsMisconfigured => 500,
+            AuthError::Backend(_) | AuthError::Misconfigured => 500,
         }
     }
 
@@ -86,7 +86,7 @@ impl AuthError {
             AuthError::Expired => "expired",
             AuthError::RateLimited { .. } => "rate_limited",
             AuthError::Backend(_) => "backend_error",
-            AuthError::MtlsMisconfigured => "internal_error",
+            AuthError::Misconfigured => "internal_error",
         }
     }
 }
@@ -164,7 +164,7 @@ mod tests {
     }
 
     // Backend renders 500 with `code: backend_error` (operator-distinguishable
-    // from MtlsMisconfigured) but a GENERIC `"internal error"` message
+    // from Misconfigured) but a GENERIC `"internal error"` message
     // — the inner discriminator (sqlx errors, file paths, parse
     // positions) MUST NOT reach the wire, only `tracing::error!` logs.
     #[tokio::test]
@@ -184,14 +184,14 @@ mod tests {
         );
     }
 
-    // M9 (#6 from verify-iter-2): MtlsMisconfigured maps to a generic
+    // M9 (#6 from verify-iter-2): Misconfigured maps to a generic
     // wire envelope (`code: internal_error`, message: "internal error")
     // so daemon misconfig discriminators are not leaked through 500s.
     // The discriminating string is logged at `tracing::error!` only
     // (see auth.rs auth_middleware).
     #[tokio::test]
     async fn auth_error_response_mtls_misconfigured_renders_generic_500() {
-        let resp = auth_error_response(&AuthError::MtlsMisconfigured);
+        let resp = auth_error_response(&AuthError::Misconfigured);
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = body_json(resp).await;
         assert_eq!(body["error"]["code"], "internal_error");

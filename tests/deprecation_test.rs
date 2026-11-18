@@ -97,19 +97,9 @@ fn ts13_default_registry_includes_inbound_auth_token() {
 }
 
 #[test]
-fn ts13_emit_helper_no_op_when_admin_disabled() {
-    let reg = default_registry();
-    // Admin disabled: even with inbound_auth.token set, no notice fires.
-    emit_inbound_auth_token_runtime_deprecation(&reg, false, true);
-    // First "real" call still fires.
-    let first = reg.notice("inbound_auth.token");
-    assert!(first, "no prior notice should have been recorded");
-}
-
-#[test]
 fn ts13_emit_helper_no_op_when_inbound_auth_unset() {
     let reg = default_registry();
-    emit_inbound_auth_token_runtime_deprecation(&reg, true, false);
+    emit_inbound_auth_token_runtime_deprecation(&reg, false);
     let first = reg.notice("inbound_auth.token");
     assert!(first, "no prior notice should have been recorded");
 }
@@ -117,8 +107,8 @@ fn ts13_emit_helper_no_op_when_inbound_auth_unset() {
 #[test]
 fn ts13_emit_helper_one_shot_when_both_set() {
     let reg = default_registry();
-    // Both admin enabled AND token set → first call fires.
-    emit_inbound_auth_token_runtime_deprecation(&reg, true, true);
+    // Token set → first call fires.
+    emit_inbound_auth_token_runtime_deprecation(&reg, true);
     // Subsequent calls are silenced (one-shot per registry).
     let second = reg.notice("inbound_auth.token");
     assert!(

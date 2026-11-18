@@ -16,7 +16,9 @@
 //!
 //! Covers: UC-6, UC-13, R-F12, R-F13, R-N6.
 
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered_legacy;
+
 use agent_locksmith::config::parse_config_str;
 use axum::Router;
 use axum::body::Body;
@@ -77,7 +79,7 @@ async fn spawn_openai_compatible_fixture() -> String {
     format!("http://{addr}")
 }
 
-async fn spawn_locksmith_for(upstream: &str) -> String {
+async fn spawn_locksmith_for(upstream: &str) -> (String, Client) {
     let yaml = format!(
         r#"
 listen:
@@ -93,22 +95,22 @@ tools:
       idle_seconds: 60
 "#
     );
-    let config = parse_config_str(&yaml).unwrap();
-    let app = build_app(config);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    format!("http://{addr}")
+    let (url, bearer) = registered_legacy::spawn(parse_config_str(&yaml).unwrap()).await;
+    (url, agent_client(&bearer))
+}
+
+/// A client that authenticates as the fixture's enrolled agent.
+fn agent_client(bearer: &str) -> Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, bearer.parse().unwrap());
+    Client::builder().default_headers(headers).build().unwrap()
 }
 
 #[tokio::test]
 async fn fixture_streams_chat_completion_through_locksmith() {
     let upstream = spawn_openai_compatible_fixture().await;
-    let proxy = spawn_locksmith_for(&upstream).await;
+    let (proxy, client) = spawn_locksmith_for(&upstream).await;
 
-    let client = Client::new();
     let start = Instant::now();
     let resp = client
         .post(format!("{proxy}/api/openai-shaped/v1/chat/completions"))
@@ -167,9 +169,8 @@ async fn ollama_streams_chat_through_locksmith_when_present() {
     }
 
     let upstream = format!("http://{host_for_url}");
-    let proxy = spawn_locksmith_for(&upstream).await;
+    let (proxy, client) = spawn_locksmith_for(&upstream).await;
 
-    let client = Client::new();
     // /api/tags is the cheapest readiness probe Ollama offers — no model
     // download required. We're verifying the proxy reaches Ollama and
     // forwards the response, not generation latency. Any non-5xx is a
@@ -197,9 +198,8 @@ async fn lmstudio_streams_chat_through_locksmith_when_present() {
     }
 
     let upstream = format!("http://{host_for_url}");
-    let proxy = spawn_locksmith_for(&upstream).await;
+    let (proxy, client) = spawn_locksmith_for(&upstream).await;
 
-    let client = Client::new();
     // /v1/models is LM Studio's catalog endpoint — no generation cost.
     // Any non-5xx is a pass: 2xx = ok, 4xx = upstream rejected (e.g.
     // 401 when LM Studio's API-token auth is enabled — the test doesn't

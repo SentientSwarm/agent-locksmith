@@ -53,11 +53,9 @@ pub struct AppState {
     /// match the existing `UdsState.agent_auth` field — the same `Arc`
     /// is shared across both consumers so admin self-service ops and
     /// the proxy hot path use one authenticator and one audit fanout.
-    /// Populated by the daemon when the admin substrate is active (both
-    /// `listen.admin_socket` and `database.path` configured); absent
-    /// under M0/M1 deployments without the substrate. When present,
-    /// `auth_middleware` uses it on every request; when absent, the M0
-    /// shared-bearer fallback preserves pre-v2 behavior.
+    /// The daemon always populates it (the admin substrate is required
+    /// since 3.0.0). `auth_middleware` uses it on every request; a
+    /// router built without it fails closed (AGENT-318).
     pub agent_auth: Option<Arc<dyn AgentAuthenticator>>,
     /// Phase E.3 — registrations repo for the public discovery
     /// endpoints `/tools` and `/models`. Same Arc as
@@ -196,11 +194,10 @@ pub fn build_app_with_audit_and_creds(
 
 /// Full-power constructor (post-v2 / #67 + M9): supplies all M0..M7
 /// state plus the optional MtlsAuthenticator (#67) and the optional
-/// BearerAuthenticator (M9). Used by the daemon. M0/M1 deployments
-/// without admin substrate pass `None` for `agent_auth`,
-/// which preserves the M0 shared-bearer middleware path; deployments
-/// with admin substrate enabled pass `Some(...)` so `auth_middleware`
-/// enforces per-agent bearer authentication on every request.
+/// BearerAuthenticator (M9). With `Some(...)` for `agent_auth`,
+/// `auth_middleware` enforces per-agent bearer authentication on every
+/// request; with `None` (tests only) every authenticated route fails
+/// closed, since legacy shared-bearer mode was removed in 3.0.0.
 pub fn build_app_full(
     config: Arc<ArcSwap<AppConfig>>,
     audit: Option<AuditRepository>,
@@ -556,17 +553,6 @@ async fn livez_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
 /// are considered required. M2 introduces per-tool `on_secret_failure:
 /// degraded` to opt out of the readiness check.
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let incompatible = crate::legacy_admission::incompatible_tools(&state);
-    if !incompatible.is_empty() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status":"not_ready", "reason":"agent_identity_required", "tools":incompatible,
-                "upgrade":crate::legacy_admission::UPGRADE_MESSAGE,
-            })),
-        )
-            .into_response();
-    }
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
     let unconfigured: Vec<&str> = config

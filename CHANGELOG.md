@@ -14,6 +14,11 @@
   `config.example.yaml` now sets all three.
   The refusal comes before the daemon creates the database directory or
   its lock file (AGENT-318).
+  The identityless code paths behind it are gone too (AGENT-318): the
+  shared `inbound_auth` bearer authenticates nobody, `/readyz` no longer
+  reports `agent_identity_required`, and the 401 `agent_identity_required`
+  error code is retired. `inbound_auth` is still accepted and ignored, with
+  a warning when a token is set.
 
 ### Fixed
 

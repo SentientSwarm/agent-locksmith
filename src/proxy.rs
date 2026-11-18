@@ -450,29 +450,27 @@ async fn proxy_request(
 ) -> Response {
     let mut ctx = RequestCtx::snapshot(&req, tool_name);
 
-    // M9 ACL gate. When the request carries an AgentIdentity (per-agent
-    // bearer or mTLS), enforce the agent's tool_allowlist /
-    // tool_denylist before reaching the tool resolver. Identity-less
-    // requests reach this code only in M0/M1 deployments without admin
-    // substrate (preserved for back-compat).
-    if let Some(identity) = req.extensions().get::<crate::auth_v2::AgentIdentity>()
-        && let Err(reason) = identity.allows_tool(&ctx.tool_name)
-    {
+    // Every proxied request carries the AgentIdentity `auth_middleware`
+    // stamped (per-agent bearer or mTLS); identityless legacy mode was
+    // removed in 3.0.0 (AGENT-297, AGENT-318). Its absence means a
+    // miswired router, so fail closed.
+    let Some(identity) = req
+        .extensions()
+        .get::<crate::auth_v2::AgentIdentity>()
+        .cloned()
+    else {
+        tracing::error!("proxied request reached the handler without an agent identity");
+        return crate::auth_v2::auth_error_response(&crate::auth_v2::AuthError::Misconfigured);
+    };
+
+    // M9 ACL gate: the agent's tool_allowlist / tool_denylist, before
+    // the tool resolver.
+    if let Err(reason) = identity.allows_tool(&ctx.tool_name) {
         return record_authz_denied(&state.audit, &ctx, reason).await;
     }
 
-    if req
-        .extensions()
-        .get::<crate::auth_v2::AgentIdentity>()
-        .is_none()
-        && crate::legacy_admission::credentialed(&state, &ctx.tool_name)
-    {
-        return selection::record_failure(&state.audit, &ctx, selection::Failure::IdentityRequired)
-            .await;
-    }
-
     let mut target = if state.registrations.is_some() {
-        match admission::target(&state, &ctx, req.extensions()).await {
+        match admission::target(&state, &ctx, &identity).await {
             Ok(target) => target,
             Err(response) => return *response,
         }
@@ -480,7 +478,7 @@ async fn proxy_request(
         let Some(mut target) = resolve_target(&state, &ctx.tool_name) else {
             return record_tool_not_found(&state.audit, &ctx).await;
         };
-        if let Err(failure) = selection::apply(&state, &mut target, req.extensions()).await {
+        if let Err(failure) = selection::apply(&state, &mut target, &identity).await {
             return selection::record_failure(&state.audit, &ctx, failure).await;
         }
         target
@@ -488,13 +486,7 @@ async fn proxy_request(
 
     // AGENT-266: per-agent rate limits, after admission and before any
     // credential is resolved or anything is sent upstream.
-    match limit::check(
-        &state,
-        &ctx,
-        req.extensions().get::<crate::auth_v2::AgentIdentity>(),
-    )
-    .await
-    {
+    match limit::check(&state, &ctx, Some(&identity)).await {
         Ok(p) => *permit = p,
         Err(refused) => return refused,
     }
@@ -787,8 +779,9 @@ fn build_upstream_request(
     headers: HeaderMap,
     body_bytes: Bytes,
     // Phase G4 — used as the codex `originator` header value when the
-    // agent didn't supply one. `None` for M0/M1 paths without
-    // `AgentIdentity`; falls back to a static `"locksmith-proxy"` then.
+    // agent didn't supply one. Every proxied request has an
+    // `AgentIdentity` since 3.0.0; `"locksmith-proxy"` is a defensive
+    // fallback only.
     agent_name: Option<&str>,
 ) -> Result<reqwest::RequestBuilder, crate::client_pool::ClientUnavailable> {
     let client = state.client_pool.get_or_build_for(
@@ -999,8 +992,8 @@ fn build_upstream_request(
     // - `originator: <agent-name>` lets codex distinguish requesters.
     //   We preserve the agent's value if they sent one (it might be
     //   meaningful to their own observability) and inject the agent
-    //   name otherwise. Falls back to `"locksmith-proxy"` for paths
-    //   without an `AgentIdentity` (M0/M1 deployments).
+    //   name otherwise (`"locksmith-proxy"` is a defensive fallback;
+    //   every proxied request has an `AgentIdentity` since 3.0.0).
     if codex_upstream {
         upstream_req = upstream_req.header("OpenAI-Beta", "responses=experimental");
         if !agent_sent_originator {
@@ -1793,7 +1786,7 @@ async fn record_proxy_request_success(
 /// `oauth_session_id` populated for OAuth requests, Phase G
 /// fields (`auth_source`, `oauth_session_label`) recording explicit
 /// agent selection (`agent_override`) and the selected OAuth label.
-/// Credentialed identityless requests cannot inherit defaults. The Phase G3
+/// The Phase G3
 /// `codex_body_fixup` field records when locksmith modified the request body
 /// for a codex `/responses` call.
 fn audit_details(ctx: &RequestCtx, target: &ProxyTarget) -> serde_json::Value {

@@ -1,24 +1,15 @@
 //! T7.2 — content-type allowlist end-to-end.
 
-use agent_locksmith::app::build_app_with_audit;
+#[path = "support/registered_legacy.rs"]
+mod registered_legacy;
+
 use agent_locksmith::config::parse_config_str;
-use agent_locksmith::migrations::open_and_migrate;
-use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository};
-use arc_swap::ArcSwap;
-use axum_test::TestServer;
-use std::sync::Arc;
-use tempfile::TempDir;
+use agent_locksmith::repo::audit::{AuditFilter, AuditPage};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn rejected_content_type_returns_502_with_audit() {
-    let dir = TempDir::new().unwrap();
-    let pool = open_and_migrate(&dir.path().join("locksmith.db"))
-        .await
-        .unwrap();
-    let audit = AuditRepository::new(pool);
-
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/html"))
@@ -40,9 +31,8 @@ tools:
         upstream = mock.uri()
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(cfg).await;
+    let (server, audit) = (&f.server, &f.audit);
     let resp = server.get("/api/t/html").await;
     resp.assert_status(axum::http::StatusCode::BAD_GATEWAY);
     let body: serde_json::Value = resp.json();
@@ -89,7 +79,8 @@ tools:
         upstream = mock.uri()
     );
     let cfg = parse_config_str(&yaml).unwrap();
-    let server = TestServer::new(agent_locksmith::app::build_app(cfg));
+    let f = registered_legacy::authed(cfg).await;
+    let server = &f.server;
     let resp = server.get("/api/t/json").await;
     resp.assert_status_ok();
 }

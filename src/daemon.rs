@@ -165,13 +165,16 @@ async fn run_owned(
     callbacks: crate::oauth::consent::server::Supervisor,
     bound: Option<oneshot::Sender<BoundAddrs>>,
 ) -> Result<(), DaemonError> {
-    let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
-    let admin_enabled = admin_socket_path.is_some();
+    let admin_socket_path = config
+        .listen
+        .admin_socket
+        .as_ref()
+        .map(|s| s.path.clone())
+        .expect("checked in require_admin");
 
-    // M9 / v2.0.0: warn once when an operator carries `inbound_auth.token`
-    // forward into a deployment with the admin substrate enabled. The
-    // shared bearer is silently ignored on the agent listener; per-agent
-    // bearer takes precedence.
+    // Warn once when an old config still carries `inbound_auth.token`:
+    // it is ignored, since every request authenticates as an enrolled
+    // agent (AGENT-297, AGENT-318).
     let inbound_auth_token_set = config
         .inbound_auth
         .as_ref()
@@ -179,7 +182,6 @@ async fn run_owned(
         .is_some();
     crate::deprecation::emit_inbound_auth_token_runtime_deprecation(
         &crate::deprecation::default_registry(),
-        admin_enabled,
         inbound_auth_token_set,
     );
 
@@ -222,19 +224,11 @@ async fn run_owned(
     let resolver = SecretResolver::with_file_sealed(FileSealedBackend::new());
     let resolved_map = {
         let snapshot = shared_config.load();
-        if admin_enabled {
-            resolve_tool_creds(&snapshot, &resolver).await
-        } else {
-            if snapshot.tools.iter().any(|t| t.auth.is_some()) {
-                tracing::warn!("{}", crate::legacy_admission::UPGRADE_MESSAGE);
-            }
-            Default::default()
-        }
+        resolve_tool_creds(&snapshot, &resolver).await
     };
     let resolved_creds: Arc<ArcSwap<ResolvedCreds>> = Arc::new(ArcSwap::from_pointee(resolved_map));
-    let mut consent_callbacks = None;
-
     let (
+        consent_callbacks,
         admin_state,
         audit_for_proxy,
         audit_for_sweeper,
@@ -248,18 +242,19 @@ async fn run_owned(
         operational_log_for_app,
         operational_log_store_for_sweeper,
         op_resolver_for_app,
-    ) = if admin_enabled {
+    ) = {
         let setup =
             build_admin_substrate(shared_config.clone(), resolved_creds.clone(), refresh_owner)
                 .await?;
         // The consent callback listener binds and serves with the other
         // listeners below, after every earlier bind succeeds (AGENT-217).
-        consent_callbacks = setup
+        let consent_callbacks = setup
             .uds_state
             .oauth
             .as_ref()
             .and_then(|o| o.consent.clone());
         (
+            consent_callbacks,
             Some(setup.uds_state),
             Some(setup.audit.clone()),
             Some(setup.audit),
@@ -291,10 +286,6 @@ async fn run_owned(
             Some(setup.operational_log_store),
             // Phase J / M2: op:// resolver cache (proxy hot path, T2.3).
             Some(setup.op_resolver),
-        )
-    } else {
-        (
-            None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
 
@@ -436,7 +427,6 @@ async fn run_owned(
             "daemon configuration loaded",
             Some(serde_json::json!({
                 "tools": snap.tools.len(),
-                "admin": admin_enabled,
             })),
         );
     }
@@ -475,34 +465,24 @@ async fn run_owned(
         .and_then(|s| s.admin.rate_limits())
         .map(|r| r.limiter.clone())
         .unwrap_or_default();
-    let agent_router = match catalog_for_app {
-        Some(catalog) => crate::app::build_app_full_with_native(
-            shared_config.clone(),
-            audit_for_proxy,
-            resolved_creds.clone(),
-            mtls_authenticator,
-            agent_auth,
-            registrations_for_app,
-            catalog,
-            oauth_runtime_for_app,
-            agent_creds_for_app,
-            credential_sealing_key_for_app,
-            credential_secrets_for_app,
-            operational_log_for_app,
-            op_resolver_for_app,
-            native.clone(),
-            broker_health,
-            rate_limiter,
-        ),
-        None => crate::app::build_app_full_with_registrations(
-            shared_config.clone(),
-            audit_for_proxy,
-            resolved_creds.clone(),
-            mtls_authenticator,
-            agent_auth,
-            registrations_for_app,
-        ),
-    };
+    let agent_router = crate::app::build_app_full_with_native(
+        shared_config.clone(),
+        audit_for_proxy,
+        resolved_creds.clone(),
+        mtls_authenticator,
+        agent_auth,
+        registrations_for_app,
+        catalog_for_app.expect("the admin substrate is always built"),
+        oauth_runtime_for_app,
+        agent_creds_for_app,
+        credential_sealing_key_for_app,
+        credential_secrets_for_app,
+        operational_log_for_app,
+        op_resolver_for_app,
+        native.clone(),
+        broker_health,
+        rate_limiter,
+    );
     log_egress_enforcement(&shared_config.load());
     let agent_shutdown = coord.shutdown_signal();
     // Every listener is bound and every fallible check done before any
@@ -558,8 +538,9 @@ async fn run_owned(
         Option<ListenerServe>,
         Option<ListenerServe>,
         Option<ListenerServe>,
-    ) = if let Some(state) = admin_state {
-        let path = admin_socket_path.expect("checked above");
+    ) = {
+        let state = admin_state.expect("the admin substrate is always built");
+        let path = admin_socket_path;
         #[cfg(test)]
         let body_test_path = path.clone();
         let uds_shutdown = coord.shutdown_signal();
@@ -672,8 +653,6 @@ async fn run_owned(
             }
         };
         (Some(uds), https, bootstrap)
-    } else {
-        (None, None, None)
     };
 
     // All binds succeeded: record them and start serving.
@@ -1006,13 +985,13 @@ async fn build_admin_substrate(
     let db_path = snapshot
         .database
         .as_ref()
-        .expect("checked in run()")
+        .expect("checked in require_admin")
         .path
         .clone();
     let ops_path = snapshot
         .operator_credentials_path
         .as_ref()
-        .expect("checked in run()")
+        .expect("checked in require_admin")
         .clone();
     drop(snapshot);
 

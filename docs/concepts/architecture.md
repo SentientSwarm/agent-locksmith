@@ -115,15 +115,15 @@ requests: legacy mode was removed in 3.0.0 (AGENT-297). See
 `src/daemon.rs::run` is the only place where state gets wired up.
 Read it first if you're contributing code. It does (in order):
 
-1. Parse + validate `AppConfig`.
+1. Parse + validate `AppConfig`. Refuse a config without
+   `listen.admin_socket`, `database.path` or `operator_credentials_path`
+   before taking the state lock (legacy mode was removed in 3.0.0).
 2. Construct `Arc<ArcSwap<AppConfig>>`, the one config snapshot the agent
    router and AdminService share. The YAML file is read once, at startup;
    see [Changing configuration](#changing-configuration).
 3. Resolve `tool.auth.value: SecretRef` for legacy config.tools entries
    (env vars + sealed files + Vault/AWS stubs).
-4. **Build admin substrate** (required: the daemon refuses to start
-   without `listen.admin_socket`, `database.path` and
-   `operator_credentials_path`):
+4. **Build admin substrate**:
    - Open SQLite pool, run migrations.
    - Construct repositories (AgentRepository, BootstrapTokenRepository,
      AuditRepository, RegistrationRepository, OauthSessionRepository).

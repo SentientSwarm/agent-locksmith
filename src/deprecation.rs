@@ -123,17 +123,16 @@ pub fn default_registry() -> DeprecationRegistry {
 }
 
 /// Emit the M9 / v2.0.0 deprecation warning when `inbound_auth.token`
-/// is set on a deployment that has the admin substrate enabled. The
-/// shared bearer is silently ignored on the agent listener — per-agent
-/// bearer authentication takes precedence — and operators should drop
-/// the `inbound_auth` block to silence this warning. One-shot per
-/// process via the registry's `notice()` mechanism.
+/// is set. The shared bearer is ignored: legacy shared-bearer mode was
+/// removed in 3.0.0 and every request authenticates as an enrolled
+/// agent (AGENT-297, AGENT-318). Operators should drop the
+/// `inbound_auth` block to silence this warning. One-shot per process
+/// via the registry's `notice()` mechanism.
 pub fn emit_inbound_auth_token_runtime_deprecation(
     registry: &DeprecationRegistry,
-    admin_substrate_enabled: bool,
     inbound_auth_token_set: bool,
 ) {
-    if !(admin_substrate_enabled && inbound_auth_token_set) {
+    if !inbound_auth_token_set {
         return;
     }
     if !registry.notice("inbound_auth.token") {
@@ -146,9 +145,9 @@ pub fn emit_inbound_auth_token_runtime_deprecation(
     tracing::warn!(
         field = "inbound_auth.token",
         since_version = entry.since_version,
-        "shared inbound_auth.token is ignored when the admin substrate is enabled — \
-         per-agent bearer authentication takes precedence. Remove the inbound_auth block \
-         to silence this warning. (M9 / v2.0.0)"
+        "shared inbound_auth.token is ignored: legacy shared-bearer mode was removed in \
+         3.0.0 and every request authenticates as an enrolled agent. Remove the \
+         inbound_auth block to silence this warning."
     );
 }
 

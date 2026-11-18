@@ -1,35 +1,20 @@
 //! T3.1 — proxy hot path emits one audit row per request.
 //!
 //! Covers R-F7 + INF-19. The proxy_handler must record an AuditEvent
-//! into the AuditRepository for every request it dispatches. This file
-//! exercises the M0/M1 shared-bearer code path explicitly (built via
-//! `build_app_with_audit`, which passes `agent_auth: None`
-//! to `build_app_full`) so `agent_public_id` is None on these rows by
-//! design. Per-agent identity on the proxy is wired by M9 / B1 — see
-//! `tests/proxy_acl_test.rs` for the populated-`agent_public_id` flow.
+//! into the AuditRepository for every request it dispatches. Requests
+//! come from an enrolled agent (legacy identityless mode was removed in
+//! 3.0.0, AGENT-318), so rows carry its `agent_public_id`.
 
-use agent_locksmith::app::build_app_with_audit;
+#[path = "support/registered_legacy.rs"]
+mod registered_legacy;
+
 use agent_locksmith::config::parse_config_str;
-use agent_locksmith::migrations::open_and_migrate;
-use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository, Decision, EventClass};
-use arc_swap::ArcSwap;
-use axum_test::TestServer;
-use std::sync::Arc;
-use tempfile::TempDir;
+use agent_locksmith::repo::audit::{AuditFilter, AuditPage, Decision, EventClass};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-async fn fixture() -> (TempDir, AuditRepository) {
-    let dir = TempDir::new().unwrap();
-    let pool = open_and_migrate(&dir.path().join("locksmith.db"))
-        .await
-        .unwrap();
-    (dir, AuditRepository::new(pool))
-}
-
 #[tokio::test]
 async fn proxy_records_audit_row_on_success() {
-    let (_dir, audit) = fixture().await;
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/things/42"))
@@ -52,10 +37,8 @@ tools:
 "#,
         mock.uri()
     );
-    let config = parse_config_str(&yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(config));
-    let app = build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(parse_config_str(&yaml).unwrap()).await;
+    let (server, audit) = (&f.server, &f.audit);
 
     let resp = server.get("/api/things/v1/things/42").await;
     resp.assert_status_ok();
@@ -83,15 +66,13 @@ tools:
         "latency populated and reasonable"
     );
     assert!(
-        row.agent_public_id.is_none(),
-        "M0/M1 shared-bearer path: agent_public_id is None by construction. \
-         The per-agent populated case is covered by tests/proxy_acl_test.rs (M9)."
+        row.agent_public_id.is_some(),
+        "every proxied request comes from an enrolled agent"
     );
 }
 
 #[tokio::test]
 async fn proxy_records_decision_error_on_upstream_5xx() {
-    let (_dir, audit) = fixture().await;
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/explode"))
@@ -110,10 +91,8 @@ tools:
 "#,
         mock.uri()
     );
-    let cfg = parse_config_str(&yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(parse_config_str(&yaml).unwrap()).await;
+    let (server, audit) = (&f.server, &f.audit);
 
     let resp = server.get("/api/svc/explode").await;
     resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
@@ -127,22 +106,21 @@ tools:
     assert_eq!(rows[0].decision, Decision::Error);
 }
 
+/// An agent asking for a tool outside its allowlist is denied before
+/// resolution, so an unknown name looks like any refused one (M9).
 #[tokio::test]
 async fn proxy_records_unknown_tool_as_denied() {
-    let (_dir, audit) = fixture().await;
     let yaml = r#"
 listen:
   host: "127.0.0.1"
   port: 9200
 tools: []
 "#;
-    let cfg = parse_config_str(yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(parse_config_str(yaml).unwrap()).await;
+    let (server, audit) = (&f.server, &f.audit);
 
     let resp = server.get("/api/no-such-tool/anything").await;
-    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
 
     let rows = audit
         .query(&AuditFilter::default(), AuditPage::default())
@@ -151,14 +129,13 @@ tools: []
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     assert_eq!(row.decision, Decision::Denied);
-    assert_eq!(row.event, "tool_not_found");
+    assert_eq!(row.event, "authz_denied");
     assert_eq!(row.tool.as_deref(), Some("no-such-tool"));
 }
 
 #[tokio::test]
 async fn proxy_without_audit_repo_still_works() {
-    // Backward compat: the M0/M1 path doesn't have an audit repo. The
-    // proxy must keep working without it.
+    // The proxy must keep working when no audit repository is wired.
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/ok"))
@@ -177,10 +154,7 @@ tools:
 "#,
         mock.uri()
     );
-    let cfg = parse_config_str(&yaml).unwrap();
-    let shared = Arc::new(ArcSwap::from_pointee(cfg));
-    let app = build_app_with_audit(shared, None);
-    let server = TestServer::new(app);
-    let resp = server.get("/api/svc/ok").await;
+    let f = registered_legacy::authed_without_audit(parse_config_str(&yaml).unwrap()).await;
+    let resp = f.server.get("/api/svc/ok").await;
     resp.assert_status_ok();
 }

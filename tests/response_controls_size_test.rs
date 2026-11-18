@@ -1,11 +1,10 @@
 //! T7.3 — size cap end-to-end (streaming + non-streaming).
 
-use agent_locksmith::app::build_app;
+#[path = "support/registered_legacy.rs"]
+mod registered_legacy;
+
 use agent_locksmith::config::parse_config_str;
-use agent_locksmith::migrations::open_and_migrate;
-use agent_locksmith::repo::audit::{AuditFilter, AuditPage, AuditRepository};
-use axum_test::TestServer;
-use tempfile::TempDir;
+use agent_locksmith::repo::audit::{AuditFilter, AuditPage};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -43,7 +42,8 @@ async fn streaming_under_cap_passes_unchanged() {
         .mount(&mock)
         .await;
     let cfg = parse_config_str(&config_yaml(&mock.uri(), 1024, false)).unwrap();
-    let server = TestServer::new(build_app(cfg));
+    let f = registered_legacy::authed(cfg).await;
+    let server = &f.server;
     let resp = server.get("/api/t/small").await;
     resp.assert_status_ok();
     assert_eq!(resp.text(), "hello");
@@ -59,7 +59,8 @@ async fn streaming_over_cap_emits_truncation_marker() {
         .mount(&mock)
         .await;
     let cfg = parse_config_str(&config_yaml(&mock.uri(), 50, false)).unwrap();
-    let server = TestServer::new(build_app(cfg));
+    let f = registered_legacy::authed(cfg).await;
+    let server = &f.server;
     let resp = server.get("/api/t/big").await;
     // Status comes from upstream (200) — truncation is body-level.
     resp.assert_status_ok();
@@ -81,7 +82,8 @@ async fn nonstreaming_over_cap_returns_502() {
         .mount(&mock)
         .await;
     let cfg = parse_config_str(&config_yaml(&mock.uri(), 50, true)).unwrap();
-    let server = TestServer::new(build_app(cfg));
+    let f = registered_legacy::authed(cfg).await;
+    let server = &f.server;
     let resp = server.get("/api/t/big").await;
     resp.assert_status(axum::http::StatusCode::BAD_GATEWAY);
     let body: serde_json::Value = resp.json();
@@ -93,12 +95,6 @@ async fn nonstreaming_over_cap_returns_502() {
 
 #[tokio::test]
 async fn streaming_truncation_emits_audit_row() {
-    let dir = TempDir::new().unwrap();
-    let pool = open_and_migrate(&dir.path().join("locksmith.db"))
-        .await
-        .unwrap();
-    let audit = AuditRepository::new(pool);
-
     let mock = MockServer::start().await;
     let big = "Z".repeat(500);
     Mock::given(method("GET"))
@@ -107,9 +103,8 @@ async fn streaming_truncation_emits_audit_row() {
         .mount(&mock)
         .await;
     let cfg = parse_config_str(&config_yaml(&mock.uri(), 50, false)).unwrap();
-    let shared = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(cfg));
-    let app = agent_locksmith::app::build_app_with_audit(shared, Some(audit.clone()));
-    let server = TestServer::new(app);
+    let f = registered_legacy::authed(cfg).await;
+    let (server, audit) = (&f.server, &f.audit);
     let _ = server.get("/api/t/big").await;
 
     // Give the truncation-spawned audit task a moment to land.
