@@ -18,8 +18,7 @@ status does not attest provider or per-account credential readiness.
 Build both binaries with `cargo build --locked --bins`. Use the
 [getting started guide](../getting-started.md) for operator bootstrap, a private
 admin socket, database and daemon setup. Native access requires that database
-and an actual registered agent identity. A shared gateway bearer or identityless
-legacy setup cannot create a native session.
+and an actual registered agent identity.
 
 Use the existing agent listener's verified TLS configuration (`auth_mode: mtls`
 or `both` and `listen.mtls` CA/server certificate/key paths). `both` accepts a

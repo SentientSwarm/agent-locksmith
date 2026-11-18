@@ -6,7 +6,6 @@ account or ready daemon does not repair an unavailable selected account.
 | Observation | Meaning and action |
 | --- | --- |
 | 401 `invalid_credential` or `expired` | Present a real registered agent token/certificate. Wrong, expired or revoked credentials must be replaced through normal enrollment. Do not use the operator token on the agent listener. |
-| 401 `agent_identity_required` | Credentialed legacy route lacks registered-agent identity. Configure the admin database/listener, register an agent, authenticate it and select its source. `/readyz` also diagnoses credentialed identityless configurations. |
 | 403 `tool_not_allowed` | Check the agent's `grants_reviewed` and finite allowlist/denylist, then `agent credentials list`. Missing/cleared binding denies even if the catalog has a healthy credential. Set the intended binding explicitly. |
 | 404 `tool_not_found` | Current registration is missing or disabled after the ACL gate. Operator checks the catalog; DB-backed requests cannot use a same-name YAML fallback. |
 | 503 `connection_not_active` | Saved configuration differs from runtime. Operator checks `tool get` / `model get`, repairs refresh failure, and repeats the intended write or restarts the deployment. No request reached upstream. |

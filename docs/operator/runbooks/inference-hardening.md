@@ -148,12 +148,19 @@ Verify locally:
 
 ```bash
 # Terminal 1: start a Locksmith with a small drain window for quick observation.
-cat > /tmp/locksmith.yaml <<'EOF'
-listen: { host: 127.0.0.1, port: 9200 }
+d=$(mktemp -d)
+locksmith bootstrap-operator --name admin > "$d/operators.yaml" 2>/dev/null
+cat > "$d/locksmith.yaml" <<EOF
+listen:
+  host: 127.0.0.1
+  port: 9200
+  admin_socket: { path: "$d/admin.sock" }
+operator_credentials_path: "$d/operators.yaml"
+database: { path: "$d/locksmith.db" }
 shutdown: { drain_window_seconds: 5 }
 tools: []
 EOF
-cargo run -- --config /tmp/locksmith.yaml
+cargo run --bin locksmithd -- --config "$d/locksmith.yaml"
 
 # Terminal 2: send SIGTERM.
 pkill -TERM -f locksmith

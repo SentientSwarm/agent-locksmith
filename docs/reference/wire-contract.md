@@ -189,8 +189,8 @@ segments after `tool_name` are forwarded as-is. So calling
 The selected Header/Bearer source may reference environment, stored credentials
 or 1Password. OAuth requires a nonempty session label and complete, consistent
 provider metadata; bootstrap alone does not authorize use. The agent never sees
-the injected credential. Identityless legacy calls cannot use credentialed
-registration defaults; only explicitly authless registrations are supported.
+the injected credential. Every call comes from an enrolled agent; legacy
+identityless mode was removed in 3.0.0.
 
 #### Response headers
 
@@ -271,7 +271,6 @@ Codes:
 |---|---|---|---|
 | 400 | `bad_request` | `bad_request` | Request body unreadable or larger than the registration's body limit. |
 | 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code), or the agent is no longer active. |
-| 401 | `auth_error` | `agent_identity_required` | Identityless request to a credentialed registration. |
 | 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
 | 404 | `not_found` | `tool_not_found` | Allowlisted name that is not registered or not enabled. |
 | 413 | `payload_too_large` | `codex_body_too_large` | Codex `/responses` request body over 1 MiB. |

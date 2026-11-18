@@ -140,7 +140,7 @@ HTTP errors carry `{"error":{"code","message"}}`. Read `code`:
 | HTTP | Meaning | `code` values |
 |---|---|---|
 | 400 | Malformed protocol/session input | `protocol_version`, `session_required`, `initialize_has_session`, `initialization_incomplete`, `unexpected_body`, `query_unsupported`, `resume_unsupported`, `duplicate_header`, `host_required` |
-| 401 | Invalid or no longer current identity | `invalid_credential` (bearer, shared agent envelope), `agent_identity_required`, `agent_inactive` |
+| 401 | Invalid or no longer current identity | `invalid_credential` (bearer, shared agent envelope), `agent_inactive` |
 | 403 | Denied grant, binding, Host or Origin | `connection_not_allowed`, `account_selection_required`, `host_denied`, `origin_denied` |
 | 404 | Unavailable session or connection | `session_unavailable`, `session_closed`, `connection_unavailable`, `authority_changed`, `compact_unavailable` |
 | 405 / 406 / 415 | Method or media negotiation | `method_not_allowed` / `accept` / `content_type` |

@@ -10,7 +10,7 @@ HTTP proxy authentication and authorization failures use a uniform JSON shape:
     "type":    "auth_error" | "authz_error" | "client_error" | "payload_too_large",
     "code":    "invalid_credential" | "expired" | "revoked" | "rate_limited" |
                "tool_not_allowed" | "internal_error" | "backend_error" |
-               "credential_unresolved" | "agent_identity_required" |
+               "credential_unresolved" |
                "oauth_session_missing" | "oauth_refresh_failed" |
                "oauth_sealing_key_unset" | "codex_body_too_large"
   }
@@ -21,8 +21,7 @@ Status codes:
 
 - `401` — `type: auth_error`: token missing, malformed, unknown, expired, or
   revoked. The wire never distinguishes between these — see §4.7.9 / Q-8 for
-  the existence-leak rationale. Identityless legacy credentialed routes return
-  `agent_identity_required`. The audit row carries the discriminating
+  the existence-leak rationale. The audit row carries the discriminating
   reason.
 - `403` — `type: authz_error code: tool_not_allowed`: token valid, but the
   requested tool is excluded by your ACL or has no explicit account binding.

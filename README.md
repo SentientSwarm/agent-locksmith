@@ -424,7 +424,8 @@ cargo test --test proxy_suite streaming_passthrough_test::
 # Audit-write benchmark.
 cargo bench --bench audit_write_bench
 
-# Run daemon against the example config.
+# Run daemon against the example config (it names /run, /var/lib and /etc
+# paths; for a local run use the config in docs/guide/01-install.md).
 target/release/locksmithd --config config.example.yaml
 ```
 

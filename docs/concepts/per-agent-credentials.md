@@ -131,13 +131,11 @@ header/bearer bindings read only their selected cached reference; the request
 never runs `op`. Missing, tombstoned, unreadable, wrongly sealed or empty values
 return 503 before dispatch, including when another source is healthy.
 
-Credentialed legacy `config.tools` routes require a real registered-agent
-identity. M0/shared-bearer calls return **401 agent_identity_required** before
-source resolution. `/readyz` returns 503 with the same reason and an upgrade
-instruction when credentialed tools have no agent authenticator. Enable the
-admin database/listener, register an agent, authenticate with that agent's bearer
-or mTLS identity, and explicitly select its account. Credential-free routes
-retain the current admission policy.
+Every request comes from a registered agent: the daemon refuses to start
+without the admin socket, since legacy shared-bearer mode was removed in 3.0.0
+(AGENT-297). Legacy `config.tools` entries are imported as registrations;
+register an agent, authenticate with its bearer or mTLS identity, and
+explicitly select its account.
 
 ## Legacy file-backed credentials
 
@@ -252,7 +250,6 @@ Every `proxy_request` audit row carries:
 
 - `agent_public_id` + `agent_name` — who made the call (G.0).
 - `auth_source` — `"agent_override"` for explicitly bound agent requests.
-  Credentialed identityless calls are denied before dispatch.
 - `auth_mode` — `"bearer"` / `"header"` / `"none"` /
   `"oauth_pkce"` / `"oauth_device_code"` / `"config"`.
 - `oauth_session_id` — present on OAuth requests; SHA-256-based

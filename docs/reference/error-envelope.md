@@ -51,7 +51,6 @@ Proxy-path types and codes are listed in the [wire contract](wire-contract.md#er
 | 503 | `auth_error` | `credential_unresolved` | Selected environment/stored/1Password source unavailable or selection unreadable. No alternate/default dispatch. |
 | 503 | `auth_error` | `oauth_session_missing` / `oauth_refresh_failed` / `oauth_sealing_key_unset` | Selected OAuth session unavailable; operator diagnosis required. |
 | 503 | `auth_error` | `oauth_reconnect_required` | A refresh of the selected OAuth session failed after trying the token endpoint, or the daemon stopped during one, so its custody is uncertain; the operator signs it in again. |
-| 401 | `auth_error` | `agent_identity_required` | Identityless legacy request to a credentialed registration. |
 | 429 | `auth_error` | `rate_limited` | Token validation rate-limited. Includes `Retry-After` header (seconds). |
 | 5xx | `auth_error` | `backend_error` | Backend persistence error during auth. The wire message is generic; the operator's logs carry the discriminator. |
 

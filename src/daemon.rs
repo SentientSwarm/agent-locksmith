@@ -7,9 +7,9 @@
 //! point stays tiny.
 //!
 //! The admin substrate (UDS + AdminService + repos + operator auth) is
-//! only constructed when `listen.admin_socket` is configured. M0/M1
-//! configs without admin_socket continue to run with only the TCP agent
-//! listener bound — preserving backward compat.
+//! required: since 3.0.0 a config without `listen.admin_socket` is
+//! refused at startup (AGENT-297; legacy mode served identityless
+//! requests).
 
 mod oauth;
 mod state_lock;
