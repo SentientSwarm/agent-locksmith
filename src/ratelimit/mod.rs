@@ -4,8 +4,8 @@
 //! mirrored here so the proxy checks them without a query. A route
 //! default applies to every agent separately; an agent row overrides it.
 //! Each (agent, route) gets a token bucket of `requests_per_minute`
-//! tokens, refilled continuously, and, with `max_concurrent`, a
-//! semaphore whose permit the request holds until its body is dropped.
+//! tokens, refilled continuously, and, with `max_concurrent`, a cap on
+//! an in-flight count the request holds until its body is dropped.
 
 pub mod repo;
 
@@ -24,9 +24,9 @@ pub struct Limit {
     pub max_concurrent: Option<u32>,
 }
 
-/// A slot's refusals write at most one audit row per this interval
-/// (AGENT-272), so an agent hammering a limited route cannot turn each
-/// refusal into an audit write.
+/// A slot's refusals of each kind (rate, concurrency) write at most one
+/// audit row per this interval (AGENT-272), so an agent hammering a
+/// limited route cannot turn each refusal into an audit write.
 pub const AUDIT_EVERY: Duration = Duration::from_secs(60);
 
 /// Why a request was refused, and when a retry can succeed.
@@ -35,8 +35,8 @@ pub struct Limited {
     pub retry_after_secs: u64,
     pub concurrency: bool,
     /// `Some(n)`: write an audit row for this refusal, which also stands
-    /// for the `n` refusals on the slot since its previous row. `None`:
-    /// counted toward the next row instead.
+    /// for the `n` refusals of its kind on the slot since that kind's
+    /// previous row. `None`: counted toward the next row instead.
     pub audit: Option<u64>,
 }
 
@@ -364,11 +364,30 @@ mod tests {
         let busy = l.check_at(1, "r", t0).unwrap_err();
         assert!(busy.concurrency);
         assert_eq!(busy.audit, Some(0));
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
         drop(held);
         let rate = l.check_at(1, "r", t0).unwrap_err();
         assert!(!rate.concurrency);
-        assert_eq!(rate.audit, Some(0), "its own first row");
+        assert_eq!(rate.audit, Some(0), "its own first row and count");
         assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
+        // Each kind's next row counts only its own refusals.
+        let next = t0 + AUDIT_EVERY;
+        let _held = l.check_at(1, "r", next).unwrap();
+        assert_eq!(l.check_at(1, "r", next).unwrap_err().audit, Some(1));
+    }
+
+    /// A rate refusal undoes the in-flight count it took while checking.
+    #[test]
+    fn a_rate_refusal_leaks_no_in_flight_count() {
+        let l = limiter(1, Some(5));
+        let t0 = Instant::now();
+        drop(l.check_at(1, "r", t0).unwrap());
+        for _ in 0..10 {
+            assert!(!l.check_at(1, "r", t0).unwrap_err().concurrency);
+        }
+        let slots = l.lock();
+        let slot = slots.get(&(1, "r".to_string())).unwrap();
+        assert_eq!(slot.inflight.load(Ordering::Acquire), 0);
     }
 
     /// AGENT-272: a changed limit starts a new audit window, so the first

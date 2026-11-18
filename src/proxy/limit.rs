@@ -38,8 +38,8 @@ async fn refuse(
     } else {
         "rate"
     };
-    // AGENT-272: at most one row per (agent, route) a minute; the row
-    // counts the refusals since the slot's previous one.
+    // AGENT-272: at most one row per (agent, route) and refusal kind a
+    // minute; the row counts the refusals of its kind since the last.
     if let Some(suppressed) = limited.audit {
         let mut event = ctx.audit_event_base();
         event.event_class = EventClass::Security;

@@ -110,10 +110,10 @@
   writes the `egress_unenforced` security audit event, as a refused
   proxied request does and as the egress docs say (AGENT-302). It was
   audited as `oauth_unavailable` with cause `egress_unenforced`.
-- An agent kept over a rate limit writes at most one `rate_limited`
-  audit row per route a minute, not one per refused request
-  (AGENT-272), one for rate and one for concurrency refusals. Each
-  row's `details.suppressed` counts the refusals of its kind since the
+- An agent kept over a limit writes at most one `rate_limited` audit
+  row per route a minute for rate refusals and one for concurrency
+  refusals, not one per refused request (AGENT-272). Each row's
+  `details.suppressed` counts the refusals of its kind since the
   previous one, and a changed limit starts a new minute.
 - An OAuth session whose token call has no egress (a proxied route with
   no egress proxy) is reported once, in the daemon log and as an
