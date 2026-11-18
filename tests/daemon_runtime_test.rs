@@ -109,36 +109,31 @@ async fn daemon_binds_both_listeners_and_drains_clean() {
     assert!(f.op_token_wire.starts_with("lkop_"));
 }
 
+/// AGENT-297: legacy mode (no admin socket, so no per-agent identity)
+/// was removed in 3.0.0. It relayed requests to authless `tools`
+/// entries for anyone who could reach the listener when `inbound_auth`
+/// was missing or misconfigured.
 #[tokio::test]
-async fn daemon_runs_without_admin_substrate() {
-    // M0/M1 backward-compat: admin_socket absent ⇒ admin UDS not bound,
-    // database not opened, operators.yaml not consulted.
+async fn daemon_refuses_to_start_without_an_admin_socket() {
     let yaml = r#"
 listen:
   host: "127.0.0.1"
   port: 0
-shutdown:
-  drain_window_seconds: 2
-tools: []
+tools:
+  - name: lan
+    description: "LAN service"
+    upstream: "http://127.0.0.1:9"
 "#;
     let cfg = parse_config_str(yaml).unwrap();
-    let started = daemon::start_with_drain_window(cfg, Duration::from_secs(2))
+    let coord = agent_locksmith::shutdown::ShutdownCoordinator::new(Duration::from_secs(2));
+    let result = timeout(Duration::from_secs(10), daemon::run(cfg, coord))
         .await
-        .expect("daemon starts");
-    let (coord, handle) = (started.coord, started.handle);
-
-    // Probe livez on the TCP listener.
-    let resp = reqwest::get(format!("http://{}/livez", started.addrs.agent))
-        .await
-        .expect("livez reachable");
-    assert!(resp.status().is_success(), "agent listener serving /livez");
-
-    coord.trigger();
-    timeout(Duration::from_secs(3), handle)
-        .await
-        .expect("daemon exits within 3s")
-        .expect("join handle ok")
-        .expect("daemon Ok(())");
+        .expect("refuses at startup, not after serving");
+    let msg = format!("{}", result.expect_err("daemon must refuse legacy mode"));
+    assert!(
+        msg.contains("listen.admin_socket"),
+        "names the fix; got: {msg}"
+    );
 }
 
 #[tokio::test]

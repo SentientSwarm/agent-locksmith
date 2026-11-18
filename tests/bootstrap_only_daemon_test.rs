@@ -210,7 +210,7 @@ async fn enabled_without_the_admin_substrate_refuses_to_start() {
         .err()
         .expect("daemon must not start without admin_socket");
     assert!(
-        err.to_string().contains("bootstrap_only"),
+        err.to_string().contains("listen.admin_socket"),
         "error names the setting: {err}"
     );
 }

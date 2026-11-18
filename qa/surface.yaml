@@ -659,7 +659,6 @@ routes:
     file: src/app.rs
     route: /api/{tool_name}/{*path}
   refusals:
-  - agent_identity_required
   - invalid_credential
   - tool_not_allowed
   - tool_not_found
@@ -720,7 +719,6 @@ routes:
   - duplicate_header
   - unexpected_body
   - resume_unsupported
-  - agent_identity_required
   - origin_denied
   - host_denied
   - connection_not_allowed
@@ -761,7 +759,6 @@ routes:
   - duplicate_header
   - unexpected_body
   - resume_unsupported
-  - agent_identity_required
   - origin_denied
   - host_denied
   - connection_not_allowed
@@ -1366,7 +1363,7 @@ behaviours:
   - revoked_by_crl
   - revoked_by_blocklist
 - id: beh.readyz.semantics
-  summary: /readyz refuses identityless credentialed setups and unresolved config credentials
+  summary: /readyz refuses unresolved config credentials
 - id: beh.native.limits
   summary: Native MCP session limits, deadlines and Origin/Host allowlists
 - id: beh.telemetry.logging

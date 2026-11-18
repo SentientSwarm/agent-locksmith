@@ -146,6 +146,18 @@ def test_duplicate_operator_public_id_refuses_start(t1):
     )
 
 
+@case("SMK-DMN-012", area="DMN", kind="refusal", covers=[VALIDATION])
+def test_legacy_mode_refuses_start(t1):
+    """config.md "Legacy mode was removed" (AGENT-297): without listen.admin_socket there is
+    no per-agent identity, so the daemon refuses to start instead of relaying to authless
+    tools entries for any caller."""
+    cfg = minimal(
+        inbound_auth={"mode": "bearer", "token": "dmn-shared"},
+        tools=[{"name": "dmn-open", "description": "d", "upstream": "http://127.0.0.1:9"}],
+    )
+    refused(run_once(t1, "dmn-legacy-mode", cfg), "listen.admin_socket", "legacy mode")
+
+
 @case("SMK-DMN-009", area="DMN", kind="positive", covers=[VALIDATION])
 def test_env_var_expansion_in_config(target_factory):
     """config.example.yaml:82 and sealed-secrets.md:35: `${VAR}` in the YAML expands from the daemon environment.

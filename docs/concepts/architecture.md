@@ -106,8 +106,8 @@ They can report `account_selected`, but never attest source health. A saved
 admin write whose refresh fails reports failure/pending and denies the affected
 route; unrelated matching routes remain usable. Config-only discovery is labelled
 `configuration_only`. Already-admitted requests may finish after authority changes;
-new admissions use current persisted state. Identityless legacy requests require `auth: none`; they
-cannot consume a credentialed registration default. See
+new admissions use current persisted state. There are no identityless
+requests: legacy mode was removed in 3.0.0 (AGENT-297). See
 [explicit account bindings](../changes/explicit-account-bindings.md) for repair.
 
 ## Composition root: `daemon::run`

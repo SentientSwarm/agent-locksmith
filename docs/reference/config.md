@@ -123,9 +123,9 @@ shutdown:
   drain_window_seconds: 30
 ```
 
-`oauth_consent` and the legacy `tools` and `inbound_auth` keys are described
-in their own sections below; they are left out of the example because each
-needs service-specific values.
+`oauth_consent` and the legacy `tools` key are described in their own
+sections below; they are left out of the example because each needs
+service-specific values.
 
 ## `listen`
 
@@ -136,7 +136,7 @@ The agent listener and the admin listeners.
 | `host` | `127.0.0.1` | Address of the agent listener. A value that is not an IP address falls back to `127.0.0.1`. |
 | `port` | `9200` | Port of the agent listener. |
 | `auth_mode` | `bearer` | How agents authenticate. `bearer`: a Locksmith token in `Authorization`. `mtls`: a client certificate, and a bearer header is refused. `both`: a certificate if one is presented, otherwise a bearer token. |
-| `admin_socket.path` | none | Unix socket for the operator CLI, created with mode 0660. It turns on the database, per-agent identity and the admin API. Without it Locksmith runs in [legacy mode](#legacy-mode). |
+| `admin_socket.path` | required | Unix socket for the operator CLI, created with mode 0660. It turns on the database, per-agent identity and the admin API. Without it the daemon refuses to start ([legacy mode was removed](#legacy-mode-was-removed)). |
 | `mtls` | none | Required when `auth_mode` is `mtls` or `both`; see below. |
 | `admin_https` | none | Optional admin listener over HTTPS; see below. |
 | `bootstrap_only` | none | Optional enrolment listener; see below. |
@@ -314,29 +314,17 @@ The profile fields depend on the provider. See
 | `logging.file` | none | Write logs to this file instead of stdout. If it cannot be opened, the daemon does not start. |
 | `shutdown.drain_window_seconds` | `30` | How long in-flight requests get to finish after SIGTERM. |
 
-## Legacy mode
+## Legacy mode was removed
 
-Without `listen.admin_socket` and with `listen.auth_mode: bearer`, Locksmith
-runs without per-agent identity or an admin API. Only `tools` entries
-**without** `auth` are served. An entry with `auth` is refused: requests get
-401 `agent_identity_required` and `/readyz` returns 503, because a shared
-token cannot select an account. To use credentials, set the admin socket,
-register agents and select their accounts.
-
-`inbound_auth` gates the entries that are served:
-
-| Key | Meaning |
-|---|---|
-| `inbound_auth.mode` | `bearer` checks every request for `inbound_auth.token`. |
-| `inbound_auth.token` | The single token every agent presents. |
-
-> **Warning.** In legacy mode, if `inbound_auth` is absent, its `mode` is not
-> `bearer`, or it has no `token`, the served entries are open to anyone who
-> can reach the listener. Keep the listener on loopback, or set the admin
-> socket.
-
-Once `listen.admin_socket` is set, `inbound_auth` is ignored (with a warning
-if a token is set) and each agent uses its own token or certificate.
+Before 3.0.0, a config without `listen.admin_socket` ran without per-agent
+identity or an admin API, serving authless `tools` entries behind an
+optional shared `inbound_auth` token. When that token was missing or
+misconfigured, anything that could reach the listener could use those
+entries (AGENT-297). The daemon now refuses to start without
+`listen.admin_socket`, `database.path` and `operator_credentials_path`.
+Register agents and select their accounts; `tools` entries are imported as
+registrations at startup. `inbound_auth` is still accepted, ignored with a
+warning if it has a token.
 
 ### `tools`
 

@@ -139,6 +139,17 @@ async fn run_owned(
 ) -> Result<(), DaemonError> {
     let admin_socket_path = config.listen.admin_socket.as_ref().map(|s| s.path.clone());
     let admin_enabled = admin_socket_path.is_some();
+    // AGENT-297: legacy mode (no admin socket, so no per-agent identity)
+    // was removed in 3.0.0. Missing or misconfigured `inbound_auth` left
+    // it relaying to authless `tools` entries for any caller.
+    if !admin_enabled {
+        return Err(DaemonError::AdminConfig(
+            "`listen.admin_socket` is required: legacy mode without per-agent identity was \
+             removed in 3.0.0. Set `listen.admin_socket`, `database.path` and \
+             `operator_credentials_path`, then enroll agents"
+                .into(),
+        ));
+    }
     if admin_enabled {
         if config.database.is_none() {
             return Err(DaemonError::AdminConfig(
@@ -150,18 +161,6 @@ async fn run_owned(
                 "listen.admin_socket is set but `operator_credentials_path` is missing".into(),
             ));
         }
-    }
-    // T6.8: enrolment runs through the admin substrate's AdminService.
-    if !admin_enabled
-        && config
-            .listen
-            .bootstrap_only
-            .as_ref()
-            .is_some_and(|c| c.enabled)
-    {
-        return Err(DaemonError::AdminConfig(
-            "listen.bootstrap_only is enabled but `listen.admin_socket` is not set".into(),
-        ));
     }
 
     // M9 / v2.0.0: warn once when an operator carries `inbound_auth.token`

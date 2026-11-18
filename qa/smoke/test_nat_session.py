@@ -304,29 +304,3 @@ def test_account_reselection_retires_open_sessions(env):
         assert fresh.call("ping").status == 200
         fresh.delete()
     no_arrivals(env, before)
-
-
-@case("SMK-NAT-013", area="NAT", kind="refusal", covers=[STD, CMP], codes=["agent_identity_required"])
-def test_identityless_and_shared_gateway_cannot_open_sessions(target_factory):
-    """Native access needs an actual registered agent; a shared gateway bearer or identityless setup cannot.
-
-    docs/operator/native-mcp.md:19-22; docs/reference/wire-contract.md:27-28.
-    """
-    gateway = target_factory(
-        config={"listen": {"admin_socket": None},
-                "inbound_auth": {"mode": "bearer", "token": "${QA_NAT_GATEWAY_TOKEN}"}},
-        env={"QA_NAT_GATEWAY_TOKEN": "qa-nat-shared-gateway-value"},
-        label="nat-gateway", upstream=False,
-    )
-    bare = target_factory(config={"listen": {"admin_socket": None}}, label="nat-identityless", upstream=False)
-    try:
-        for path in ("/mcp/sample", "/mcp/sample/compact"):
-            shared = w.send(gateway, "POST", path, [w.auth("qa-nat-shared-gateway-value"), *w.POST_HEADERS], w.INIT)
-            assert shared.status == 401, path
-            assert shared.code == "agent_identity_required", path
-            anonymous = w.send(bare, "POST", path, w.POST_HEADERS, w.INIT)
-            assert anonymous.status == 401, path
-            assert anonymous.code == "agent_identity_required", path
-    finally:
-        gateway.stop()
-        bare.stop()

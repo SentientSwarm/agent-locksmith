@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Removed
+
+- **Breaking:** legacy mode (AGENT-297). The daemon refuses to start
+  without `listen.admin_socket`, so every request comes from an enrolled
+  agent. Legacy mode served authless `tools` entries behind an optional
+  shared `inbound_auth` token, and when that was missing or misconfigured
+  anything that could reach the listener could use them. Set
+  `listen.admin_socket`, `database.path` and `operator_credentials_path`,
+  then enroll agents; `tools` entries are imported as registrations.
+  `config.example.yaml` now sets all three.
+
 ### Fixed
 
 - Under `fail_closed`, a streamed chat reply with many or long tool calls

@@ -4,12 +4,12 @@
 listen:
   host: "127.0.0.1"
   port: 9200
+  admin_socket: # required since 3.0.0: per-agent identity and the admin API
+    path: "/run/locksmith/admin.sock"
 
-# Optional auth for inbound requests from agent/gateway. M0-style; per-agent
-# identity arrives in M2 (T2.x).
-# inbound_auth:
-#   mode: "bearer"
-#   token: "${LOCKSMITH_INBOUND_TOKEN}"
+# Required with the admin socket (`locksmith bootstrap-operator` writes it).
+database: { path: "/var/lib/locksmith/locksmith.db" }
+operator_credentials_path: "/etc/locksmith/operators.yaml"
 
 # Native MCP budgets/host policy require restart. Calls need reviewed tool grants.
 # See docs/operator/native-mcp.md and docs/development/native-mcp.md.
