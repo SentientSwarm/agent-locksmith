@@ -26,8 +26,9 @@
   or `prompts/list` result, a read or a tool call's output) is no longer
   blocked under `fail_closed` with held events (AGENT-273). Each of its
   strings took a window of its own, so past 255 the stream was refused.
-  An MCP result is complete in its event and is now scanned whole; other
-  JSON-RPC (A2A or ACP chunks, which clients join) keeps its windows. A
+  An MCP result is complete in its event, so the strings under its
+  member are now scanned whole; its other fields and other JSON-RPC (A2A
+  or ACP chunks, which clients join) keep their windows. A
   JSON-RPC stream that later sends JSON that is not JSON-RPC now blocks
   under `fail_closed` ("stream event names another protocol"); under
   `fail_open` it keeps its windows and is audited as a hold overflow.

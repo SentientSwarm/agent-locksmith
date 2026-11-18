@@ -457,7 +457,7 @@ pub fn extract_within(
     // joins one message's strings with another's, so in a JSON-RPC stream
     // the strings under its MCP member are scanned whole instead of taking
     // a window each (AGENT-273).
-    let jsonrpc = jsonrpc_stream && mcp_result(&value, kind.as_deref());
+    let mcp_whole = jsonrpc_stream && mcp_result(&value, kind.as_deref());
     let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
@@ -472,7 +472,7 @@ pub fn extract_within(
         .into_iter()
         .map(|(place, path, text)| {
             let lane =
-                path.filter(|path| !(jsonrpc && under_mcp_member(path)))
+                path.filter(|path| !(mcp_whole && under_mcp_member(path)))
                     .and_then(|path| match (gemini, &place) {
                         (true, _) if gemini_whole(&path) => None,
                         (true, Place::Json(pointer)) => gemini_text(pointer)

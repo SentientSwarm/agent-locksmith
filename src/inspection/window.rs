@@ -316,6 +316,24 @@ mod tests {
         assert!(w.buf.capacity() <= SHRINK_ABOVE, "{}", w.buf.capacity());
     }
 
+    /// AGENT-273: a released window holds nothing, so text before the
+    /// release is not joined with text after it, and its offsets carry
+    /// on, so a later hit is placed after the released text.
+    #[test]
+    fn a_released_window_keeps_its_offsets_but_not_its_text() {
+        let mut w = literal("SECRET42", 1 << 20);
+        assert_eq!(w.push("abc SECRET42").unwrap().len(), 1);
+        w.release_text();
+        assert_eq!((w.held(), w.base(), w.end()), (0, 12, 12));
+        let hits = w.push("x SECRET42").unwrap();
+        assert_eq!((hits[0].start, hits[0].end), (14, 22));
+        let mut w = literal("SECRET42", 1 << 20);
+        assert!(w.push("SECR").unwrap().is_empty());
+        w.release_text();
+        assert!(w.push("ET42").unwrap().is_empty());
+        assert!(w.flush().unwrap().is_empty());
+    }
+
     #[test]
     fn match_split_across_pushes_is_found_once() {
         let mut w = literal("SECRET42", 1 << 20);

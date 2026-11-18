@@ -1620,6 +1620,38 @@ mod tests {
         );
     }
 
+    /// AGENT-273: outputs are remembered after they finish, up to
+    /// `MAX_OUTPUTS`. Past that, a new output would share a window, so
+    /// `fail_closed` blocks and `fail_open` goes on, audited.
+    #[test]
+    fn outputs_past_the_limit_block_or_share_a_window() {
+        let events: Vec<String> = (0..MAX_OUTPUTS)
+            .map(|n| {
+                format!(
+                    "data: {{\"choices\":[{{\"index\":{n},\"delta\":{{\"content\":\"x\"}},\"finish_reason\":\"stop\"}}]}}\n\n"
+                )
+            })
+            .collect();
+        let (_, i) = run(
+            &closed(1 << 20, Verdict::Redact),
+            &events[..MAX_OUTPUTS - 2],
+        );
+        assert_eq!(i.report().error, None);
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("more stream outputs than can be inspected")
+        );
+        let (_, i) = run(&policy(Verdict::Redact), &events);
+        assert_eq!(i.report().error, None);
+        assert!(i.hold_overflowed());
+    }
+
+    /// Padding beside each piece of a match (chat `obfuscation`,
+    /// `service_tier`) is not in the piece's window, so it does not split
+    /// the match (AGENT-265). It guards per-output windows: these fields
+    /// sit outside the choice and are scanned per chunk either way.
     #[test]
     fn padding_fields_do_not_split_a_match() {
         let mut events = Vec::new();
@@ -2842,13 +2874,21 @@ mod tests {
         }
     }
 
-    /// AGENT-273: a JSON-RPC message (MCP over SSE) is complete in its
-    /// event, so a large `tools/list` result is scanned whole instead of
-    /// taking a window per string and blocking past the lane limit.
+    /// AGENT-273: an MCP result is complete in its event, so the strings
+    /// of a large `tools/list` result are scanned whole instead of taking
+    /// a window each and blocking past the lane limit.
     #[test]
-    fn a_large_jsonrpc_message_passes_under_fail_closed() {
+    fn a_large_mcp_result_passes_under_fail_closed() {
+        let k = key();
         let tools: Vec<_> = (0..300)
-            .map(|n| serde_json::json!({"name": format!("tool{n}"), "description": format!("does thing {n}")}))
+            .map(|n| {
+                let description = if n == 150 {
+                    format!("does thing {n} with {k}")
+                } else {
+                    format!("does thing {n}")
+                };
+                serde_json::json!({"name": format!("tool{n}"), "description": description})
+            })
             .collect();
         let event = format!(
             "event: message\ndata: {}\n\n",
@@ -2860,6 +2900,9 @@ mod tests {
         );
         assert_eq!(i.report().error, None);
         assert!(out.contains("does thing 299"), "{out}");
+        // Scanned whole, a key inside one string is still caught.
+        assert!(!out.contains(&k[..12]), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
     }
 
     /// AGENT-273: the stream's first JSON event decides whether it is
@@ -2893,6 +2936,11 @@ mod tests {
             i.report().error.as_deref(),
             Some("stream event names another protocol")
         );
+        // Under `fail_open` it goes on, audited as a hold overflow.
+        let (out, i) = run(&policy(Verdict::Redact), &events);
+        assert!(out.contains("world"), "{out}");
+        assert_eq!(i.report().error, None);
+        assert!(i.hold_overflowed());
     }
 
     /// AGENT-273: A2A streams artifact chunks as JSON-RPC results that
