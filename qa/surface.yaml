@@ -160,7 +160,8 @@ routes:
   - invalid_credential
   fault_refusals:
   - registrations_unavailable
-  fault_reason: needs the registrations table to fail a read
+  - bindings_unavailable
+  fault_reason: needs the registrations or agent bindings table to fail a read
 - id: admin.GET./admin/operator/rate-limits
   listener: admin
   method: GET
@@ -472,6 +473,7 @@ routes:
   - device_login_unsupported
   - session_exists
   - too_many_device_logins
+  - egress_proxy_unconfigured
   fault_refusals:
   - oauth_kind_unsupported
   fault_reason: needs a consent-managed account already under the label

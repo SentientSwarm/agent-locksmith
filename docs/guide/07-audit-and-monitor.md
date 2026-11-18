@@ -148,6 +148,17 @@ curl -fsS --unix-socket "$LOCKSMITH_SOCKET" -H "Authorization: Bearer $LOCKSMITH
 
 ![Recent operational events](img/07-audit-and-monitor/oplog.svg)
 
+Two `oauth` warnings are worth an alert. Each names the registration,
+session label and cause in `details`:
+
+- `oauth_refresh_degraded`: a background refresh failed and the session
+  is marked degraded. Requests on it fail with 503 `oauth_refresh_failed`
+  until it is signed in again.
+- `oauth_refresh_skipped`: a `proxied` route's session is due a refresh,
+  but its token call has no egress (no usable `egress_proxy`), so the
+  refresh was not tried. It is reported once per session, and again only
+  after a refresh of that session has had egress.
+
 ## Read the process log
 
 <!-- uat:step process-log -->

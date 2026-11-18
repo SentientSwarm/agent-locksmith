@@ -14,6 +14,10 @@
   and hide it, so text holding one is also matched with the previous
   fold; symbols such as `™` keep their own form. A redaction now covers
   combining marks on the phrase's last letter.
+- `GET /admin/operator/egress/policy` reports an unreadable agent-binding
+  table as 503 `bindings_unavailable`, not `registrations_unavailable`
+  (AGENT-302). The operator guide now names the `oauth_refresh_degraded`
+  and `oauth_refresh_skipped` operational-log warnings.
 - The edge start guard refuses a secret-holding executable whose
   directories, as written or resolved, someone other than root could
   change, since a writable directory lets the binary be swapped
@@ -152,8 +156,9 @@
   agent binding that selects one (often the provider's auth host rather
   than its API host). The background refresh runs at startup, and a
   refresh, bootstrap or device login refused at the proxy leaves the
-  session `reconnect_required`: revoke it locally (`locksmith oauth
-  revoke`), then bootstrap or sign in again. Token calls trust
+  session `reconnect_required`: sign in again with a device login, which
+  replaces it in place, or revoke it locally (`locksmith oauth revoke`)
+  and then bootstrap. Token calls trust
   `tls.upstream_ca_bundle` like routes do, and no longer follow
   redirects, which could have resent a refresh token to another host.
 - `locksmith egress policy --pipelock` writes the allowlist with a YAML

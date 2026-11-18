@@ -214,6 +214,27 @@ async fn registration_read_failure_is_an_error_not_a_partial_policy() {
     );
 }
 
+#[tokio::test]
+async fn binding_read_failure_is_an_error_not_a_partial_policy() {
+    // AGENT-302: a binding can add a token host, so an unreadable
+    // binding table must not yield a policy without it, and the error
+    // names what failed.
+    let h = setup().await;
+    h.route("search", "https://api.search.example", "proxied")
+        .await;
+    sqlx::query("DROP TABLE agent_credential_overrides")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let r = h
+        .admin
+        .get("/admin/operator/egress/policy")
+        .add_header("authorization", &h.op)
+        .await;
+    assert_eq!(r.status_code(), 503, "{}", r.text());
+    assert_eq!(r.json::<Value>()["error"]["code"], "bindings_unavailable");
+}
+
 fn device_code(token_url: &str) -> Value {
     json!({ "kind": "oauth_device_code", "client_id": "c", "scopes": [],
         "device_url": "https://auth.provider.example/device", "token_url": token_url })

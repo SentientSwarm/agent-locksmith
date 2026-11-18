@@ -390,6 +390,9 @@ not listed, because nothing reaches them: no current path calls an infra
 upstream, and only a route's active backend is used. Regenerate the
 allowlist after
 `locksmith route switch` (or any route change). The proxy URL is not returned.
+If the registrations or the agent bindings can't be read, the request
+fails with 503 `registrations_unavailable` or `bindings_unavailable`
+rather than returning a partial list.
 Use `--pipelock` to generate the egress proxy's allowlist from Locksmith's
 routes instead of maintaining it separately. Pipelock enforces that list only with
 `mode: strict`; its default `balanced` mode reaches every host not on its

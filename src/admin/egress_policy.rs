@@ -29,11 +29,11 @@ pub(super) async fn op_egress_policy(
     let routes: Vec<(String, String)> = match &state.registrations {
         Some(repo) => match registration_routes(repo, state.agent_creds.as_ref()).await {
             Ok(routes) => routes,
-            Err(()) => {
+            Err((code, what)) => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({ "error": { "code": "registrations_unavailable",
-                        "message": "registrations could not be read; no partial policy is returned" } })),
+                    Json(json!({ "error": { "code": code,
+                        "message": format!("{what} could not be read; no partial policy is returned") } })),
                 )
                     .into_response();
             }
@@ -59,14 +59,16 @@ pub(super) async fn op_egress_policy(
 
 /// `(route, url)` for every URL an enabled proxied route reaches: its
 /// upstream and, for OAuth (AGENT-269), the token URL of the route and of
-/// each agent binding that selects one for it. Read failures are logged.
+/// each agent binding that selects one for it. Read failures are logged
+/// and returned as `(error code, what failed)`.
 /// `infra` rows are left out: no path calls their upstream.
 async fn registration_routes(
     repo: &RegistrationRepository,
     bindings: Option<&AgentCredentialRepository>,
-) -> Result<Vec<(String, String)>, ()> {
+) -> Result<Vec<(String, String)>, (&'static str, &'static str)> {
     let rows = repo.list(None).await.map_err(|e| {
         tracing::warn!(error = %e, "egress policy: registrations could not be read");
+        ("registrations_unavailable", "registrations")
     })?;
     let proxied: Vec<_> = rows
         .into_iter()
@@ -81,6 +83,7 @@ async fn registration_routes(
         // A decode error can quote the stored row, so none is logged.
         let all = bindings.list_all().await.map_err(|_| {
             tracing::warn!("egress policy: agent bindings could not be read");
+            ("bindings_unavailable", "agent bindings")
         })?;
         for b in all {
             if proxied.iter().any(|r| r.name == b.registration) {
