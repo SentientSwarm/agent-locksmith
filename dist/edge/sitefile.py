@@ -23,6 +23,7 @@ COMPONENT_KEYS = {
     "command",
     "environment_file",
     "jit",
+    "private_network",
     "env",
     "ingress",
     "closed",
@@ -43,6 +44,9 @@ class Component:
     command: str
     environment_file: bool = False
     jit: bool = False
+    # No network namespace of its own beyond loopback (PrivateNetwork=yes),
+    # for a component that reaches nothing over the network (AGENT-288).
+    private_network: bool = False
     env: dict[str, str] = field(default_factory=dict)
     ingress: list[Ingress] = field(default_factory=list)
     # Ports rejected for every source, e.g. an admin listener reached only
@@ -133,6 +137,11 @@ def _component(raw: object, parent: str) -> Component:
     both = sorted({r.port for r in ingress} & set(closed))
     if both:
         raise SiteError(f"{where}: port {both[0]} is both ingress and closed")
+    private_network = check.as_bool(
+        table.get("private_network", False), f"{where} private_network"
+    )
+    if private_network and ingress:
+        raise SiteError(f"{where}: private_network cannot take ingress")
     return Component(
         name=name,
         user=check.user(table.get("user"), where),
@@ -141,6 +150,7 @@ def _component(raw: object, parent: str) -> Component:
             table.get("environment_file", False), f"{where} environment_file"
         ),
         jit=check.as_bool(table.get("jit", False), f"{where} jit"),
+        private_network=private_network,
         env=check.env(table.get("env", {}), where),
         ingress=ingress,
         closed=closed,

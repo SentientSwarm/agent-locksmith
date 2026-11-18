@@ -47,6 +47,13 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(locksmith.ingress[0].port, 9200)
         self.assertEqual(locksmith.ingress[0].sources, ["198.51.100.0/24"])
 
+    def test_example_inspector_has_no_network(self):
+        # AGENT-288: an offline classifier needs no network at all.
+        inspector = next(
+            c for i in sitefile.load(EXAMPLE).instances for c in i.components if c.name == "inspector"
+        )
+        self.assertTrue(inspector.private_network)
+
     def test_example_inspector_shares_locksmiths_container_and_user(self):
         site = sitefile.load(EXAMPLE)
         locksmith, inspector = site.instances[0].components
@@ -232,6 +239,21 @@ ingress = [{ port = 9201, from = ["10.0.0.0/24"] }]
             'name = "site-a"', 'name = "site-a"\naddress = "10.0.0.300"'
         )
         self.assertRefused(text, "address")
+
+    def test_private_network(self):
+        comp = sitefile.parse(with_component_line("private_network = true")).instances[0].components[0]
+        self.assertTrue(comp.private_network)
+        self.assertFalse(sitefile.parse(MINIMAL).instances[0].components[0].private_network)
+        self.assertRefused(with_component_line('private_network = "yes"'), "private_network")
+
+    def test_private_network_cannot_take_ingress(self):
+        # AGENT-288: with no network namespace of its own the port is unreachable.
+        self.assertRefused(
+            with_component_line(
+                'private_network = true\ningress = [{ port = 9201, from = ["10.0.0.0/24"] }]'
+            ),
+            "private_network",
+        )
 
     def test_non_bool_jit(self):
         self.assertRefused(with_component_line('jit = "yes"'), "jit")

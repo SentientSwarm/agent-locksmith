@@ -30,6 +30,8 @@ user = "locksmith"
 command = "/opt/locksmith-inspector/venv/bin/python -I /opt/locksmith-inspector/locksmith_inspector.py --socket /run/locksmith-edge/inspector/inspector.sock"
 env = { HF_HOME = "/srv/locksmith-edge/models/inspector", HF_HUB_OFFLINE = "1" }
 jit = true
+# Offline: the model is installed beforehand and the socket is a Unix one.
+private_network = true
 
 # A second instance: a service a Locksmith brokered route points at,
 # reachable only from the Locksmith instance. These tools render inbound

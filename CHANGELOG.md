@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Edge components take `private_network = true` (`PrivateNetwork=yes`),
+  set for the offline inspector in the example site, and the start guard
+  refuses a secret-holding component while `fs.suid_dumpable` is `1`,
+  which would leave its execute-only binary dumpable (AGENT-288). The
+  edge guide says to move a model cache installed under `$R/inspector`
+  to `$R/models/inspector`.
 - The `injection` scanner also reads a phrase that combines a glued
   emoji letter (a flag, `ℹ️`, `Ⓜ️`) with a look-alike only the new fold
   reads, such as `ígnore previous instructions🇺🇸` (AGENT-315).

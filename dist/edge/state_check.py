@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 
 TRUSTED_UID = 0
 DEFAULT_CONFIG = Path("/etc/locksmith-edge/components.json")
+SUID_DUMPABLE = Path("/proc/sys/fs/suid_dumpable")
 MAX_CONFIG_BYTES = 65536
 
 
@@ -144,6 +145,18 @@ def execute_only(path: Path) -> None:
     trusted_parents(path)
 
 
+def dumping_restricted() -> None:
+    """An execute-only binary runs non-dumpable only while fs.suid_dumpable
+    is 0 or 2; at 1 the kernel leaves it dumpable, so a same-uid process
+    could read its memory and environment (AGENT-288)."""
+    try:
+        value = SUID_DUMPABLE.read_text(encoding="ascii").strip()
+    except OSError as error:
+        raise Refusal("fs.suid_dumpable cannot be read") from error
+    if value not in ("0", "2"):
+        raise Refusal("fs.suid_dumpable must be 0 or 2 for a secret-holding component")
+
+
 def load_components(config: Path) -> dict:
     try:
         protected(config.parent, directory=True)
@@ -178,6 +191,7 @@ def check(config: Path, instance: str, component: str) -> None:
     entry = data["components"][component]
     if entry["environment_file"]:
         execute_only(Path(entry["executable"]))
+        dumping_restricted()
     root = Path(data["state_root"])
     fstype = mount_type(root)
     if fstype is None:

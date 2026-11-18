@@ -88,6 +88,11 @@ class RenderTest(unittest.TestCase):
             "ReadWritePaths=/srv/locksmith-edge/locksmith /run/locksmith-edge/locksmith", lines
         )
 
+    def test_private_network_only_where_declared(self):
+        out = self.out("lab-locksmith")
+        self.assertIn("PrivateNetwork=yes", self.unit(out, "inspector").splitlines())
+        self.assertNotIn("PrivateNetwork=yes", self.unit(out, "locksmith").splitlines())
+
     def test_jit_relaxes_only_memory_deny(self):
         lines = self.unit(self.out("lab-locksmith"), "inspector").splitlines()
         self.assertIn("MemoryDenyWriteExecute=no", lines)

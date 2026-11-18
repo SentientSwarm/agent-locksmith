@@ -40,6 +40,8 @@ class StateCheckTest(unittest.TestCase):
         self.binary.chmod(0o711)
         self.write_config()
         self.uid = self.root.stat().st_uid
+        self.dumpable = base / "suid_dumpable"
+        self.dumpable.write_text("2\n")
 
     def write_config(self, **overrides):
         data = {
@@ -62,6 +64,7 @@ class StateCheckTest(unittest.TestCase):
             patch.object(self.guard.os, "getuid", return_value=0),
             patch.object(self.guard, "mount_type", return_value=fstype),
             patch.object(self.guard, "TRUSTED_UID", self.uid if uid is None else uid),
+            patch.object(self.guard, "SUID_DUMPABLE", self.dumpable),
         ):
             self.guard.check(self.config, instance, component)
 
@@ -79,6 +82,30 @@ class StateCheckTest(unittest.TestCase):
         for mode in (0o755, 0o751, 0o715, 0o731):
             self.binary.chmod(mode)
             self.refused("execute-only")
+
+    def test_suid_dumpable_one_is_refused_for_a_secret_holding_component(self):
+        # AGENT-288: fs.suid_dumpable=1 leaves an execute-only binary
+        # dumpable, so a same-uid process could read its secrets.
+        self.dumpable.write_text("1\n")
+        self.refused("suid_dumpable")
+
+    def test_suid_dumpable_zero_or_two_is_accepted(self):
+        for value in ("0\n", "2\n"):
+            self.dumpable.write_text(value)
+            self.check()
+
+    def test_unreadable_suid_dumpable_is_refused(self):
+        self.dumpable.unlink()
+        self.refused("suid_dumpable")
+
+    def test_suid_dumpable_is_not_checked_without_an_environment_file(self):
+        self.write_config(
+            components={
+                "app": {"user": "app", "executable": str(self.binary), "environment_file": False}
+            }
+        )
+        self.dumpable.write_text("1\n")
+        self.check()
 
     def test_secret_holding_executable_must_be_root_owned(self):
         with patch.object(self.guard, "TRUSTED_UID", self.uid + 1):

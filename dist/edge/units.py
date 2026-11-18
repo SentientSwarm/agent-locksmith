@@ -99,7 +99,7 @@ TimeoutStopSec=60
 KillMode=control-group
 {SANDBOX}
 MemoryDenyWriteExecute={"no" if comp.jit else "yes"}
-ReadWritePaths={root}/{comp.name} /run/locksmith-edge/{comp.name}
+{"PrivateNetwork=yes" + chr(10) if comp.private_network else ""}ReadWritePaths={root}/{comp.name} /run/locksmith-edge/{comp.name}
 
 [Install]
 WantedBy=multi-user.target

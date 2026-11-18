@@ -41,6 +41,10 @@ memory for runtimes that need it, such as Python with ONNX. It also takes
 `env = { NAME = "value" }` for extra variables on the service command.
 `env` values are written into the unit file, which is world-readable, so
 never put a secret there; use `environment_file` for secrets.
+`private_network = true` gives the component no network beyond loopback
+(`PrivateNetwork=yes`), for one that reaches nothing over the network,
+such as the classifier sidecar running offline. Unix sockets on the
+filesystem still work. It cannot be combined with `ingress`.
 
 `closed = [9201]` rejects TCP on the listed ports for every source. Use it
 for a listener that only processes inside the container should reach, such
@@ -133,7 +137,9 @@ executable root-owned and execute-only, for example
 `install -o root -g root -m 0711 locksmithd /usr/local/bin/`. The kernel
 then makes the process non-dumpable from the moment it starts, so no other
 process running as the same user can read its environment or memory. The
-guard refuses to start the component otherwise.
+guard refuses to start the component otherwise. That holds only while the
+`fs.suid_dumpable` sysctl is `0` or `2` (Ubuntu's default is `2`); at `1`
+the kernel leaves the process dumpable, so the guard refuses that too.
 
 ## 4. Lay out the state volume
 
@@ -212,7 +218,11 @@ state directory: renaming a directory needs write access only on its
 parent, so a cache under `$R/inspector` could be swapped by the sidecar.
 The installer creates the cache root-owned and readable (`0755`/`0644`,
 whatever your umask) and refuses a cache under any directory that is not
-root-owned or is group- or world-writable. Then copy the tools in:
+root-owned or is group- or world-writable. If an earlier install put a
+cache under `$R/inspector` (for example `$R/inspector/models`), install it
+again under `$R/models/inspector`, point `HF_HOME` there, and delete the
+old copy: the sidecar can swap a cache inside its own directory. Then copy
+the tools in:
 
 ```bash
 sudo incus --project edge file push -r dist/edge lab-locksmith/root/
@@ -266,7 +276,8 @@ unless:
 - `custody/<component>.ready` exists, is root-owned, and contains
   `<instance>:<component>`;
 - for a component with `environment_file`, its executable is a
-  root-owned, execute-only regular file (mode `0711`).
+  root-owned, execute-only regular file (mode `0711`) in directories only
+  root can change, and `fs.suid_dumpable` is `0` or `2`.
 
 The receipt is your statement that this component's state is in place and
 that no other copy is running anywhere. Write it only after that is true,
