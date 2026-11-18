@@ -109,6 +109,46 @@ async fn a_sidecar_hit_under_redact_blocks() {
     assert_eq!(rows[0].2["redaction_incomplete"], true, "{rows:?}");
 }
 
+/// AGENT-278 (Codex Medium): a sidecar cannot inspect a stream, and
+/// under `fail_closed` that is known before anything is sent, so the
+/// stream is refused with a 502 like an unscannable one, in the
+/// gateway's own error shape rather than a guessed SSE framing.
+#[tokio::test]
+async fn a_fail_closed_sidecar_refuses_a_stream_up_front() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let socket = sidecar(dir.path());
+    for sse in [
+        "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+    ] {
+        let up = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+            .mount(&up)
+            .await;
+        let extra = "        on_error: fail_closed\n";
+        let h = harness(config(&up.uri(), &inspection(&socket, "response", extra))).await;
+        let resp = h
+            .server
+            .post("/api/out/x")
+            .json(&serde_json::json!({}))
+            .await;
+        assert_eq!(resp.status_code(), 502, "{}", resp.text());
+        assert_eq!(
+            resp.json::<serde_json::Value>()["error"]["code"],
+            "inspection_blocked"
+        );
+        let rows = h.inspection_rows().await;
+        assert!(
+            rows[0].2["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("sidecar:pg"),
+            "{rows:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn an_unreachable_sidecar_follows_on_error() {
     let dir = tempfile::TempDir::new().unwrap();

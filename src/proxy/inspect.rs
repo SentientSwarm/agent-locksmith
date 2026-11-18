@@ -220,6 +220,20 @@ pub(super) async fn stream(
         return Ok(upstream);
     }
     let inspector = StreamInspector::new(policy);
+    if inspector.refused_up_front() {
+        // AGENT-278: known before any byte is sent, so refuse with a 502
+        // like an unscannable stream, rather than 200 headers and an
+        // error event framed before the stream's protocol is known.
+        let report = Report {
+            verdict: Verdict::Block,
+            ..inspector.report().clone()
+        };
+        record(&state.audit, ctx, &report, Some(502)).await;
+        return Err(blocked(
+            StatusCode::BAD_GATEWAY,
+            "response blocked by inspection",
+        ));
+    }
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     tokio::spawn(drive(
         inspector,

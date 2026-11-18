@@ -200,7 +200,8 @@ positives a phrase list brings on pages that discuss prompt injection.
 - **Sidecars don't scan streamed (SSE) responses**, because a classifier
   scores whole texts. On a route with a sidecar, a streamed response is
   an inspection error. Under `fail_closed` (the default when the policy
-  redacts or blocks) it is blocked. Under
+  redacts or blocks) it is refused with 502 before anything is sent.
+  Under
   `fail_open` it streams with only the built-in scanners, so for
   prompt injection the phrase list is all that applies.
 - **The model weights are not shipped.** The operator accepts their

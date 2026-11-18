@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A streamed response on a route whose `fail_closed` policy includes a
+  sidecar is refused with 502 `inspection_blocked` before any header is
+  sent, instead of 200 headers and an SSE error event, which was framed
+  for OpenAI even on an Anthropic stream (AGENT-278).
 - A sidecar scanner that reads a large request slowly can no longer hold
   a scan past `timeout_ms` or the scan's deadline: the request is
   written in small pieces, each given only the time left (AGENT-278).

@@ -201,6 +201,13 @@ impl StreamInspector {
         &self.report
     }
 
+    /// Blocked before any event arrives: a scanner that cannot take part
+    /// in streams under `fail_closed`. The caller can refuse the stream
+    /// outright instead of sending headers and an error event (AGENT-278).
+    pub fn refused_up_front(&self) -> bool {
+        self.unjudged
+    }
+
     /// A window or the held events overflowed their cap at least once.
     pub fn hold_overflowed(&self) -> bool {
         self.hold_overflowed || self.lanes.iter().any(|l| l.window.overflowed())
