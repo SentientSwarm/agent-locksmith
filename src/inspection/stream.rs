@@ -2874,6 +2874,102 @@ mod tests {
         }
     }
 
+    /// AGENT-323: an MCP task list and the server's own MCP requests are
+    /// complete in their events too, so they pass whole, while a key inside
+    /// one is still caught. A method MCP does not name keeps its windows
+    /// and still blocks past the limit.
+    #[test]
+    fn large_mcp_tasks_and_server_requests_pass_whole() {
+        let k = key();
+        let many = |f: &dyn Fn(usize) -> serde_json::Value| -> Vec<serde_json::Value> {
+            (0..300).map(f).collect()
+        };
+        let text = |n: usize| {
+            if n == 150 {
+                format!("item {n} with {k}")
+            } else {
+                format!("item {n}")
+            }
+        };
+        let tasks = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {
+            "tasks": many(&|n| serde_json::json!({"taskId": format!("t{n}"), "statusMessage": text(n)}))}});
+        let sampling = serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "sampling/createMessage",
+            "params": {"maxTokens": 10, "messages": many(&|n| serde_json::json!({
+                "role": "user", "content": {"type": "text", "text": text(n)}}))}});
+        let elicit = serde_json::json!({"jsonrpc": "2.0", "id": 8, "method": "elicitation/create",
+            "params": {"message": "fill in", "requestedSchema": {"type": "object",
+                "properties": many(&|n| serde_json::json!({"type": "string", "description": text(n)}))}}});
+        for (name, message) in [("tasks", tasks), ("sampling", sampling), ("elicit", elicit)] {
+            let event = format!("event: message\ndata: {message}\n\n");
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &[event]);
+            assert_eq!(i.report().error, None, "{name}");
+            assert!(out.contains("item 299"), "{name}");
+            assert!(!out.contains(&k[..12]), "{name}");
+            assert_eq!(i.report().verdict, Verdict::Redact, "{name}");
+        }
+        let other = serde_json::json!({"jsonrpc": "2.0", "method": "session/update",
+            "params": {"data": many(&|n| serde_json::json!(format!("item {n}")))}});
+        let event = format!("data: {other}\n\n");
+        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[event]);
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("more stream outputs than can be inspected")
+        );
+    }
+
+    /// AGENT-323: MCP notifications (progress, log messages) arrive over
+    /// time and keep their windows, so a key split across two of them is
+    /// still caught; and a
+    /// message that is not a plain MCP result or request (it carries both
+    /// `result` and `method`, or an `error`) is not scanned whole.
+    #[test]
+    fn other_mcp_shapes_keep_their_windows() {
+        let k = key();
+        let progress = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "method": "notifications/progress",
+                    "params": {"progressToken": 1, "progress": 1, "message": t}})
+            )
+        };
+        let log = |t: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"jsonrpc": "2.0", "method": "notifications/message",
+                    "params": {"level": "info", "logger": "tool", "data": t}})
+            )
+        };
+        for events in [
+            vec![progress(&format!("token {}", &k[..20])), progress(&k[20..])],
+            vec![log(&format!("token {}", &k[..20])), log(&k[20..])],
+        ] {
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(&k[..20]) && !out.contains(&k[20..]), "{out}");
+            assert_eq!(i.report().verdict, Verdict::Redact);
+        }
+        let many: Vec<_> = (0..300)
+            .map(|n| serde_json::json!(format!("item {n}")))
+            .collect();
+        let shapes = [
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "x",
+                "result": {"tools": many}}),
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": {"code": 1, "message": "e"},
+                "result": {"tools": many}}),
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "sampling/createMessage",
+                "error": {"code": 1, "message": "e"}, "params": {"messages": many}}),
+        ];
+        for shape in shapes {
+            let (_, i) = run(
+                &closed(1 << 20, Verdict::Redact),
+                &[format!("data: {shape}\n\n")],
+            );
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("more stream outputs than can be inspected")
+            );
+        }
+    }
+
     /// AGENT-273: an MCP result is complete in its event, so the strings
     /// of a large `tools/list` result are scanned whole instead of taking
     /// a window each and blocking past the lane limit.

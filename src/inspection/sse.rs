@@ -269,45 +269,76 @@ pub fn is_jsonrpc(event: &SseEvent) -> Option<bool> {
 /// The members a JSON-RPC 2.0 message may have.
 const JSONRPC_MEMBERS: [&str; 6] = ["jsonrpc", "id", "method", "params", "result", "error"];
 
-/// The members that name an MCP result: a list (`tools/list` and the
-/// rest), a read, a tool call's output or a prompt.
-const MCP_RESULTS: [&str; 8] = [
+/// The members that name an MCP result: a list (`tools/list`,
+/// `tasks/list` and the rest), a read, a tool call's output or a prompt.
+const MCP_RESULTS: [&str; 9] = [
     "tools",
     "resources",
     "resourceTemplates",
     "prompts",
+    "tasks",
     "contents",
     "content",
     "structuredContent",
     "messages",
 ];
 
-/// An MCP result: a JSON-RPC 2.0 message with only the spec's members
-/// whose `result` names an MCP result. MCP sends each result whole, and
-/// no MCP client joins one message's strings with another's. Any other
-/// JSON-RPC message keeps its windows, since other protocols (A2A, ACP)
-/// stream text across messages that their clients join.
-fn mcp_result(value: &Value, kind: Option<&str>) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let names_mcp = object
-        .get("result")
-        .and_then(Value::as_object)
-        .is_some_and(|result| result.keys().any(|k| MCP_RESULTS.contains(&k.as_str())));
-    object.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-        && object.keys().all(|k| JSONRPC_MEMBERS.contains(&k.as_str()))
-        && names_mcp
-        && kind.and_then(lanes::scheme_of).is_none()
+/// The MCP requests a server sends its client whose `params` can be
+/// large (AGENT-323). No other JSON-RPC protocol over SSE uses these
+/// names: ACP streams its chunks as `session/update`, which keeps its
+/// windows. MCP notifications keep theirs too: progress and log messages
+/// arrive over time, and a key split across two of them is still caught.
+const MCP_METHODS: [&str; 2] = ["sampling/createMessage", "elicitation/create"];
+
+/// Where an MCP message's whole-scanned strings lie.
+#[derive(Clone, Copy)]
+enum McpPlace {
+    /// Under one of a result's `MCP_RESULTS` members.
+    Result,
+    /// Anywhere in an MCP request's or notification's `params`.
+    Params,
 }
 
-/// Whether a string's path lies under an MCP result's member
-/// (`/result/tools/...`). Only those are scanned whole: any other field
-/// of the message keeps its window, whatever MCP member sits beside it.
-fn under_mcp_member(path: &str) -> bool {
-    path.strip_prefix("/result/")
-        .map(|rest| rest.split('/').next().unwrap_or(rest))
-        .is_some_and(|member| MCP_RESULTS.contains(&member))
+impl McpPlace {
+    fn covers(self, path: &str) -> bool {
+        match self {
+            McpPlace::Result => path
+                .strip_prefix("/result/")
+                .map(|rest| rest.split('/').next().unwrap_or(rest))
+                .is_some_and(|member| MCP_RESULTS.contains(&member)),
+            McpPlace::Params => path.starts_with("/params/"),
+        }
+    }
+}
+
+/// An MCP message: a JSON-RPC 2.0 message with only the spec's members
+/// that is an MCP result (its `result` names an `MCP_RESULTS` member) or
+/// an MCP request or notification (its `method` is MCP's). MCP sends each
+/// message whole, and no MCP client joins one message's strings with
+/// another's. Any other JSON-RPC message keeps its windows, since other
+/// protocols (A2A, ACP) stream text across messages that their clients
+/// join. Only the strings in its place are scanned whole: any other field
+/// keeps its window, whatever MCP member sits beside it.
+fn mcp_place(value: &Value, kind: Option<&str>) -> Option<McpPlace> {
+    let object = value.as_object()?;
+    let envelope = object.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        && object.keys().all(|k| JSONRPC_MEMBERS.contains(&k.as_str()))
+        && kind.and_then(lanes::scheme_of).is_none();
+    // A message with an `error` is not a plain result or request.
+    if !envelope || object.contains_key("error") {
+        return None;
+    }
+    let result = object.get("result");
+    let method = object.get("method").and_then(Value::as_str);
+    match (result, method) {
+        (Some(Value::Object(result)), None)
+            if result.keys().any(|k| MCP_RESULTS.contains(&k.as_str())) =>
+        {
+            Some(McpPlace::Result)
+        }
+        (None, Some(method)) if MCP_METHODS.contains(&method) => Some(McpPlace::Params),
+        _ => None,
+    }
 }
 
 fn json(event: &SseEvent) -> Option<Value> {
@@ -457,7 +488,11 @@ pub fn extract_within(
     // joins one message's strings with another's, so in a JSON-RPC stream
     // the strings under its MCP member are scanned whole instead of taking
     // a window each (AGENT-273).
-    let mcp_whole = jsonrpc_stream && mcp_result(&value, kind.as_deref());
+    let mcp_whole = if jsonrpc_stream {
+        mcp_place(&value, kind.as_deref())
+    } else {
+        None
+    };
     let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
@@ -472,7 +507,7 @@ pub fn extract_within(
         .into_iter()
         .map(|(place, path, text)| {
             let lane =
-                path.filter(|path| !(mcp_whole && under_mcp_member(path)))
+                path.filter(|path| !mcp_whole.is_some_and(|place| place.covers(path)))
                     .and_then(|path| match (gemini, &place) {
                         (true, _) if gemini_whole(&path) => None,
                         (true, Place::Json(pointer)) => gemini_text(pointer)

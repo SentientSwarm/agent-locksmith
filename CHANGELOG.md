@@ -22,6 +22,14 @@
 
 ### Fixed
 
+- A large MCP task list (`tasks/list`), or an MCP server's own request
+  (`sampling/createMessage`, `elicitation/create`), streamed over SSE is
+  no longer blocked under `fail_closed` past 255 strings (AGENT-323).
+  Like the MCP results below, each is complete in its event and is
+  scanned whole: a task list under its `tasks`, a request in its
+  `params`. MCP notifications, such as progress and log messages, keep
+  their windows.
+
 - A large MCP result streamed over SSE (a `tools/list`, `resources/list`
   or `prompts/list` result, a read or a tool call's output) is no longer
   blocked under `fail_closed` with held events (AGENT-273). Each of its

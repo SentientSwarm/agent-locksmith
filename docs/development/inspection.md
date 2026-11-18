@@ -243,25 +243,27 @@ that repeats a key blocks the stream, and under `fail_open` it writes an
 A string complete in its own event (a snapshot) is scanned alone and never
 waits for later text: every Responses event except a `*.delta`
 (`response.created`, `.added`, `.done`, `response.completed` and the rest),
-Anthropic `message_start`, `message_delta` and `message_stop`, an MCP result
+Anthropic `message_start`, `message_delta` and `message_stop`, an MCP message
 in a JSON-RPC stream (MCP over SSE: a JSON-RPC 2.0 message with only the
 spec's members whose `result` holds `tools`, `resources`, `resourceTemplates`,
-`prompts`, `contents`, `content`, `structuredContent` or `messages`, whole
-only under that member; other JSON-RPC, such as A2A artifact or ACP session
-chunks, which clients join, keeps its windows), a chat chunk's fields outside
-a choice's `delta` (`logprobs`, Azure content filter results, `usage`), and,
-within a choice, anything named as protocol metadata (`type`, `id`, `object`,
-`model`, `role`, `finish_reason`, `stop_reason`, `system_fingerprint`,
-`status`, `item_id`, `call_id`, `response_id`, `obfuscation`, `service_tier`,
-`instructions`), such as a delta's `role` or a tool call's `id`. In a Gemini
-chunk (any event with a `candidates` array, whatever `choices`, `type` or
-event name it also carries) the same holds for its `modelVersion`,
-`responseId` and `usageMetadata`, each candidate's `content.role` and
-`finishReason`, and a part's `thoughtSignature`, matched by place (AGENT-273).
-Only fields later events extend go to a window: a chat or completions choice's
-`delta` and `text`, a Responses `*.delta`, an Anthropic block's text, thinking
-and tool input, and the opening text clients start them from
-(`content_block_start`, a Responses `.added` part's text or refusal, or a
+`prompts`, `tasks`, `contents`, `content`, `structuredContent` or `messages`,
+whole only under that member, or whose `method` is `sampling/createMessage` or
+`elicitation/create`, whole only in its `params`; MCP notifications, such as
+progress and log messages, keep their windows; other JSON-RPC, such as A2A
+artifact or ACP session chunks, which clients join, keeps its windows), a chat
+chunk's fields outside a choice's `delta` (`logprobs`, Azure content filter
+results, `usage`), and, within a choice, anything named as protocol metadata
+(`type`, `id`, `object`, `model`, `role`, `finish_reason`, `stop_reason`,
+`system_fingerprint`, `status`, `item_id`, `call_id`, `response_id`,
+`obfuscation`, `service_tier`, `instructions`), such as a delta's `role` or a
+tool call's `id`. In a Gemini chunk (any event with a `candidates` array,
+whatever `choices`, `type` or event name it also carries) the same holds for
+its `modelVersion`, `responseId` and `usageMetadata`, each candidate's
+`content.role` and `finishReason`, and a part's `thoughtSignature`, matched by
+place (AGENT-273). Only fields later events extend go to a window: a chat or
+completions choice's `delta` and `text`, a Responses `*.delta`, an Anthropic
+block's text, thinking and tool input, and the opening text clients start them
+from (`content_block_start`, a Responses `.added` part's text or refusal, or a
 call's arguments). An event a redaction rewrites loses its `logprobs` (`null`,
 or `[]` where it is a list): its tokens, their bytes and alternatives would
 spell the text the cut removed. The stream's first JSON event fixes whether it
