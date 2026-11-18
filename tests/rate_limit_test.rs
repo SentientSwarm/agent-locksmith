@@ -251,6 +251,23 @@ async fn limits_are_refused_on_routes_the_proxy_does_not_serve() {
     assert_eq!(count(&h, "rate_limit_set").await, 0);
 }
 
+/// AGENT-272: a stored limit whose route is gone (or is no longer an HTTP
+/// model or tool route) stays listed but says it is not enforced.
+#[tokio::test]
+async fn list_marks_limits_whose_route_is_gone() {
+    let h = setup().await;
+    let _up = route(&h).await;
+    set(&h, json!({ "requests_per_minute": 5 })).await;
+    let list: Value = h.op_req(Method::GET, "/rate-limits").await.json();
+    assert_eq!(list["rate_limits"][0]["enforced"], true, "{list}");
+    h.op_req(Method::DELETE, "/models/up")
+        .await
+        .assert_status_no_content();
+    let list: Value = h.op_req(Method::GET, "/rate-limits").await.json();
+    assert_eq!(list["rate_limits"][0]["route"], "up", "{list}");
+    assert_eq!(list["rate_limits"][0]["enforced"], false, "{list}");
+}
+
 /// AGENT-272: a hammering agent writes one `rate_limited` row a minute,
 /// not one per refusal; the next row counts the refusals in between.
 #[tokio::test]

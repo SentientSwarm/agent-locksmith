@@ -4,26 +4,24 @@
 
 ### Fixed
 
-- A request can no longer climb out of a route's base path with dot
-  segments or separators only some upstreams read as such: split by a
-  tab or newline (`.%09.`), or spelled with characters NFKC maps to
-  `.`, `..`, `/` or `\` (`%EF%BC%8E`, `‥`, `／`), including one such `.`
-  that a following `..` would otherwise pop. The path must stay inside
-  both as a strict upstream and as a lenient one reads it. A path
-  holding an overlong UTF-8 or `%uXXXX` escape (`%c0%ae`, `%c0%af`,
-  `%u002e`) in any reading is refused outright. A lead that can start
-  an overlong form is read with the bytes after it, escaped or literal,
-  as a decoder that skips the continuation check would, and refused when
-  that is overlong, whatever it spells: `%E0@n` and `%e0%40%6e` (`.`),
-  an overlong `．`, and a continuation encoded at another depth or
-  joined by a `%` after a decode (`%25e0%80%ae`, `%e0%2580%25ae`).
-  Forms never valid in UTF-8 (`%F8`-`%FF`, or above U+10FFFF) are also
-  refused when their value is ASCII once cut to 21 or 16 bits. Valid UTF-8 always passes,
-  and most Latin-1 letters do (`s%F8ren`, `voil%E0/x`, `%FC%FD`); a few
-  pairs are refused: `À` or `Á` (`%C0`, `%C1`) before anything, `à`
-  before an uppercase letter or `_`, and `ð`, `ø`, `ü`, `þ` or `ÿ`
-  before `@` or an early uppercase letter. Either way the request gets
-  400 `upstream_path_escape` (AGENT-287).
+- A request can no longer climb out of a route's base path with dot segments
+  or separators only some upstreams read as such: split by a tab or newline
+  (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`
+  (`%EF%BC%8E`, `‥`, `／`), including one such `.` that a following `..` would
+  otherwise pop. The path must stay inside both as a strict upstream and as a
+  lenient one reads it. A path holding an overlong UTF-8 or `%uXXXX` escape
+  (`%c0%ae`, `%c0%af`, `%u002e`) in any reading is refused outright. A lead
+  that can start an overlong form is read with the bytes after it, escaped or
+  literal, as a decoder that skips the continuation check would, and refused
+  when that is overlong, whatever it spells: `%E0@n` and `%e0%40%6e` (`.`), an
+  overlong `．`, and a continuation encoded at another depth or joined by a `%`
+  after a decode (`%25e0%80%ae`, `%e0%2580%25ae`). Forms never valid in UTF-8
+  (`%F8`-`%FF`, or above U+10FFFF) are also refused when their value is ASCII
+  once cut to 21 or 16 bits. Valid UTF-8 always passes, and most Latin-1
+  letters do (`s%F8ren`, `voil%E0/x`, `%FC%FD`); a few pairs are refused: `À`
+  or `Á` (`%C0`, `%C1`) before anything, `à` before an uppercase letter or
+  `_`, and `ð`, `ø`, `ü`, `þ` or `ÿ` before `@` or an early uppercase letter.
+  Either way the request gets 400 `upstream_path_escape` (AGENT-287).
 - Edge components take `private_network = true` (`PrivateNetwork=yes`),
   set for the offline inspector in the example site, and the start guard
   refuses a secret-holding component while `fs.suid_dumpable` is `1`,
@@ -31,6 +29,10 @@
   edge guide says to reinstall a model cache found under `$R/inspector`
   into `$R/models/inspector` and delete the old copy, and to set
   `fs.suid_dumpable` on the Incus host, since a container cannot.
+- `locksmith rate-limit list` (`GET /admin/operator/rate-limits`) gives
+  each limit `enforced`, false when its route is gone or is no longer an
+  HTTP model or tool route. Such a limit is kept, and applies again if
+  the route comes back as one (AGENT-272).
 - The `injection` scanner also reads a phrase that combines a glued
   emoji letter (a flag, `ℹ️`, `Ⓜ️`) with a look-alike only the new fold
   reads, such as `ígnore previous instructions🇺🇸` (AGENT-315).

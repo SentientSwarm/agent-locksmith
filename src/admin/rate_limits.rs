@@ -91,7 +91,17 @@ async fn agent(
     }
 }
 
-/// `GET /admin/operator/rate-limits`.
+/// AGENT-272 — only the `/api/*` proxy enforces limits, so a limit on
+/// any other registration would be listed and audited but never applied.
+fn limitable(r: &crate::registrations::Registration) -> bool {
+    r.protocol == crate::registrations::Protocol::Http
+        && r.kind != crate::registrations::Kind::Infra
+}
+
+/// `GET /admin/operator/rate-limits`. With registrations wired, each row
+/// says whether its route is currently one the proxy limits (AGENT-272):
+/// a limit outlives its registration and applies again if the route
+/// returns as an HTTP model or tool.
 pub(super) async fn op_list(
     State(state): State<UdsState>,
     Extension(_op): Extension<OperatorIdentity>,
@@ -100,10 +110,28 @@ pub(super) async fn op_list(
         Ok(l) => l,
         Err(r) => return *r,
     };
-    match limits.repo.list().await {
-        Ok(rows) => Json(json!({ "rate_limits": rows })).into_response(),
-        Err(_) => unavailable(),
+    let Ok(rows) = limits.repo.list().await else {
+        return unavailable();
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    let mut seen = std::collections::HashMap::new();
+    for row in rows {
+        let mut value = json!(row);
+        if let Some(regs) = &state.registrations {
+            let enforced = match seen.get(&row.route) {
+                Some(&e) => e,
+                None => match regs.get(&row.route).await {
+                    Ok(r) => *seen
+                        .entry(row.route.clone())
+                        .or_insert(r.as_ref().is_some_and(limitable)),
+                    Err(_) => return unavailable(),
+                },
+            };
+            value["enforced"] = json!(enforced);
+        }
+        out.push(value);
     }
+    Json(json!({ "rate_limits": out })).into_response()
 }
 
 /// `PUT /admin/operator/rate-limits/{route}`.
@@ -126,12 +154,7 @@ pub(super) async fn op_set(
     }
     if let Some(regs) = &state.registrations {
         match regs.get(&route).await {
-            // AGENT-272 — only the `/api/*` proxy enforces limits, so a
-            // limit elsewhere would be listed and audited but never applied.
-            Ok(Some(r))
-                if r.protocol != crate::registrations::Protocol::Http
-                    || r.kind == crate::registrations::Kind::Infra =>
-            {
+            Ok(Some(r)) if !limitable(&r) => {
                 return error(
                     StatusCode::BAD_REQUEST,
                     "route_not_limitable",
