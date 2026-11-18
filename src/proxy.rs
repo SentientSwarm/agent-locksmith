@@ -1388,7 +1388,8 @@ async fn record_tool_not_found(audit: &Option<AuditRepository>, ctx: &RequestCtx
 /// and inside its base path at a segment boundary (AGENT-286). The path
 /// is also judged as an upstream may read it: decoded again (up to the
 /// inspection bound), split on `/` and `\\`, with `;` parameters dropped
-/// and dot segments resolved, so `..%2F` and `..;/` cannot climb out.
+/// to find dot segments and kept when comparing (AGENT-287), so `..%2F`
+/// and `..;/` cannot climb out, nor come back with other parameters.
 /// A base that does not parse refuses; a built URL that does not parse is
 /// left for reqwest, which parses the same string and sends nothing.
 fn stays_within_base(upstream: &str, url: &str) -> bool {
@@ -1416,26 +1417,45 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     let bases = readings(base.path());
     let views = readings(out.path());
     let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
-    let whole = (0..bases.len().max(views.len())).all(|i| {
-        let (base, view) = (at(&bases, i), at(&views, i));
-        match (upstream_segments(&base), upstream_segments(&view)) {
-            (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
-            _ => false,
-        }
-    });
-    // An upstream may also split first and decode each segment, so an
-    // encoded `/` stays data while `%252e%252e` becomes `..` of the whole
-    // segment before it.
-    whole
-        && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
-            match (
-                segmentwise(base.path(), rounds),
-                segmentwise(out.path(), rounds),
-            ) {
-                (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
-                _ => false,
-            }
+    // Both readings of `;` parameters must stay inside (AGENT-287).
+    [Params::Dropped, Params::Unknown]
+        .into_iter()
+        .all(|params| {
+            let whole = (0..bases.len().max(views.len())).all(|i| {
+                let (base, view) = (at(&bases, i), at(&views, i));
+                match (
+                    upstream_segments(&base, params),
+                    upstream_segments(&view, params),
+                ) {
+                    (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+                    _ => false,
+                }
+            });
+            // An upstream may also split first and decode each segment, so an
+            // encoded `/` stays data while `%252e%252e` becomes `..` of the
+            // whole segment before it.
+            whole
+                && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
+                    [false, true].into_iter().all(|backslash| {
+                        match (
+                            segmentwise(base.path(), rounds, backslash, params),
+                            segmentwise(out.path(), rounds, backslash, params),
+                        ) {
+                            (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+                            _ => false,
+                        }
+                    })
+                })
         })
+}
+
+/// How an upstream reads a `;` parameter on a path segment (AGENT-287).
+#[derive(Clone, Copy)]
+enum Params {
+    /// Dropped from each segment (`..;/` climbs, `.;x` is `.`).
+    Dropped,
+    /// Unknown: part of the segment's name (`;x` is a segment).
+    Unknown,
 }
 
 /// How many times [`segmentwise`] decodes a segment, as `path_views` does
@@ -1446,7 +1466,7 @@ const SEGMENT_DECODE_ROUNDS: usize = 4;
 /// it: split on its literal separators, each segment percent-decoded up
 /// to `rounds` times, `;` parameters dropped and dot segments resolved.
 /// `None` when `..` climbs above the root.
-fn segmentwise(path: &str, rounds: usize) -> Option<Vec<String>> {
+fn segmentwise(path: &str, rounds: usize, backslash: bool, params: Params) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
         let mut segment = raw.to_string();
@@ -1457,34 +1477,46 @@ fn segmentwise(path: &str, rounds: usize) -> Option<Vec<String>> {
             }
             segment = next;
         }
-        match segment.split(';').next().unwrap_or("") {
-            "" | "." => {}
-            ".." => {
-                out.pop()?;
-            }
-            other => out.push(other.to_string()),
+        // With `backslash`, a decoded `\` splits the segment too.
+        let pieces: Vec<&str> = if backslash {
+            segment.split('\\').collect()
+        } else {
+            vec![segment.as_str()]
+        };
+        for piece in pieces {
+            push_segment(&mut out, piece, params)?;
         }
     }
     Some(out)
 }
-
 /// Path segments as a normalising upstream resolves them, or `None` when
 /// `..` climbs above the root.
-fn upstream_segments(path: &str) -> Option<Vec<&str>> {
-    let mut out: Vec<&str> = Vec::new();
+fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
-        let segment = raw.split(';').next().unwrap_or("");
-        match segment {
-            "" | "." => {}
-            ".." => {
-                out.pop()?;
-            }
-            other => out.push(other),
-        }
+        push_segment(&mut out, raw, params)?;
     }
     Some(out)
 }
 
+/// Resolve one segment onto `out`, reading `;` parameters as `params`
+/// says. `..;` climbs either way. A segment pushed keeps its parameters
+/// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
+/// that keeps them. `None` when `..` climbs above the root.
+fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> {
+    let name = raw.split(';').next().unwrap_or("");
+    let empty = match params {
+        Params::Dropped => matches!(name, "" | "."),
+        Params::Unknown => matches!(raw, "" | "."),
+    };
+    if empty {
+    } else if name == ".." {
+        out.pop()?;
+    } else {
+        out.push(raw.to_string());
+    }
+    Some(())
+}
 /// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
 /// request path would leave the route's upstream base path.
 async fn record_upstream_path_escape(
@@ -2037,6 +2069,55 @@ mod base_path_tests {
             "https://h/projects/group%2Fproj/%2e%2e/%2e%2e/projects/group/proj/x"
         ));
         assert!(!ok(base, "https://h/projects/group/proj/x"));
+    }
+
+    /// AGENT-287: `;` parameters are dropped only to find dot segments.
+    /// A path that climbs back into the base with other parameters
+    /// (`../a;x`, `..;/..;/base;v=2`) reaches another resource on an
+    /// upstream that keeps them.
+    #[test]
+    fn parameters_on_the_base_segments_must_match() {
+        assert!(!ok("https://h/v1/a", "https://h/v1/a/../a;x/y"));
+        let base = "https://h/base;v=1/api";
+        assert!(!ok(base, "https://h/base;v=1/api/..;/..;/base;v=2/api/x"));
+        assert!(ok(base, "https://h/base;v=1/api/x;y=2"));
+        assert!(ok(base, "https://h/base;v=1/api/a/..;/b"));
+        assert!(ok("https://h/v1/a", "https://h/v1/a/x;p=1/..;/y"));
+        // A segment that is only parameters is a segment to an upstream
+        // that does not know them.
+        assert!(!ok("https://h/v1/a", "https://h/v1/a/../;x/a/y"));
+        assert!(!ok("https://h/v1/a", "https://h/v1/a/../.;x/a/y"));
+        assert!(ok("https://h/v1/a", "https://h/v1/a/;x/y"));
+        // And an upstream that drops them reads `.;x` as `.` and `..;` as
+        // `..` (the URL parser resolves neither): both readings must stay
+        // inside.
+        for climb in [
+            ".;x/..;/y",
+            ";x/..;/y",
+            ";x/..;x/y",
+            ".;x/%2e%2e;/y",
+            "%3Bx/..%3B/y",
+            ".%3Bx/..%3B/y",
+        ] {
+            assert!(
+                !ok("https://h/v1/a", &format!("https://h/v1/a/{climb}")),
+                "{climb}"
+            );
+        }
+        assert!(ok("https://h/v1/a", "https://h/v1/a/b/.;x/..;/c"));
+        assert!(ok("https://h/v1/a", "https://h/v1/a/x/;p/..;/y"));
+    }
+
+    /// An upstream that keeps `%2F` as data may still split a segment on
+    /// a decoded `\`.
+    #[test]
+    fn a_decoded_backslash_in_a_segment_cannot_climb() {
+        let base = "https://h/projects/group%2Fproj";
+        assert!(!ok(
+            base,
+            "https://h/projects/group%2Fproj/x%255C..%255C..%255Cproj"
+        ));
+        assert!(ok(base, "https://h/projects/group%2Fproj/a%255Cb/x"));
     }
 
     /// An upstream may read `%2F` as data yet decode each segment fully,

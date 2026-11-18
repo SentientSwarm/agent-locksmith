@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- A request can no longer climb back into a route's base path with
+  other `;` parameters (`../a;x`, `..;/..;/base;v=2`), which an upstream
+  that keeps parameters serves as another resource, nor through a
+  segment that is only parameters (`../;x/a`, `.;x/..;/y`): the path
+  must stay inside whether the upstream drops parameters or does not
+  know them (AGENT-287). A decoded `\` inside a segment
+  is also read as a separator, for an upstream that keeps `%2F` as data
+  but splits on it.
 - A route whose upstream base path holds an encoded separator
   (`/projects/group%2Fproj`) no longer lets a request climb out of it
   and spell the decoded base again (`%2e%2e/%2e%2e/projects/group/proj`),
