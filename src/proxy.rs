@@ -1505,8 +1505,10 @@ impl Dots {
 
 /// AGENT-287 L5 — an escape only a lenient decoder reads: overlong
 /// UTF-8 (`%c0%ae`, `%e0%80%af`, `%c1%9c`), a 5- or 6-byte lead, or IIS
-/// `%uXXXX`. Each can spell `.`, `/` or `\`, and no valid path needs
-/// one, so a path holding one in any reading is refused, not modelled.
+/// `%uXXXX`. Each can spell `.`, `/` or `\`, and no valid UTF-8 path
+/// needs one, so a path holding one in any reading is refused, not
+/// modelled. The lead alone decides, so a Latin-1 path's `%C0`, `%C1` or
+/// `%F8`-`%FD` byte (`s%F8ren`) and literal `%uXXXX` text are refused too.
 fn lenient_escape(text: &str) -> bool {
     let b = text.as_bytes();
     let byte_at = |i: usize| -> Option<u8> {
