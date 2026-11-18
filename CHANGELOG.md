@@ -22,6 +22,17 @@
 
 ### Fixed
 
+- A streamed Gemini reply under `redact` or `block` is no longer held
+  longer than its text needs (AGENT-273). Its `modelVersion`,
+  `responseId`, `usageMetadata`, each candidate's `role` and
+  `finishReason`, and a part's `thoughtSignature` come whole, so they are
+  scanned in their event instead of in a window. A short field repeated
+  in every chunk (`role`, a usage `modality`) kept every event held until
+  its own window passed the match overlap, two to three times as long as
+  the text alone, and under `fail_closed` a long reply could be blocked
+  for holding past `max_scan_bytes`; a thought signature held the stream
+  to its end.
+
 - Under `fail_closed`, a streamed chat reply with many or long tool calls
   is no longer blocked once the whole tool-call section, as raw SSE,
   passes `max_scan_bytes` (AGENT-273). A tool call is now finished, judged

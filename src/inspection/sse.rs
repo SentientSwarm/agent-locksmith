@@ -343,6 +343,9 @@ pub fn extract_within(
     let kind = kind(event, &value);
     let chat = value.get("choices").is_some_and(Value::is_array)
         && kind.as_deref().and_then(lanes::scheme_of).is_none();
+    let gemini = !chat
+        && value.get("candidates").is_some_and(Value::is_array)
+        && kind.as_deref().and_then(lanes::scheme_of).is_none();
     let tags = lanes::tags(scheme, kind.as_deref(), &value);
     let mut walk = Walk {
         limit,
@@ -358,7 +361,11 @@ pub fn extract_within(
         .map(|(place, path, text)| TextSpan {
             place,
             lane: path
-                .and_then(|path| stream_path(kind.as_deref(), chat, &path))
+                .and_then(|path| {
+                    (!(gemini && gemini_whole(&path)))
+                        .then(|| stream_path(kind.as_deref(), chat, &path))
+                        .flatten()
+                })
                 .map(|path| Lane {
                     // A choice is named by its `#index` in the path.
                     tags: if path.starts_with("/choices/") {
@@ -384,6 +391,35 @@ pub fn extract_within(
         }));
     }
     Some(out)
+}
+
+/// A Gemini `generateContent` chunk's metadata, whole in each chunk and
+/// never joined across chunks by a client: the model version, the
+/// response id, the usage counts, a candidate's role and finish reason,
+/// and a part's opaque thought signature. Matched by exact place, not by
+/// name, so a field of the same name elsewhere keeps its lane. In a lane,
+/// a field repeated in every chunk but shorter than the text (`role`, a
+/// usage `modality`), or one sent once and never extended (a signature),
+/// would hold the stream until its own lane passed the overlap
+/// (AGENT-273).
+fn gemini_whole(path: &str) -> bool {
+    if matches!(path, "/modelVersion" | "/responseId") || path.starts_with("/usageMetadata/") {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix("/candidates/") else {
+        return false;
+    };
+    let Some((_, field)) = rest.split_once('/') else {
+        return false;
+    };
+    if matches!(field, "content/role" | "finishReason") {
+        return true;
+    }
+    // `content/parts/<part>/thoughtSignature`
+    field
+        .strip_prefix("content/parts/")
+        .and_then(|part| part.split_once('/'))
+        .is_some_and(|(_, leaf)| leaf == "thoughtSignature")
 }
 
 /// The lane path of a field later events extend, or `None` for one

@@ -1581,6 +1581,64 @@ mod tests {
         assert!(!leaked(&out), "{out}");
     }
 
+    fn gemini(text: &str) -> String {
+        format!(
+            "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":{}}}],\"role\":\"model\"}},\"index\":0}}],\"usageMetadata\":{{\"promptTokenCount\":8,\"totalTokenCount\":8,\"promptTokensDetails\":[{{\"modality\":\"TEXT\",\"tokenCount\":8}}]}},\"modelVersion\":\"gemini-2.5-pro\",\"responseId\":\"r-1\"}}\n\n",
+            q(text)
+        )
+    }
+
+    /// A Gemini chunk whose part also carries a thought signature, as a
+    /// thinking model's first chunk can.
+    fn gemini_signed(text: &str) -> String {
+        gemini(text).replace(
+            "\"text\":",
+            &format!("\"thoughtSignature\":{},\"text\":", q(&"Cg".repeat(200))),
+        )
+    }
+
+    /// The first event released before the end of a stream of short
+    /// text chunks.
+    fn first_release(first: fn(&str) -> String, chunk: fn(&str) -> String) -> Option<usize> {
+        let mut i = StreamInspector::new(&closed(1 << 20, Verdict::Redact));
+        let at = (0..3000).position(|n| {
+            let event = if n == 0 { first } else { chunk };
+            !i.push(event(&format!("word{n:04} ")).as_bytes())
+                .out
+                .is_empty()
+        });
+        assert_ne!(i.report().verdict, Verdict::Block, "{:?}", i.report().error);
+        at
+    }
+
+    /// AGENT-273: metadata repeated in every chunk comes whole in each
+    /// event, so a Gemini stream's `role`, `modelVersion` or
+    /// `usageMetadata`, or a thought signature, doesn't hold it longer
+    /// than its text alone would, as a chat stream is.
+    #[test]
+    fn a_gemini_stream_is_held_no_longer_than_its_text_needs() {
+        let chat = |text: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}}}}]}}\n\n",
+                q(text)
+            )
+        };
+        let chat = first_release(chat, chat);
+        assert!(chat.is_some(), "a chat stream is released as it goes");
+        assert_eq!(first_release(gemini, gemini), chat);
+        assert_eq!(first_release(gemini_signed, gemini), chat);
+    }
+
+    #[test]
+    fn a_key_split_across_gemini_chunks_is_redacted() {
+        let k = key();
+        let events = vec![gemini(&format!("here: {}", &k[..20])), gemini(&k[20..])];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(!out.contains(&k[..20]), "{out}");
+        assert!(!out.contains(&k[20..]), "{out}");
+        assert!(i.report().error.is_none());
+    }
+
     #[test]
     fn a_finished_block_is_released_before_the_stream_ends() {
         let mut i = StreamInspector::new(&policy(Verdict::Redact));

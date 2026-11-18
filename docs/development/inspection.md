@@ -249,12 +249,16 @@ filter results, `usage`), and, within a choice, anything named as
 protocol metadata (`type`, `id`, `object`, `model`, `role`,
 `finish_reason`, `stop_reason`, `system_fingerprint`, `status`,
 `item_id`, `call_id`, `response_id`, `obfuscation`, `service_tier`,
-`instructions`), such as a delta's `role` or a tool call's `id`. Only
-fields later events extend go to a window: a chat or completions
-choice's `delta` and `text`, a Responses `*.delta`, an Anthropic block's
-text, thinking and tool input, and the opening text clients start them
-from (`content_block_start`, a Responses `.added` part's text or refusal,
-or a call's arguments). An event a redaction rewrites loses its
+`instructions`), such as a delta's `role` or a tool call's `id`. In a
+Gemini chunk (a `candidates` array, no `choices` and no other protocol's
+event type) the same holds for its `modelVersion`, `responseId` and
+`usageMetadata`, each candidate's `content.role` and `finishReason`, and a
+part's `thoughtSignature`, matched by place (AGENT-273). Only fields later
+events extend go to a window: a chat or completions choice's `delta` and
+`text`, a Responses `*.delta`, an Anthropic block's text, thinking and
+tool input, and the opening text clients start them from
+(`content_block_start`, a Responses `.added` part's text or refusal, or a
+call's arguments). An event a redaction rewrites loses its
 `logprobs` (`null`, or `[]` where it is a list): its tokens, their bytes
 and alternatives would spell the text the cut removed.
 
