@@ -167,8 +167,9 @@ session label and cause in `fields`:
 - `oauth_refresh_skipped`: a `proxied` route's session is due a
   background refresh, but its token call has no egress (no usable
   `egress_proxy`), so the refresh was not tried. It is reported once per
-  session while the daemon runs, and again only after a refresh of that
-  session has had egress.
+  session, then once a day while the skip lasts, so the log always holds
+  a recent row; after a refresh of that session has had egress, a new
+  skip is reported at once.
 
 The first two come from the background refresh and from a refresh made
 for a request alike; the request that hit the failure gets 503

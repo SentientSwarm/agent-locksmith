@@ -22,6 +22,12 @@
 
 ### Fixed
 
+- A background OAuth refresh skipped for want of egress
+  (`oauth_refresh_skipped`) is reported again once a day while the skip
+  lasts (AGENT-302). It was reported once per daemon run, so after
+  `operational_log.retention_days` the log held no sign of a session
+  still going unrefreshed.
+
 - An OAuth bootstrap or device login no longer stores a session for a
   registration its serving catalog shows as infra (AGENT-302). Both
   refuse infra registrations up front from the database, but a catalog
