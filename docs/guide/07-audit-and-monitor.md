@@ -159,8 +159,9 @@ session label and cause in `fields`:
   `reconnect_required` and requests on it fail with 503
   `oauth_reconnect_required` until it is signed in again.
 - `oauth_refresh_degraded`: a refresh failed before trying the provider
-  (unusable token metadata, an empty refresh token, or the refresh
-  could not be recorded) and the session is marked degraded. Requests
+  (unusable token metadata, an empty refresh token in the background
+  refresh, or the refresh could not be recorded) and the session is
+  marked degraded. Requests
   on it fail with 503 `oauth_refresh_failed` until it is signed in
   again.
 - `oauth_refresh_skipped`: a `proxied` route's session is due a
@@ -172,8 +173,9 @@ session label and cause in `fields`:
 The first two come from the background refresh and from a refresh made
 for a request alike; the request that hit the failure gets 503
 `oauth_refresh_failed`. A daemon stopped mid-refresh writes no event,
-so also check `locksmith oauth status`, which shows any session that
-needs reconnecting.
+so also check `locksmith oauth list`, which marks every session that
+needs signing in again `reconnect_required` (`locksmith oauth status
+<name> --label <label>` shows one).
 
 For a device-login route, signing in again is `locksmith oauth
 device-login`; for others, revoke the session locally and bootstrap it.
