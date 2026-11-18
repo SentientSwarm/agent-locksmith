@@ -32,18 +32,39 @@ const TAGS: [(&str, &str); 4] = [
 /// An index as a lenient client reads it: an integer, an integer-valued
 /// float, or a string holding one.
 fn index(value: &Value) -> Option<i64> {
-    let whole = |f: f64| (f.is_finite() && f.fract() == 0.0).then_some(f as i64);
     match value {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().and_then(whole)),
-        // A string holding `1.0` reads as 1 too (AGENT-317).
-        Value::String(s) => {
-            let s = s.trim();
-            s.parse()
-                .ok()
-                .or_else(|| s.parse::<f64>().ok().and_then(whole))
-        }
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
+        Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
+}
+
+/// Every index an event names its outputs with is a plain JSON integer
+/// that every client reads the same way (|n| <= 2^53). Clients disagree
+/// on the rest: `"1.0"`, `1.0` or `1e0` is 1 to one and a key of its own
+/// to another, and integers past 2^53 collide in JavaScript (AGENT-317).
+pub fn indexes_are_plain(value: &Value) -> bool {
+    const SAFE: u64 = 1 << 53;
+    let plain = |v: &Value| match v {
+        Value::Number(n) => n.as_i64().is_some_and(|i| i.unsigned_abs() <= SAFE),
+        _ => false,
+    };
+    let fields = TAGS.iter().filter_map(|(field, _)| value.get(*field));
+    let choices = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    let calls = choices
+        .clone()
+        .filter_map(|c| c.pointer("/delta/tool_calls").and_then(Value::as_array))
+        .flatten();
+    fields
+        .chain(choices.filter_map(|c| c.get("index")))
+        .chain(calls.filter_map(|c| c.get("index")))
+        .all(plain)
 }
 
 /// A protocol that names its outputs with top-level indexes.

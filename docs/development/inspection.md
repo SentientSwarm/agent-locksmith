@@ -301,21 +301,25 @@ starts (AGENT-273): a chat stream sends its calls one after another, and
 only the call in progress then needs to fit in `max_scan_bytes` as raw
 SSE. An upstream that interleaves calls writes to a finished output, so
 under `fail_closed` its stream is blocked; that needs held events, so
-`pass` and `flag` are unaffected. Under `fail_closed` the same holds for
-one that starts a call below a higher-numbered call of its choice, or
-with a negative index: that call gets a fresh window, while a client
-merging calls by position would join it to the call before (AGENT-317).
-A choice or tool call sent without an `index` among ones sent with it is
-blocked for the same reason, and so is one past the first of its chunk's
-array in a stream that sends no index, since a client may merge
-index-less entries into one. Under `fail_open` the calls stay open until
-`finish_reason`, and held events past `max_scan_bytes` go early.
+`pass` and `flag` are unaffected. Under `fail_closed` the same holds for one
+that starts a call below a higher-numbered call of its choice, or with a
+negative index: that call gets a fresh window, while a client merging calls
+by position would join it to the call before (AGENT-317). A choice or tool
+call sent without an `index` among ones sent with it is blocked for the same
+reason, and so is one past the first of its chunk's array in a stream that
+sends no index, since a client may merge index-less entries into one;
+servers that send parallel tool calls in one chunk without an index are
+blocked. So is an index that is not a plain JSON integer up to 2^53
+(`"1.0"`, `1e0`, `"1"`): one client reads it as the number, another as a key
+of its own. Under `fail_open` the calls stay open until `finish_reason`, and
+held events past `max_scan_bytes` go early.
 Past that, or when non-empty text arrives for an output the protocol
 already said was finished, a match could be missed: under `fail_closed`
 the stream is blocked, under `fail_open` the outputs share one window (or
 the finished one reopens) and an `inspection_hold_overflow` row is
 written. An `index` is read as clients read it: an integer, a whole-number
-float or a numeric string.
+float or a numeric string (under `fail_closed` with held events, anything
+but a plain integer blocks, as above).
 
 How the stream is forwarded depends on `on_hit`:
 

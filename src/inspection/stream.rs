@@ -425,6 +425,12 @@ impl StreamInspector {
         let Some(spans) = sse::extract_within(&event, self.max_held, self.scheme) else {
             return self.oversized(Some(event), step);
         };
+        // Clients read a loose index (`"1.0"`, `1e0`, past 2^53) in
+        // different ways, so no lane can match all of them (AGENT-317).
+        if self.hold && self.on_error == OnError::FailClosed && !sse::indexes_are_plain(&event) {
+            self.note_error("stream output index is not a plain integer".into());
+            return self.block(step);
+        }
         if spans
             .iter()
             .any(|s| s.place == sse::Place::View { json: true })
@@ -1450,6 +1456,45 @@ mod tests {
         assert_eq!(out, events.concat());
     }
 
+    /// AGENT-317: one client reads `"1.0"` as call 1, another keys it
+    /// apart, and integers past 2^53 collide in JavaScript, so no lane
+    /// fits every reader. Under `fail_closed` a loose index blocks.
+    #[test]
+    fn a_loose_index_blocks_under_fail_closed() {
+        let k = key();
+        let call = |index: &str, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{index},\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        for loose in ["\"1.0\"", "\"1\"", "1.0", "1e0", "9007199254740993"] {
+            let events = vec![
+                call("1", &k[..20]),
+                call(loose, ", "),
+                call("1", &k[20..]),
+                DONE.to_string(),
+            ];
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(&k[..20]), "{loose}: {out}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream output index is not a plain integer"),
+                "{loose}"
+            );
+        }
+        let anthropic = ev(
+            "content_block_delta",
+            serde_json::json!({"index": "1.0",
+            "delta": {"type": "text_delta", "text": "x"}}),
+        );
+        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[anthropic]);
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("stream output index is not a plain integer")
+        );
+    }
+
     #[test]
     fn padding_fields_do_not_split_a_match() {
         let mut events = Vec::new();
@@ -1557,7 +1602,7 @@ mod tests {
         let k = key();
         let mut events = Vec::new();
         for (n, c) in k.chars().enumerate() {
-            let index = ["0", "0.0", "\"0\"", "\"0.0\""][n % 4];
+            let index = ["0", "0.0", "\"0\""][n % 3];
             events.push(format!(
                 "data: {{\"choices\":[{{\"index\":{index},\"delta\":{{\"content\":{}}}}}]}}\n\n",
                 q(&c.to_string())

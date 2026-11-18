@@ -27,8 +27,10 @@
   split between it and the call before was never seen whole, though a
   client merging calls by position would join them. A choice or tool
   call sent without an `index` among indexed ones is blocked too, as is
-  one past the first of its chunk in a stream that sends no index. An
-  index sent as a string such as `"1.0"` is read as the number.
+  one past the first of its chunk in a stream that sends no index, and
+  any output index that is not a plain integer up to 2^53 (`"1.0"`, `1e0`,
+  `"1"`), which clients read in different ways. Servers that send parallel
+  tool calls in one chunk without an index are blocked too.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`

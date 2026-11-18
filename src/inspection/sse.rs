@@ -202,6 +202,11 @@ fn parse_from(raw: Vec<u8>, skip: usize) -> SseEvent {
     SseEvent { raw, event, data }
 }
 
+/// See [`lanes::indexes_are_plain`]; data that is not JSON names none.
+pub fn indexes_are_plain(event: &SseEvent) -> bool {
+    json(event).is_none_or(|v| lanes::indexes_are_plain(&v))
+}
+
 fn json(event: &SseEvent) -> Option<Value> {
     serde_json::from_str(event.data.as_deref()?).ok()
 }
