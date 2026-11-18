@@ -8,8 +8,9 @@
   set for the offline inspector in the example site, and the start guard
   refuses a secret-holding component while `fs.suid_dumpable` is `1`,
   which would leave its execute-only binary dumpable (AGENT-288). The
-  edge guide says to move a model cache installed under `$R/inspector`
-  to `$R/models/inspector`.
+  edge guide says to reinstall a model cache found under `$R/inspector`
+  into `$R/models/inspector` and delete the old copy, and to set
+  `fs.suid_dumpable` on the Incus host, since a container cannot.
 - The `injection` scanner also reads a phrase that combines a glued
   emoji letter (a flag, `ℹ️`, `Ⓜ️`) with a look-alike only the new fold
   reads, such as `ígnore previous instructions🇺🇸` (AGENT-315).
