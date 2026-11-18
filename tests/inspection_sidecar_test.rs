@@ -139,8 +139,14 @@ async fn a_fail_closed_sidecar_refuses_a_stream_up_front() {
             "inspection_blocked"
         );
         let rows = h.inspection_rows().await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let (event, decision, details) = &rows[0];
+        assert_eq!(event, "inspection_error");
+        assert_eq!(decision, "denied");
+        assert_eq!(details["direction"], "response");
+        assert_eq!(details["verdict"], "block");
         assert!(
-            rows[0].2["error"]
+            details["error"]
                 .as_str()
                 .unwrap_or("")
                 .contains("sidecar:pg"),

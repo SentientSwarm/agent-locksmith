@@ -219,6 +219,8 @@ impl StreamInspector {
             step.ended = true;
             return step;
         }
+        // The proxy checks `refused_up_front` and never feeds such a
+        // stream, so this guards other callers: block, never pass it.
         if self.unjudged {
             self.block(&mut step);
             self.ended = true;
@@ -297,6 +299,7 @@ impl StreamInspector {
             step.ended = true;
             return step;
         }
+        // As in `push`: unreachable from the proxy, kept fail-closed.
         if self.unjudged {
             self.block(&mut step);
             self.ended = true;

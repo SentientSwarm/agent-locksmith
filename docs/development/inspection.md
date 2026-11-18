@@ -36,11 +36,13 @@ inspection:
 | `max_scan_bytes` | 1 MiB | 1 MiB |
 
 A response policy that redacts or blocks fails closed unless `on_error` says
-otherwise, so a reply it can't judge doesn't pass unjudged: compressed,
-oversized or streamed as NDJSON, a scanner error or timeout, or an SSE stream
-the scanners can't follow (including any SSE stream on a policy with a
-sidecar scanner, since sidecars don't scan streams). Such a reply is refused
-with 502, or its SSE stream ends with an error event.
+otherwise, so a reply it can't judge doesn't pass unjudged. A reply that is
+compressed, oversized, streamed as NDJSON, or hit by a scanner error or
+timeout is refused with 502. So is any SSE stream on a policy with a sidecar
+scanner, since sidecars don't scan streams: that is known before anything is
+sent. An SSE stream that hits a scanner error, or that the scanners stop
+being able to follow, part-way through has already sent its headers, so it
+ends with an error event instead.
 
 Unknown scanner ids, an empty scanner list and a route listed twice fail
 config load.
