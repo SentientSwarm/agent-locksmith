@@ -437,8 +437,8 @@ async fn same_authority(
         .ok()
         .filter(|d| d.egress == a.egress);
     let stored = stored.map(|d| (d.issuer, d.client_id));
-    // AGENT-302: checked as the start checked it; a catalog that lags a
-    // re-create as infra serves no session.
+    // AGENT-302: checked as the start checked it; a serving catalog that
+    // still shows the name as infra serves no session.
     let serving = state
         .catalog
         .load()

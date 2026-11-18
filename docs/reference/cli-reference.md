@@ -532,6 +532,8 @@ are held in memory, expire after 15 minutes and do not survive a restart. At mos
 ends its pending logins, and a login fails with 409 `authority_changed`
 before any code is exchanged when its registration, or any agent binding that
 selects the label, no longer names the issuer and client it used, so tokens only ever go to the issuer that issued them.
+A login or a `bootstrap` also fails with 409 `authority_changed`, keeping no
+session, when the serving catalog still shows the registration as infra.
 
 **Phase G — `--label`**: distinguishes multiple sessions under one
 registration, defaulting to `"default"`. Use distinct labels (e.g.,

@@ -377,9 +377,9 @@ fn code_exchanged(requests: &[wiremock::Request]) -> bool {
     })
 }
 
-/// AGENT-302: a serving catalog that lags a delete and re-create of the
-/// registration as infra serves the login no session, as an infra
-/// registration is refused from the start.
+/// AGENT-302: a serving catalog that still shows the registration as
+/// infra serves the login no session, as an infra registration is
+/// refused from the start.
 #[tokio::test]
 async fn a_registration_serving_as_infra_never_receives_the_new_tokens() {
     let h = setup().await;

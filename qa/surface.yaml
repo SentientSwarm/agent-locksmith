@@ -460,6 +460,9 @@ routes:
   - session_exists
   - oauth_kind_unsupported
   - egress_proxy_unconfigured
+  fault_refusals:
+  - authority_changed
+  fault_reason: needs a serving catalog that still shows the name as infra (a failed catalog refresh, or a change racing the bootstrap)
 - id: admin.POST./admin/operator/oauth/{name}/device-login
   listener: admin
   method: POST

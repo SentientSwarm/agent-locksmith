@@ -129,18 +129,18 @@ async fn setup() -> Harness {
     }
 }
 
-/// The bootstrap answers 502 `oauth_bootstrap_failed`, leaves no session
+/// The bootstrap answers `status` with error `code`, leaves no session
 /// row and never calls the token endpoint.
-async fn assert_refused_without_session(h: &Harness) {
+async fn assert_refused_without_session(h: &Harness, status: axum::http::StatusCode, code: &str) {
     let resp = h
         .server
         .post("/admin/operator/oauth/codex/bootstrap")
         .add_header("authorization", format!("Bearer {}", h.op_token))
         .json(&serde_json::json!({"refresh_token": "initial-refresh"}))
         .await;
-    resp.assert_status(axum::http::StatusCode::BAD_GATEWAY);
+    resp.assert_status(status);
     let body: serde_json::Value = resp.json();
-    assert_eq!(body["error"]["code"], "oauth_bootstrap_failed");
+    assert_eq!(body["error"]["code"], code);
     let status = h
         .server
         .get("/admin/operator/oauth/codex")
@@ -156,14 +156,17 @@ async fn assert_refused_without_session(h: &Harness) {
 async fn bootstrap_whose_registration_left_the_catalog_removes_its_row() {
     let h = setup().await;
     h.catalog.store(Arc::new(Catalog::default()));
-    assert_refused_without_session(&h).await;
+    let gateway = axum::http::StatusCode::BAD_GATEWAY;
+    assert_refused_without_session(&h, gateway, "oauth_bootstrap_failed").await;
 }
 
-// ─── AGENT-302: the serving registration became infra by the exchange ──────
+// ─── AGENT-302: the serving registration is infra at the exchange ─────────
 #[tokio::test]
 async fn bootstrap_rechecks_the_serving_registration_kind() {
     let h = setup().await;
-    // A catalog that lags a delete and re-create of `codex` as infra.
+    // A serving catalog that still shows `codex` as infra while the
+    // database row is a model again (a failed catalog refresh, or a
+    // change between the check and the exchange).
     let dir = TempDir::new().unwrap();
     let pool = open_and_migrate(&dir.path().join("lag.db")).await.unwrap();
     let repo = RegistrationRepository::new(pool);
@@ -183,7 +186,8 @@ async fn bootstrap_rechecks_the_serving_registration_kind() {
     repo.create(&infra).await.unwrap();
     h.catalog
         .store(Arc::new(Catalog::from_repo(&repo).await.unwrap()));
-    assert_refused_without_session(&h).await;
+    let conflict = axum::http::StatusCode::CONFLICT;
+    assert_refused_without_session(&h, conflict, "authority_changed").await;
 }
 
 // ─── TS-210: bootstrap exchanges refresh→access, persists session ──────────

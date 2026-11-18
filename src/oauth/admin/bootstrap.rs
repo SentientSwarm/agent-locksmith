@@ -140,16 +140,25 @@ pub(super) fn create_error(e: crate::oauth::session::OauthSessionError) -> Box<R
 /// AGENT-302: the token endpoint and the egress come from one serving
 /// registration, so an edit racing the bootstrap cannot pair them. That
 /// registration is checked again as `validate` checked the database row:
-/// a catalog that lags a delete and re-create as infra serves no session.
+/// a serving catalog that still shows the name as infra (a failed catalog
+/// refresh, or a change since `validate`) serves no session, and the
+/// operator is told to start again, as a device login is.
 async fn exchange(
     state: &OauthAdminState,
     name: &str,
     session: &OauthSession,
 ) -> Result<OauthSession, Box<Response>> {
     let cat = state.catalog.load();
-    let serving = cat
-        .lookup_active(name)
-        .filter(|r| r.kind != crate::registrations::Kind::Infra);
+    let serving = cat.lookup_active(name);
+    if serving.is_some_and(|r| r.kind == crate::registrations::Kind::Infra) {
+        let _ = state.sessions.delete_if_current(session).await;
+        return Err(Box::new(error_envelope(
+            StatusCode::CONFLICT,
+            "conflict",
+            "authority_changed",
+            "the serving registration does not match the stored one; start again once it does",
+        )));
+    }
     let Some(registration) = serving else {
         let _ = state.sessions.delete_if_current(session).await;
         let e = crate::oauth::refresh::RefreshError::RegistrationGone(name.to_string());
