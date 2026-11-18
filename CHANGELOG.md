@@ -492,6 +492,15 @@
 
 ### Added
 
+- `locksmith agent set-credential <id> <reg> --stored-header-stdin
+  [--header <Name>]` (AGENT-325) seals a per-agent value read from stdin
+  that is sent bare in a header: `--header`, or else the route's own
+  header. A route that names no header refuses it without `--header` (400
+  `invalid_stored_credential`) rather than sealing a bearer. The admin API
+  takes this as `"stored_header": true` on the per-agent `credential` PUT.
+  Before, stdin took only bearers (`--stored-bearer-stdin`), so an API
+  that wants a bare key, such as Linear's `Authorization: <key>`, had no
+  CLI path to a stored value.
 - Edge packaging in `dist/edge/` (AGENT-258). It runs Locksmith, and
   optionally Pipelock and a classifier sidecar, as hardened systemd
   services in Incus system containers. The tools, all standard-library

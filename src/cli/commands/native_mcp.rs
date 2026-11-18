@@ -91,11 +91,20 @@ fn validate(s: &Selection) -> Result<(), CliError> {
     }
     Ok(())
 }
+/// How a per-agent value read from stdin is sent upstream.
+pub enum Sealed {
+    /// `Authorization: Bearer <value>`.
+    Bearer,
+    /// The bare value in this header, or in the route's own header when
+    /// `None`; refused when the route names none (AGENT-325).
+    Header(Option<String>),
+}
 pub async fn ingest(
     client: &CliClient,
     format: Format,
     agent: &str,
     connection: &str,
+    sealed: Sealed,
 ) -> Result<(), CliError> {
     validate(&Selection {
         connection: connection.into(),
@@ -110,12 +119,19 @@ pub async fn ingest(
         return Err(invalid());
     }
     let value = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let body = match sealed {
+        Sealed::Bearer => json!({"value":value,"bearer":true}),
+        Sealed::Header(None) => json!({"value":value,"stored_header":true}),
+        Sealed::Header(Some(header)) => {
+            json!({"value":value,"header":header,"stored_header":true})
+        }
+    };
     request(
         client,
         format,
         "PUT",
         &format!("/admin/operator/agents/{agent}/credentials/{connection}/credential"),
-        Some(json!({"value":value,"bearer":true})),
+        Some(body),
     )
     .await
 }

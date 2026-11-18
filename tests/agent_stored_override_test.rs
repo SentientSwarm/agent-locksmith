@@ -243,5 +243,57 @@ async fn stored_override_with_header_makes_stored_header() {
     }
 }
 
+#[tokio::test]
+async fn stored_header_intent_needs_a_header_name_and_excludes_bearer() {
+    let h = setup().await;
+    let path = format!(
+        "/admin/operator/agents/{}/credentials/shared-api/credential",
+        h.agent_public_id
+    );
+    // shared-api is authless, so it names no header; with stored_header the
+    // write is refused instead of falling back to a stored bearer (AGENT-325).
+    for body in [
+        json!({ "value": "v", "stored_header": true }),
+        json!({ "value": "v", "stored_header": true, "bearer": true }),
+    ] {
+        let r = h
+            .admin
+            .put(&path)
+            .add_header("authorization", &h.op_bearer)
+            .json(&body)
+            .await;
+        r.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            r.json::<serde_json::Value>()["error"]["code"],
+            "invalid_stored_credential"
+        );
+    }
+    assert!(
+        h.agent_creds
+            .get(h.agent_id, "shared-api")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // A named header still works with the intent.
+    h.admin
+        .put(&path)
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "value": "v", "stored_header": true, "header": "x-api-key" }))
+        .await
+        .assert_status_ok();
+    match h
+        .agent_creds
+        .get(h.agent_id, "shared-api")
+        .await
+        .unwrap()
+        .unwrap()
+        .auth_spec
+    {
+        AuthSpec::StoredHeader { header, .. } => assert_eq!(header, "x-api-key"),
+        other => panic!("expected stored_header, got {other:?}"),
+    }
+}
+
 #[path = "native_preparation/credential.rs"]
 mod native_credential;

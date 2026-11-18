@@ -41,6 +41,9 @@ Provide one UTF-8 value on stdin (1–8192 printable ASCII bytes, no spaces or
 controls; one terminal newline is removed). Explicit bearer intent replaces
 an existing header-shaped selection. The older stored-value API still inherits
 header shape when neither `bearer: true` nor an explicit header is supplied.
+`--stored-header-stdin` sends `stored_header: true` instead, which takes the
+header from `--header` or the route, never from the current selection, and is
+refused when neither names one.
 The sealed insert and selection commit together; a refused write leaves no
 new sealed row. Selecting a shared handle is deliberate:
 

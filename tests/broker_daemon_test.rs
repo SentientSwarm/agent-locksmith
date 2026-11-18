@@ -1,6 +1,9 @@
 //! #159 M7 — the daemon wires the broker prober to `/readyz`: a broker
 //! whose probe fails is counted as down on a running `locksmithd`, while
 //! readiness stays 200 and names no route.
+//!
+//! AGENT-325 — on the same daemon + CLI fixture, `agent set-credential
+//! --stored-header-stdin` seals a per-agent value sent bare in a header.
 
 #![allow(dead_code)]
 #[path = "native_process/fixture.rs"]
@@ -17,13 +20,27 @@ use serde_json::Value;
 use std::io::Write;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use wiremock::matchers::path;
+use wiremock::matchers::{header, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SEALING_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 
 fn set_key(f: &Fixture, route: &str, value: &str) {
-    let mut c = f.command(&["tool", "set-key", route]);
+    piped(f, &["tool", "set-key", route], value);
+}
+
+fn piped(f: &Fixture, args: &[&str], value: &str) {
+    assert!(try_piped(f, args, value), "{} failed", args[1]);
+}
+
+fn set<'a>(id: &'a str, route: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["agent", "set-credential", id, route];
+    args.extend_from_slice(extra);
+    args
+}
+
+fn try_piped(f: &Fixture, args: &[&str], value: &str) -> bool {
+    let mut c = f.command(args);
     c.stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -34,7 +51,7 @@ fn set_key(f: &Fixture, route: &str, value: &str) {
         .unwrap()
         .write_all(value.as_bytes())
         .unwrap();
-    assert!(process::wait(&mut child).success(), "set-key failed");
+    process::wait(&mut child).success()
 }
 
 #[tokio::test]
@@ -84,5 +101,110 @@ async fn readyz_counts_a_down_broker() {
     assert!(!ready.contains("pool"), "readyz names no route: {ready}");
     let probes = broker.received_requests().await.unwrap();
     assert!(probes.iter().any(|r| r.url.path() == "/healthz"));
+    f.stop();
+}
+
+#[tokio::test]
+async fn a_stored_header_from_stdin_is_sent_bare() {
+    let upstream = MockServer::start().await;
+    Mock::given(path("/inherited"))
+        .and(header("x-api-key", "header-secret-1"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    Mock::given(path("/named"))
+        .and(header("authorization", "header-secret-2"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    let mut f = Fixture::new();
+    f.start_with_key(process::DAEMON, Some(SEALING_KEY)).await;
+    for (route, auth) in [
+        ("keyed", "header:X-Api-Key=UNSET_ENV"),
+        ("named", "header:X-Api-Key=UNSET_ENV"),
+        ("plain", "bearer=UNSET_ENV"),
+    ] {
+        f.op(&[
+            "tool",
+            "put",
+            route,
+            "--upstream",
+            &upstream.uri(),
+            "--auth",
+            auth,
+            "--egress",
+            "direct",
+        ]);
+    }
+    let a = f.op(&[
+        "agent",
+        "register",
+        "--name",
+        "hdr",
+        "--allowlist",
+        "keyed,named,plain",
+    ]);
+    let id = a["public_id"].as_str().unwrap();
+    // An earlier bearer binding is replaced, and the route's own header
+    // (X-Api-Key), not that binding, names where the value goes.
+    piped(
+        &f,
+        &set(id, "keyed", &["--stored-bearer-stdin"]),
+        "old-bearer",
+    );
+    piped(
+        &f,
+        &set(id, "keyed", &["--stored-header-stdin"]),
+        "header-secret-1\n",
+    );
+    // --header overrides the route's header; the value still goes bare.
+    piped(
+        &f,
+        &set(
+            id,
+            "named",
+            &["--stored-header-stdin", "--header", "Authorization"],
+        ),
+        "header-secret-2",
+    );
+    // A route that names no header refuses, rather than sealing a bearer.
+    assert!(
+        !try_piped(&f, &set(id, "plain", &["--stored-header-stdin"]), "v"),
+        "a header route is needed without --header"
+    );
+    let listed = f.op(&["agent", "credentials", "list", id]);
+    assert!(
+        !listed.to_string().contains("header-secret"),
+        "value never listed"
+    );
+    let kinds: Vec<(String, String, String)> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| {
+            let spec = &o["auth_spec"];
+            let s = |k: &str| spec[k].as_str().unwrap_or("").to_owned();
+            (
+                o["registration"].as_str().unwrap().to_owned(),
+                s("kind"),
+                s("header"),
+            )
+        })
+        .collect();
+    let want = |r: &str, h: &str| (r.to_owned(), "stored_header".to_owned(), h.to_owned());
+    assert!(kinds.contains(&want("keyed", "X-Api-Key")), "{kinds:?}");
+    assert!(kinds.contains(&want("named", "Authorization")), "{kinds:?}");
+    assert!(!kinds.iter().any(|k| k.0 == "plain"), "{kinds:?}");
+    let token = a["token"].as_str().unwrap();
+    for p in ["/api/keyed/inherited", "/api/named/named"] {
+        let r = f
+            .http
+            .get(f.url(p))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "{p}");
+    }
     f.stop();
 }

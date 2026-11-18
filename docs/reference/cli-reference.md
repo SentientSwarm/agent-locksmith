@@ -114,6 +114,8 @@ locksmith agent set-credential <public_id> <reg> --auth bearer=<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --auth header=<Header>:<ENV_VAR>
 locksmith agent set-credential <public_id> <reg> --no-auth
 locksmith agent set-credential <public_id> <reg> --oauth-session <label>
+locksmith agent set-credential <public_id> <reg> --stored-bearer-stdin      # value on stdin
+locksmith agent set-credential <public_id> <reg> --stored-header-stdin [--header <Name>]
 locksmith agent select-oauth <public_id> <reg> --label <label> --if-match <account-revision>
 locksmith agent unset-credential <public_id> <reg>
 locksmith agent credentials list <public_id>
@@ -129,6 +131,16 @@ for the design and the OAuth single-grant trap.
 copies the selected registration's current OAuth metadata into the binding.
 Later template changes do not redirect that binding's refresh exchange. Old
 empty-placeholder bindings require deliberate re-selection.
+
+`--stored-bearer-stdin` and `--stored-header-stdin` read one value from stdin,
+never argv: printable ASCII with no spaces, at most 8 KiB, one trailing newline
+ignored. They seal it for this agent alone, replacing its current binding on
+the route. A stored bearer is sent as `Authorization: Bearer <value>`. A stored
+header is sent bare, in `--header` or else the route's own header (its
+`header:` auth), for APIs that refuse a bearer (Linear wants
+`Authorization: <key>`). On a route whose auth names no header, pass
+`--header`; without it the write is refused (400 `invalid_stored_credential`)
+rather than sealed as a bearer. Both need `LOCKSMITH_CREDENTIAL_SEALING_KEY`.
 
 `unset-credential` is idempotent — removing an absent binding returns success.
 After clearing, subsequent requests to that registration are denied until an

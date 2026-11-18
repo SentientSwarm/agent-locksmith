@@ -25,6 +25,12 @@ pub(super) struct Input {
     header: Option<String>,
     #[serde(default)]
     bearer: bool,
+    /// Bind a stored header: `header`, else the route's own header name,
+    /// never the agent's current binding; refused when neither names one
+    /// (AGENT-325). Without it, an absent `header` inherits the current
+    /// binding's header and falls back to a stored bearer.
+    #[serde(default)]
+    stored_header: bool,
 }
 pub(super) async fn set(
     state: UdsState,
@@ -58,14 +64,15 @@ pub(super) async fn set(
             state.resync_op_references().await;
             Json(value).into_response()
         }
-        Err(error) => admin_err_response(error),
+        Err(Refused::Admin(error)) => admin_err_response(error),
+        Err(Refused::Unnamed) => failure("invalid_stored_credential", StatusCode::BAD_REQUEST),
     }
 }
 fn failure(code: &str, status: StatusCode) -> Response {
     (status, Json(json!({"error":{"code":code}}))).into_response()
 }
 fn invalid(body: &Input) -> bool {
-    body.bearer && body.header.is_some()
+    body.bearer && (body.header.is_some() || body.stored_header)
         || body
             .header
             .as_deref()
@@ -79,6 +86,22 @@ fn invalid(body: &Input) -> bool {
                     .bytes()
                     .all(|b| (0x21..=0x7e).contains(&b))))
 }
+/// Why a write changed nothing.
+enum Refused {
+    Admin(AdminError),
+    /// `stored_header` with no `header` on a route that names none.
+    Unnamed,
+}
+impl From<AdminError> for Refused {
+    fn from(e: AdminError) -> Self {
+        Self::Admin(e)
+    }
+}
+impl From<crate::repo::RepoError> for Refused {
+    fn from(e: crate::repo::RepoError) -> Self {
+        Self::Admin(e.into())
+    }
+}
 /// What a successful write bound, for the audit row (AGENT-253).
 struct Written {
     agent_public_id: String,
@@ -91,7 +114,7 @@ async fn write(
     id: &str,
     registration: &str,
     body: Input,
-) -> Result<(serde_json::Value, Written), AdminError> {
+) -> Result<(serde_json::Value, Written), Refused> {
     let agent = state.admin.get_agent(op, id).await?;
     let creds = state.agent_creds.as_ref().ok_or_else(unavailable)?;
     let key = state
@@ -104,6 +127,9 @@ async fn write(
         .await
         .map_err(|_| unavailable())?;
     let (header, previous) = shape(&mut tx, agent.id, registration, &body).await?;
+    if body.stored_header && header.is_none() {
+        return Err(Refused::Unnamed);
+    }
     let old_ref = previous
         .as_ref()
         .and_then(AuthSpec::stored_secret_ref)
@@ -154,10 +180,12 @@ async fn shape(
         .map_err(|_| unavailable())?;
     let default: AuthSpec =
         serde_json::from_str(&row.get::<String, _>("auth_json")).map_err(|_| unavailable())?;
-    Ok((
-        header(body, selected.as_ref().unwrap_or(&default)),
-        selected,
-    ))
+    let inherited = if body.stored_header {
+        &default
+    } else {
+        selected.as_ref().unwrap_or(&default)
+    };
+    Ok((header(body, inherited), selected))
 }
 fn header(body: &Input, inherited: &AuthSpec) -> Option<String> {
     if body.bearer {

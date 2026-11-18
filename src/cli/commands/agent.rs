@@ -159,6 +159,14 @@ pub struct SetCredentialArgs {
     /// Read a bearer value from stdin and seal it; never pass values in argv.
     #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_ref"])]
     pub stored_bearer_stdin: bool,
+    /// Read a header value from stdin and seal it; it is sent bare, in
+    /// `--header` or else the route's own header (refused when the route
+    /// names none). Never pass values in argv.
+    #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin","stored_bearer_ref","broker"])]
+    pub stored_header_stdin: bool,
+    /// The header `--stored-header-stdin` sends its value in.
+    #[arg(long, requires = "stored_header_stdin")]
+    pub header: Option<String>,
     /// Explicitly select an existing live sealed bearer reference.
     #[arg(long, conflicts_with_all=["auth","no_auth","oauth_session","stored_bearer_stdin"])]
     pub stored_bearer_ref: Option<String>,
@@ -292,9 +300,20 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
             print(&value, format);
         }
         AgentCmd::SetCredential(args) => {
-            if args.stored_bearer_stdin {
-                return super::native_mcp::ingest(client, format, &args.id, &args.registration)
-                    .await;
+            if args.stored_bearer_stdin || args.stored_header_stdin {
+                let sealed = if args.stored_header_stdin {
+                    super::native_mcp::Sealed::Header(args.header)
+                } else {
+                    super::native_mcp::Sealed::Bearer
+                };
+                return super::native_mcp::ingest(
+                    client,
+                    format,
+                    &args.id,
+                    &args.registration,
+                    sealed,
+                )
+                .await;
             }
             let auth_spec = if let Some(label) = &args.oauth_session {
                 oauth::selection(client, &token, &args.registration, label).await?
@@ -439,5 +458,35 @@ mod broker_selection_tests {
             json!({"kind": "broker"})
         );
         assert!(Cli::try_parse_from(["x", "a", "pool", "--broker", "--no-auth"]).is_err());
+    }
+
+    #[test]
+    fn stored_header_stdin_takes_an_optional_header_and_no_other_source() {
+        let cli = Cli::try_parse_from(["x", "a", "linear", "--stored-header-stdin"]).unwrap();
+        assert!(cli.args.stored_header_stdin && cli.args.header.is_none());
+        let cli = Cli::try_parse_from([
+            "x",
+            "a",
+            "linear",
+            "--stored-header-stdin",
+            "--header",
+            "Authorization",
+        ])
+        .unwrap();
+        assert_eq!(cli.args.header.as_deref(), Some("Authorization"));
+        // A header without the stdin flag would be silently ignored.
+        assert!(Cli::try_parse_from(["x", "a", "r", "--header", "X-Key"]).is_err());
+        for other in [
+            &["--stored-bearer-stdin"][..],
+            &["--no-auth"],
+            &["--broker"],
+            &["--auth", "bearer=K"],
+            &["--oauth-session", "default"],
+            &["--stored-bearer-ref", "cs_x"],
+        ] {
+            let mut argv = vec!["x", "a", "r", "--stored-header-stdin"];
+            argv.extend_from_slice(other);
+            assert!(Cli::try_parse_from(argv).is_err(), "{other:?}");
+        }
     }
 }
