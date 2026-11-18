@@ -14,7 +14,9 @@
   for OpenAI even on an Anthropic stream (AGENT-278).
 - A sidecar scanner that reads a large request slowly can no longer hold
   a scan past `timeout_ms` or the scan's deadline: the request is
-  written in small pieces, each given only the time left (AGENT-278).
+  written without blocking, and each wait for room is given only the
+  time left, so a small send buffer (macOS's is 8 KiB) cannot turn one
+  write into many waits (AGENT-278).
 - The `injection` scanner folds look-alike letters that have a Unicode
   compatibility form (Kelvin sign, Roman numerals, circled and
   parenthesized letters, superscripts, accented letters, ligatures,

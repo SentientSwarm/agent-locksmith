@@ -170,36 +170,69 @@ fn plain_rule(rule: &str) -> String {
         .collect()
 }
 
-/// Most bytes handed to one `write`. A socket's send timeout bounds each
-/// wait for buffer space, and one large `write` can wait many times, so
-/// writes stay small enough to wait about once (AGENT-278).
-const WRITE_CHUNK: usize = 16 << 10;
-
-/// Write `bytes` within `deadline`: each write gets only the time left,
-/// so a sidecar that reads slowly cannot stretch the call past it.
+/// Write `bytes` within `deadline`. The socket is non-blocking while it
+/// writes, and each wait for room is one `poll` given only the time left.
+/// A send timeout instead bounds each of the kernel's waits, and one
+/// `write` can wait many times when the send buffer is smaller than the
+/// write (macOS buffers 8 KiB on an AF_UNIX stream), so a sidecar that
+/// frees a little before each wait expired could stretch the call
+/// (AGENT-278).
 fn send(stream: &mut UnixStream, bytes: &[u8], deadline: Instant) -> Result<(), String> {
+    stream
+        .set_nonblocking(true)
+        .map_err(|e| format!("write: {e}"))?;
+    let sent = send_nonblocking(stream, bytes, deadline);
+    stream
+        .set_nonblocking(false)
+        .map_err(|e| format!("write: {e}"))?;
+    sent
+}
+
+fn send_nonblocking(
+    stream: &mut UnixStream,
+    bytes: &[u8],
+    deadline: Instant,
+) -> Result<(), String> {
     let mut sent = 0;
     while sent < bytes.len() {
-        stream
-            .set_write_timeout(Some(remaining(deadline)?))
-            .map_err(|e| e.to_string())?;
-        let end = bytes.len().min(sent + WRITE_CHUNK);
-        match stream.write(&bytes[sent..end]) {
+        match stream.write(&bytes[sent..]) {
             Ok(0) => return Err("write: closed".into()),
             Ok(n) => sent += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err("write: timed out".into());
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                wait_writable(stream, deadline)?;
             }
             Err(e) => return Err(format!("write: {e}")),
         }
     }
     Ok(())
+}
+
+/// Wait until `stream` has room to write, or `deadline`.
+fn wait_writable(stream: &UnixStream, deadline: Instant) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let left = remaining(deadline).map_err(|_| "write: timed out".to_string())?;
+    // Rounded up, so a wait never ends before the time left.
+    let ms = left.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+    let mut fd = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    // SAFETY: `fd` is one valid pollfd for the duration of the call.
+    match unsafe { libc::poll(&mut fd, 1, ms) } {
+        0 => Err("write: timed out".into()),
+        -1 => {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                Ok(())
+            } else {
+                Err(format!("write: {e}"))
+            }
+        }
+        // Writable, or an error or hang-up the next write reports.
+        _ => Ok(()),
+    }
 }
 
 /// Time left before `deadline`, or the timeout error. Never under a
@@ -402,6 +435,39 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert!(took < Duration::from_secs(2), "{took:?}");
+    }
+
+    /// AGENT-278 — with a send buffer smaller than a write (as on macOS,
+    /// where an AF_UNIX stream buffers 8 KiB), one write can wait for room
+    /// many times. A reader that frees a little just before each wait
+    /// would time out must still not stretch `send` past its deadline.
+    #[test]
+    fn a_small_send_buffer_cannot_stretch_a_write() {
+        let (mut ours, mut theirs) = UnixStream::pair().unwrap();
+        socket2::SockRef::from(&ours)
+            .set_send_buffer_size(4096)
+            .unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            loop {
+                std::thread::sleep(Duration::from_millis(80));
+                match theirs.read(&mut buf) {
+                    Ok(n) if n > 0 => {}
+                    _ => return,
+                }
+            }
+        });
+        let start = Instant::now();
+        let result = send(
+            &mut ours,
+            &vec![b'x'; 1 << 20],
+            start + Duration::from_millis(300),
+        );
+        let took = start.elapsed();
+        drop(ours);
+        reader.join().unwrap();
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(took < Duration::from_millis(450), "{took:?}");
     }
 
     /// Codex P2 — a malformed answer's own text never reaches the error,
