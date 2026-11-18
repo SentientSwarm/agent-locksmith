@@ -1409,18 +1409,20 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // any reading would let a path that climbs out of `group%2Fproj` and
     // spells `group/proj` pass, though an upstream reading `%2F` as data
     // serves another resource there. The shorter list repeats its last.
-    let readings = |path: &str| {
-        std::iter::once(path.to_string())
-            .chain(crate::inspection::path_views(path))
-            .collect::<Vec<_>>()
-    };
-    let bases = readings(base.path());
-    let views = readings(out.path());
     let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
-    // Both readings of `;` parameters must stay inside (AGENT-287).
+    if [Dots::Literal, Dots::Lenient]
+        .into_iter()
+        .any(|dots| readings(out.path(), dots).iter().any(|r| lenient_escape(r)))
+    {
+        return false;
+    }
+    // Both readings of `;` parameters, and of look-alike dots, must stay
+    // inside (AGENT-287).
     [Params::Dropped, Params::Unknown]
         .into_iter()
-        .all(|params| {
+        .flat_map(|params| [Dots::Literal, Dots::Lenient].map(|dots| (params, dots)))
+        .all(|(params, dots)| {
+            let (bases, views) = (readings(base.path(), dots), readings(out.path(), dots));
             let whole = (0..bases.len().max(views.len())).all(|i| {
                 let (base, view) = (at(&bases, i), at(&views, i));
                 match (
@@ -1438,8 +1440,8 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
                 && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
                     [false, true].into_iter().all(|backslash| {
                         match (
-                            segmentwise(base.path(), rounds, backslash, params),
-                            segmentwise(out.path(), rounds, backslash, params),
+                            segmentwise(base.path(), rounds, backslash, params, dots),
+                            segmentwise(out.path(), rounds, backslash, params, dots),
                         ) {
                             (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
                             _ => false,
@@ -1447,6 +1449,22 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
                     })
                 })
         })
+}
+
+/// The path undecoded, then decoded until nothing changes, at most
+/// [`SEGMENT_DECODE_ROUNDS`] times, as `path_views` does; `dots` folds
+/// each reading before the next decode.
+fn readings(path: &str, dots: Dots) -> Vec<String> {
+    let mut list = vec![dots.fold(path)];
+    for _ in 0..SEGMENT_DECODE_ROUNDS {
+        let last = list.last().expect("one reading");
+        let next = dots.fold(&crate::inspection::percent_decode_path(last));
+        if &next == last {
+            break;
+        }
+        list.push(next);
+    }
+    list
 }
 
 /// How an upstream reads a `;` parameter on a path segment (AGENT-287).
@@ -1458,6 +1476,62 @@ enum Params {
     Unknown,
 }
 
+/// How an upstream reads a segment that only looks like `.` or `..`
+/// (AGENT-287 L5).
+#[derive(Clone, Copy)]
+enum Dots {
+    /// Only `.` and `..` themselves are dot segments.
+    Literal,
+    /// Read as [`Dots::fold`] spells each reading: a WHATWG re-parse
+    /// drops tab and newline, and a normalising upstream applies NFKC
+    /// (`．`, `‥`, `％`). Escapes only a lenient decoder reads are
+    /// refused outright ([`lenient_escape`]).
+    Lenient,
+}
+
+impl Dots {
+    /// A reading as a lenient upstream sees it, before it is decoded
+    /// again: tab and newline dropped, then NFKC. Folding each reading
+    /// lets a tab or `％` that splits an escape join it before the next
+    /// decode.
+    fn fold(self, text: &str) -> String {
+        use unicode_normalization::UnicodeNormalization;
+        match self {
+            Dots::Literal => text.to_string(),
+            Dots::Lenient => text.replace(['\t', '\n', '\r'], "").nfkc().collect(),
+        }
+    }
+}
+
+/// AGENT-287 L5 — an escape only a lenient decoder reads: overlong
+/// UTF-8 (`%c0%ae`, `%e0%80%af`, `%c1%9c`), a 5- or 6-byte lead, or IIS
+/// `%uXXXX`. Each can spell `.`, `/` or `\`, and no valid path needs
+/// one, so a path holding one in any reading is refused, not modelled.
+fn lenient_escape(text: &str) -> bool {
+    let b = text.as_bytes();
+    let byte_at = |i: usize| -> Option<u8> {
+        let hex = |j: usize| b.get(j).and_then(|c| (*c as char).to_digit(16));
+        (b.get(i) == Some(&b'%')).then_some(())?;
+        Some((hex(i + 1)? * 16 + hex(i + 2)?) as u8)
+    };
+    (0..b.len()).any(|i| {
+        if b[i] != b'%' {
+            return false;
+        }
+        if matches!(b.get(i + 1), Some(b'u' | b'U'))
+            && (2..6).all(|k| b.get(i + k).is_some_and(u8::is_ascii_hexdigit))
+        {
+            return true;
+        }
+        match byte_at(i) {
+            Some(0xC0 | 0xC1 | 0xF8..=0xFD) => true,
+            Some(0xE0) => byte_at(i + 3).is_some_and(|n| n < 0xA0),
+            Some(0xF0) => byte_at(i + 3).is_some_and(|n| n < 0x90),
+            _ => false,
+        }
+    })
+}
+
 /// How many times [`segmentwise`] decodes a segment, as `path_views` does
 /// a whole path.
 const SEGMENT_DECODE_ROUNDS: usize = 4;
@@ -1466,12 +1540,18 @@ const SEGMENT_DECODE_ROUNDS: usize = 4;
 /// it: split on its literal separators, each segment percent-decoded up
 /// to `rounds` times, `;` parameters dropped and dot segments resolved.
 /// `None` when `..` climbs above the root.
-fn segmentwise(path: &str, rounds: usize, backslash: bool, params: Params) -> Option<Vec<String>> {
+fn segmentwise(
+    path: &str,
+    rounds: usize,
+    backslash: bool,
+    params: Params,
+    dots: Dots,
+) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
-        let mut segment = raw.to_string();
+        let mut segment = dots.fold(raw);
         for _ in 0..rounds {
-            let next = crate::inspection::percent_decode_path(&segment);
+            let next = dots.fold(&crate::inspection::percent_decode_path(&segment));
             if next == segment {
                 break;
             }
@@ -1502,7 +1582,9 @@ fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
 /// Resolve one segment onto `out`, reading `;` parameters as `params`
 /// says. `..;` climbs either way. A segment pushed keeps its parameters
 /// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
-/// that keeps them. `None` when `..` climbs above the root.
+/// that keeps them. Under [`Dots::Lenient`] the segment was already
+/// folded, so a look-alike `.` vanishes and a look-alike `..` climbs.
+/// `None` when `..` climbs above the root.
 fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> {
     let name = raw.split(';').next().unwrap_or("");
     let empty = match params {
@@ -2138,6 +2220,73 @@ mod base_path_tests {
         ));
         assert!(ok(base, "https://h/projects/group%2Fproj/a/%252e%252e/b"));
         assert!(ok(base, "https://h/projects/group%2Fproj/a%252Fb/x"));
+    }
+
+    /// Some upstreams read more than `..` as a parent: a WHATWG re-parse
+    /// drops tab and newline, and normalising ones map the fullwidth and
+    /// other compatibility full stops to `.`; the lenient reading counts
+    /// those as dot segments. Lenient decoders also read overlong UTF-8
+    /// and `%u` escapes as `.`, `/` or `\`; a path holding one in any
+    /// reading is refused (AGENT-287 L5).
+    #[test]
+    fn look_alike_dot_segments_cannot_climb() {
+        let base = "https://h/v1/api";
+        for dots in [
+            ".%09.",
+            "%2e%0a%2e",
+            ".%0D.",
+            "%EF%BC%8E%EF%BC%8E",
+            "%E2%80%A4%E2%80%A4",
+            "%EF%B9%92.",
+            "%c0%ae%c0%ae",
+            "%C0%AE.",
+            "%e0%80%ae%e0%80%ae",
+            "%f0%80%80%ae%f0%80%80%ae",
+            "%25c0%25ae%25c0%25ae",
+            "%E2%80%A5",
+            "%u002e%u002e",
+            "%U002E.",
+        ] {
+            assert!(
+                !ok(base, &format!("https://h/v1/api/{dots}/{dots}/v2/x")),
+                "{dots}"
+            );
+        }
+        // A look-alike `.` is no segment to such an upstream, so it cannot
+        // absorb a `..` that follows it.
+        for dot in ["%EF%BC%8E", "%09", "%c0%ae", "%E2%80%A4%09"] {
+            let url = format!("https://h/v1/api/x/{dot}/%252e%252e/%252e%252e/v2");
+            assert!(!ok(base, &url), "{dot}");
+        }
+        // Joined by an encoded separator, which only a decoded reading
+        // splits on; a strict upstream must still see the climb refused.
+        for path in [
+            "..%2f%EF%BC%8E%EF%BC%8E%2fv1%2fapi%2fx",
+            "..%2f.%09.%2fv1%2fapi%2fx",
+            "%EF%BC%8E%2f..",
+            ".%09%2f..",
+            "%EF%B8%B0",
+            "%c0%ae%c0%ae%2f%c0%ae%c0%ae%2fv2%2fx",
+            "%c0%ae%c0%ae%5c%c0%ae%c0%ae%5cv2%5cx",
+            "%c0%ae%2f..",
+            "%252%09e%252%09e/%252%09e%252%09e/v2",
+            "..%c0%af..%c0%afv2",
+            "..%C1%9C..%C1%9Cv2",
+            "%uff0e%uff0e/%u2025/v2",
+            "..%u002f..%u005cv2",
+            "%f8%80%80%80%ae%f8%80%80%80%ae/x",
+            "%25c0%25af",
+            "..%c%090%a%09f..%c%090%a%09fv2",
+            "%EF%BC%852e%EF%BC%852e/%EF%BC%852e%EF%BC%852e/v2",
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
+        assert!(ok(base, "https://h/v1/api/a/.%09./b"));
+        assert!(ok(base, "https://h/v1/api/file%09name/x"));
+        assert!(ok(base, "https://h/v1/api/%EF%BC%8E/x"));
+        assert!(ok(base, "https://h/v1/api/%E0%A4%85/%F0%9F%98%80/x"));
+        assert!(ok(base, "https://h/v1/api/100%25u/x"));
+        assert!(ok(base, "https://h/v1/api/a%09b/%EF%BC%8Ex"));
     }
 }
 

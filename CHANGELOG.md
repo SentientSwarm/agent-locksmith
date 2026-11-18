@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- A request can no longer climb out of a route's base path with dot
+  segments or separators only some upstreams read as such: split by a
+  tab or newline (`.%09.`), or spelled with characters NFKC maps to
+  `.`, `..`, `/` or `\` (`%EF%BC%8E`, `‥`, `／`), including one such `.`
+  that a following `..` would otherwise pop. The path must stay inside
+  both as a strict upstream and as a lenient one reads it. A path
+  holding an overlong UTF-8 or `%uXXXX` escape (`%c0%ae`, `%c0%af`,
+  `%u002e`) in any reading is refused outright. Either way the request
+  gets 400 `upstream_path_escape` (AGENT-287).
 - Edge components take `private_network = true` (`PrivateNetwork=yes`),
   set for the offline inspector in the example site, and the start guard
   refuses a secret-holding component while `fs.suid_dumpable` is `1`,
