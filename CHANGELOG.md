@@ -30,7 +30,10 @@
   one past the first of its chunk in a stream that sends no index, and
   any output index that is not a plain integer up to 2^53 (`"1.0"`, `1e0`,
   `"1"`), which clients read in different ways. Servers that send parallel
-  tool calls in one chunk without an index are blocked too.
+  tool calls in one chunk without an index are blocked too. The index check
+  covers an array element's `index` at any depth, such as OpenRouter
+  `reasoning_details` (AGENT-319), and skips a top-level `index` that the
+  stream's protocol does not use.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`

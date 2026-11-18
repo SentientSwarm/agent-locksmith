@@ -203,8 +203,8 @@ fn parse_from(raw: Vec<u8>, skip: usize) -> SseEvent {
 }
 
 /// See [`lanes::indexes_are_plain`]; data that is not JSON names none.
-pub fn indexes_are_plain(event: &SseEvent) -> bool {
-    json(event).is_none_or(|v| lanes::indexes_are_plain(&v))
+pub fn indexes_are_plain(event: &SseEvent, scheme: Option<lanes::Scheme>) -> bool {
+    json(event).is_none_or(|v| lanes::indexes_are_plain(scheme, kind(event, &v).as_deref(), &v))
 }
 
 fn json(event: &SseEvent) -> Option<Value> {

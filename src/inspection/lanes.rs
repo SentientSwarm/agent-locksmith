@@ -45,26 +45,30 @@ fn index(value: &Value) -> Option<i64> {
 /// that every client reads the same way (|n| <= 2^53). Clients disagree
 /// on the rest: `"1.0"`, `1.0` or `1e0` is 1 to one and a key of its own
 /// to another, and integers past 2^53 collide in JavaScript (AGENT-317).
-pub fn indexes_are_plain(value: &Value) -> bool {
+/// That covers the top-level fields [`tags`] reads for `scheme` and
+/// `kind`, and the `index` of every array element at any depth, which
+/// [`element`] reads (AGENT-319).
+pub fn indexes_are_plain(scheme: Option<Scheme>, kind: Option<&str>, value: &Value) -> bool {
+    let top = tag_fields(scheme, kind.unwrap_or(""));
+    top.iter().filter_map(|field| value.get(*field)).all(plain) && elements_are_plain(value)
+}
+
+fn plain(value: &Value) -> bool {
     const SAFE: u64 = 1 << 53;
-    let plain = |v: &Value| match v {
+    match value {
         Value::Number(n) => n.as_i64().is_some_and(|i| i.unsigned_abs() <= SAFE),
         _ => false,
-    };
-    let fields = TAGS.iter().filter_map(|(field, _)| value.get(*field));
-    let choices = value
-        .get("choices")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten();
-    let calls = choices
-        .clone()
-        .filter_map(|c| c.pointer("/delta/tool_calls").and_then(Value::as_array))
-        .flatten();
-    fields
-        .chain(choices.filter_map(|c| c.get("index")))
-        .chain(calls.filter_map(|c| c.get("index")))
-        .all(plain)
+    }
+}
+
+fn elements_are_plain(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .all(|item| item.get("index").is_none_or(plain) && elements_are_plain(item)),
+        Value::Object(map) => map.values().all(elements_are_plain),
+        _ => true,
+    }
 }
 
 /// A protocol that names its outputs with top-level indexes.
@@ -96,8 +100,16 @@ pub fn scheme_of(kind: &str) -> Option<Scheme> {
 /// inside `choices`), so an upstream can't split one output across
 /// windows by adding or varying indexes its clients ignore.
 pub fn tags(scheme: Option<Scheme>, kind: Option<&str>, value: &Value) -> Vec<(&'static str, i64)> {
-    let kind = kind.unwrap_or("");
-    let fields: &[&str] = match scheme {
+    let fields = tag_fields(scheme, kind.unwrap_or(""));
+    TAGS.iter()
+        .filter(|(field, _)| fields.contains(field))
+        .filter_map(|(field, tag)| index(value.get(*field)?).map(|n| (*tag, n)))
+        .collect()
+}
+
+/// The top-level index fields [`tags`] reads for an event of type `kind`.
+fn tag_fields(scheme: Option<Scheme>, kind: &str) -> &'static [&'static str] {
+    match scheme {
         Some(Scheme::Responses) if kind.contains("reasoning_summary") => {
             &["output_index", "summary_index"]
         }
@@ -111,11 +123,7 @@ pub fn tags(scheme: Option<Scheme>, kind: Option<&str>, value: &Value) -> Vec<(&
         Some(Scheme::Responses) => &["output_index"],
         Some(Scheme::Anthropic) => &["index"],
         None => &[],
-    };
-    TAGS.iter()
-        .filter(|(field, _)| fields.contains(field))
-        .filter_map(|(field, tag)| index(value.get(*field)?).map(|n| (*tag, n)))
-        .collect()
+    }
 }
 
 /// The path segment for array element `i`: its `index`, when it has one.

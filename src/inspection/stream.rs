@@ -427,7 +427,10 @@ impl StreamInspector {
         };
         // Clients read a loose index (`"1.0"`, `1e0`, past 2^53) in
         // different ways, so no lane can match all of them (AGENT-317).
-        if self.hold && self.on_error == OnError::FailClosed && !sse::indexes_are_plain(&event) {
+        if self.hold
+            && self.on_error == OnError::FailClosed
+            && !sse::indexes_are_plain(&event, self.scheme)
+        {
             self.note_error("stream output index is not a plain integer".into());
             return self.block(step);
         }
@@ -1488,7 +1491,76 @@ mod tests {
             serde_json::json!({"index": "1.0",
             "delta": {"type": "text_delta", "text": "x"}}),
         );
-        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[anthropic]);
+        let responses = ev(
+            "response.output_text.delta",
+            serde_json::json!({"type": "response.output_text.delta",
+            "output_index": "0.0", "content_index": 0, "delta": "x"}),
+        );
+        for event in [anthropic, responses] {
+            let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[event]);
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream output index is not a plain integer")
+            );
+        }
+    }
+
+    /// AGENT-319: an array element anywhere in an event takes its lane
+    /// from its `index`, so a loose one splits a value there as well
+    /// (OpenRouter `reasoning_details`, a generic `items` array).
+    #[test]
+    fn a_loose_nested_index_blocks_under_fail_closed() {
+        let k = key();
+        let detail = |index: &str, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"reasoning_details\":[{{\"index\":{index},\"text\":{}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        let item = |index: &str, a: &str| {
+            format!(
+                "data: {{\"items\":[{{\"index\":{index},\"text\":{}}}]}}\n\n",
+                q(a)
+            )
+        };
+        for shape in [detail, item] {
+            for loose in ["\"1\"", "1.0", "null"] {
+                let events = vec![
+                    shape("1", &k[..20]),
+                    shape(loose, ", "),
+                    shape("1", &k[20..]),
+                    DONE.to_string(),
+                ];
+                let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+                assert!(!out.contains(&k[..20]), "{loose}: {out}");
+                assert_eq!(
+                    i.report().error.as_deref(),
+                    Some("stream output index is not a plain integer"),
+                    "{loose}"
+                );
+            }
+        }
+    }
+
+    /// AGENT-319: a top-level field no client reads as an index (a
+    /// generic event's `index`, a chat chunk's) does not block.
+    #[test]
+    fn an_unread_top_level_index_passes_under_fail_closed() {
+        let generic = "data: {\"index\":\"abc\",\"text\":\"hello\"}\n\n".to_string();
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &[generic]);
+        assert!(out.contains("hello"), "{out}");
+        assert_eq!(i.report().error, None);
+    }
+
+    /// AGENT-319: 2^53 is the last index every client reads exactly.
+    #[test]
+    fn an_index_at_two_to_the_53_is_plain() {
+        let at = |n: u64| {
+            format!("data: {{\"choices\":[{{\"index\":{n},\"delta\":{{\"content\":\"x\"}}}}]}}\n\n")
+        };
+        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[at(1 << 53)]);
+        assert_eq!(i.report().error, None);
+        let (_, i) = run(&closed(1 << 20, Verdict::Redact), &[at((1 << 53) + 1)]);
         assert_eq!(
             i.report().error.as_deref(),
             Some("stream output index is not a plain integer")

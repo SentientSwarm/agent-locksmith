@@ -310,9 +310,12 @@ reason, and so is one past the first of its chunk's array in a stream that
 sends no index, since a client may merge index-less entries into one;
 servers that send parallel tool calls in one chunk without an index are
 blocked. So is an index that is not a plain JSON integer up to 2^53
-(`"1.0"`, `1e0`, `"1"`): one client reads it as the number, another as a key
-of its own. Under `fail_open` the calls stay open until `finish_reason`, and
-held events past `max_scan_bytes` go early.
+(`"1.0"`, `1e0`, `"1"`, `null`): one client reads it as the number, another
+as a key of its own. That covers the top-level indexes the stream's protocol
+names outputs by and the `index` of an array element at any depth, such as
+OpenRouter `reasoning_details` (AGENT-319); a top-level `index` the protocol
+does not use is not checked. Under `fail_open` the calls stay open until
+`finish_reason`, and held events past `max_scan_bytes` go early.
 Past that, or when non-empty text arrives for an output the protocol
 already said was finished, a match could be missed: under `fail_closed`
 the stream is blocked, under `fail_open` the outputs share one window (or
