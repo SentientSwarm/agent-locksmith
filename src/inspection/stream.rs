@@ -136,6 +136,8 @@ pub struct StreamInspector {
     lane_bytes: usize,
     /// The highest tool-call index seen in each chat choice (AGENT-317).
     last_call: HashMap<String, i64>,
+    /// Whether each chat array's elements came by `index` (AGENT-317).
+    indexed: HashMap<String, bool>,
     /// Short texts scanned alone and found clean.
     clean: HashSet<String>,
     /// A configured scanner can't judge streams and `on_error` is
@@ -194,6 +196,7 @@ impl StreamInspector {
             wholes: 0,
             lane_bytes: 0,
             last_call: HashMap::new(),
+            indexed: HashMap::new(),
             clean: HashSet::new(),
             unjudged: false,
             scheme: None,
@@ -375,27 +378,33 @@ impl StreamInspector {
     }
 
     /// A chat tool call first seen below a higher-numbered call of its
-    /// choice, or with a negative index (AGENT-317). Its lane is new, so
+    /// choice, or with a negative index, or a chat array addressed both
+    /// by `index` and by position (AGENT-317). Its lane is new, so
     /// a match split between it and the call before is in no one window,
     /// while a client merging calls by position joins them. Only matters
     /// where events are held under `fail_closed`.
     /// Tracked only there, so the map grows only with lanes, which are
     /// bounded (`lane` blocks past them under `fail_closed`).
-    fn call_out_of_order(&mut self, lane: &Lane) -> bool {
+    fn out_of_order(&mut self, lane: &Lane) -> Option<&'static str> {
         if !self.hold || self.on_error != OnError::FailClosed {
-            return false;
+            return None;
         }
-        let Some((calls, n)) = super::lanes::tool_call(&lane.path) else {
-            return false;
-        };
+        // An element with no `index` gets a positional lane; mixed with
+        // indexed ones, a client could merge it into another output.
+        for (array, by_index) in super::lanes::chat_addressing(&lane.path) {
+            if *self.indexed.entry(array.to_string()).or_insert(by_index) != by_index {
+                return Some("stream outputs addressed both by index and by position");
+            }
+        }
+        let (calls, n) = super::lanes::tool_call(&lane.path)?;
         let last = self.last_call.get(calls).copied();
         if !self.by_lane.contains_key(lane) && (n < 0 || last.is_some_and(|m| n < m)) {
-            return true;
+            return Some("stream tool call out of order");
         }
         if last.is_none_or(|m| n > m) {
             self.last_call.insert(calls.to_string(), n);
         }
-        false
+        None
     }
 
     fn event(&mut self, event: SseEvent, step: &mut Step) {
@@ -439,8 +448,8 @@ impl StreamInspector {
                 });
                 continue;
             };
-            if self.call_out_of_order(key) {
-                self.note_error("stream tool call out of order".into());
+            if let Some(why) = self.out_of_order(key) {
+                self.note_error(why.into());
                 return self.block(step);
             }
             let Some(lane) = self.lane(key) else {
@@ -1333,8 +1342,13 @@ mod tests {
             )
         };
         let k = key();
-        for (first, second) in [(2, 1), (0, -1)] {
-            let mut events = vec![call(0, "{}")];
+        for (first, second) in [(2, 1), (0, -1), (-1, 0)] {
+            // A negative first call is refused at once, before any later one.
+            let mut events = if first < 0 {
+                vec![]
+            } else {
+                vec![call(0, "{}")]
+            };
             events.push(call(first, &k[..20]));
             events.push(call(second, &k[20..]));
             events.push(DONE.to_string());
@@ -1353,6 +1367,44 @@ mod tests {
             call(2, "{}"),
             DONE.to_string(),
         ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert_eq!(i.report().error, None);
+        assert_eq!(out, events.concat());
+    }
+
+    /// AGENT-317: an output with no `index` among indexed ones gets a
+    /// positional lane a client could merge into another, so under
+    /// `fail_closed` the stream is blocked. All positional passes.
+    #[test]
+    fn mixed_indexed_and_positional_outputs_block_under_fail_closed() {
+        let k = key();
+        let call = |index: &str, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{{index}\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        let content = |index: &str, a: &str| {
+            format!(
+                "data: {{\"choices\":[{{{index}\"delta\":{{\"content\":{}}}}}]}}\n\n",
+                q(a)
+            )
+        };
+        for events in [
+            vec![call("\"index\":0,", &k[..20]), call("", &k[20..])],
+            vec![call("", &k[..20]), call("\"index\":0,", &k[20..])],
+            vec![content("\"index\":0,", &k[..20]), content("", &k[20..])],
+        ] {
+            let mut events = events;
+            events.push(DONE.to_string());
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert!(!out.contains(&k[..20]), "{out}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream outputs addressed both by index and by position")
+            );
+        }
+        let events = vec![call("", "{}"), call("", "{}"), DONE.to_string()];
         let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
         assert_eq!(i.report().error, None);
         assert_eq!(out, events.concat());

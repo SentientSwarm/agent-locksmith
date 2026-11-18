@@ -25,7 +25,8 @@
   a higher-numbered call of its choice, or with a negative index, is now
   blocked (AGENT-317). That call was inspected in a fresh window, so a key
   split between it and the call before was never seen whole, though a
-  client merging calls by position would join them.
+  client merging calls by position would join them. A choice or tool
+  call sent without an `index` among indexed ones is blocked too.
 - A request can no longer climb out of a route's base path with dot segments
   or separators only some upstreams read as such: split by a tab or newline
   (`.%09.`), or spelled with characters NFKC maps to `.`, `..`, `/` or `\`

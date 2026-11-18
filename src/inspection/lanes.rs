@@ -113,6 +113,25 @@ pub fn tool_call(path: &str) -> Option<(&str, i64)> {
     Some((&path[..at - 1], n.parse().ok()?))
 }
 
+/// The arrays a chat lane's path passes through that clients merge by
+/// `index` (the choices, a choice's tool calls), each with whether this
+/// path addressed its element by `index` (`#n`) or only by position.
+pub fn chat_addressing(path: &str) -> Vec<(&str, bool)> {
+    let mut out = Vec::new();
+    for array in ["/choices/", "/delta/tool_calls/"] {
+        let Some(at) = path.find(array).map(|i| i + array.len()) else {
+            continue;
+        };
+        if array == "/choices/" && at != array.len() {
+            continue;
+        }
+        if at < path.len() {
+            out.push((&path[..at], path[at..].starts_with('#')));
+        }
+    }
+    out
+}
+
 /// Which lanes an event finishes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Close {
