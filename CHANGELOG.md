@@ -14,7 +14,6 @@
 - The `injection` scanner also reads a phrase that combines a glued
   emoji letter (a flag, `ℹ️`, `Ⓜ️`) with a look-alike only the new fold
   reads, such as `ígnore previous instructions🇺🇸` (AGENT-315).
-- A background OAuth refresh whose token call fails now writes an
 - An OAuth refresh whose token call fails now writes an
   `oauth_refresh_reconnect_required` operational-log warning (AGENT-302).
   The session was already left `reconnect_required`, but only a
