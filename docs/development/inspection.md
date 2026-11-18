@@ -276,7 +276,9 @@ clients append deltas to (Responses `response.created` output, an
 content) carrying text, which real streams send empty, would split a match
 from its deltas. Either way, under `fail_closed` the stream is blocked,
 under `fail_open` an `inspection_hold_overflow` row is written. So a match
-split across one output's deltas is found however the outputs interleave.
+split across one output's deltas is found however the outputs interleave,
+except that interleaved chat tool calls are blocked under `fail_closed`
+(see below).
 Each window keeps the last `max_match_len - 1` bytes of its output,
 measured both raw and after folding, so a match split across any number of
 deltas is found once. A `private_key` hit not closed by its `END` line and
@@ -298,7 +300,8 @@ a chat tool call is finished when a later-numbered call in its choice
 starts (AGENT-273): a chat stream sends its calls one after another, and
 only the call in progress then needs to fit in `max_scan_bytes` as raw
 SSE. An upstream that interleaves calls writes to a finished output, so
-under `fail_closed` its stream is blocked. Under `fail_open` the calls
+under `fail_closed` its stream is blocked; that needs held events, so
+`pass` and `flag` are unaffected. Under `fail_open` the calls
 stay open until `finish_reason`, and held events past `max_scan_bytes`
 go early.
 Past that, or when non-empty text arrives for an output the protocol

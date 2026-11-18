@@ -440,9 +440,11 @@ impl StreamInspector {
         }
         let mut closes = sse::closes(&event, self.scheme);
         // A later tool call finishing the earlier ones only matters where
-        // held events can't be released early: under `fail_open` they are
-        // (audited), and an interleaving upstream would split a match there.
-        if self.on_error == OnError::FailOpen {
+        // events are held and can't be released early: under `pass` or
+        // `flag` nothing is held, and under `fail_open` held events go
+        // early (audited) while an interleaving upstream would split a
+        // match there.
+        if self.on_error == OnError::FailOpen || !self.hold {
             closes.retain(|c| !matches!(c, Close::Earlier { .. }));
         }
         let verdict = self.judge(&hits, step);
@@ -1269,6 +1271,21 @@ mod tests {
             i.report().error.as_deref(),
             Some("stream text after its output finished")
         );
+    }
+
+    /// Nothing is held under `flag`, so interleaved tool calls are not
+    /// treated as finished and the stream is not blocked.
+    #[test]
+    fn interleaved_tool_calls_pass_under_flag_and_fail_closed() {
+        let call = |n: usize| {
+            format!(
+                "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":{n},\"function\":{{\"arguments\":\"{{}}\"}}}}]}}}}]}}\n\n"
+            )
+        };
+        let events = vec![call(0), call(1), call(0), DONE.to_string()];
+        let (out, i) = run(&closed(1 << 20, Verdict::Flag), &events);
+        assert_eq!(i.report().error, None);
+        assert_eq!(out, events.concat());
     }
 
     #[test]
