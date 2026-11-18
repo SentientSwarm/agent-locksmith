@@ -333,6 +333,16 @@ mod tests {
             let key = key.to_string_lossy();
             assert!(!key.starts_with("LOCKSMITH_"), "{key} reaches op");
         }
+        // `get_envs` lists only variables set explicitly, so the loop above
+        // passes for a command with none. An allowlisted variable shows
+        // the child's environment was built from the allowlist (AGENT-288).
+        if std::env::var_os("PATH").is_some() {
+            assert!(
+                cmd.get_envs()
+                    .any(|(key, value)| key == "PATH" && value.is_some()),
+                "the allowlisted PATH did not reach op"
+            );
+        }
         assert_eq!(cmd.get_program(), "op");
     }
 

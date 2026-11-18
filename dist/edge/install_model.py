@@ -208,6 +208,11 @@ def main() -> int:
         help="who accepted the licence (recorded)",
     )
     args = parser.parse_args()
+    if os.geteuid() != 0:
+        # As non-root, this user's own directories would count as trusted
+        # cache parents, so a cache it can rewrite would pass (AGENT-288).
+        print("install_model: run as root (sudo)", file=sys.stderr)
+        return 2
     try:
         model = load_catalog(args.catalog).get(args.model)
         if model is None:

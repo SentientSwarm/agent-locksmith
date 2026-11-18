@@ -62,10 +62,71 @@ def read_protected(path: Path, limit: int) -> str:
         return stream.read(limit)
 
 
+MAX_LINK_HOPS = 40
+
+
+def trusted_parents(path: Path) -> None:
+    """Every directory the path to `path` passes through, and every link on
+    the way, must be one only root can change (AGENT-288): renaming the
+    file needs write access only on its directory, and repointing a link
+    only on the link's. The path is walked one component at a time, so a
+    directory a link leads through is checked too. Sticky directories such
+    as /tmp pass."""
+    owners = {0, TRUSTED_UID}
+
+    def check(where: Path, info: os.stat_result) -> None:
+        # A link's own mode is always 0777 and means nothing; its owner does.
+        writable = (
+            not stat.S_ISLNK(info.st_mode)
+            and info.st_mode & 0o022
+            and not info.st_mode & stat.S_ISVTX
+        )
+        if info.st_uid not in owners or writable:
+            raise Refusal(
+                f"{path.name} must sit under directories only root can change; "
+                f"{where} does not"
+            )
+
+    def lstat(where: Path) -> os.stat_result:
+        try:
+            return where.lstat()
+        except OSError as error:
+            raise Refusal(f"{where} is unavailable") from error
+
+    current = Path("/")
+    check(current, lstat(current))
+    todo = list(path.absolute().parts[1:-1])
+    hops = 0
+    while todo:
+        part = todo.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        step = current / part
+        info = lstat(step)
+        if stat.S_ISLNK(info.st_mode):
+            hops += 1
+            if hops > MAX_LINK_HOPS:
+                raise Refusal(f"{path.name} is behind too many links")
+            check(step, info)
+            target = Path(os.readlink(step))
+            if target.is_absolute():
+                current = Path("/")
+            todo = [*target.parts[1 if target.is_absolute() else 0 :], *todo]
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise Refusal(f"{step} is not a directory")
+        check(step, info)
+        current = step
+
+
 def execute_only(path: Path) -> None:
     """A secret-holding executable must be root-owned and unreadable by
     others: the kernel then marks the process non-dumpable at exec, so no
-    same-uid process can read its environment before it hardens itself."""
+    same-uid process can read its environment before it hardens itself.
+    Its directories must be root's too, or it could be swapped."""
     try:
         info = path.lstat()
     except OSError as error:
@@ -80,6 +141,7 @@ def execute_only(path: Path) -> None:
             f"{path.name} holds secrets and must be a root-owned, execute-only "
             "file (mode 0711)"
         )
+    trusted_parents(path)
 
 
 def load_components(config: Path) -> dict:

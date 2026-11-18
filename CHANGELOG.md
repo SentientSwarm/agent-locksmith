@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- The edge start guard refuses a secret-holding executable whose
+  directories, as written or resolved, someone other than root could
+  change, since a writable directory lets the binary be swapped
+  (AGENT-288). The path is walked one component at a time, so a
+  directory a link leads through is checked too. `install_model.py` runs
+  only as root: as another user its
+  own directories counted as trusted cache parents. The edge guide now
+  says a compromised sidecar can make `op` run and read its output, so
+  it has every secret the 1Password service account can read.
 - A request can no longer climb back into a route's base path with
   other `;` parameters (`../a;x`, `..;/..;/base;v=2`), which an upstream
   that keeps parameters serves as another resource, nor through a

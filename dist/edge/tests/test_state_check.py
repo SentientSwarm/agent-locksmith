@@ -86,6 +86,56 @@ class StateCheckTest(unittest.TestCase):
                 self.guard.execute_only(self.binary)
         self.assertIn("execute-only", str(ctx.exception))
 
+    def test_secret_holding_executable_needs_trusted_parents(self):
+        # AGENT-288: renaming the binary needs write access only on its
+        # directory, so a writable or untrusted ancestor could swap it.
+        folder = self.binary.parent
+        with patch.object(self.guard, "TRUSTED_UID", self.uid):
+            self.guard.execute_only(self.binary)
+            folder.chmod(0o777)
+            try:
+                with self.assertRaises(self.guard.Refusal) as ctx:
+                    self.guard.execute_only(self.binary)
+                self.assertIn("directories only root can change", str(ctx.exception))
+            finally:
+                folder.chmod(0o755)
+
+    def test_secret_holding_executable_parents_are_checked_through_links(self):
+        # The directories a link leads through are checked too: here the
+        # link's own directory is fine, but the target's is not.
+        base = Path(self.temp.name)
+        loose = base / "loose"
+        real = loose / "real"
+        real.mkdir(parents=True)
+        (real / "app").write_text("")
+        (real / "app").chmod(0o711)
+        (base / "linked").symlink_to(real)
+        loose.chmod(0o777)
+        try:
+            with patch.object(self.guard, "TRUSTED_UID", self.uid):
+                with self.assertRaises(self.guard.Refusal):
+                    self.guard.execute_only(base / "linked" / "app")
+        finally:
+            loose.chmod(0o755)
+
+    def test_a_directory_in_the_middle_of_a_link_chain_is_checked(self):
+        # a/link -> b/hop -> real: whoever can write b/ can repoint hop.
+        base = Path(self.temp.name)
+        for name in ("a", "b", "real"):
+            (base / name).mkdir()
+        (base / "real" / "app").write_text("")
+        (base / "real" / "app").chmod(0o711)
+        (base / "b" / "hop").symlink_to(base / "real")
+        (base / "a" / "link").symlink_to(base / "b" / "hop")
+        with patch.object(self.guard, "TRUSTED_UID", self.uid):
+            self.guard.execute_only(base / "a" / "link" / "app")
+            (base / "b").chmod(0o777)
+            try:
+                with self.assertRaises(self.guard.Refusal):
+                    self.guard.execute_only(base / "a" / "link" / "app")
+            finally:
+                (base / "b").chmod(0o755)
+
     def test_secret_holding_executable_must_not_be_a_symlink(self):
         target = self.binary.with_name("real")
         self.binary.rename(target)

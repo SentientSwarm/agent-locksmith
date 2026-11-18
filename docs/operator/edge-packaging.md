@@ -162,7 +162,8 @@ keys recoverable.
 Model weights are not shipped. `install_model.py` downloads one of the
 models pinned in `dist/edge/models.toml` into an offline Hugging Face cache.
 It checks every file against its pinned SHA-256 or git blob SHA-1 before
-renaming the install into place.
+renaming the install into place. It runs only as root, and refuses a
+cache under any directory that someone other than root could change.
 
 A classifier sidecar must run in Locksmith's container, as Locksmith's
 user: Locksmith reaches it only over a Unix socket and refuses a socket
@@ -184,8 +185,13 @@ that user's access:
   env-backed upstream credentials.
 - With `op_*` credentials, the `op read` child needs your 1Password
   service-account token in its environment, and the sidecar can read that
-  token while `op` runs. Prefer `stored_*` credentials on an instance with
-  a sidecar.
+  token while `op` runs. It can also make `op` run when it likes, by
+  killing `locksmithd` so systemd restarts it (each start reads every
+  `op://` reference; the unit's start limit caps how often), and
+  read each value from `op`'s output through `/proc/<pid>/fd`. Treat a
+  compromised sidecar as having every secret that service account can
+  read, not just the ones Locksmith uses. Prefer `stored_*` credentials on
+  an instance with a sidecar.
 
 Run only a sidecar you would trust with Locksmith's own files. Point
 Locksmith at it:

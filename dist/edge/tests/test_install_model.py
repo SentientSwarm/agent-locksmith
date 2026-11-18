@@ -439,6 +439,22 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("--token", options)
 
 
+class RootOnlyTest(unittest.TestCase):
+    def test_a_non_root_installer_is_refused(self):
+        # AGENT-288: as non-root, the installer's own directories would
+        # count as trusted, so a cache it can rewrite would pass.
+        from unittest.mock import patch
+
+        argv = ["install_model.py", "test-model", "--hf-home", "/nonexistent"]
+        with (
+            patch.object(install_model.os, "geteuid", return_value=1000),
+            patch.object(sys, "argv", argv),
+            patch.object(install_model, "install") as install,
+        ):
+            self.assertEqual(install_model.main(), 2)
+        install.assert_not_called()
+
+
 class CatalogTest(unittest.TestCase):
     def test_shipped_catalog(self):
         models = install_model.load_catalog(EDGE / "models.toml")
