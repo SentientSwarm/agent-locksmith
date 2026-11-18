@@ -34,7 +34,9 @@ async fn journey(tls: bool, method: &str, path: &str) {
     // window only has to outlast the listener reaching its hold. With 1 ms a
     // slow runner aborted the listener before the hold and `forced` stayed 0.
     let (coord, mut daemon) = super::run_with_drain_window(config, DRAIN).await;
+    let started = std::time::Instant::now();
     let ready = f.ready().await;
+    let ready_after = started.elapsed();
     let (mut client, bytes) = f.request(path, method);
     let _ = bytes.send(Ok(bytes::Bytes::from_static(b"{"))).await;
     // The request is argon2-checked before it enters; same contention as
@@ -52,8 +54,9 @@ async fn journey(tls: bool, method: &str, path: &str) {
     drop(lock);
     assert!(
         ready && entered && normal_return && lock_reacquired,
-        "{method} {path} tls={tls}: ready={ready} entered={entered} \
-         normal_return={normal_return} lock_reacquired={lock_reacquired}"
+        "{method} {path} tls={tls}: ready={ready} after {ready_after:?} \
+         entered={entered} normal_return={normal_return} \
+         lock_reacquired={lock_reacquired}"
     );
     assert_eq!(dropped_at_return, 1, "body lifetime, before client cleanup");
     assert_eq!(

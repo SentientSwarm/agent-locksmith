@@ -46,9 +46,9 @@ impl Fixture {
         }
     }
     /// Startup (fresh database, migrations) plus one argon2-checked request
-    /// takes about 0.4 s alone and 2.7 s in the full debug lib suite; under a
-    /// contended host it exceeded 10 s (AGENT-293). The ceiling only bounds a
-    /// hung daemon; it is not what the test measures.
+    /// takes about 0.4 s alone and up to 2.7 s in the full debug lib suite;
+    /// under a contended host it exceeded 10 s (AGENT-293). The ceiling only
+    /// bounds a hung daemon; it is not what the test measures.
     pub async fn ready(&self) -> bool {
         tokio::time::timeout(Duration::from_secs(60), async {
             loop {
@@ -118,7 +118,9 @@ fn client_config(
 ) -> (reqwest::Client, String, String) {
     let builder = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(30));
+        // Longer than every ceiling the tests wait under (AGENT-293), so the
+        // client never drops a held body itself.
+        .timeout(Duration::from_secs(120));
     if !tls {
         return (
             builder.unix_socket(socket).build().unwrap(),
