@@ -57,9 +57,10 @@ struct Slot {
     /// life, so a changed cap still counts what is already in flight
     /// (AGENT-272); it counts even while the route has no cap.
     inflight: Arc<AtomicUsize>,
-    /// When a refusal last wrote an audit row, and refusals since.
-    audited_at: Option<Instant>,
-    unaudited: u64,
+    /// For rate (`[0]`) and concurrency (`[1]`) refusals apart: when one
+    /// last wrote an audit row, and refusals since (AGENT-272).
+    audited_at: [Option<Instant>; 2],
+    unaudited: [u64; 2],
 }
 
 /// One admitted request, held until its response body is dropped.
@@ -79,20 +80,21 @@ impl Slot {
             tokens: f64::from(limit.requests_per_minute),
             at: now,
             inflight: Arc::new(AtomicUsize::new(0)),
-            audited_at: None,
-            unaudited: 0,
+            audited_at: [None; 2],
+            unaudited: [0; 2],
         }
     }
 
     fn refuse(&mut self, now: Instant, retry_after_secs: u64, concurrency: bool) -> Limited {
-        let audit = match self.audited_at {
+        let reason = usize::from(concurrency);
+        let audit = match self.audited_at[reason] {
             Some(at) if now.saturating_duration_since(at) < AUDIT_EVERY => {
-                self.unaudited += 1;
+                self.unaudited[reason] += 1;
                 None
             }
             _ => {
-                self.audited_at = Some(now);
-                Some(std::mem::take(&mut self.unaudited))
+                self.audited_at[reason] = Some(now);
+                Some(std::mem::take(&mut self.unaudited[reason]))
             }
         };
         Limited {
@@ -103,8 +105,13 @@ impl Slot {
     }
 
     /// A changed rate starts a fresh bucket. A changed concurrency cap
-    /// applies to the same in-flight count.
+    /// applies to the same in-flight count. Either starts new audit
+    /// windows, so the first refusal under it is recorded, counting the
+    /// ones held back before (AGENT-272).
     fn adopt(&mut self, limit: Limit, now: Instant) {
+        if self.limit != limit {
+            self.audited_at = [None; 2];
+        }
         if self.limit.requests_per_minute != limit.requests_per_minute {
             self.tokens = f64::from(limit.requests_per_minute);
             self.at = now;
@@ -345,6 +352,45 @@ mod tests {
         assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
         let next = t0 + AUDIT_EVERY;
         assert_eq!(l.check_at(1, "r", next).unwrap_err().audit, Some(1));
+    }
+
+    /// AGENT-272: rate and concurrency refusals keep their own window, so
+    /// a concurrency episode right after a rate row still gets a row.
+    #[test]
+    fn rate_and_concurrency_refusals_have_their_own_windows() {
+        let l = limiter(1, Some(1));
+        let t0 = Instant::now();
+        let held = l.check_at(1, "r", t0).unwrap();
+        let busy = l.check_at(1, "r", t0).unwrap_err();
+        assert!(busy.concurrency);
+        assert_eq!(busy.audit, Some(0));
+        drop(held);
+        let rate = l.check_at(1, "r", t0).unwrap_err();
+        assert!(!rate.concurrency);
+        assert_eq!(rate.audit, Some(0), "its own first row");
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
+    }
+
+    /// AGENT-272: a changed limit starts a new audit window, so the first
+    /// refusal under it is recorded and counts the ones held back before.
+    #[test]
+    fn a_changed_limit_restarts_the_audit_window() {
+        let l = limiter(1, None);
+        let t0 = Instant::now();
+        l.check_at(1, "r", t0).unwrap();
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, Some(0));
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, None);
+        l.replace([(
+            "r".to_string(),
+            None,
+            Limit {
+                requests_per_minute: 2,
+                max_concurrent: None,
+            },
+        )]);
+        l.check_at(1, "r", t0).unwrap();
+        l.check_at(1, "r", t0).unwrap();
+        assert_eq!(l.check_at(1, "r", t0).unwrap_err().audit, Some(1));
     }
 
     #[test]
