@@ -1503,19 +1503,23 @@ impl Dots {
     }
 }
 
-/// AGENT-287 L5 — an escape only a lenient decoder reads: overlong
-/// UTF-8 (`%c0%ae`, `%e0%80%af`, `%c1%9c`), a 5- or 6-byte lead, or IIS
-/// `%uXXXX`. Each can spell `.`, `/` or `\`, and no valid UTF-8 path
-/// needs one, so a path holding one in any reading is refused, not
-/// modelled. The lead alone decides, so a Latin-1 path's `%C0`, `%C1` or
-/// `%F8`-`%FD` byte (`s%F8ren`) and literal `%uXXXX` text are refused too.
+/// AGENT-287 L5 — an escape only a lenient decoder reads: an overlong
+/// UTF-8 form (`%c0%ae`, `%e0%80%af`) or IIS `%uXXXX`, either of which
+/// can spell `.`, `/` or `\`. No valid UTF-8 path needs one, so a path
+/// holding one in any reading is refused, not modelled. A lead that can
+/// start an overlong form (`%C0`, `%C1`, `%E0`, `%F0`, `%F8`-`%FF`) is
+/// read with the bytes after it, escaped or literal, as a decoder that
+/// skips the continuation check would, and refused when the value is
+/// below the least its length may encode, so overlong whatever it spells
+/// (an overlong `．` is `.` after NFKC). Most Latin-1 letters before
+/// ordinary text decode above that (`s%F8ren`), and one too close to the
+/// end to complete is no sequence; a few pairs do not and are refused:
+/// `À` or `Á` before anything, `à` before an uppercase letter or `_`, and
+/// `ð`, `ø`, `ü`, `þ` or `ÿ` before `@` or an early uppercase letter. A
+/// follower an earlier decode replaced (U+FFFD) or a `%`, which a later
+/// decode may join into another escape, refuses the lead too.
 fn lenient_escape(text: &str) -> bool {
     let b = text.as_bytes();
-    let byte_at = |i: usize| -> Option<u8> {
-        let hex = |j: usize| b.get(j).and_then(|c| (*c as char).to_digit(16));
-        (b.get(i) == Some(&b'%')).then_some(())?;
-        Some((hex(i + 1)? * 16 + hex(i + 2)?) as u8)
-    };
     (0..b.len()).any(|i| {
         if b[i] != b'%' {
             return false;
@@ -1525,13 +1529,58 @@ fn lenient_escape(text: &str) -> bool {
         {
             return true;
         }
-        match byte_at(i) {
-            Some(0xC0 | 0xC1 | 0xF8..=0xFD) => true,
-            Some(0xE0) => byte_at(i + 3).is_some_and(|n| n < 0xA0),
-            Some(0xF0) => byte_at(i + 3).is_some_and(|n| n < 0x90),
-            _ => false,
-        }
+        escaped_byte(b, i).is_some_and(|lead| overlong_lead(text, i + 3, lead))
     })
+}
+
+/// The byte `%XX` at `i` spells, if it is one.
+fn escaped_byte(b: &[u8], i: usize) -> Option<u8> {
+    let hex = |j: usize| b.get(j).and_then(|c| (*c as char).to_digit(16));
+    (b.get(i) == Some(&b'%')).then_some(())?;
+    Some((hex(i + 1)? * 16 + hex(i + 2)?) as u8)
+}
+
+/// Whether `lead`, with the bytes from `at` as its continuation, is an
+/// overlong form to a decoder that keeps only each continuation's low six
+/// bits: a value below the least its length may encode, or, for a 5-byte
+/// or longer form, ASCII once cut to 21 or 16 bits. `%FE` and `%FF` are
+/// read as 7-byte leads. Valid UTF-8 never matches.
+fn overlong_lead(text: &str, mut at: usize, lead: u8) -> bool {
+    let (bits, count) = match lead {
+        0xC0 | 0xC1 => (lead & 0x1F, 1),
+        0xE0 => (0, 2),
+        0xF0 => (0, 3),
+        0xF8..=0xFB => (lead & 0x03, 4),
+        0xFC | 0xFD => (lead & 0x01, 5),
+        0xFE | 0xFF => (0, 6),
+        _ => return false,
+    };
+    let b = text.as_bytes();
+    let mut value = u64::from(bits);
+    for _ in 0..count {
+        let byte = match escaped_byte(b, at) {
+            Some(b'%') => return true,
+            Some(n) => {
+                at += 3;
+                n
+            }
+            None if text.get(at..).is_some_and(|t| t.starts_with('\u{FFFD}')) => return true,
+            None => match b.get(at) {
+                Some(b'%') => return true,
+                Some(&n) => {
+                    at += 1;
+                    n
+                }
+                None => return false,
+            },
+        };
+        value = (value << 6) | u64::from(byte & 0x3F);
+    }
+    const LEAST: [u64; 6] = [0x80, 0x800, 0x1_0000, 0x20_0000, 0x400_0000, 1 << 31];
+    // A decoder may also keep only the low 21 or 16 bits of a 5-byte or
+    // longer form, which is never valid UTF-8.
+    let cut = |mask: u64| count >= 4 && value & mask < 0x80;
+    value < LEAST[count - 1] || cut(0x1F_FFFF) || cut(0xFFFF)
 }
 
 /// How many times [`segmentwise`] decodes a segment, as `path_views` does
@@ -2289,6 +2338,57 @@ mod base_path_tests {
         assert!(ok(base, "https://h/v1/api/%E0%A4%85/%F0%9F%98%80/x"));
         assert!(ok(base, "https://h/v1/api/100%25u/x"));
         assert!(ok(base, "https://h/v1/api/a%09b/%EF%BC%8Ex"));
+    }
+
+    /// A lead byte that may start an overlong form is refused when the
+    /// bytes after it, escaped or literal, spell ASCII to a decoder that
+    /// skips the continuation check, or when a follower may only join it
+    /// after a later decode (AGENT-287). Latin-1 letters pass.
+    #[test]
+    fn latin1_bytes_pass_and_overlong_forms_do_not() {
+        let base = "https://h/v1/api";
+        for path in [
+            "s%F8ren",
+            "%E9t%E9",
+            "voil%E0/x",
+            "%FCber",
+            "%E0%A4%85",
+            "%F0%9F%98%80",
+            "%25E0%25A4%2585",
+            "%E0%2Fx",
+            "%FC%FD",
+            "%F8%2E",
+            "s%F8ren/x",
+            "%FEte/%FFx",
+            "Espa%F1a/x",
+            "%F0%A0%80%80/x",
+        ] {
+            assert!(ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
+        for path in [
+            "%25e0%80%ae%25e0%80%ae/%25e0%80%ae%25e0%80%ae/v2",
+            "%25f0%80%80%ae%25f0%80%80%ae/x",
+            "%25c0%ae%25c0%ae/%25c0%ae%25c0%ae/v2",
+            "%c0%2e%c0%2e/%c0%2e%c0%2e/v2",
+            "%C0nd",
+            "%e0%2580%25ae%e0%2580%25ae/%e0%2580%25ae%e0%2580%25ae/v2",
+            "%f0%2580%2580%25ae/x",
+            "%e0%40%6e%e0%40%6e/x",
+            "%E0@n%E0@n/x",
+            "%E0%00/x",
+            "%F8%40%40%40%2E",
+            "%F8@@@./x",
+            "%C0b",
+            "%f0%8f%bc%8e%f0%8f%bc%8e/x",
+            "%e0%9f%bf",
+            "%e0%%3880%%3Ae/x",
+            "%e0%80%",
+            "%F8H@@./x",
+            "%FCD@@@./x",
+            "%FEB@@@@./x",
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
     }
 }
 

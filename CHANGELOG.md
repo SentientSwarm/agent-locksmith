@@ -11,10 +11,19 @@
   that a following `..` would otherwise pop. The path must stay inside
   both as a strict upstream and as a lenient one reads it. A path
   holding an overlong UTF-8 or `%uXXXX` escape (`%c0%ae`, `%c0%af`,
-  `%u002e`) in any reading is refused outright, and so is one holding a
-  bare `%C0`, `%C1` or `%F8`-`%FD` byte, which a Latin-1 path can
-  (`s%F8ren`). Either way the request gets 400 `upstream_path_escape`
-  (AGENT-287).
+  `%u002e`) in any reading is refused outright. A lead that can start
+  an overlong form is read with the bytes after it, escaped or literal,
+  as a decoder that skips the continuation check would, and refused when
+  that is overlong, whatever it spells: `%E0@n` and `%e0%40%6e` (`.`),
+  an overlong `．`, and a continuation encoded at another depth or
+  joined by a `%` after a decode (`%25e0%80%ae`, `%e0%2580%25ae`).
+  `%F8`-`%FF` forms, never valid UTF-8, are also refused when their
+  value is ASCII once cut to 21 or 16 bits. Valid UTF-8 always passes,
+  and most Latin-1 letters do (`s%F8ren`, `voil%E0/x`, `%FC%FD`); a few
+  pairs are refused: `À` or `Á` (`%C0`, `%C1`) before anything, `à`
+  before an uppercase letter or `_`, and `ð`, `ø`, `ü`, `þ` or `ÿ`
+  before `@` or an early uppercase letter. Either way the request gets
+  400 `upstream_path_escape` (AGENT-287).
 - Edge components take `private_network = true` (`PrivateNetwork=yes`),
   set for the offline inspector in the example site, and the start guard
   refuses a secret-holding component while `fs.suid_dumpable` is `1`,
