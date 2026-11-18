@@ -45,8 +45,10 @@ never put a secret there; use `environment_file` for secrets.
 (`PrivateNetwork=yes`), for one that reaches nothing over the network,
 such as the classifier sidecar running offline. Unix sockets on the
 filesystem still work. It cannot be combined with `ingress`, and `closed`
-adds nothing to it. To check it took effect, list the service's network
-interfaces from the container; only `lo` should appear:
+adds nothing for it, though its ports are still closed to the container's
+other listeners. Once the service runs (step 6), check it took effect by
+listing its network interfaces from the container; only `lo` should
+appear:
 
 ```bash
 nsenter -n -t "$(systemctl show -P MainPID locksmith-edge-inspector)" ip -br link
@@ -148,9 +150,12 @@ guard refuses to start the component otherwise. That holds only while the
 process dumpable, so the guard refuses that too. The kernel default is `0`;
 packages such as apport or systemd-coredump set `2`. The sysctl is
 kernel-wide, so a container cannot change it: if the guard refuses, set it
-on the Incus host and keep it across reboots:
+as root on the Incus host and keep it across reboots. A file that sorts
+later and sets `1` wins at boot (Ubuntu links `/etc/sysctl.conf` in as
+`99-sysctl.conf`), so remove any such line first:
 
 ```bash
+grep -rn suid_dumpable /etc/sysctl.conf /etc/sysctl.d /usr/lib/sysctl.d
 sysctl -w fs.suid_dumpable=2
 echo 'fs.suid_dumpable = 2' > /etc/sysctl.d/60-locksmith-edge.conf
 ```
