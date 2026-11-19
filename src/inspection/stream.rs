@@ -599,10 +599,12 @@ impl StreamInspector {
                 self.note_error(why.into());
                 return self.block(step);
             }
-            // A new output of a join group starts from the group's newest
-            // open one, which clients join it after (AGENT-329). That one
-            // keeps its window, so nothing it holds is lost; text sent to
-            // it later joins nothing, so it is an interleave (below).
+            // A new output of a join group, in order, takes the tail of the
+            // group's latest output, which clients join just before it
+            // (AGENT-329); one out of order takes none (AGENT-328). The
+            // lender keeps its window, so nothing it holds is lost; text
+            // sent to it later joins nothing, so it is an interleave
+            // (below).
             let mut set_aside = None;
             if !self.by_lane.contains_key(key)
                 && let Some(group) = join_group(key)
