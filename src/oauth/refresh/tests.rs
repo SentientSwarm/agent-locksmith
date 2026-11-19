@@ -246,6 +246,13 @@ mod failure_events {
         record_failure(&repo, &session, &error, None).await;
         let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         assert!(text.contains("degradation not committed"), "{text}");
-        assert!(text.contains("http_status=Some(304)"), "{text}");
+        assert!(text.contains("http_status=304"), "{text}");
+        // No provider answer: the field is left out, not logged as `None`.
+        captured.0.lock().unwrap().clear();
+        let error = RefreshError::BadResponse("empty refresh token".into());
+        record_failure(&repo, &session, &error, None).await;
+        let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("degradation not committed"), "{text}");
+        assert!(!text.contains("http_status"), "{text}");
     }
 }

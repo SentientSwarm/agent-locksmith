@@ -157,8 +157,9 @@ curl -fsS --unix-socket "$LOCKSMITH_SOCKET" -H "Authorization: Bearer $LOCKSMITH
 Three `oauth` warnings are worth an alert. Each names the registration,
 session label and cause in `fields`. When the token endpoint answered,
 `oauth_refresh_reconnect_required` also carries its `http_status`:
-`provider_5xx` covers any 3xx other than the five redirects as well as a
-5xx, and `revoked` covers every 4xx.
+`provider_5xx` covers any other non-success status (a 3xx that is not
+one of the five redirects, a 5xx, or a non-standard code), and `revoked`
+covers every 4xx.
 
 - `oauth_refresh_reconnect_required`: a refresh tried the token
   endpoint and failed (the provider refused the refresh token or
