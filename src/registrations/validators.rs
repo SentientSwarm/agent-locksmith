@@ -40,6 +40,27 @@ pub const RESERVED_NAMES: &[&str] = &[
 /// log output — keep them short.
 pub const MAX_NAME_LEN: usize = 64;
 
+/// The longest stored credential value accepted (AGENT-325).
+pub const MAX_CREDENTIAL_VALUE_BYTES: usize = 8192;
+
+/// Whether a stored credential value can reach an upstream intact
+/// (AGENT-328): not empty, at most [`MAX_CREDENTIAL_VALUE_BYTES`], visible
+/// ASCII with inner spaces or tabs and none at either end. As a bearer
+/// (`Authorization: Bearer <value>`) it holds no space or tab. A value
+/// that fails would be refused by the HTTP client or reach the upstream
+/// altered, after it was sealed and reported as set.
+pub fn valid_credential_value(value: &str, bearer: bool) -> bool {
+    let bytes = value.as_bytes();
+    let blank = |b: &u8| matches!(b, b' ' | b'\t');
+    !bytes.is_empty()
+        && bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES
+        && bytes
+            .iter()
+            .all(|b| (0x21..=0x7e).contains(b) || (!bearer && blank(b)))
+        && !bytes.first().is_some_and(blank)
+        && !bytes.last().is_some_and(blank)
+}
+
 /// Validate a registration name. Same rules across all entry points.
 ///
 /// - Charset: `[a-z0-9-]` (lowercase ASCII alnum + dash).

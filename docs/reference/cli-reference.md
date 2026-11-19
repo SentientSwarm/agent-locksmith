@@ -141,6 +141,9 @@ header is sent bare, in `--header` or else the route's own header (its
 `Authorization: <key>`). On a route whose auth names no header, pass
 `--header`; without it the write is refused (400 `invalid_stored_credential`)
 rather than sealed as a bearer. Both need `LOCKSMITH_CREDENTIAL_SEALING_KEY`.
+The daemon checks the value too, for any client: a header value may hold
+inner spaces or tabs, a bearer none, and neither may be empty, padded or
+hold a control character (400 `invalid_stored_credential`).
 
 `unset-credential` is idempotent — removing an absent binding returns success.
 After clearing, subsequent requests to that registration are denied until an
@@ -329,6 +332,10 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   `--header` works the same on any route, broker or not: `tool|model
   set-key --header H` seals the key as `stored_header`, sent as `H: <key>`;
   without it the key is sent as `Authorization: Bearer <key>`.
+  The daemon refuses a key no upstream could take intact, whatever the
+  client checked (400 `invalid_credential_value` from `set-key` and
+  `route backend set-credential`): empty, over 8 KiB, padded, holding a
+  control character or non-ASCII, or, sent as a bearer, holding a space.
 - **Attribution.** `--attribution-header H` copies the broker's response
   header `H` into audit as `details.broker_account` when it is 1-64
   printable ASCII characters without spaces; otherwise audit records

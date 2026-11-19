@@ -281,6 +281,64 @@ async fn full_stored_credential_slice_without_op() {
     assert_eq!(resp2.text(), "rotated-ok");
 }
 
+/// AGENT-328: the server refuses a value no upstream could receive
+/// intact, whatever the client checked: empty, padded, holding a control
+/// character or a line break, too long, or with a space as a bearer.
+#[tokio::test]
+async fn an_unsendable_value_is_refused_and_stores_nothing() {
+    let h = setup(true).await;
+    h.admin
+        .put("/admin/operator/models/store-api")
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "upstream": h.mock.uri(), "auth": { "kind": "none" } }))
+        .await
+        .assert_status_ok();
+    let put = |body: serde_json::Value| {
+        h.admin
+            .put("/admin/operator/models/store-api/credential")
+            .add_header("authorization", &h.op_bearer)
+            .json(&body)
+    };
+    let long = "a".repeat(8193);
+    for value in [
+        "",
+        " lead",
+        "trail ",
+        "a\r\nX-Injected: y",
+        "a\u{7f}",
+        "nul\0",
+        "é",
+        &long,
+    ] {
+        for header in [None, Some("x-api-key")] {
+            let mut body = json!({ "value": value });
+            if let Some(header) = header {
+                body["header"] = json!(header);
+            }
+            let r = put(body).await;
+            r.assert_status(axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(
+                r.json::<serde_json::Value>()["error"]["code"],
+                "invalid_credential_value",
+                "{value:?} {header:?}"
+            );
+        }
+    }
+    // A bearer can't hold a space; a header value can.
+    let r = put(json!({ "value": "two words" })).await;
+    r.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let reg: serde_json::Value = h
+        .admin
+        .get("/admin/operator/models/store-api")
+        .add_header("authorization", &h.op_bearer)
+        .await
+        .json();
+    assert_eq!(reg["auth"]["kind"], "none", "a refusal stores nothing");
+    put(json!({ "value": "Token two\twords", "header": "x-api-key" }))
+        .await
+        .assert_status_ok();
+}
+
 #[tokio::test]
 async fn stored_route_404s_when_sealing_key_unset() {
     // 5. Feature off: the daemon booted without LOCKSMITH_CREDENTIAL_SEALING_KEY.

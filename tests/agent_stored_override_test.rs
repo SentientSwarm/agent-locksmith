@@ -295,5 +295,51 @@ async fn stored_header_intent_needs_a_header_name_and_excludes_bearer() {
     }
 }
 
+/// AGENT-328: the per-agent write applies the same value rules, and a
+/// value that falls back to a stored bearer is held to the bearer rule.
+#[tokio::test]
+async fn an_unsendable_per_agent_value_is_refused() {
+    let h = setup().await;
+    let path = format!(
+        "/admin/operator/agents/{}/credentials/shared-api/credential",
+        h.agent_public_id
+    );
+    for body in [
+        json!({ "value": "" }),
+        json!({ "value": " lead", "header": "x-api-key" }),
+        json!({ "value": "a\r\nX-Injected: y", "header": "x-api-key" }),
+        json!({ "value": "a\u{7f}", "header": "x-api-key" }),
+        // No header and no bearer flag: shared-api names no header, so this
+        // would be a stored bearer, and a bearer can't hold a space.
+        json!({ "value": "two words" }),
+    ] {
+        let r = h
+            .admin
+            .put(&path)
+            .add_header("authorization", &h.op_bearer)
+            .json(&body)
+            .await;
+        r.assert_status(axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            r.json::<serde_json::Value>()["error"]["code"],
+            "invalid_stored_credential",
+            "{body}"
+        );
+    }
+    assert!(
+        h.agent_creds
+            .get(h.agent_id, "shared-api")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    h.admin
+        .put(&path)
+        .add_header("authorization", &h.op_bearer)
+        .json(&json!({ "value": "Token two words", "header": "x-api-key" }))
+        .await
+        .assert_status_ok();
+}
+
 #[path = "native_preparation/credential.rs"]
 mod native_credential;

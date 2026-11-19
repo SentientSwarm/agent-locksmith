@@ -90,6 +90,11 @@ fn backend_error(e: &BackendError) -> Response {
         BackendError::InvalidBroker(_) => {
             error(StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
         }
+        BackendError::InvalidCredentialValue => error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "invalid_credential_value",
+        ),
         BackendError::Json(_) | BackendError::Db(_) => {
             tracing::error!("route backend store error");
             error(
@@ -314,7 +319,8 @@ async fn delete(
 pub struct BackendCredentialBody {
     /// Zeroized on drop; exposed only for the instant it is sealed.
     pub value: secrecy::SecretString,
-    /// Send the value in this header (`stored_header`); default bearer.
+    /// Send the value in this header (`stored_header`); default: the
+    /// backend's current header, else a bearer.
     #[serde(default)]
     pub header: Option<String>,
 }
@@ -352,7 +358,14 @@ async fn put_credential(
         }
     };
     let reference = match repo
-        .store_credential(&route, &backend, &sealed, &nonce, body.header.as_deref())
+        .store_credential(
+            &route,
+            &backend,
+            body.value.expose_secret(),
+            &sealed,
+            &nonce,
+            body.header.as_deref(),
+        )
         .await
     {
         Ok(r) => r,

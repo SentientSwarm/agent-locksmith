@@ -220,6 +220,11 @@ fn registration_status_code(err: &RegistrationError) -> (StatusCode, &'static st
         RegistrationError::InvalidBroker(_) => {
             (StatusCode::BAD_REQUEST, "bad_request", "invalid_broker")
         }
+        RegistrationError::InvalidCredentialValue => (
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "invalid_credential_value",
+        ),
         RegistrationError::BrokerKindChange => {
             (StatusCode::CONFLICT, "conflict", "broker_kind_change")
         }
@@ -806,11 +811,14 @@ pub async fn op_put_credential(
     {
         return registration_error_response(&e);
     }
+    // AGENT-328: the value must reach the upstream intact in the shape it
+    // will be sent in; a route that names no header sends it as a bearer.
+    let header = body.header.as_deref().or(existing.auth.header_name());
+    if !super::validators::valid_credential_value(body.value.expose_secret(), header.is_none()) {
+        return registration_error_response(&RegistrationError::InvalidCredentialValue);
+    }
     if let Some(spec) = &existing.broker {
-        let shape = super::credential::stored_auth(
-            body.header.as_deref().or(existing.auth.header_name()),
-            "cs_pending",
-        );
+        let shape = super::credential::stored_auth(header, "cs_pending");
         if let Err(e) = super::broker::validate(spec, &shape) {
             return registration_error_response(&e);
         }

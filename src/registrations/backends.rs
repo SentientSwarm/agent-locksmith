@@ -48,6 +48,10 @@ pub enum BackendError {
     RevisionConflict,
     #[error("invalid broker: {0}")]
     InvalidBroker(String),
+    /// A key no upstream could receive intact in the shape it is stored
+    /// in (AGENT-328). Never echoes the value.
+    #[error("invalid credential value")]
+    InvalidCredentialValue,
     #[error("serialize: {0}")]
     Json(#[from] serde_json::Error),
     #[error("database: {0}")]
@@ -268,13 +272,16 @@ impl BackendRepository {
     }
 
     /// Seal a key onto an inactive declared backend: insert the sealed
-    /// value and point the backend's auth at it (`stored_header` when
-    /// `header` is given, else `stored_bearer`) in one transaction that
-    /// also moves the route revision. Returns the new `secret_ref`.
+    /// value and point the backend's auth at it (`stored_header` in
+    /// `header`, else in the backend's current header, else
+    /// `stored_bearer`) in one transaction that also moves the route
+    /// revision. `value` is the cleartext of `sealed`, checked against
+    /// that shape (AGENT-328). Returns the new `secret_ref`.
     pub async fn store_credential(
         &self,
         route: &str,
         backend: &str,
+        value: &str,
         sealed: &[u8],
         nonce: &[u8],
         header: Option<&str>,
@@ -296,6 +303,9 @@ impl BackendRepository {
             .map(serde_json::from_str)
             .transpose()?;
         let header = header.or(current.header_name());
+        if !super::validators::valid_credential_value(value, header.is_none()) {
+            return Err(BackendError::InvalidCredentialValue);
+        }
         // Checked on the row this transaction writes, so a concurrent edit
         // cannot slip a clashing key header past it.
         if let Some(spec) = &broker {

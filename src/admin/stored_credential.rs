@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     auth_v2::OperatorIdentity,
-    registrations::AuthSpec,
+    registrations::{AuthSpec, validators::valid_credential_value},
     repo::{AgentCredentialRepository, CredentialSecretsRepository},
 };
 use axum::{
@@ -65,7 +65,9 @@ pub(super) async fn set(
             Json(value).into_response()
         }
         Err(Refused::Admin(error)) => admin_err_response(error),
-        Err(Refused::Unnamed) => failure("invalid_stored_credential", StatusCode::BAD_REQUEST),
+        Err(Refused::Unnamed | Refused::Invalid) => {
+            failure("invalid_stored_credential", StatusCode::BAD_REQUEST)
+        }
     }
 }
 fn failure(code: &str, status: StatusCode) -> Response {
@@ -77,20 +79,15 @@ fn invalid(body: &Input) -> bool {
             .header
             .as_deref()
             .is_some_and(|h| crate::registrations::broker::validate_credential_header(h).is_err())
-        || body.value.expose_secret().len() > 8192
-        || (body.bearer
-            && (body.value.expose_secret().is_empty()
-                || !body
-                    .value
-                    .expose_secret()
-                    .bytes()
-                    .all(|b| (0x21..=0x7e).contains(&b))))
+        || !valid_credential_value(body.value.expose_secret(), body.bearer)
 }
 /// Why a write changed nothing.
 enum Refused {
     Admin(AdminError),
     /// `stored_header` with no `header` on a route that names none.
     Unnamed,
+    /// A value that would be a stored bearer but can't be sent as one.
+    Invalid,
 }
 impl From<AdminError> for Refused {
     fn from(e: AdminError) -> Self {
@@ -129,6 +126,11 @@ async fn write(
     let (header, previous) = shape(&mut tx, agent.id, registration, &body).await?;
     if body.stored_header && header.is_none() {
         return Err(Refused::Unnamed);
+    }
+    // AGENT-328: a value that falls back to a stored bearer is held to the
+    // bearer rule, as if the caller had asked for one.
+    if header.is_none() && !valid_credential_value(body.value.expose_secret(), true) {
+        return Err(Refused::Invalid);
     }
     let old_ref = previous
         .as_ref()

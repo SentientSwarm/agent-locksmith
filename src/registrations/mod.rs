@@ -82,6 +82,12 @@ pub enum RegistrationError {
     #[error("invalid broker: {0}")]
     InvalidBroker(String),
 
+    /// A stored credential value no upstream could receive intact
+    /// (AGENT-328). Never echoes the value.
+    /// Wire: 400 bad_request / `invalid_credential_value`.
+    #[error("invalid credential value")]
+    InvalidCredentialValue,
+
     /// A route PUT that would turn an upstream route into a broker or
     /// back. Wire: 409 conflict / `broker_kind_change`.
     #[error("broker kind change: use a new route or a backend switch")]

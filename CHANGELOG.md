@@ -22,6 +22,20 @@
 
 ### Fixed
 
+- The admin API refuses a stored credential value no upstream could
+  receive intact, whatever the client checked (AGENT-328): an empty
+  value, one over 8 KiB, one with a control character, a line break or
+  non-ASCII, or one with a space or tab at either end. A value sent as a
+  bearer can't hold a space or tab at all. The route credential write
+  (`PUT /admin/operator/{kind}/{name}/credential`) and the route-backend
+  key write (`PUT /routes/{route}/backends/{backend}/credential`) had no
+  check and now answer 400 `invalid_credential_value`. The per-agent
+  write checked only values marked as bearers and now answers 400
+  `invalid_stored_credential` for these too. Each write checks the shape
+  the value will be stored in, so a value that falls back to a stored
+  bearer is held to the bearer rule, and a key rotated onto a header
+  without restating it to the header rule. Nothing is sealed or bound on
+  refusal.
 - The upstream base-path check reads `%2e` in any case as a dot, as a
   WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
   the four-decode bound or cut at a decoded `?`, now resolves alike for an

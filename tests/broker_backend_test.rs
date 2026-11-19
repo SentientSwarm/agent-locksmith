@@ -191,6 +191,46 @@ async fn backend_credential_seals_without_echo() {
     assert_eq!(active.json::<Value>()["error"]["code"], "active_backend");
 }
 
+/// AGENT-328: a backend key no upstream could receive intact is refused
+/// before anything is sealed.
+#[tokio::test]
+async fn an_unsendable_backend_key_is_refused() {
+    let (h, _a, _b) = scenario().await;
+    let before = revision(&h).await;
+    for body in [
+        json!({ "value": "" }),
+        json!({ "value": "two words" }),
+        json!({ "value": "a\r\nX-Injected: y", "header": "X-Pool-Key" }),
+        json!({ "value": " lead", "header": "X-Pool-Key" }),
+    ] {
+        let r = h
+            .op_req(Method::PUT, "/routes/r/backends/pool/credential")
+            .json(&body)
+            .await;
+        assert_eq!(r.status_code(), 400, "{body}");
+        assert_eq!(
+            r.json::<Value>()["error"]["code"],
+            "invalid_credential_value"
+        );
+    }
+    assert_eq!(revision(&h).await, before, "a refusal changes nothing");
+    // A backend whose key already goes in a header keeps the header rule
+    // when rotated without restating `header`: inner spaces are fine.
+    h.op_req(Method::PUT, "/routes/r/backends/pool/credential")
+        .json(&json!({ "value": "k1", "header": "X-Pool-Key" }))
+        .await
+        .assert_status_ok();
+    h.op_req(Method::PUT, "/routes/r/backends/pool/credential")
+        .json(&json!({ "value": "Token two words" }))
+        .await
+        .assert_status_ok();
+    let got: Value = h
+        .op_req(Method::GET, "/routes/r/backends/pool")
+        .await
+        .json();
+    assert_eq!(got["auth"]["kind"], "stored_header");
+}
+
 #[tokio::test]
 async fn backend_broker_validated() {
     let (h, _a, _b) = scenario().await;
