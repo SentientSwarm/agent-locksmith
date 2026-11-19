@@ -302,6 +302,8 @@ impl Prober {
             cause: Some(cause),
             fingerprint: fp.clone(),
         };
+        // Unreachable: `probed` keeps only brokers with a health probe. Kept
+        // so a future caller gets a down state, not a panic.
         let Some(probe) = r.broker.as_ref().and_then(|b| b.health.as_ref()) else {
             return Ok(down(None, "no_probe"));
         };

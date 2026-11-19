@@ -519,12 +519,12 @@ async fn down_probe_records_its_cause() {
         DOWN_AFTER as usize,
         "only the direct route is probed, and retried until it is down"
     );
-    // The log rows drain one at a time and in catalog order, so wait for
-    // all three before looking for the egress one.
+    // The log rows drain one at a time, in no set order, so wait for all
+    // three before looking for the egress one.
     let mut logs = Vec::new();
     for _ in 0..100 {
         logs = broker_logs(&h, "broker_down").await;
-        if logs.len() == 3 {
+        if logs.len() >= 3 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
