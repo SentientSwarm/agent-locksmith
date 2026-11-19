@@ -1427,6 +1427,9 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
             return false;
         }
     }
+    if separator_climbs(base.path(), out.path(), &all) {
+        return false;
+    }
     if all.iter().copied().any(|dots| {
         fold_crosses_escape(out.path(), dots)
             || readings(out.path(), dots)
@@ -1477,6 +1480,61 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
                     })
                 })
         })
+}
+
+/// Whether a `..` could climb above the base for an upstream that
+/// decodes, splits and resolves dot segments in some other order, more
+/// than once (AGENT-332): a decode, a WHATWG re-parse (`%2e` a dot, `%2F`
+/// data), then an app that decodes and cleans again takes
+/// `a%252Fb/%252e%252e/c%252F%252e%252e%252F%252e%252e` to `/v1/admin`.
+/// Only a separator inside a raw segment lets that order matter: an
+/// encoded one (`%2F`, `%5C`), or one a fold makes (U+FF0F). The raw
+/// segments after the base are walked with a bound no order beats: a
+/// segment with no separator in any reading is one segment in every
+/// reading, so as a name it absorbs one `..`; one with a separator
+/// absorbs none and counts each `..` any reading splits it into; a
+/// segment some reading makes `.` or `..` absorbs none. Refused when the
+/// count goes below the base.
+fn separator_climbs(base: &str, path: &str, all: &[Dots]) -> bool {
+    let views =
+        |text: &str| -> Vec<String> { all.iter().flat_map(|&dots| readings(text, dots)).collect() };
+    let separator = |r: &String| {
+        let b = r.as_bytes();
+        r.contains(['/', '\\'])
+            || (0..b.len()).any(|i| matches!(escaped_byte(b, i), Some(b'/' | b'\\')))
+    };
+    let name = |piece: &str| piece.split(';').next().unwrap_or("").to_string();
+    let segments = |text: &str| -> Vec<Vec<String>> {
+        text.split(['/', '\\'])
+            .filter(|s| !s.is_empty())
+            .map(views)
+            .collect()
+    };
+    if !segments(path).iter().flatten().any(separator) {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix(base) else {
+        return true;
+    };
+    let mut depth: i64 = 0;
+    for list in segments(rest) {
+        if list.iter().any(separator) {
+            let dots = list
+                .iter()
+                .map(|r| r.split(['/', '\\']).filter(|p| name(p) == "..").count())
+                .max()
+                .unwrap_or(0);
+            depth -= dots as i64;
+        } else if list.iter().any(|r| name(r) == "..") {
+            depth -= 1;
+        } else if list.iter().all(|r| !matches!(name(r).as_str(), "" | ".")) {
+            depth += 1;
+        }
+        if depth < 0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether every fold leaves `text` as it is: ASCII without tab or
@@ -2580,6 +2638,35 @@ mod base_path_tests {
         ));
         assert!(ok(base, "https://h/projects/group%2Fproj/a/%252e%252e/b"));
         assert!(ok(base, "https://h/projects/group%2Fproj/a%252Fb/x"));
+    }
+
+    /// AGENT-332: an upstream may decode, split and resolve dot segments in
+    /// any order, more than once (a decode, a WHATWG re-parse that reads
+    /// `%2e` as a dot and `%2F` as data, then an app that decodes and
+    /// cleans again). Where an encoded separator lets the order matter, a
+    /// `..` must not be able to climb past the base in any order.
+    #[test]
+    fn no_order_of_decode_split_and_resolve_climbs_out() {
+        let base = "https://h/v1/api";
+        for path in [
+            "a%252Fb%2F%252e%252e%2F%252e%252e/admin",
+            "a%25252Fb%252F%25252e%25252e%252F%25252e%25252e/admin",
+            "a%252Fb/%252e%252e/c%252F%252e%252e%252F%252e%252e/admin",
+            "a%255Cb/%252e%252e;x/c",
+            "a%2Fb/%EF%BC%8E%EF%BC%8E/c",
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
+        assert!(ok(base, "https://h/v1/api/a%252Fb/x"));
+        assert!(ok(base, "https://h/v1/api/a%252Fb%2Fc/x"));
+        assert!(ok(base, "https://h/v1/api/a/%252e%252e/b"));
+        assert!(ok(base, "https://h/v1/api/x/..%252Fy"));
+        assert!(ok(base, "https://h/v1/api/x/y/..%252F..%252Fz"));
+        assert!(!ok(base, "https://h/v1/api/x/..%252F..%252Fz"));
+        // A fold can make a separator too (U+FF0F to `/`).
+        let solidus = "%EF%BC%8F..";
+        let path = format!("https://h/v1/api/a%2Fb/x{0}{0}{0}/c", solidus);
+        assert!(!ok(base, &path));
     }
 
     /// Some upstreams read more than `..` as a parent: a WHATWG re-parse

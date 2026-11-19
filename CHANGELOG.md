@@ -22,6 +22,15 @@
 
 ### Fixed
 
+- The upstream base-path check bounds how far a `..` could climb when
+  the path holds an encoded separator (`%2F`, `%5C`). An upstream may
+  decode, split and resolve dots in any order, more than once (a WHATWG
+  re-parse reads `%2e` as a dot and keeps `%2F` as data), so
+  `a%252Fb%2F%252e%252e%2F%252e%252e/admin` climbed out. A segment
+  holding a separator in some reading (encoded, or made by a fold such
+  as U+FF0F) now absorbs no `..` and counts every `..` it can decode
+  to; the path is refused if that could climb past the base
+  (AGENT-332).
 - A device login whose provider answers a redirect now says Locksmith
   does not follow provider redirects and that the route's `token_url`
   and `device_url` must be the provider's final URLs, instead of a bare
