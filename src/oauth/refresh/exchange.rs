@@ -95,6 +95,11 @@ async fn request_tokens(
 async fn parse_tokens(response: reqwest::Response) -> Result<TokenResponse, RefreshError> {
     let status = response.status();
     if !status.is_success() {
+        if status.is_redirection() {
+            return Err(RefreshError::Redirected {
+                status: status.as_u16(),
+            });
+        }
         if status.is_client_error() {
             return Err(RefreshError::Revoked {
                 status: status.as_u16(),
@@ -119,4 +124,45 @@ async fn parse_tokens(response: reqwest::Response) -> Result<TokenResponse, Refr
         return Err(RefreshError::BadResponse("empty token response".into()));
     }
     Ok(token_response)
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+
+    fn answer(status: u16) -> reqwest::Response {
+        axum::http::Response::builder()
+            .status(status)
+            .header("location", "https://elsewhere.example/oauth/token")
+            .body("")
+            .unwrap()
+            .into()
+    }
+
+    /// AGENT-302: token calls do not follow redirects, so a 3xx from the
+    /// token endpoint fails the refresh. It must say so, not report a 5xx.
+    #[tokio::test]
+    async fn a_redirected_token_call_is_reported_as_a_redirect() {
+        for status in [301, 302, 307, 308] {
+            let Err(error) = parse_tokens(answer(status)).await else {
+                panic!("{status} must fail the refresh");
+            };
+            assert_eq!(error.audit_cause(), "token_redirect", "{status}");
+            let text = error.to_string();
+            assert!(text.contains(&status.to_string()), "{text}");
+            assert!(text.contains("token_url"), "{text}");
+            assert!(
+                !text.contains("elsewhere"),
+                "location must not be quoted: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_error_is_still_reported_as_one() {
+        let Err(error) = parse_tokens(answer(503)).await else {
+            panic!("503 must fail the refresh");
+        };
+        assert_eq!(error.audit_cause(), "provider_5xx");
+    }
 }

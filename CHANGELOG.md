@@ -22,6 +22,9 @@
 
 ### Fixed
 
+- A token endpoint that answers a redirect now fails the refresh with
+  cause `token_redirect` and a message naming `token_url`, not as
+  `provider_5xx` (AGENT-302). Token calls still do not follow redirects.
 - The upstream base-path check refuses a path holding a NUL (`%00`),
   decoded or still escaped at the decode bound, since an upstream reading
   it as a C string sees `..%00` as `..`. That includes a literal `%2500`

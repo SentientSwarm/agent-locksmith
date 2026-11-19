@@ -157,7 +157,10 @@ session label and cause in `fields`:
   malformed, or the new tokens could not be stored). Whether the
   provider rotated the refresh token is unknown, so the session is left
   `reconnect_required` and requests on it fail with 503
-  `oauth_reconnect_required` until it is signed in again.
+  `oauth_reconnect_required` until it is signed in again. Token calls
+  do not follow redirects: a token endpoint that answers 3xx fails
+  with cause `token_redirect`, and the fix is to set the route's
+  `token_url` to the final URL.
 - `oauth_refresh_degraded`: a refresh failed before trying the provider
   (unusable token metadata, an empty refresh token in the background
   refresh, or the refresh could not be recorded) and the session is

@@ -476,6 +476,9 @@ fn refresh_failure(e: &crate::oauth::refresh::RefreshError) -> String {
     match e {
         E::Revoked { status } => format!("provider rejected the refresh ({status})"),
         E::ProviderError { status } => format!("provider error ({status})"),
+        E::Redirected { status } => {
+            format!("token endpoint redirected ({status}); set token_url to the final URL")
+        }
         E::Network(_) => "token endpoint unreachable".into(),
         E::BadResponse(_) => "malformed token response".into(),
         E::Persist(_) => "could not store the tokens".into(),
