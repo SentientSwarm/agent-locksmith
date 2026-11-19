@@ -346,6 +346,15 @@ written. An `index` is read as clients read it: an integer, a whole-number
 float or a numeric string (under `fail_closed` with held events, anything but
 a plain integer blocks, as above).
 
+Under `fail_closed`, a write to a finished output gains an upstream nothing
+over ending the stream there (AGENT-316). The close judges the output's tail
+exactly as the end of the stream would and then releases it. The later write
+is blocked, so the client gets the truncated stream plus the block event. A
+key prefix shorter than any rule's match goes out either way, as it would from
+a buffered scan of the truncated text. Splitting a secret on purpose is the
+same evasion an upstream can do by encoding it; inspection does not claim to
+stop an upstream built to leak.
+
 How the stream is forwarded depends on `on_hit`:
 
 - **`pass` or `flag`**: each event is forwarded the moment it is

@@ -1381,6 +1381,45 @@ mod tests {
         );
     }
 
+    /// AGENT-316: under `fail_closed`, a write to a finished output gains a
+    /// hostile upstream nothing over ending the stream at the close. The
+    /// close judges the output's tail exactly as the stream's end would,
+    /// and the later write is blocked, so the client gets the truncated
+    /// stream's bytes plus the block event, and no more. A key prefix
+    /// shorter than any rule's match goes out either way, as it would in a
+    /// buffered scan of the truncated text.
+    #[test]
+    fn a_write_after_close_gains_nothing_over_ending_at_the_close() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        let chat_stop =
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+        let block_stop =
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        for (event, stop) in [
+            (chat as fn(&str) -> String, chat_stop),
+            (anthropic, block_stop),
+        ] {
+            let mut truncated = vec![PING.to_string(), event("Here is the key: ")];
+            truncated.extend(head.chars().map(|c| event(&c.to_string())));
+            truncated.push(stop.to_string());
+            let mut attack = truncated.clone();
+            attack.push(event(last));
+            attack.push(event(" and that is all."));
+            let policy = closed(1 << 20, Verdict::Block);
+            let (cut, _) = run(&policy, &truncated);
+            let (out, i) = run(&policy, &attack);
+            let rest = out
+                .strip_prefix(cut.as_str())
+                .unwrap_or_else(|| panic!("the attack sent more than the truncated stream: {out}"));
+            assert_eq!(rest.as_bytes(), sse::blocked_event(i.protocol), "{rest}");
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("stream text after its output finished")
+            );
+        }
+    }
+
     /// Nothing is held under `flag`, so interleaved tool calls are not
     /// treated as finished and the stream is not blocked.
     #[test]
