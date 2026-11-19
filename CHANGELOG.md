@@ -36,7 +36,8 @@
   16 KiB: the check costs about a hundred passes over such a path, and
   the listener accepts URIs of about 400 KiB. A path with no escape after
   the base has no bound, and is now decided in one pass (a 400 KB one
-  took 733 ms).
+  took 733 ms). A plain `..;` that dips into the base and comes back
+  (`/v1/api/..;/api/x`) is now refused.
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG

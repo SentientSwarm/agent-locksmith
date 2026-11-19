@@ -20,7 +20,8 @@ pub enum RefreshError {
     ProviderError { status: u16 },
 
     /// AGENT-302: token calls never follow redirects (a followed one could
-    /// resend the refresh token to another host), so a 3xx fails the call.
+    /// resend the refresh token to another host), so any 3xx fails the
+    /// call; this variant is the redirects (301, 302, 303, 307, 308).
     #[error(
         "token endpoint answered a redirect ({status}); token calls do not \
          follow redirects, so set token_url to the final URL"

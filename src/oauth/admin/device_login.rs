@@ -517,7 +517,7 @@ fn upstream_failed(step: &str, status: Option<reqwest::StatusCode>) -> Box<Respo
 
 /// The status, or why there is none. Provider calls don't follow
 /// redirects (a followed one could carry codes to another host), so a
-/// 3xx says so (AGENT-328).
+/// redirect (301, 302, 303, 307 or 308) says so (AGENT-328).
 fn failure_detail(status: Option<reqwest::StatusCode>) -> String {
     match status {
         None => "unreachable".into(),
@@ -744,8 +744,8 @@ impl DeviceLogins {
 
 #[cfg(test)]
 mod tests {
-    /// AGENT-328: device-login calls don't follow redirects, so a 3xx
-    /// says so rather than showing a bare status.
+    /// AGENT-328: device-login calls don't follow redirects, so a redirect
+    /// says so rather than showing a bare status; 300 and 304 don't.
     #[test]
     fn a_redirected_provider_call_says_redirects_are_not_followed() {
         let detail = failure_detail(Some(reqwest::StatusCode::TEMPORARY_REDIRECT));

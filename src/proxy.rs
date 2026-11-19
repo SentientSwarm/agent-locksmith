@@ -1443,10 +1443,6 @@ fn within(base: &str, path: &str) -> bool {
     // spells `group/proj` pass, though an upstream reading `%2F` as data
     // serves another resource there. The shorter list repeats its last.
     let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
-    // A NUL ends the path to an upstream reading it as a C string, so
-    // `..%00` is `..` there; no path needs one (AGENT-287). One still
-    // escaped past the decode bound is refused too, as `lenient_escape`
-    // refuses escapes in the last reading.
     // With no escape in the path or the base, every reading is the literal
     // one, so resolving decides; a long plain path or base is not bounded.
     if !path.contains('%') && !base.contains('%') {
@@ -1481,6 +1477,10 @@ fn within(base: &str, path: &str) -> bool {
     if separator_climbs(base, path, &all) {
         return false;
     }
+    // A NUL ends the path to an upstream reading it as a C string, so
+    // `..%00` is `..` there; no path needs one (AGENT-287). One still
+    // escaped past the decode bound is refused too, as `lenient_escape`
+    // refuses escapes in the last reading.
     if all.iter().copied().any(|dots| {
         fold_crosses_escape(path, dots)
             || readings(path, dots)
@@ -1492,7 +1492,10 @@ fn within(base: &str, path: &str) -> bool {
     // Fold subsets that leave the base and the path reading alike at every
     // level are one reading: folds act per character and never across a
     // `/`, so a segment, or a text rejoined from segments and decoded
-    // again, folds alike too. Only distinct ones are resolved below.
+    // again, folds alike too, except that folding a rejoined text a second
+    // time may compose an accent (NFKC after dropping U+200B). That yields
+    // only a letter, never a dot, separator or cut, and alike in the base
+    // and the path. Only distinct subsets are resolved below.
     let mut distinct: Vec<Dots> = Vec::new();
     let mut seen: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for &dots in &all {

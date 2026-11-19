@@ -139,8 +139,9 @@ mod redirect_tests {
             .into()
     }
 
-    /// AGENT-302: token calls do not follow redirects, so a 3xx from the
-    /// token endpoint fails the refresh. It must say so, not report a 5xx.
+    /// AGENT-302: token calls do not follow redirects, so a redirect (301,
+    /// 302, 303, 307 or 308) from the token endpoint fails the refresh. It
+    /// must say so, not report a 5xx.
     #[tokio::test]
     async fn a_redirected_token_call_is_reported_as_a_redirect() {
         for status in [301, 302, 303, 307, 308] {
