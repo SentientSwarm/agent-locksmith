@@ -2901,6 +2901,31 @@ mod base_path_tests {
     /// A path that climbs back into the base with other parameters
     /// (`../a;x`, `..;/..;/base;v=2`) reaches another resource on an
     /// upstream that keeps them.
+    /// A two-hop upstream decodes once, splits on `/`, then decodes each
+    /// segment fully and resolves its dots, so an encoded separator stays
+    /// inside a name there and a `..` pops the whole name (AGENT-287).
+    #[test]
+    fn a_two_hop_upstream_cannot_climb_out() {
+        let base = "https://h/p/g%252Fq";
+        assert!(ok(base, "https://h/p/g%252Fq/x/y"));
+        for path in [
+            "%252e%252e%2Fq/x",
+            "%252e%252e/q/x",
+            "%25252e%25252e/q/x",
+            "a%252Fb/%25252e%25252e/%25252e%25252e/x",
+        ] {
+            assert!(!ok(base, &format!("{base}/{path}")), "{path}");
+        }
+        let base = "https://h/p/api";
+        let three = "%2525252e%2525252e/".repeat(3);
+        for path in [
+            "a%252Fb/%25252e%25252e/%25252e%25252e/x".to_string(),
+            format!("a%25252Fb%25252Fc/{three}x"),
+        ] {
+            assert!(!ok(base, &format!("{base}/{path}")), "{path}");
+        }
+    }
+
     #[test]
     fn parameters_on_the_base_segments_must_match() {
         assert!(!ok("https://h/v1/a", "https://h/v1/a/../a;x/y"));
