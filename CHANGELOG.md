@@ -22,6 +22,14 @@
 
 ### Fixed
 
+- Under `on_hit: redact` with `fail_open`, a streamed key whose start went
+  out before the key was complete (held events released early past
+  `max_scan_bytes`) is no longer audited as redacted while that start
+  reaches the agent (AGENT-330). Only the rest of it was cut; with long
+  event fields, 15 to 27 characters of a token could go. The stream is now
+  blocked with `redaction_incomplete: true`, as the documented contract
+  says for a redaction that can't remove every match. The same holds for a
+  match (a PEM key) that grows over text already released.
 - Request inspection also reads a path whose decoding contains a `?`
   (a double-encoded `%253F`) with the text after it as a form query, `+`
   as a space (AGENT-315). An upstream hop that decodes the path again and

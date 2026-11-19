@@ -40,6 +40,9 @@ pub struct WindowHit {
     /// False when it extends a hit already reported (same rule,
     /// overlapping): it still needs redacting, but is counted once.
     pub new: bool,
+    /// Where the part no earlier report of its rule covered starts:
+    /// `start` for a new hit (AGENT-330).
+    pub fresh: usize,
 }
 
 /// An output's kept text and the spans reported in it, offsets from its start.
@@ -266,6 +269,7 @@ impl TextWindow {
             .entry((scanner.to_string(), hit.rule.clone()))
             .or_default();
         let new = !overlaps(spans, start, end);
+        let fresh = uncovered(spans, start, end);
         insert(spans, start, end);
         out.push(WindowHit {
             scanner: scanner.to_string(),
@@ -275,6 +279,7 @@ impl TextWindow {
             flag_only: hit.flag_only,
             sha256,
             new,
+            fresh,
         });
     }
 
@@ -350,6 +355,26 @@ fn overlaps(spans: &BTreeMap<usize, usize>, start: usize, end: usize) -> bool {
         .is_some_and(|(_, &b)| b > start)
 }
 
+/// The first offset of `[start, end)` that no span covers (`end` if all do).
+fn uncovered(spans: &BTreeMap<usize, usize>, start: usize, end: usize) -> usize {
+    if start >= end {
+        return end;
+    }
+    // Spans are disjoint, so only the one starting at or before `start`
+    // and those chained after it can cover it.
+    let mut at = spans
+        .range(..=start)
+        .next_back()
+        .map_or(start, |(_, &b)| b.max(start));
+    for (&a, &b) in spans.range(start + 1..end) {
+        if a > at {
+            break;
+        }
+        at = at.max(b);
+    }
+    at.min(end)
+}
+
 /// Add `[start, end)` to `spans`, merging the spans it overlaps.
 fn insert(spans: &mut BTreeMap<usize, usize>, mut start: usize, mut end: usize) {
     if start >= end {
@@ -370,6 +395,15 @@ fn insert(spans: &mut BTreeMap<usize, usize>, mut start: usize, mut end: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncovered_finds_the_first_offset_no_span_covers() {
+        let spans = BTreeMap::from([(1, 4), (4, 6), (8, 9)]);
+        assert_eq!(uncovered(&spans, 2, 9), 6);
+        assert_eq!(uncovered(&spans, 0, 9), 0);
+        assert_eq!(uncovered(&spans, 1, 5), 5);
+        assert_eq!(uncovered(&spans, 5, 5), 5, "an empty span covers nothing");
+    }
     use crate::inspection::injection::Injection;
     use crate::inspection::literal::Literal;
 

@@ -414,7 +414,16 @@ text or events past it (counting the copies of the fields a held event
 keeps: those later text can reach, and those to rewrite), or lane paths
 past it, can't be judged within bounds. Under `fail_closed` the stream is
 blocked. Under `fail_open`, held text or events past the bound are
-released early and an `inspection_hold_overflow` row is written; an
+released early and an `inspection_hold_overflow` row is written. A match
+to redact found later that starts in text already released this way, or
+grows over it past what an earlier hit covered, can't be removed whole:
+the stream is blocked with `redaction_incomplete` (AGENT-330). Whitespace
+at the end of released text doesn't count, escaped whitespace (`\n` in
+tool arguments) included, so a key whose newlines went early with its cut
+lines, or in events of their own, is still redacted. Nor does text a cut
+already removed: a token one rule cut before it went early isn't late
+for another rule that matches it later (`anthropic_key`, then `bearer`).
+An
 oversized event and the rest of the stream pass through unscanned, audited
 `inspection_skipped` with reason `oversize`. The text held when the
 oversized event arrives is judged first, so its hits are redacted or block
@@ -452,8 +461,9 @@ Details carry `direction`, `verdict`, `count` and `hits`, each hit as
 `{scanner, rule, sha256}` where `sha256` is the hash of the matched span.
 At most 64 distinct hits are listed; `count` includes the rest and
 `truncated: true` marks the row. A scanner error adds `error`, a skip adds
-`reason`, and a redaction that turned into a block (buffered, or a streamed
-event no rewrite can reach) adds `redaction_incomplete: true`.
+`reason`, and a redaction that turned into a block (buffered, a streamed
+event no rewrite can reach, or a streamed match whose start went early)
+adds `redaction_incomplete: true`.
 The matched text itself is never recorded.
 
 ## Sidecars

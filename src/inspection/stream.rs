@@ -108,6 +108,9 @@ struct LaneState {
     /// The scan across this output's start and the end of the one its
     /// clients join it after, while a match could still cross it.
     bridge: Option<Bridge>,
+    /// Where the text already sent of it ends, past trailing whitespace
+    /// (AGENT-330).
+    sent: usize,
 }
 
 /// AGENT-329: a second window over a joined output's start, beginning with
@@ -133,6 +136,7 @@ impl Bridge {
                 hit: WindowHit {
                     start: 0,
                     end: h.end - self.seed,
+                    fresh: h.fresh.max(self.seed) - self.seed,
                     ..h
                 },
             })
@@ -471,6 +475,7 @@ impl StreamInspector {
             done: false,
             superseded: false,
             bridge,
+            sent: 0,
         });
         let i = self.lanes.len() - 1;
         self.by_lane.insert(lane.clone(), i);
@@ -696,8 +701,9 @@ impl StreamInspector {
             cost,
         });
         if verdict == Verdict::Redact {
+            let late = self.late(&hits);
             self.cut_all(&hits);
-            if self.unrewritable() {
+            if late || self.unrewritable() {
                 self.report.redaction_incomplete = true;
                 return self.block(step);
             }
@@ -957,6 +963,17 @@ impl StreamInspector {
         })
     }
 
+    /// A hit to redact begins, past what earlier reports of it covered, in
+    /// text its lane already sent (released early under `fail_open`), so
+    /// no cut can remove it whole (AGENT-330).
+    fn late(&self, hits: &[LaneHit]) -> bool {
+        hits.iter().any(|h| {
+            h.lane < WHOLE
+                && self.verdict_of(&h.hit) == Verdict::Redact
+                && h.hit.fresh < self.lanes[h.lane].sent
+        })
+    }
+
     /// Mark every redact-level hit for removal in the events it covers.
     fn cut_all(&mut self, hits: &[LaneHit]) {
         for h in hits {
@@ -1018,6 +1035,10 @@ impl StreamInspector {
         }
         let verdict = self.judge(&hits, step);
         if !step.ended && verdict == Verdict::Redact {
+            if self.late(&hits) {
+                self.report.redaction_incomplete = true;
+                return self.block(step);
+            }
             self.cut_all(&hits);
         }
     }
@@ -1135,9 +1156,68 @@ impl StreamInspector {
             self.hold_overflowed |= !safe;
             let h = self.held.pop_front().expect("front exists");
             self.held_bytes -= h.cost;
+            for (f, cuts) in h.fields.iter().zip(&h.cuts).filter(|(f, _)| f.lane < WHOLE) {
+                // Whitespace a match later grows over gives nothing of it
+                // away, nor does text already cut, nor a field of nothing else.
+                let kept = sent_end(&f.span.text, cuts);
+                if kept > 0 {
+                    let lane = &mut self.lanes[f.lane];
+                    lane.sent = lane.sent.max(f.start + kept);
+                }
+            }
             step.out.push(render(&h));
         }
     }
+}
+
+/// Where `text` ends past trailing whitespace, escaped whitespace (`\n`,
+/// `\\n`, `\u000a` as JSON nested in a string spells it) included.
+fn content_end(text: &str) -> usize {
+    let mut t = text;
+    loop {
+        let trimmed = t.trim_end();
+        let escaped = [
+            "n", "r", "t", "u0009", "u000a", "u000A", "u000d", "u000D", "u0020",
+        ]
+        .iter()
+        .find_map(|e| trimmed.strip_suffix(e).filter(|s| s.ends_with('\\')));
+        t = match escaped {
+            Some(s) => s.trim_end_matches('\\'),
+            None if trimmed.len() < t.len() => trimmed,
+            None => return t.len(),
+        };
+    }
+}
+
+/// Where what a field sent ends for a match found later: past trailing
+/// whitespace and past text its cuts removed (another rule's match, say).
+fn sent_end(text: &str, cuts: &Cuts) -> usize {
+    let mut end = content_end(text);
+    if cuts.is_empty() {
+        return end;
+    }
+    // The cuts merged into disjoint spans, walked back once: `end` only
+    // falls, so a span past it is never needed again.
+    let mut spans: Vec<(usize, usize)> = cuts.iter().map(|&(a, b, _)| (a, b)).collect();
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (a, b) in spans {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    while let Some(&(a, b)) = merged.last() {
+        if a >= end {
+            merged.pop();
+        } else if end <= b {
+            end = content_end(&text[..a]);
+            merged.pop();
+        } else {
+            break;
+        }
+    }
+    end
 }
 
 /// The event as it goes out: untouched unless a field has cuts.
@@ -4369,9 +4449,11 @@ mod tests {
 
     /// AGENT-315: a stream that redacts keeps scanning every push past a
     /// full window, so under `fail_open` a key is still found while its
-    /// events are held, even when the held events pass the limit.
+    /// events are held, even when the held events pass the limit. If its
+    /// start went early regardless, the stream blocks (AGENT-330).
     #[test]
-    fn a_key_streamed_past_a_full_window_is_redacted_whole() {
+    fn a_key_streamed_past_a_full_window_is_never_sent_in_part() {
+        let mut outcomes = Vec::new();
         for cap in [4096, 1 << 14] {
             for per in [1, 3] {
                 let mut events: Vec<String> = (0..2 * cap / 2048 + 1)
@@ -4393,10 +4475,247 @@ mod tests {
                 let (out, i) = run(&p, &events);
                 assert!(!leaked(&out), "cap {cap}, {per} a time: the key went out");
                 assert!(i.hold_overflowed());
-                assert_eq!(i.report().verdict, Verdict::Redact);
-                assert!(client_texts(&out).concat().contains("done."));
+                // A redaction removes the key whole, its start included;
+                // one that can't, its start already sent, blocks (AGENT-330).
+                let text = client_texts(&out).concat();
+                match i.report().verdict {
+                    Verdict::Redact => {
+                        assert!(text.contains("[REDACTED:dlp]") && text.contains("done."));
+                        assert!(!i.report().redaction_incomplete);
+                    }
+                    v => {
+                        assert_eq!(v, Verdict::Block);
+                        assert!(i.report().redaction_incomplete);
+                    }
+                }
+                outcomes.push(i.report().verdict);
             }
         }
+        assert!(outcomes.contains(&Verdict::Redact) && outcomes.contains(&Verdict::Block));
+    }
+
+    /// A chat delta whose event also carries a long `id`, so few events fit
+    /// in `max_scan_bytes` and the oldest go early.
+    fn chat_with_id(d: &str) -> String {
+        chat_with_id_of(191, d)
+    }
+
+    fn chat_with_id_of(digits: usize, d: &str) -> String {
+        format!(
+            "data: {{\"id\":\"chatcmpl-{}\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}}}}]}}\n\n",
+            "0".repeat(digits),
+            q(d)
+        )
+    }
+
+    /// AGENT-330: under `fail_open`, events can go early before the key in
+    /// them is complete. A key whose start already went out can't be
+    /// removed whole: the stream is blocked, not reported as redacted.
+    #[test]
+    fn a_key_begun_in_text_sent_early_blocks_the_stream() {
+        let mut events = vec![PING.to_string()];
+        events.extend((0..9).map(|_| chat(&" ".repeat(1000))));
+        events.extend((0..50).map(|_| chat_with_id("z")));
+        let secret: Vec<char> = format!(" {} ", key()).chars().collect();
+        events.extend(secret.iter().map(|c| chat_with_id(&c.to_string())));
+        events.extend((0..256).map(|_| chat_with_id(" y")));
+        events.push(DONE.to_string());
+        let p = DirectionPolicy {
+            max_scan_bytes: 4096,
+            ..policy(Verdict::Redact)
+        };
+        let (out, i) = run(&p, &events);
+        assert!(i.hold_overflowed());
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(i.report().redaction_incomplete);
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
+    /// AGENT-330: a PEM key grows past what was scanned; its newest lines
+    /// can go early before the scan that grows the match over them. They
+    /// can't be cut once sent, so the stream is blocked.
+    #[test]
+    fn a_key_grown_into_text_sent_early_blocks_the_stream() {
+        let line = "QUJD".repeat(16);
+        let mut events = vec![chat_with_id_of(1500, "Here: -----BEGIN PRIVATE KEY-----\n")];
+        events.extend((0..60).map(|_| chat_with_id_of(1500, &format!("{line}\n"))));
+        events.push(chat_with_id_of(
+            1500,
+            "-----END PRIVATE KEY----- that is all.",
+        ));
+        events.push(DONE.to_string());
+        let p = DirectionPolicy {
+            max_scan_bytes: 4096,
+            ..policy(Verdict::Redact)
+        };
+        let (out, i) = run(&p, &events);
+        assert!(i.hold_overflowed());
+        let sent = client_texts(&out).concat().contains("QUJD");
+        assert!(sent, "the test sends a line before it is scanned");
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert!(i.report().redaction_incomplete);
+    }
+
+    /// AGENT-330: a key's lines that went early after they were scanned and
+    /// cut gave nothing away; only their trailing newlines, which the match
+    /// grows over later, went with them. The key is still redacted.
+    #[test]
+    fn a_key_grown_over_sent_whitespace_is_still_redacted() {
+        let line = "QUJD".repeat(16);
+        let mut events = vec![chat_with_id_of(300, "Here: -----BEGIN PRIVATE KEY-----\n")];
+        events.extend((0..60).map(|_| chat_with_id_of(300, &format!("{line}\n"))));
+        events.push(chat_with_id_of(
+            300,
+            "-----END PRIVATE KEY----- that is all.",
+        ));
+        events.push(DONE.to_string());
+        let p = DirectionPolicy {
+            max_scan_bytes: 4096,
+            ..policy(Verdict::Redact)
+        };
+        let (out, i) = run(&p, &events);
+        assert!(i.hold_overflowed());
+        let text = client_texts(&out).concat();
+        assert!(!text.contains("QUJD"), "{text}");
+        assert!(text.contains("that is all."), "{text}");
+        assert_eq!(i.report().verdict, Verdict::Redact);
+        assert!(!i.report().redaction_incomplete);
+    }
+
+    /// The same with the whitespace after each line in events of its own,
+    /// and with the key in tool-call arguments, where its newlines are
+    /// escaped: whitespace sent early gives nothing away either.
+    #[test]
+    fn a_key_grown_over_whitespace_sent_on_its_own_is_still_redacted() {
+        let line = "QUJD".repeat(16);
+        let call = |digits: usize, a: &str| {
+            format!(
+                "data: {{\"id\":\"chatcmpl-{}\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":{}}}}}]}}}}]}}\n\n",
+                "0".repeat(digits),
+                q(a)
+            )
+        };
+        type Event = Box<dyn Fn(usize, &str) -> String>;
+        let shapes: [(Event, &[&str], &str); 3] = [
+            (Box::new(chat_with_id_of), &["\r", "\n"], "\n"),
+            (Box::new(chat_with_id_of), &[" ", "\n"], "\n"),
+            (Box::new(call), &["\\n"], "\\n"),
+        ];
+        let mut redacted = [0; 3];
+        for digits in [0, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400] {
+            for (s, (event, after, nl)) in shapes.iter().enumerate() {
+                let mut events = vec![event(
+                    digits,
+                    &format!("{{\"k\":\"-----BEGIN PRIVATE KEY-----{nl}"),
+                )];
+                for _ in 0..60 {
+                    events.push(event(digits, &line));
+                    events.extend(after.iter().map(|w| event(digits, w)));
+                }
+                events.push(event(digits, "-----END PRIVATE KEY----- that is all.\"}"));
+                events.push(DONE.to_string());
+                let p = DirectionPolicy {
+                    max_scan_bytes: 4096,
+                    ..policy(Verdict::Redact)
+                };
+                let (out, i) = run(&p, &events);
+                let text = client_texts(&out).concat();
+                if text.contains("QUJD") {
+                    // A line itself went early: that one must block.
+                    assert!(i.report().redaction_incomplete, "{digits}: {text}");
+                    continue;
+                }
+                assert!(text.contains("that is all."), "{digits} {after:?}: {text}");
+                assert_eq!(i.report().verdict, Verdict::Redact, "{digits} {after:?}");
+                redacted[s] += 1;
+            }
+        }
+        assert!(redacted.iter().all(|&n| n > 1), "{redacted:?}");
+    }
+
+    #[test]
+    fn content_end_skips_plain_and_escaped_trailing_whitespace() {
+        assert_eq!(content_end("ab \r\n"), 2);
+        assert_eq!(content_end("ab\\n"), 2);
+        assert_eq!(content_end("ab\\\\n \\u000a\\t"), 2);
+        assert_eq!(content_end(" \n"), 0);
+        assert_eq!(content_end("\\n"), 0);
+        // Only an escape counts: a plain `n` ending a word is content.
+        assert_eq!(content_end("ab n"), 4);
+        assert_eq!(content_end("an"), 2);
+    }
+
+    /// A token two rules match (`anthropic_key`, then `bearer` once it is
+    /// long enough): what went early after the first rule cut it gave
+    /// nothing away, so the second rule's later report doesn't block.
+    #[test]
+    fn a_token_cut_by_one_rule_and_sent_does_not_block_another() {
+        let token = format!(
+            "sk-ant-api03-{}",
+            &"Qm7Zx2Lk9Vb4Nc8Rt1Hy6Jd3Fg5Sa0Wp".repeat(3)[..60]
+        );
+        let mut redacted = 0;
+        for digits in (0..=600).step_by(25) {
+            let mut events = vec![chat_with_id_of(digits, "Use Bearer ")];
+            events.extend(
+                token
+                    .chars()
+                    .map(|c| chat_with_id_of(digits, &c.to_string())),
+            );
+            events.push(chat_with_id_of(digits, " that is all."));
+            events.push(DONE.to_string());
+            let p = DirectionPolicy {
+                max_scan_bytes: 4096,
+                ..policy(Verdict::Redact)
+            };
+            let (out, i) = run(&p, &events);
+            let text = client_texts(&out).concat();
+            if text.starts_with("Use Bearer [REDACTED:dlp]") {
+                assert!(text.ends_with(" that is all."), "{digits}: {text}");
+                assert_eq!(i.report().verdict, Verdict::Redact, "{digits}");
+                redacted += 1;
+            } else {
+                // The token's start went before any rule matched it.
+                assert!(i.report().redaction_incomplete, "{digits}: {text}");
+            }
+        }
+        assert!(redacted > 0);
+    }
+
+    /// Many redacted matches in one field cost little to release: finding
+    /// where its sent text ends walks its cuts once (AGENT-330).
+    #[test]
+    fn dense_redactions_in_one_field_release_in_linear_time() {
+        let canary = "CANARY42";
+        let scanner: Arc<dyn Scanner> =
+            Arc::new(super::super::literal::Literal::new(canary).unwrap());
+        let p = DirectionPolicy {
+            scanners: vec![scanner],
+            ..policy(Verdict::Redact)
+        };
+        let events = [
+            chat(&format!("{canary} ").repeat(115_000)),
+            DONE.to_string(),
+        ];
+        let started = std::time::Instant::now();
+        let (out, i) = run(&p, &events);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(!out.contains(canary));
+        assert_eq!(i.report().verdict, Verdict::Redact);
+    }
+
+    #[test]
+    fn sent_end_moves_back_only_over_cut_text() {
+        let cut = |a, b| (a, b, None);
+        assert_eq!(sent_end("AAA b CCC", &vec![cut(6, 9), cut(0, 3)]), 5);
+        assert_eq!(sent_end("abKEYcd", &vec![cut(2, 5)]), 7);
+        assert_eq!(sent_end("abKEY  ", &vec![cut(2, 5)]), 2);
+        assert_eq!(sent_end("KEY KEY ", &vec![cut(4, 7), cut(0, 3)]), 0);
+        assert_eq!(sent_end("aKEYKEY", &vec![cut(1, 4), cut(3, 7)]), 1);
     }
 
     /// AGENT-315: under `flag`, where nothing is held, a full window keeps
