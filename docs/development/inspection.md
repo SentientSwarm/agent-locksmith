@@ -448,11 +448,14 @@ time. Routes that need the lowest time to first token should use
 
 Memory and cost bounds, per stream (AGENT-273):
 
-- **Windows.** Under `fail_open` at most 32 unfinished outputs have a
-  window of their own; more, and finished outputs written to again past
-  that limit, share one. Each window holds up to `max_scan_bytes` (an
-  eighth more under `flag` or `pass` once it has overflowed). A window
-  fills that far only while its text can't be trimmed: padding that
+- **Windows.** Under `fail_open` at most 31 unfinished outputs have a
+  window of their own, plus one shared by any more and by finished
+  outputs written to again past that limit. Each joined output (an
+  Anthropic text block, a Responses content part) still open can also
+  hold a bridge window across its join, and each join group carries one
+  tail, so the total is about 64 windows' worth. Each window holds up to
+  `max_scan_bytes` (an eighth more under `flag` or `pass` once it has
+  overflowed). A window fills that far only while its text can't be trimmed: padding that
   folds to nothing, or a PEM key still arriving. Under `fail_closed`
   windows, bridges and carried tails together hold at most
   `max_scan_bytes`, held events have a budget of their own of the same

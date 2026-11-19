@@ -1418,8 +1418,6 @@ mod tests {
         assert_eq!(i.report().verdict, Verdict::Redact);
     }
 
-    /// AGENT-311: a key joined onto its BEGIN line with spaces, longer
-    /// than an END is looked for across, is redacted whole when streamed.
     /// AGENT-273: Azure "On Your Data" streams text in a choice's
     /// `messages[].delta`, outside its `delta`; a key split across those
     /// chunks is redacted like one split across chat deltas.
@@ -1466,6 +1464,8 @@ mod tests {
         assert_eq!(i.report().verdict, Verdict::Block);
     }
 
+    /// AGENT-311: a key joined onto its BEGIN line with spaces, longer
+    /// than an END is looked for across, is redacted whole when streamed.
     #[test]
     fn a_streamed_space_joined_key_is_redacted_whole() {
         let words: Vec<String> = (0..200).map(|_| "QUJD".repeat(16)).collect();

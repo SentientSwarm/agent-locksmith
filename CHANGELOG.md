@@ -23,8 +23,9 @@
 ### Fixed
 
 - Under `fail_open`, a streamed output written to again after it
-  finished counts against the 32-window limit, so an upstream can no
-  longer hold a window per output for up to 1024 outputs (AGENT-273).
+  finished counts against the lane limit, so an upstream can no longer
+  hold a window per output for up to 1024 outputs; the bound is about
+  64 windows of `max_scan_bytes`, bridges included (AGENT-273).
   Azure "On Your Data" text (`choices[].messages[].delta`) is scanned
   across chunks, so a key split between chunks is caught.
 - A token endpoint that answers a redirect now fails the refresh with
