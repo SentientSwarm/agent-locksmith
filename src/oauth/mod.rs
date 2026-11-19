@@ -27,6 +27,14 @@ pub mod refresh;
 pub mod sealing;
 pub mod session;
 
+/// Whether `status` is a redirect a client would follow (301, 302, 303,
+/// 307, 308). Provider calls follow none, so these say the configured URL
+/// must be the final one; 300 and 304 are 3xx but not redirects
+/// (AGENT-328).
+pub(crate) fn is_followable_redirect(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+}
+
 pub use admin::OauthAdminState;
 pub use sealing::{SealingKey, SealingKeyError};
 pub use session::{OauthSession, OauthSessionError, OauthSessionRepository};

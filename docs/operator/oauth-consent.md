@@ -52,6 +52,8 @@ Only HTTPS literal `127.0.0.1` or `[::1]` addresses are supported, with nonzero
 ports. Callback URI must exactly match the bound address and `/oauth/callback`.
 Authorization and token origins equal the configured issuer. No discovery,
 registration, proxy, redirect following, remote fallback or request retry occurs.
+A token endpoint that answers a redirect is refused as `token_http_refused`, so
+configure the provider's final token URL.
 CA files add trust; verification stays enabled. Profiles are startup-only;
 restart to change them. At most 8 distinct profiles are supported.
 

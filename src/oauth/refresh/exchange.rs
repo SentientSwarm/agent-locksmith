@@ -95,7 +95,7 @@ async fn request_tokens(
 async fn parse_tokens(response: reqwest::Response) -> Result<TokenResponse, RefreshError> {
     let status = response.status();
     if !status.is_success() {
-        if status.is_redirection() {
+        if crate::oauth::is_followable_redirect(status) {
             return Err(RefreshError::Redirected {
                 status: status.as_u16(),
             });
@@ -155,6 +155,19 @@ mod redirect_tests {
                 !text.contains("elsewhere"),
                 "location must not be quoted: {text}"
             );
+        }
+    }
+
+    /// AGENT-328: 300 and 304 are 3xx but not redirects a client would
+    /// follow, so they must not tell the operator to change token_url.
+    #[tokio::test]
+    async fn multiple_choices_and_not_modified_are_not_redirects() {
+        for status in [300, 304] {
+            let Err(error) = parse_tokens(answer(status)).await else {
+                panic!("{status} must fail the refresh");
+            };
+            assert_ne!(error.audit_cause(), "token_redirect", "{status}");
+            assert!(!error.to_string().contains("token_url"), "{status}");
         }
     }
 

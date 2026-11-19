@@ -31,10 +31,10 @@
   as U+FF0F) now absorbs no `..` and counts every `..` it can decode
   to; the path is refused if that could climb past the base
   (AGENT-332).
-- A device login whose provider answers a redirect now says Locksmith
-  does not follow provider redirects and that the route's `token_url`
-  and `device_url` must be the provider's final URLs, instead of a bare
-  status (AGENT-328).
+- A device login whose provider answers a redirect (301, 302, 303, 307
+  or 308) now says Locksmith does not follow provider redirects and that
+  the route's `token_url` and `device_url` must be the provider's final
+  URLs, instead of a bare status (AGENT-328).
 - Under `fail_open`, a streamed output written to again after it
   finished counts against the lane limit, so an upstream can no longer
   hold a window per output for up to 1024 outputs; the bound is about
@@ -42,9 +42,13 @@
   `pass`), bridges included (AGENT-273).
   Azure "On Your Data" text (`choices[].messages[].delta`) is scanned
   across chunks, so a key split between chunks is caught.
-- A token endpoint that answers a redirect now fails the refresh with
-  cause `token_redirect` and a message naming `token_url`, not as
-  `provider_5xx` (AGENT-302). Token calls still do not follow redirects.
+- A token endpoint that answers a redirect (301, 302, 303, 307 or 308)
+  now fails the refresh with cause `token_redirect` and a message naming
+  `token_url`, not as `provider_5xx` (AGENT-302). 300 and 304 are not
+  redirects and still report `provider_5xx` (AGENT-328). Token calls
+  still do not follow redirects.
+- The operator consent guide says a redirect from the token endpoint is
+  reported as `token_http_refused` (AGENT-328).
 - The upstream base-path check refuses a path holding a NUL (`%00`),
   decoded or still escaped at the decode bound, since an upstream reading
   it as a C string sees `..%00` as `..`. That includes a literal `%2500`

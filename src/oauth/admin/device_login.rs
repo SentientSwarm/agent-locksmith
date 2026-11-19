@@ -521,7 +521,7 @@ fn upstream_failed(step: &str, status: Option<reqwest::StatusCode>) -> Box<Respo
 fn failure_detail(status: Option<reqwest::StatusCode>) -> String {
     match status {
         None => "unreachable".into(),
-        Some(s) if s.is_redirection() => format!(
+        Some(s) if crate::oauth::is_followable_redirect(s) => format!(
             "{} (a redirect; Locksmith does not follow provider redirects, so the \
              route's token_url and device_url must be the provider's final URLs)",
             s.as_u16()
@@ -758,6 +758,12 @@ mod tests {
             "502"
         );
         assert_eq!(failure_detail(None), "unreachable");
+        for status in [
+            reqwest::StatusCode::MULTIPLE_CHOICES,
+            reqwest::StatusCode::NOT_MODIFIED,
+        ] {
+            assert_eq!(failure_detail(Some(status)), status.as_u16().to_string());
+        }
     }
 
     use super::*;
