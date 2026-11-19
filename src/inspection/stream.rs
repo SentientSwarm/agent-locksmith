@@ -593,8 +593,9 @@ impl StreamInspector {
                     }
                     self.hold_overflowed = true;
                     self.carry.remove(group);
+                } else {
+                    self.last_join.insert(group, at);
                 }
-                self.last_join.insert(group, at);
                 let open: Vec<usize> = (0..self.lanes.len())
                     .filter(|&i| {
                         let l = &self.lanes[i];
@@ -859,6 +860,13 @@ impl StreamInspector {
         self.scanned(0, found.map(|_| Vec::new()), overflowed, hits, step)
     }
 
+    /// `lane` is the latest in-order output of `group`.
+    fn is_latest(&self, group: JoinGroup, lane: &Lane) -> bool {
+        self.last_join.get(group).is_some_and(|last| {
+            lane.tags.len() == last.len() && lane.tags.iter().zip(last).all(|(&(_, v), l)| v == *l)
+        })
+    }
+
     /// `lane`'s tail for the next output of its group, if not empty. With
     /// a bridge, that is the bridge's: the earlier outputs' kept tail and
     /// then this one's text, so a match can cross a short output too.
@@ -973,9 +981,11 @@ impl StreamInspector {
                 (found, bridge.window.overflowed())
             });
             let state = &self.lanes[lane];
-            // A superseded output's successor already took its tail.
+            // A superseded output's successor already took its tail, and
+            // only the group's latest output is followed by the next one.
             if let Some(group) = join_group(&state.lane)
                 && !state.superseded
+                && self.is_latest(group, &state.lane)
             {
                 self.lend_tail(group, lane);
             }
@@ -1938,6 +1948,29 @@ mod tests {
         let (head, last) = k.split_at(k.len() - 1);
         for (at, stop, end) in JOINED {
             let events = vec![at(1, head), at(0, last), stop(0), stop(1), end.to_string()];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(out, events.concat());
+            assert!(i.hold_overflowed());
+            assert_ne!(i.report().verdict, Verdict::Block, "{:?}", i.report().hits);
+        }
+    }
+
+    /// An out-of-order output lends no tail when it finishes either: the
+    /// next output follows the group's latest, not it.
+    #[test]
+    fn an_out_of_order_output_lends_no_tail_when_it_finishes() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(1, " middle "),
+                stop(1),
+                at(0, head),
+                stop(0),
+                at(2, last),
+                stop(2),
+                end.to_string(),
+            ];
             let (out, i) = run(&policy(Verdict::Redact), &events);
             assert_eq!(out, events.concat());
             assert!(i.hold_overflowed());
