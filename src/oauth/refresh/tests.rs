@@ -207,4 +207,45 @@ mod failure_events {
         };
         assert!(store.query(&filter).await.unwrap().is_empty());
     }
+
+    /// Captures formatted log lines for one test.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn the_daemon_log_names_the_provider_status() {
+        // AGENT-328: when the session changed under the failure, nothing
+        // reaches the operational log, so the daemon log is the only record
+        // and must say a 304 from a 503.
+        let (_d, repo, key, _store) = setup().await;
+        let session = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        repo.delete(&session.name, &session.session_label)
+            .await
+            .unwrap();
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let error = RefreshError::ProviderError { status: 304 };
+        record_failure(&repo, &session, &error, None).await;
+        let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("degradation not committed"), "{text}");
+        assert!(text.contains("http_status=Some(304)"), "{text}");
+    }
 }

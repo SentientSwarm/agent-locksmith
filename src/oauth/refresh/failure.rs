@@ -16,7 +16,8 @@ pub(crate) async fn record_failure(
         // It needs signing in again all the same, so say so.
         if repo.held_by_claim(session).await.unwrap_or(false) {
             warn!(name = %session.name, session_label = %session.session_label,
-                cause = error.audit_cause(), "oauth refresh failed; session needs reconnecting");
+                cause = error.audit_cause(), http_status = ?error.http_status(),
+                "oauth refresh failed; session needs reconnecting");
             if let Some(emitter) = emitter {
                 emitter.emit(
                     crate::repo::LogLevel::Warn,
@@ -29,11 +30,13 @@ pub(crate) async fn record_failure(
             return;
         }
         warn!(name = %session.name, session_label = %session.session_label,
-            cause = error.audit_cause(), "oauth refresh failed; degradation not committed");
+            cause = error.audit_cause(), http_status = ?error.http_status(),
+            "oauth refresh failed; degradation not committed");
         return;
     }
     warn!(name = %session.name, session_label = %session.session_label,
-        cause = error.audit_cause(), "oauth refresh failed; session marked degraded");
+        cause = error.audit_cause(), http_status = ?error.http_status(),
+        "oauth refresh failed; session marked degraded");
     if let Some(emitter) = emitter {
         emitter.emit(
             crate::repo::LogLevel::Warn,
