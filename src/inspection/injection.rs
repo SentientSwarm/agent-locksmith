@@ -141,7 +141,7 @@ fn invisible_hits(text: &str) -> Vec<(&'static str, usize, usize)> {
     out
 }
 
-pub(super) struct Injection;
+pub(crate) struct Injection;
 
 impl Scanner for Injection {
     fn id(&self) -> &str {

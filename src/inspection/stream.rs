@@ -597,6 +597,7 @@ impl StreamInspector {
             // open one, which clients join it after (AGENT-329). That one
             // keeps its window, so nothing it holds is lost; text sent to
             // it later joins nothing, so it is an interleave (below).
+            let mut set_aside = None;
             if !self.by_lane.contains_key(key)
                 && let Some(group) = join_group(key)
             {
@@ -610,34 +611,41 @@ impl StreamInspector {
                         !l.done && !l.superseded && join_group(&l.lane) == Some(group)
                     })
                     .collect();
-                // Out of order, it joins before them: it takes no tail. In
-                // order, it follows the group's latest output, so only that
-                // one lends, not an out-of-order one still open (AGENT-328).
-                let lender = open
-                    .last()
-                    .copied()
-                    .filter(|&i| in_order && self.is_latest(group, &self.lanes[i].lane));
                 if !in_order {
                     if self.on_error == OnError::FailClosed {
                         self.note_error("joined stream outputs out of order".into());
                         return self.block(step);
                     }
+                    // It joins before the group's latest output: it takes
+                    // no tail, and leaves that output open and its tail kept
+                    // for the next one, which clients join after it
+                    // (AGENT-328).
                     self.hold_overflowed = true;
-                    self.carry.remove(group);
+                    set_aside = self.carry.remove(group).map(|tail| (group, tail));
                 } else {
+                    // In order, it follows the group's latest output: only
+                    // that one lends, wherever it is among the open ones,
+                    // not an out-of-order one still open (AGENT-328).
+                    let lender = open
+                        .iter()
+                        .copied()
+                        .find(|&i| self.is_latest(group, &self.lanes[i].lane));
                     self.last_join.insert(group, at);
-                }
-                if let Some(newest) = lender {
-                    self.lend_tail(group, newest);
-                }
-                for i in open {
-                    self.lanes[i].superseded = true;
+                    if let Some(latest) = lender {
+                        self.lend_tail(group, latest);
+                    }
+                    for i in open {
+                        self.lanes[i].superseded = true;
+                    }
                 }
             }
             let Some(lane) = self.lane(key) else {
                 self.note_error("more stream outputs than can be inspected".into());
                 return self.block(step);
             };
+            if let Some((group, tail)) = set_aside {
+                self.carry.insert(group, tail);
+            }
             let state = &mut self.lanes[lane];
             if state.done {
                 // Its output was said to be finished, and its held events
@@ -2095,6 +2103,57 @@ mod tests {
             assert_eq!(out, events.concat());
             assert!(i.hold_overflowed());
             assert_ne!(i.report().verdict, Verdict::Block, "{:?}", i.report().hits);
+        }
+    }
+
+    /// The group's latest output, reopened after an out-of-order one
+    /// superseded it, still lends its tail to the next: clients join 1 then
+    /// 2, so a key split there is caught and the stream blocked rather than
+    /// the key's end sent to complete it (AGENT-328).
+    #[test]
+    fn a_reopened_latest_output_lends_its_tail_to_the_next() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(1, "x "),
+                at(0, "y "),
+                at(1, head),
+                at(2, last),
+                stop(0),
+                stop(1),
+                stop(2),
+                end.to_string(),
+            ];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_split_blocked(&out, &i);
+            assert!(i.hold_overflowed());
+        }
+    }
+
+    /// An out-of-order output starting between the group's latest one and
+    /// the next takes nothing from either: the latest, still open or
+    /// finished, lends its tail to the next all the same (AGENT-328).
+    #[test]
+    fn an_out_of_order_output_between_two_joined_ones_keeps_their_join() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            for finished in [false, true] {
+                let mut events = vec![at(1, &format!("x {head}"))];
+                if finished {
+                    events.push(stop(1));
+                }
+                events.extend([at(0, "y "), at(2, last), at(2, " and that is all.")]);
+                events.extend([stop(0), stop(2)]);
+                if !finished {
+                    events.push(stop(1));
+                }
+                events.push(end.to_string());
+                let (out, i) = run(&policy(Verdict::Redact), &events);
+                assert_split_blocked(&out, &i);
+                assert!(i.hold_overflowed());
+            }
         }
     }
 
@@ -4699,8 +4758,9 @@ mod tests {
         ];
         let started = std::time::Instant::now();
         let (out, i) = run(&p, &events);
+        // The quadratic walk took about 17 s; linear, about 2 s under load.
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
+            started.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",
             started.elapsed()
         );

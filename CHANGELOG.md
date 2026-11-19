@@ -22,6 +22,12 @@
 
 ### Fixed
 
+- Under `fail_open`, a key split between two joined outputs (Anthropic
+  text blocks, Responses content parts) no longer reaches the agent whole
+  when an out-of-order output starts between them (AGENT-328). That
+  output joins before the others, so it now takes no tail and leaves the
+  group's latest output, open or finished, to lend its tail to the next;
+  the split is caught and the stream blocked.
 - Under `on_hit: redact` with `fail_open`, a streamed key whose start went
   out before the key was complete (held events released early past
   `max_scan_bytes`) is no longer audited as redacted while that start

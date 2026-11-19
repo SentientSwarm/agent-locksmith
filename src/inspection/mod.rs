@@ -11,7 +11,7 @@
 
 pub mod config;
 pub(crate) mod dlp;
-mod injection;
+pub(crate) mod injection;
 pub mod lanes;
 mod literal;
 mod normalize;
