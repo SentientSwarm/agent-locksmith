@@ -270,6 +270,8 @@ Codes:
 | HTTP | type | code | When |
 |---|---|---|---|
 | 400 | `bad_request` | `bad_request` | Request body unreadable or larger than the registration's body limit. |
+| 400 | `bad_request` | `upstream_path_escape` | The request path would leave the route's upstream base path, as Locksmith or the upstream may resolve it. Nothing is sent. |
+| 400 | `bad_request` | `path_too_long` | An escaped request path is too long to check against the base path (over 16 KiB, or 8 KiB when it needs folded readings). Nothing is sent. |
 | 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code), or the agent is no longer active. |
 | 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
 | 404 | `not_found` | `tool_not_found` | Allowlisted name that is not registered or not enabled. |

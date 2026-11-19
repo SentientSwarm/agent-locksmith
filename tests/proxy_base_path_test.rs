@@ -72,6 +72,30 @@ async fn dot_segments_cannot_leave_the_base_path() {
     assert_eq!(refused, 13);
 }
 
+/// AGENT-287 — an escaped path too long to judge is refused with its own
+/// code, so the audit tells it from an escape.
+#[tokio::test]
+async fn a_path_too_long_to_check_has_its_own_code() {
+    let up = upstream().await;
+    let b = build(config(&format!("{}/base/api", up.uri()), "  routes: []\n")).await;
+    // The router decodes once, so each repeat is six bytes at the check.
+    let long = "a%252Fb/".repeat(16 * 1024 / 6 + 1);
+    let (status, body) = get(&b, &format!("/api/out/{long}x")).await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["code"], "path_too_long");
+    let (status, body) = get(&b, "/api/out/%2e%2e/secret").await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["code"], "upstream_path_escape");
+    assert!(up.received_requests().await.unwrap().is_empty());
+    let count = |event: &'static str| {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audit WHERE event = ?")
+            .bind(event)
+            .fetch_one(&b.pool)
+    };
+    assert_eq!(count("path_too_long").await.unwrap(), 1);
+    assert_eq!(count("upstream_path_escape").await.unwrap(), 1);
+}
+
 #[tokio::test]
 async fn paths_inside_the_base_path_still_forward() {
     let up = upstream().await;

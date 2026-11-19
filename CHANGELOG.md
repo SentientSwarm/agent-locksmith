@@ -33,11 +33,14 @@
   decoded `?` or `#`, and resolves again. A tail walking back into the
   base no longer hides such a climb (`q%2523/%252e%252e/..%2523/api/z`
   reached `/v1/`). A path holding a `%` escape is now refused above
-  16 KiB: at that length the check takes up to about a tenth of a
-  second, and the listener accepts URIs of about 400 KiB. A path with no escape after
-  the base has no bound, and is now decided in one pass (a 400 KB one
-  took 733 ms). A plain `..;` that climbs out of the base and back
-  (`/v1/api/..;/api/x`) is now refused.
+  16 KiB (8 KiB when it needs folded readings), with 400
+  `path_too_long` and a `path_too_long` audit row, not
+  `upstream_path_escape`. The costliest paths measured near those bounds
+  took about a tenth of a second to check, and the listener accepts URIs
+  of about 400 KiB. A path with no escape after the base has no bound,
+  and is now decided in one pass (a 400 KB one took 733 ms). A plain
+  `..;` that climbs out of the base and back (`/v1/api/..;/api/x`) is
+  now refused.
 - The upstream base-path check no longer lets `..;` bring a path back
   into the base after it climbed out. It reads `..;` as a name too, as
   an RFC 3986 resolver does, and refuses a path that no longer starts

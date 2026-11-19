@@ -622,7 +622,8 @@ async fn proxy_request(
     // URL parser resolves dot segments (and `\`), so `%2e%2e` would climb
     // out of the route's base path with its credential attached.
     if !stays_within_base(&target.upstream, &upstream_url) {
-        return record_upstream_path_escape(&state.audit, &ctx, upstream_host).await;
+        let too_long = refused_for_length(&target.upstream, &upstream_url);
+        return record_upstream_path_escape(&state.audit, &ctx, upstream_host, too_long).await;
     }
     let method = req.method().clone();
     let agent_base = upstream_urls::agent_base(
@@ -1412,9 +1413,7 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // base passes its own readings and this part never climbs above its
     // start (`..;` still does). One pass decides a path of any length, under
     // an escaped base (`group%2Fproj`) too (AGENT-287).
-    let rest = path
-        .strip_prefix(base.trim_end_matches('/'))
-        .filter(|rest| rest.is_empty() || rest.starts_with('/'));
+    let rest = after_base(base, path);
     // The URL is the base, a `/` and the request path, so a path that no
     // longer starts with the base was climbed out of it by the URL parser's
     // own `..`. A later `..;` brings it back only for an upstream
@@ -1438,6 +1437,33 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
         return !climbs && !joins && within(base, base);
     }
     within(base, path)
+}
+
+/// The part of `path` after `base`, when `path` starts with it at a
+/// segment boundary.
+fn after_base<'a>(base: &str, path: &'a str) -> Option<&'a str> {
+    path.strip_prefix(base.trim_end_matches('/'))
+        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Whether [`stays_within_base`] refused `url` for its length alone, before
+/// judging where it leads: the part after the base holds an escape and the
+/// path is over a bound in [`too_long`] (AGENT-287).
+fn refused_for_length(upstream: &str, url: &str) -> bool {
+    let (Ok(base), Ok(out)) = (reqwest::Url::parse(upstream), reqwest::Url::parse(url)) else {
+        return false;
+    };
+    out.origin() == base.origin()
+        && after_base(base.path(), out.path()).is_some_and(|rest| rest.contains('%'))
+        && too_long(out.path())
+}
+
+/// Whether an escaped path is too long to judge: over
+/// [`MAX_ESCAPED_PATH_BYTES`], or over [`MAX_FOLDED_PATH_BYTES`] and needing
+/// the folded readings.
+fn too_long(path: &str) -> bool {
+    path.len() > MAX_ESCAPED_PATH_BYTES
+        || (path.len() > MAX_FOLDED_PATH_BYTES && Dots::for_path(path).len() > 1)
 }
 
 /// Whether every reading of `path` stays under the same reading of `base`
@@ -1466,7 +1492,7 @@ fn within(base: &str, path: &str) -> bool {
                 }
             });
     }
-    if path.len() > MAX_ESCAPED_PATH_BYTES {
+    if too_long(path) {
         return false;
     }
     let all = Dots::for_path(path);
@@ -1478,7 +1504,7 @@ fn within(base: &str, path: &str) -> bool {
     if all.len() > 1 {
         let literal = readings(path, Dots::LITERAL);
         let earlier = &literal[..literal.len() - 1];
-        if path.len() > MAX_FOLDED_PATH_BYTES || !earlier.iter().all(|r| plain(r)) {
+        if !earlier.iter().all(|r| plain(r)) {
             return false;
         }
     }
@@ -1657,10 +1683,12 @@ fn plain(text: &str) -> bool {
 const MAX_FOLDED_PATH_BYTES: usize = 8 * 1024;
 
 /// The longest path with a `%` escape the check holds (AGENT-287). Its
-/// readings and two-stage resolves take up to about a tenth of a second
-/// at this length (release build, measured at 4b1475a), in the request
-/// handler, and the listener accepts URIs of about 400 KiB; no real client sends an escaped path this long (common
-/// servers cap a URL at 8 KiB), so a longer one is refused. A path with
+/// readings and two-stage resolves run in the request handler; the
+/// costliest paths measured near this bound and [`MAX_FOLDED_PATH_BYTES`]
+/// took about a tenth of a second (release build, Linux, 4b1475a). The
+/// listener accepts URIs of about 400 KiB, and no real client sends an
+/// escaped path this long (common servers cap a URL at 8 KiB), so a
+/// longer one is refused. A path with
 /// no escape has one reading and no bound.
 const MAX_ESCAPED_PATH_BYTES: usize = 16 * 1024;
 
@@ -2079,15 +2107,28 @@ fn two_stage_within(base: &str, path: &str, params: Params, dots: Dots) -> bool 
 }
 
 /// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
-/// request path would leave the route's upstream base path.
+/// request path would leave the route's upstream base path, or
+/// `proxy/path_too_long` when it was too long to judge (AGENT-287).
 async fn record_upstream_path_escape(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
     upstream_host: Option<String>,
+    too_long: bool,
 ) -> Response {
+    let (code, message) = if too_long {
+        (
+            "path_too_long",
+            "Request path is too long to check against the route's base path",
+        )
+    } else {
+        (
+            "upstream_path_escape",
+            "Request path leaves the route's upstream base path",
+        )
+    };
     let mut event = ctx.audit_event_base();
     event.event_class = EventClass::Proxy;
-    event.event = "upstream_path_escape".to_string();
+    event.event = code.to_string();
     event.status = Some(400);
     event.decision = Decision::Denied;
     event.upstream_host = upstream_host;
@@ -2095,9 +2136,9 @@ async fn record_upstream_path_escape(
     (
         StatusCode::BAD_REQUEST,
         Json(json!({"error": {
-            "message": "Request path leaves the route's upstream base path",
+            "message": message,
             "type": "bad_request",
-            "code": "upstream_path_escape",
+            "code": code,
         }})),
     )
         .into_response()
@@ -2594,7 +2635,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod base_path_tests {
     use super::stays_within_base as ok;
-    use super::{MAX_ESCAPED_PATH_BYTES, MAX_FOLDED_PATH_BYTES};
+    use super::{MAX_ESCAPED_PATH_BYTES, MAX_FOLDED_PATH_BYTES, refused_for_length};
 
     #[test]
     fn base_path_edges() {
@@ -2666,6 +2707,25 @@ mod base_path_tests {
         assert!(ok(base, "https://h/v1/api/%25E6%2597%25A5/x"));
         assert!(ok(base, "https://h/v1/api/100%25%20/%E6%97%A5/x"));
         assert!(ok(base, "https://h/v1/api/a%252Fb/x"));
+    }
+
+    #[test]
+    fn a_refusal_for_length_is_told_from_an_escape() {
+        // AGENT-287: only a refusal by the bounds counts as too long.
+        let base = "https://h/v1/api";
+        let escaped = "a%252Fb/".repeat(MAX_ESCAPED_PATH_BYTES / 8 + 1);
+        let url = format!("https://h/v1/api/{escaped}x");
+        assert!(!ok(base, &url) && refused_for_length(base, &url));
+        let folded = "%EF%BD%81/".repeat(MAX_FOLDED_PATH_BYTES / 10 + 1);
+        let url = format!("https://h/v1/api/{folded}x");
+        assert!(!ok(base, &url) && refused_for_length(base, &url));
+        // A short escape that climbs, and a long plain path that climbs.
+        assert!(!refused_for_length(base, "https://h/v1/api/%252e%252e/x"));
+        let plain = format!(
+            "https://h/v1/api/../x/{}",
+            "a/".repeat(MAX_ESCAPED_PATH_BYTES)
+        );
+        assert!(!ok(base, &plain) && !refused_for_length(base, &plain));
     }
 
     /// The folded readings cost eight times one, so a path they are needed
