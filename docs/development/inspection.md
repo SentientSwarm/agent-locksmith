@@ -313,7 +313,36 @@ finds it ended, or the window or the held events pass `max_scan_bytes`
 of what it holds, so padding that keeps the window long cannot make scanning
 quadratic. Up to 31 unfinished outputs under `fail_open`, or 255 under
 `fail_closed` (1023 in all), get their own window; a finished output's window
-drops its text. Each parallel tool call takes two outputs, its name and its
+drops its text, except for its kept tail. That tail carries over when the
+output belongs to a join group (AGENT-329): outputs a client joins into one
+text. The groups are an Anthropic message's text blocks (`text_delta`) and
+Responses content parts. The SDK's `output_text` joins the output text parts;
+the group also takes refusal and reasoning text, joining more rather than
+less. Tool inputs and arguments, thinking, reasoning summaries, chat choices
+and keys an upstream invents never join. Each output keeps its own window,
+judged as before. Its start also gets a second window, a bridge, which begins
+with the group's kept tail so far, counted as already scanned (after a short
+output that is the earlier outputs' tail and then its text, so a match can
+cross it too). The bridge scans in batches, as a window does, reports only
+matches that cross the join, and is dropped once its scan keeps none of that
+tail, or after a last scan when its output finishes. The output's events stay
+held while it has a bridge. A new match to redact across the join cannot be
+removed whole, since its start went out with the earlier output (and, in
+Responses, again in that part's whole-text `.done` copies). The stream is
+therefore blocked before the rest goes, with `redaction_incomplete`, as for a
+cut no rewrite can make. Under `on_hit: block` it blocks as any match does,
+and under `flag` it is flagged. A match the earlier output already reported,
+grown into this one, counts once and is cut here too. Clients join a group's
+outputs in index order: an output starting below an earlier one of its group
+blocks under `fail_closed` ("joined stream outputs out of order"), and under
+`fail_open` is not joined and writes an `inspection_hold_overflow` row.
+Carried tails and bridges count toward `max_scan_bytes`; past it the tails are
+dropped (an `inspection_hold_overflow` row, or a block under `fail_closed`).
+A new output of a group starts from the group's open one, which keeps its
+window. Text sent to that earlier output afterwards joins nothing a client
+joins: under `fail_closed` the stream is blocked ("joined stream outputs
+interleaved"), and under `fail_open` an `inspection_hold_overflow` row is
+written. Each parallel tool call takes two outputs, its name and its
 arguments (AGENT-273). Under `fail_closed` the text all windows hold is
 already limited to `max_scan_bytes`, and a window gives back memory when it
 trims, so the higher limit adds little; each unfinished output keeps up to the

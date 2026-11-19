@@ -42,6 +42,23 @@ pub struct WindowHit {
     pub new: bool,
 }
 
+/// An output's kept text and the spans reported in it, offsets from its start.
+#[derive(Clone, Debug, Default)]
+pub struct Carried {
+    text: String,
+    reported: HashMap<(String, String), BTreeMap<usize, usize>>,
+}
+
+impl Carried {
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+}
+
 pub struct TextWindow {
     scanners: Vec<Arc<dyn Scanner>>,
     overlap: usize,
@@ -108,6 +125,41 @@ impl TextWindow {
             return Ok(Vec::new());
         }
         self.scan()
+    }
+
+    /// What a later output its clients join must start from (AGENT-329):
+    /// the text a match ending later could still include (what the last
+    /// scan kept, whether or not scanned since), and the spans already
+    /// reported in it, so a match that grows into the next output is
+    /// counted once.
+    pub fn carried(&self) -> Carried {
+        let base = self.base;
+        let reported = self
+            .reported
+            .iter()
+            .map(|(key, spans)| {
+                let kept: BTreeMap<usize, usize> = spans
+                    .iter()
+                    .filter(|&(_, &b)| b > base)
+                    .map(|(&a, &b)| (a.max(base) - base, b - base))
+                    .collect();
+                (key.clone(), kept)
+            })
+            .filter(|(_, kept)| !kept.is_empty())
+            .collect();
+        Carried {
+            text: self.buf.clone(),
+            reported,
+        }
+    }
+
+    /// Start a fresh window from `carried`, counted as scanned: a match is
+    /// reported only when it ends in text pushed later.
+    pub fn seed(&mut self, carried: Carried) {
+        debug_assert!(self.buf.is_empty() && self.base == 0);
+        self.buf = carried.text;
+        self.scanned = self.buf.len();
+        self.reported = carried.reported;
     }
 
     /// Drop the held text once nothing will extend it (its output is

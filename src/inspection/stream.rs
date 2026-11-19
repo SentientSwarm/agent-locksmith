@@ -23,7 +23,7 @@
 
 use super::lanes::{Close, Lane};
 use super::sse::{self, Protocol, SseEvent, SseParser, TextSpan};
-use super::window::{TextWindow, WindowHit};
+use super::window::{Carried, TextWindow, WindowHit};
 use super::{
     Direction, DirectionPolicy, HitRecord, MAX_AUDITED_HITS, OnError, Report, Scanner, Verdict,
 };
@@ -101,6 +101,48 @@ struct LaneState {
     window: TextWindow,
     /// The protocol said this output is finished: nothing more extends it.
     done: bool,
+    /// A later output of its join group began from this one's text: what
+    /// it is sent after that joins no output a client joins (AGENT-329).
+    superseded: bool,
+    /// The scan across this output's start and the end of the one its
+    /// clients join it after, while a match could still cross it.
+    bridge: Option<Bridge>,
+}
+
+/// AGENT-329: a second window over a joined output's start, beginning with
+/// the previous output's kept tail. The output keeps its own window, so
+/// what it alone holds is judged as before (a key right after a word in
+/// the previous output still starts at a word boundary in its own); the
+/// bridge reports only matches crossing the join, in the output's offsets.
+struct Bridge {
+    window: TextWindow,
+    /// Bytes of carried tail before the output's first byte.
+    seed: usize,
+}
+
+impl Bridge {
+    /// Matches crossing the join, moved into `lane`'s offsets (a match
+    /// starting in the carried tail starts at the output's start).
+    fn crossing(&self, lane: usize, found: Vec<WindowHit>) -> Vec<LaneHit> {
+        found
+            .into_iter()
+            .filter(|h| h.start < self.seed && h.end > self.seed)
+            .map(|h| LaneHit {
+                lane,
+                hit: WindowHit {
+                    start: 0,
+                    end: h.end - self.seed,
+                    ..h
+                },
+            })
+            .collect()
+    }
+
+    /// No match can cross the join any more: the bridge's last scan kept
+    /// none of the carried tail.
+    fn spent(&self) -> bool {
+        self.window.base() >= self.seed
+    }
 }
 
 /// A hit with the lane it was found in.
@@ -136,6 +178,8 @@ pub struct StreamInspector {
     lane_bytes: usize,
     /// The highest tool-call index seen in each chat choice (AGENT-317).
     last_call: HashMap<String, i64>,
+    /// The tags of each join group's latest output (AGENT-329).
+    last_join: HashMap<JoinGroup, Vec<i64>>,
     /// Whether each chat array's elements came by `index` (AGENT-317).
     indexed: HashMap<String, bool>,
     /// Gemini candidates (by position) whose answer text has started.
@@ -149,6 +193,26 @@ pub struct StreamInspector {
     scheme: Option<super::lanes::Scheme>,
     /// Whether the stream's first JSON event was a JSON-RPC message.
     jsonrpc: Option<bool>,
+    /// The tail of the last finished output of each join group, for the
+    /// next output of that group to start from (AGENT-329).
+    carry: HashMap<JoinGroup, Carried>,
+}
+
+/// Outputs a client joins into one text, whatever their indexes: an
+/// Anthropic message's text blocks, and Responses content parts (the SDK's
+/// `output_text`). Only these: tool inputs and arguments, thinking and
+/// reasoning summaries are not joined by clients, and an allow-list keeps
+/// an upstream from making a group of every key it invents, which would
+/// keep a tail per group.
+type JoinGroup = &'static str;
+
+fn join_group(lane: &Lane) -> Option<JoinGroup> {
+    let names: Vec<&str> = lane.tags.iter().map(|(t, _)| *t).collect();
+    match (lane.path.as_str(), names.as_slice()) {
+        ("/delta/text", ["i"]) => Some("anthropic text"),
+        ("/delta", ["o", "c"]) => Some("responses content"),
+        _ => None,
+    }
 }
 
 impl StreamInspector {
@@ -200,12 +264,14 @@ impl StreamInspector {
             wholes: 0,
             lane_bytes: 0,
             last_call: HashMap::new(),
+            last_join: HashMap::new(),
             indexed: HashMap::new(),
             answered: HashSet::new(),
             clean: HashSet::new(),
             unjudged: false,
             scheme: None,
             jsonrpc: None,
+            carry: HashMap::new(),
         }
     }
 
@@ -365,6 +431,11 @@ impl StreamInspector {
                 return None;
             }
             self.hold_overflowed = true;
+            // The shared window takes no tail; a later output of the group
+            // must not start from one no longer next to it.
+            if let Some(group) = join_group(lane) {
+                self.carry.remove(group);
+            }
             &shared
         } else {
             lane
@@ -373,10 +444,20 @@ impl StreamInspector {
             return Some(i);
         }
         self.lane_bytes += lane.path.len();
+        let bridge = join_group(lane)
+            .and_then(|g| self.carry.remove(g))
+            .map(|tail| {
+                let seed = tail.len();
+                let mut window = TextWindow::new(self.scanners.clone(), self.max_held);
+                window.seed(tail);
+                Bridge { window, seed }
+            });
         self.lanes.push(LaneState {
             lane: lane.clone(),
             window: TextWindow::new(self.scanners.clone(), self.max_held),
             done: false,
+            superseded: false,
+            bridge,
         });
         let i = self.lanes.len() - 1;
         self.by_lane.insert(lane.clone(), i);
@@ -494,6 +575,38 @@ impl StreamInspector {
                 self.note_error(why.into());
                 return self.block(step);
             }
+            // A new output of a join group starts from the group's newest
+            // open one, which clients join it after (AGENT-329). That one
+            // keeps its window, so nothing it holds is lost; text sent to
+            // it later joins nothing, so it is an interleave (below).
+            if !self.by_lane.contains_key(key)
+                && let Some(group) = join_group(key)
+            {
+                // Clients join a group's outputs in index order: one
+                // starting below an earlier one joins before it.
+                let at: Vec<i64> = key.tags.iter().map(|&(_, v)| v).collect();
+                if self.last_join.get(group).is_some_and(|last| at < *last) {
+                    if self.on_error == OnError::FailClosed {
+                        self.note_error("joined stream outputs out of order".into());
+                        return self.block(step);
+                    }
+                    self.hold_overflowed = true;
+                    self.carry.remove(group);
+                }
+                self.last_join.insert(group, at);
+                let open: Vec<usize> = (0..self.lanes.len())
+                    .filter(|&i| {
+                        let l = &self.lanes[i];
+                        !l.done && !l.superseded && join_group(&l.lane) == Some(group)
+                    })
+                    .collect();
+                if let Some(&newest) = open.last() {
+                    self.lend_tail(group, newest);
+                }
+                for i in open {
+                    self.lanes[i].superseded = true;
+                }
+            }
             let Some(lane) = self.lane(key) else {
                 self.note_error("more stream outputs than can be inspected".into());
                 return self.block(step);
@@ -509,10 +622,23 @@ impl StreamInspector {
                 self.hold_overflowed = true;
                 state.done = false;
             }
+            if state.superseded {
+                // A later output its clients join after it already took its
+                // tail: a match through what comes now is in no one window.
+                if self.on_error == OnError::FailClosed {
+                    self.note_error("joined stream outputs interleaved".into());
+                    return self.block(step);
+                }
+                self.hold_overflowed = true;
+                state.superseded = false;
+            }
             let start = state.window.end();
             let found = state.window.push(&span.text);
             let overflowed = state.window.overflowed();
             if !self.scanned(lane, found, overflowed, &mut hits, step) {
+                return;
+            }
+            if !self.bridge_push(lane, &span.text, &mut hits, step) {
                 return;
             }
             fields.push(Field { span, lane, start });
@@ -675,13 +801,87 @@ impl StreamInspector {
         true
     }
 
+    /// Feed `text` (just pushed to `lane`'s own window) to the lane's
+    /// bridge, scanning at once, and judge only what crosses the join. The
+    /// bridge goes once nothing can cross it.
+    fn bridge_push(
+        &mut self,
+        lane: usize,
+        text: &str,
+        hits: &mut Vec<LaneHit>,
+        step: &mut Step,
+    ) -> bool {
+        let Some(bridge) = self.lanes[lane].bridge.as_mut() else {
+            return true;
+        };
+        let found = bridge.window.push(text).map(|f| bridge.crossing(lane, f));
+        let overflowed = bridge.window.overflowed();
+        if bridge.spent() {
+            self.lanes[lane].bridge = None;
+        }
+        self.bridged(found, overflowed, hits, step)
+    }
+
+    /// Take a bridge's result, as `scanned` does a window's. An overflow
+    /// is audited even under `fail_open`: the bridge goes, its flag with it.
+    /// A new match to redact across the join cannot be removed whole: its
+    /// start went out with the earlier output, so the stream is blocked
+    /// (`redaction_incomplete`). A match the earlier output reported, now
+    /// grown into this one, is cut here as well.
+    fn bridged(
+        &mut self,
+        found: Result<Vec<LaneHit>, super::ScanError>,
+        overflowed: bool,
+        hits: &mut Vec<LaneHit>,
+        step: &mut Step,
+    ) -> bool {
+        self.hold_overflowed |= overflowed;
+        let found = found.map(|f| {
+            let split = f
+                .iter()
+                .any(|h| h.hit.new && self.verdict_of(&h.hit) == Verdict::Redact);
+            if split {
+                self.record(&f);
+                self.report.redaction_incomplete = true;
+            }
+            hits.extend(f);
+            split
+        });
+        if let Ok(true) = found {
+            self.block(step);
+            return false;
+        }
+        self.scanned(0, found.map(|_| Vec::new()), overflowed, hits, step)
+    }
+
+    /// `lane`'s tail for the next output of its group, if not empty. With
+    /// a bridge, that is the bridge's: the earlier outputs' kept tail and
+    /// then this one's text, so a match can cross a short output too.
+    fn lend_tail(&mut self, group: JoinGroup, lane: usize) {
+        let state = &self.lanes[lane];
+        let tail = match &state.bridge {
+            None => state.window.carried(),
+            Some(b) => b.window.carried(),
+        };
+        if !tail.is_empty() {
+            self.carry.insert(group, tail);
+        }
+    }
+
     /// All lanes together hold more text than `max_scan_bytes`.
     fn over_cap(&mut self, step: &mut Step) -> bool {
-        let held: usize = self.lanes.iter().map(|l| l.window.held()).sum();
+        // Carried tails and bridges count too: text held for joined outputs.
+        let held: usize = self
+            .lanes
+            .iter()
+            .map(|l| l.window.held() + l.bridge.as_ref().map_or(0, |b| b.window.held()))
+            .sum::<usize>()
+            + self.carry.values().map(Carried::len).sum::<usize>();
         if held <= self.max_held {
             return false;
         }
         self.hold_overflowed = true;
+        self.carry.clear();
         if self.on_error == OnError::FailClosed {
             self.note_error("stream text held past max_scan_bytes".into());
             self.block(step);
@@ -742,18 +942,47 @@ impl StreamInspector {
         if closes.is_empty() {
             return;
         }
+        let covered: Vec<usize> = (0..self.lanes.len())
+            .filter(|&lane| closes.iter().any(|c| c.covers(&self.lanes[lane].lane)))
+            .collect();
+        self.finish_lanes(&covered, step);
+    }
+
+    /// Finish the lanes `lanes`: scan and judge what they hold unscanned,
+    /// keep each joined output's tail for the next one of its group, and
+    /// drop their text.
+    fn finish_lanes(&mut self, lanes: &[usize], step: &mut Step) {
+        if lanes.is_empty() {
+            return;
+        }
         let mut hits = Vec::new();
-        for lane in 0..self.lanes.len() {
-            if !closes.iter().any(|c| c.covers(&self.lanes[lane].lane)) {
-                continue;
-            }
+        for &lane in lanes {
             let found = self.lanes[lane].window.flush();
             let overflowed = self.lanes[lane].window.overflowed();
             if !self.scanned(lane, found, overflowed, &mut hits, step) {
                 return;
             }
-            self.lanes[lane].done = true;
-            self.lanes[lane].window.release_text();
+            // What the bridge holds unscanned may still cross the join.
+            let bridged = self.lanes[lane].bridge.as_mut().map(|bridge| {
+                let found = bridge.window.flush().map(|f| bridge.crossing(lane, f));
+                (found, bridge.window.overflowed())
+            });
+            let state = &self.lanes[lane];
+            // A superseded output's successor already took its tail.
+            if let Some(group) = join_group(&state.lane)
+                && !state.superseded
+            {
+                self.lend_tail(group, lane);
+            }
+            self.lanes[lane].bridge = None;
+            if let Some((found, overflowed)) = bridged
+                && !self.bridged(found, overflowed, &mut hits, step)
+            {
+                return;
+            }
+            let state = &mut self.lanes[lane];
+            state.done = true;
+            state.window.release_text();
         }
         let verdict = self.judge(&hits, step);
         if !step.ended && verdict == Verdict::Redact {
@@ -851,7 +1080,10 @@ impl StreamInspector {
         h.fields.iter().all(|f| {
             f.lane >= WHOLE || {
                 let lane = &self.lanes[f.lane];
-                lane.done || f.start + f.span.text.len() <= lane.window.base()
+                let end = f.start + f.span.text.len();
+                // While a match can still cross into it (AGENT-329), an
+                // output's own part of it may not go.
+                (lane.done || end <= lane.window.base()) && lane.bridge.is_none()
             }
         })
     }
@@ -1379,6 +1611,454 @@ mod tests {
             i.report().error.as_deref(),
             Some("stream text after its output finished")
         );
+    }
+
+    fn anthropic_at(i: usize, d: &str) -> String {
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":{i},\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}\n\n",
+            q(d)
+        )
+    }
+
+    fn anthropic_stop(i: usize) -> String {
+        format!(
+            "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":{i}}}\n\n"
+        )
+    }
+
+    fn responses_at(c: usize, d: &str) -> String {
+        format!(
+            "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":{c},\"delta\":{}}}\n\n",
+            q(d)
+        )
+    }
+
+    fn responses_stop(c: usize) -> String {
+        format!(
+            "event: response.content_part.done\ndata: {{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":{c}}}\n\n"
+        )
+    }
+
+    const MESSAGE_STOP: &str = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    const MESSAGE_START: &str =
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n";
+    const COMPLETED: &str =
+        "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n";
+
+    type At = fn(usize, &str) -> String;
+    type Stop = fn(usize) -> String;
+    const JOINED: [(At, Stop, &str); 2] = [
+        (anthropic_at, anthropic_stop, MESSAGE_STOP),
+        (responses_at, responses_stop, COMPLETED),
+    ];
+
+    /// A key whose last character opens the next output: the first output
+    /// is finished before the key is complete.
+    fn split_across(at: At, stop: Stop, end: &str) -> Vec<String> {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        let mut events = vec![at(0, "Here is the key: ")];
+        events.extend(head.chars().map(|c| at(0, &c.to_string())));
+        events.push(stop(0));
+        events.push(at(1, last));
+        events.push(at(1, " and that is all."));
+        events.push(stop(1));
+        events.push(end.to_string());
+        events
+    }
+
+    /// A key split across a join was found and the stream blocked before
+    /// its rest went out: its start had gone with the earlier output, so
+    /// a redaction could not remove it whole.
+    fn assert_split_blocked(out: &str, i: &StreamInspector) {
+        let text = client_texts(out).concat();
+        assert!(!text.contains(&key()), "{text}");
+        assert!(!text.contains("that is all"), "the rest went out: {text}");
+        assert_eq!(i.report().verdict, Verdict::Block, "{out}");
+        assert!(i.report().redaction_incomplete);
+        assert!(i.report().hits.iter().any(|h| h.rule != "entropy"));
+    }
+
+    /// AGENT-329: clients join an Anthropic message's text blocks, and the
+    /// Responses SDK's `output_text` joins content parts, so a key split
+    /// between two such outputs reaches the agent whole unless the second
+    /// output's window starts with the first one's tail.
+    #[test]
+    fn a_key_split_across_joined_outputs_is_caught() {
+        for (at, stop, end) in JOINED {
+            let events = split_across(at, stop, end);
+            for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+                let (out, i) = run(&p, &events);
+                assert_split_blocked(&out, &i);
+            }
+            let (out, i) = run(&policy(Verdict::Block), &events);
+            assert!(!client_texts(&out).concat().contains(&key()), "{out}");
+            assert_eq!(i.report().verdict, Verdict::Block);
+            assert!(!i.report().redaction_incomplete);
+        }
+    }
+
+    /// The carried tail only joins a match: honest outputs pass untouched.
+    #[test]
+    fn joined_outputs_without_a_key_pass_untouched() {
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(0, "Here is the plan: "),
+                stop(0),
+                at(1, "first, read the file."),
+                stop(1),
+                end.to_string(),
+            ];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(out, events.concat());
+            assert_eq!(i.report().hits, Vec::new());
+        }
+    }
+
+    /// A new output of a join group starts from the group's open one, which
+    /// keeps its window: a key split between two outputs an upstream
+    /// interleaves is still caught, and a write back to the earlier output
+    /// joins nothing a client joins, so `fail_closed` blocks it.
+    #[test]
+    fn interleaved_joined_outputs_start_from_the_open_one() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(0, head),
+                at(1, last),
+                at(1, " and that is all."),
+                stop(1),
+                end.to_string(),
+            ];
+            let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert_split_blocked(&out, &i);
+            assert_eq!(i.report().error, None);
+
+            let back = vec![
+                at(0, "Here: "),
+                at(1, "more"),
+                at(0, "again"),
+                end.to_string(),
+            ];
+            let (_, i) = run(&closed(1 << 20, Verdict::Redact), &back);
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("joined stream outputs interleaved")
+            );
+            let (out, i) = run(&policy(Verdict::Redact), &back);
+            assert_eq!(out, back.concat());
+            assert!(i.hold_overflowed());
+        }
+    }
+
+    /// The joined scan is added to each output's own, not put in its place:
+    /// a whole key at a block's start, right after a word that ended the
+    /// previous block, is still at a word boundary in its own output.
+    #[test]
+    fn a_key_after_a_word_in_the_previous_output_is_still_caught() {
+        for (at, stop, end) in JOINED {
+            for on_hit in [Verdict::Redact, Verdict::Block] {
+                let events = vec![
+                    at(0, "hello"),
+                    stop(0),
+                    at(1, &format!("{} and that is all.", key())),
+                    stop(1),
+                    end.to_string(),
+                ];
+                let (out, i) = run(&policy(on_hit), &events);
+                assert!(!leaked(&out), "{on_hit:?}: {out}");
+                assert_eq!(i.report().verdict, on_hit);
+            }
+        }
+    }
+
+    /// A streaming scanner that finds nothing and counts the bytes it is
+    /// given, with a long match so a whole output is carried.
+    struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+    impl Scanner for Counting {
+        fn id(&self) -> &str {
+            "counting"
+        }
+        fn max_match_len(&self) -> usize {
+            1 << 16
+        }
+        fn scan(
+            &self,
+            text: &str,
+            _: Direction,
+        ) -> Result<Vec<super::super::Hit>, super::super::ScanError> {
+            self.0
+                .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        }
+    }
+
+    /// A PEM key whose BEGIN line ends one output and whose lines fill the
+    /// next, past what that output's own window keeps: only the bridge
+    /// sees the whole key, and nothing of it goes before the bridge does.
+    #[test]
+    fn a_pem_key_begun_in_one_output_is_cut_whole_in_the_next() {
+        let line = "QUJD".repeat(16);
+        for (at, stop, end) in JOINED {
+            let mut events = vec![at(0, "Here: -----BEGIN PRIVATE KEY-----\n"), stop(0)];
+            for _ in 0..300 {
+                events.push(at(1, &format!("{line}\n")));
+            }
+            events.push(at(1, "-- that is all."));
+            events.push(stop(1));
+            events.push(end.to_string());
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            let text = client_texts(&out).concat();
+            assert!(!text.contains("QUJD"), "a key line was forwarded");
+            assert!(text.contains("that is all"), "{text}");
+            assert_eq!(i.report().verdict, Verdict::Redact);
+        }
+    }
+
+    /// A short text block, then a large tool input: the text's tail goes
+    /// when the tool call starts, so the input does not queue behind it
+    /// and pass the held limit.
+    #[test]
+    fn a_tool_call_after_a_text_block_ends_its_join() {
+        use serde_json::json;
+        let mut events = vec![
+            anthropic_at(0, "I'll write the file now."),
+            anthropic_stop(0),
+        ];
+        events.push(ev(
+            "content_block_start",
+            json!({"index": 1, "content_block": {"type": "tool_use", "id": "t1", "name": "write", "input": {}}}),
+        ));
+        for _ in 0..8000 {
+            events.push(ev(
+                "content_block_delta",
+                json!({"index": 1, "delta": {"type": "input_json_delta", "partial_json": "abcdefghij klmnopqrst uvwxyz0123 4567"}}),
+            ));
+        }
+        events.push(anthropic_stop(1));
+        events.push(MESSAGE_STOP.to_string());
+        for p in [closed(1 << 20, Verdict::Redact), policy(Verdict::Redact)] {
+            let mut i = StreamInspector::new(&p);
+            let mut out = String::new();
+            for e in &events[..4] {
+                out.push_str(&String::from_utf8(i.push(e.as_bytes()).out.concat()).unwrap());
+            }
+            assert!(out.contains("write the file"), "held behind the tool call");
+            for e in &events[4..] {
+                i.push(e.as_bytes());
+            }
+            i.finish();
+            assert_eq!(i.report().error, None);
+            assert!(!i.hold_overflowed());
+        }
+    }
+
+    /// Responses sends each part's whole text again when it is done, where
+    /// no cut of the deltas reaches: the stream stops before the second
+    /// part's copies go, so the agent never gets the whole key.
+    #[test]
+    fn a_split_key_in_responses_done_copies_is_not_sent_whole() {
+        let k = key();
+        let (head, last) = k.split_at(20);
+        let done = |c: usize, text: &str| {
+            format!(
+                "event: response.output_text.done\ndata: {{\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":{c},\"text\":{}}}\n\n",
+                q(text)
+            )
+        };
+        let events = vec![
+            responses_at(0, head),
+            done(0, head),
+            responses_stop(0),
+            responses_at(1, last),
+            responses_at(1, " and that is all."),
+            done(1, &format!("{last} and that is all.")),
+            responses_stop(1),
+            COMPLETED.to_string(),
+        ];
+        for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+            let (out, i) = run(&p, &events);
+            assert!(!out.contains(last), "{out}");
+            assert_split_blocked(&out, &i);
+        }
+    }
+
+    /// A key across three outputs, the middle one shorter than the key:
+    /// the middle one passes on the bridge's tail, not just its own text.
+    #[test]
+    fn a_key_across_a_short_middle_output_is_caught() {
+        let k = key();
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(0, &format!("Here: {}", &k[..20])),
+                stop(0),
+                at(1, &k[20..21]),
+                stop(1),
+                at(2, &format!("{} and that is all.", &k[21..])),
+                stop(2),
+                end.to_string(),
+            ];
+            for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+                let (out, i) = run(&p, &events);
+                assert_split_blocked(&out, &i);
+            }
+        }
+    }
+
+    /// Clients join a group's outputs by index: an output starting below
+    /// an earlier one is out of order, not joined after it.
+    #[test]
+    fn joined_outputs_out_of_order_are_not_joined() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![at(1, head), stop(1), at(0, last), stop(0), end.to_string()];
+            let (_, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+            assert_eq!(
+                i.report().error.as_deref(),
+                Some("joined stream outputs out of order")
+            );
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(out, events.concat());
+            assert!(i.hold_overflowed());
+        }
+    }
+
+    /// Text after a key's last part, sent a byte at a time in the joined
+    /// output, does not release that part before the bridge scans it.
+    #[test]
+    fn a_batched_bridge_holds_the_key_until_it_scans() {
+        for (at, stop, end) in JOINED {
+            let mut events = split_across(at, stop, end);
+            let tail = events.split_off(events.len() - 2);
+            events.extend("x".repeat(400).chars().map(|c| at(1, &c.to_string())));
+            events.extend(tail);
+            for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+                let (out, i) = run(&p, &events);
+                assert_split_blocked(&out, &i);
+            }
+        }
+    }
+
+    /// A long carried tail and a joined output sent a byte at a time: the
+    /// bridge batches its scans as an output's own window does, rather
+    /// than rescanning the tail on every delta.
+    #[test]
+    fn a_long_carried_tail_is_not_rescanned_per_delta() {
+        for (at, stop, end) in JOINED {
+            let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let p = DirectionPolicy {
+                scanners: vec![Arc::new(Counting(count.clone()))],
+                ..policy(Verdict::Redact)
+            };
+            let mut events = vec![at(0, &" ".repeat(50_000)), stop(0)];
+            events.extend((0..1000).map(|_| at(1, "x")));
+            events.push(stop(1));
+            events.push(end.to_string());
+            let (out, _) = run(&p, &events);
+            assert_eq!(out, events.concat());
+            let scanned = count.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(scanned < 1_000_000, "{scanned} bytes scanned");
+        }
+    }
+
+    /// The tail an open output gives the next one includes text it has not
+    /// scanned yet; the key is caught once.
+    #[test]
+    fn an_open_output_gives_its_unscanned_text_too() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, _, end) in JOINED {
+            let mut events = vec![at(0, "Here: ")];
+            events.extend(head.chars().map(|c| at(0, &c.to_string())));
+            events.push(at(1, last));
+            events.push(at(1, " and that is all."));
+            events.push(end.to_string());
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_split_blocked(&out, &i);
+            let named = i
+                .report()
+                .hits
+                .iter()
+                .filter(|h| h.rule != "entropy")
+                .count();
+            assert_eq!(named, 1, "{:?}", i.report().hits);
+        }
+    }
+
+    /// Tool arguments are not joined: interleaved Responses function calls
+    /// keep their own windows, so a key split within one call is redacted
+    /// as before, and honest interleaving is not blocked.
+    #[test]
+    fn interleaved_function_calls_are_not_joined() {
+        let args = |o: usize, d: &str| {
+            format!(
+                "event: response.function_call_arguments.delta\ndata: {{\"type\":\"response.function_call_arguments.delta\",\"output_index\":{o},\"delta\":{}}}\n\n",
+                q(d)
+            )
+        };
+        let k = key();
+        let (a, b) = k.split_at(20);
+        let events = vec![args(0, a), args(1, "{}"), args(0, b), COMPLETED.to_string()];
+        for p in [policy(Verdict::Redact), closed(1 << 20, Verdict::Redact)] {
+            let (out, i) = run(&p, &events);
+            assert!(!client_texts(&out).concat().contains(&k), "{out}");
+            assert_eq!(i.report().verdict, Verdict::Redact);
+            assert!(i.carry.is_empty());
+        }
+    }
+
+    /// Only the allow-listed groups carry a tail: outputs under keys an
+    /// upstream invents keep nothing after they finish.
+    #[test]
+    fn invented_outputs_carry_nothing() {
+        let mut events = vec![MESSAGE_START.to_string()];
+        for n in 0..50 {
+            events.push(format!(
+                "event: x\ndata: {{\"type\":\"x\",\"index\":{n},\"p{n}\":{}}}\n\n",
+                q(&format!("a{}", " ".repeat(2000)))
+            ));
+            events.push(anthropic_stop(n));
+        }
+        let (_, i) = run(&closed(1 << 16, Verdict::Redact), &events);
+        assert!(i.carry.is_empty());
+    }
+
+    /// A carried tail is held text: it counts toward `max_scan_bytes`.
+    #[test]
+    fn carried_tails_count_toward_the_held_limit() {
+        // Under `flag` nothing is held, so only the text limit applies: a
+        // 3000-byte blank tail carried into the next text block's bridge,
+        // which holds it with that block's 1500 bytes, as the block does.
+        let events = vec![
+            anthropic_at(0, &format!("x{}", " ".repeat(3000))),
+            anthropic_stop(0),
+            anthropic_at(1, &format!("y{}", " ".repeat(1500))),
+        ];
+        let (_, i) = run(&closed(4096, Verdict::Flag), &events);
+        assert_eq!(
+            i.report().error.as_deref(),
+            Some("stream text held past max_scan_bytes")
+        );
+    }
+
+    /// A match the first output reported, grown by the next output's text,
+    /// is the same match: counted once.
+    #[test]
+    fn a_match_grown_across_a_join_is_counted_once() {
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(0, &format!("key {}", key())),
+                stop(0),
+                at(1, "abc def"),
+                stop(1),
+                end.to_string(),
+            ];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(i.report().hits.len(), 1, "{:?}", i.report().hits);
+            assert_eq!(client_texts(&out).concat().matches("[REDACTED").count(), 1);
+        }
     }
 
     /// AGENT-316: under `fail_closed`, a write to a finished output gains a

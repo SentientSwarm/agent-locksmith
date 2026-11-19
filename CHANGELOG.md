@@ -22,6 +22,21 @@
 
 ### Fixed
 
+- Stream inspection now catches a secret split between two outputs that
+  clients join into one text (AGENT-329): an Anthropic message's text
+  blocks, or Responses content parts, which the SDK's `output_text` joins.
+  Each output had its own window, so the halves were scanned apart and the
+  agent could rebuild the key. Each output keeps its own window, and its
+  start is also scanned together with the group's kept tail so far, so a
+  match crossing the join is found. Its start has already gone out with the
+  earlier output, so under `on_hit: redact` the stream is blocked before the
+  rest goes, with `redaction_incomplete` in the audit row, rather than
+  claiming a redaction; under `block` it blocks and under `flag` it is
+  flagged. Only those two kinds of output join, in index order, and carried
+  tails count toward `max_scan_bytes`. Under `fail_closed`, text sent to an
+  output after a later one of its group has started blocks the stream
+  (`joined stream outputs interleaved`), as does an output starting below an
+  earlier one (`joined stream outputs out of order`).
 - An OAuth bootstrap or device login no longer stores a session for a
   registration its serving catalog shows as infra (AGENT-302). Both
   refuse infra registrations up front from the database, but a catalog
