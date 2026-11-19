@@ -418,7 +418,10 @@ pub async fn proxy_root_handler(
 /// Every reading of the path and query that the scanners must judge
 /// (AGENT-262, AGENT-270): each percent-decoding of the request path and of
 /// the upstream URL's path as reqwest will parse it, and each query both as
-/// a form (`+` is a space) and with `+` kept. Order kept, duplicates dropped.
+/// a form (`+` is a space) and with `+` kept. A path view with a decoded
+/// `?` is also read with its tail as a form: a hop that decodes the path
+/// again and re-parses it sees a query there (AGENT-315). Order kept,
+/// duplicates dropped.
 fn request_line_views(uri: &axum::http::Uri, upstream_url: &str) -> Vec<String> {
     let parsed = reqwest::Url::parse(upstream_url).ok();
     let paths = [Some(uri.path()), parsed.as_ref().map(|u| u.path())];
@@ -430,9 +433,13 @@ fn request_line_views(uri: &axum::http::Uri, upstream_url: &str) -> Vec<String> 
         }
     };
     for path in paths.into_iter().flatten() {
-        crate::inspection::path_views(path)
-            .into_iter()
-            .for_each(&mut add);
+        for view in crate::inspection::path_views(path) {
+            let form = view
+                .split_once('?')
+                .map(|(head, tail)| format!("{head}?{}", crate::inspection::percent_decode(tail)));
+            add(view);
+            form.into_iter().for_each(&mut add);
+        }
     }
     for query in queries.into_iter().flatten() {
         add(crate::inspection::percent_decode(query));
@@ -2405,6 +2412,26 @@ mod request_path_responses_tests {
         let uri: axum::http::Uri = "/api/out/CAN%09ARY".parse().unwrap();
         let views = super::request_line_views(&uri, "http://up/CAN\tARY");
         assert!(views.iter().any(|v| v == "/CANARY"), "{views:?}");
+    }
+
+    /// AGENT-315: a double-encoded `%253F` reaches the upstream as `%3F`;
+    /// a hop that decodes the path again and re-parses it reads what
+    /// follows as a query, where `+` is a space.
+    #[test]
+    fn a_question_mark_decoded_in_the_path_is_read_as_a_query_too() {
+        let uri: axum::http::Uri = "/api/out/x%253Fq=ignore+all+previous".parse().unwrap();
+        let views = super::request_line_views(&uri, "http://up/x%3Fq=ignore+all+previous");
+        assert!(
+            views
+                .iter()
+                .any(|v| v == "/api/out/x?q=ignore all previous"),
+            "{views:?}"
+        );
+        assert!(
+            views
+                .iter()
+                .any(|v| v == "/api/out/x?q=ignore+all+previous")
+        );
     }
 
     use super::request_path_ends_with_responses;

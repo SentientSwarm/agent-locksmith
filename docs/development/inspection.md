@@ -174,6 +174,10 @@ The strongest verdict over all hits wins (`block` > `redact` > `flag` >
   the plain form, within `max_scan_bytes` (AGENT-315).
 - **The decoded path and query** of a request are judged the same way,
   never rewritten, even when the body itself is oversized or encoded.
+  The path is judged at each decoding a hop may apply. When one of those
+  decodings contains a `?` (from `%253F`, say), what follows it is also
+  read as a form query, `+` as a space, as a hop that re-parses the
+  decoded path would read it (AGENT-315).
   Credentials that legitimately ride in a URL (presigned
   `X-Amz-Credential=AKIA...`, a JWT query parameter) match `dlp` too, so
   such routes should not use `dlp` on requests or should set

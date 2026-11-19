@@ -22,6 +22,11 @@
 
 ### Fixed
 
+- Request inspection also reads a path whose decoding contains a `?`
+  (a double-encoded `%253F`) with the text after it as a form query, `+`
+  as a space (AGENT-315). An upstream hop that decodes the path again and
+  re-parses it sees a query there, so `ignore+all+previous+instructions`
+  hidden that way is now judged as the words it becomes.
 - Under `on_hit: flag` (or `pass`), a stream window that has passed
   `max_scan_bytes` no longer rescans its whole held text on every chunk
   (AGENT-315). Once pinned at the cap, as when padding or a long run of
