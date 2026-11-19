@@ -34,10 +34,12 @@ use std::sync::Arc;
 /// counted as dropped without being remembered.
 const MAX_SEEN: usize = 4 * MAX_AUDITED_HITS;
 
-/// Unfinished outputs given their own window under `fail_open`; more
-/// share one, so memory is bounded: each window can hold up to
-/// `max_scan_bytes` there (an eighth more under `flag` or `pass` once it
-/// has overflowed, AGENT-315). A finished output's window drops its text.
+/// Lanes under `fail_open`: 31 unfinished outputs get a window of their
+/// own and the 32nd is shared by any more, so memory is bounded. Each
+/// window can hold up to `max_scan_bytes` there (an eighth more under
+/// `flag` or `pass` once it has overflowed, AGENT-315), and a joined
+/// output still open can also hold a bridge window. A finished output's
+/// window drops its text.
 const MAX_LANES: usize = 32;
 
 /// The same limit under `fail_closed`, where the text all windows hold

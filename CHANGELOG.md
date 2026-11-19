@@ -22,10 +22,15 @@
 
 ### Fixed
 
+- A device login whose provider answers a redirect now says Locksmith
+  does not follow provider redirects and that the route's `token_url`
+  and `device_url` must be the provider's final URLs, instead of a bare
+  status (AGENT-328).
 - Under `fail_open`, a streamed output written to again after it
   finished counts against the lane limit, so an upstream can no longer
   hold a window per output for up to 1024 outputs; the bound is about
-  64 windows of `max_scan_bytes`, bridges included (AGENT-273).
+  64 windows of `max_scan_bytes` (an eighth more under `flag` or
+  `pass`), bridges included (AGENT-273).
   Azure "On Your Data" text (`choices[].messages[].delta`) is scanned
   across chunks, so a key split between chunks is caught.
 - A token endpoint that answers a redirect now fails the refresh with

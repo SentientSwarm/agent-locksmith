@@ -455,11 +455,11 @@ Memory and cost bounds, per stream (AGENT-273):
   hold a bridge window across its join, and each join group carries one
   tail, so the total is about 64 windows' worth. Each window holds up to
   `max_scan_bytes` (an eighth more under `flag` or `pass` once it has
-  overflowed). A window fills that far only while its text can't be trimmed: padding that
-  folds to nothing, or a PEM key still arriving. Under `fail_closed`
-  windows, bridges and carried tails together hold at most
-  `max_scan_bytes`, held events have a budget of their own of the same
-  size, and the SSE parser buffers up to `max_scan_bytes` of an
+  overflowed). A window fills that far only while its text can't be
+  trimmed: padding that folds to nothing, or a PEM key still arriving.
+  Under `fail_closed` windows, bridges and carried tails together hold
+  at most `max_scan_bytes`, held events have a budget of their own of
+  the same size, and the SSE parser buffers up to `max_scan_bytes` of an
   unfinished event. Size `max_scan_bytes` with these multiples in mind.
 - **CPU.** Stream scans run on the async worker that forwards the
   stream, not on a blocking thread, and have no deadline; buffered bodies

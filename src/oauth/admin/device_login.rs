@@ -507,13 +507,27 @@ fn internal(message: &str) -> Response {
 
 /// Provider failures report the status only; bodies may carry secrets.
 fn upstream_failed(step: &str, status: Option<reqwest::StatusCode>) -> Box<Response> {
-    let detail = status.map_or("unreachable".to_string(), |s| s.as_u16().to_string());
     Box::new(error_envelope(
         StatusCode::BAD_GATEWAY,
         "auth_error",
         "device_login_failed",
-        &format!("provider {step} failed: {detail}"),
+        &format!("provider {step} failed: {}", failure_detail(status)),
     ))
+}
+
+/// The status, or why there is none. Provider calls don't follow
+/// redirects (a followed one could carry codes to another host), so a
+/// 3xx says so (AGENT-328).
+fn failure_detail(status: Option<reqwest::StatusCode>) -> String {
+    match status {
+        None => "unreachable".into(),
+        Some(s) if s.is_redirection() => format!(
+            "{} (a redirect; Locksmith does not follow provider redirects, so the \
+             route's token_url and device_url must be the provider's final URLs)",
+            s.as_u16()
+        ),
+        Some(s) => s.as_u16().to_string(),
+    }
 }
 
 async fn request_user_code(
@@ -730,6 +744,22 @@ impl DeviceLogins {
 
 #[cfg(test)]
 mod tests {
+    /// AGENT-328: device-login calls don't follow redirects, so a 3xx
+    /// says so rather than showing a bare status.
+    #[test]
+    fn a_redirected_provider_call_says_redirects_are_not_followed() {
+        let detail = failure_detail(Some(reqwest::StatusCode::TEMPORARY_REDIRECT));
+        assert!(
+            detail.contains("307") && detail.contains("redirect"),
+            "{detail}"
+        );
+        assert_eq!(
+            failure_detail(Some(reqwest::StatusCode::BAD_GATEWAY)),
+            "502"
+        );
+        assert_eq!(failure_detail(None), "unreachable");
+    }
+
     use super::*;
 
     fn device(token_url: &str) -> AuthSpec {
