@@ -36,7 +36,8 @@ const MAX_SEEN: usize = 4 * MAX_AUDITED_HITS;
 
 /// Unfinished outputs given their own window under `fail_open`; more
 /// share one, so memory is bounded: each window can hold up to
-/// `max_scan_bytes` there. A finished output's window drops its text.
+/// `max_scan_bytes` there (an eighth more under `flag` or `pass` once it
+/// has overflowed, AGENT-315). A finished output's window drops its text.
 const MAX_LANES: usize = 32;
 
 /// The same limit under `fail_closed`, where the text all windows hold
@@ -598,6 +599,19 @@ impl StreamInspector {
                 // starting below an earlier one joins before it.
                 let at: Vec<i64> = key.tags.iter().map(|&(_, v)| v).collect();
                 let in_order = self.last_join.get(group).is_none_or(|last| at > *last);
+                let open: Vec<usize> = (0..self.lanes.len())
+                    .filter(|&i| {
+                        let l = &self.lanes[i];
+                        !l.done && !l.superseded && join_group(&l.lane) == Some(group)
+                    })
+                    .collect();
+                // Out of order, it joins before them: it takes no tail. In
+                // order, it follows the group's latest output, so only that
+                // one lends, not an out-of-order one still open (AGENT-328).
+                let lender = open
+                    .last()
+                    .copied()
+                    .filter(|&i| in_order && self.is_latest(group, &self.lanes[i].lane));
                 if !in_order {
                     if self.on_error == OnError::FailClosed {
                         self.note_error("joined stream outputs out of order".into());
@@ -608,16 +622,7 @@ impl StreamInspector {
                 } else {
                     self.last_join.insert(group, at);
                 }
-                let open: Vec<usize> = (0..self.lanes.len())
-                    .filter(|&i| {
-                        let l = &self.lanes[i];
-                        !l.done && !l.superseded && join_group(&l.lane) == Some(group)
-                    })
-                    .collect();
-                // Out of order, it joins before them: it takes no tail.
-                if let Some(&newest) = open.last()
-                    && in_order
-                {
+                if let Some(newest) = lender {
                     self.lend_tail(group, newest);
                 }
                 for i in open {
@@ -1980,6 +1985,29 @@ mod tests {
                 at(0, head),
                 stop(0),
                 at(2, last),
+                stop(2),
+                end.to_string(),
+            ];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(out, events.concat());
+            assert!(i.hold_overflowed());
+            assert_ne!(i.report().verdict, Verdict::Block, "{:?}", i.report().hits);
+        }
+    }
+
+    /// The same with the out-of-order output still open when the next one
+    /// starts: it isn't the group's latest, so it lends no tail (AGENT-328).
+    #[test]
+    fn an_open_out_of_order_output_lends_no_tail_when_the_next_starts() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(1, " middle "),
+                stop(1),
+                at(0, head),
+                at(2, last),
+                stop(0),
                 stop(2),
                 end.to_string(),
             ];
