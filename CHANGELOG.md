@@ -22,6 +22,11 @@
 
 ### Fixed
 
+- The upstream base-path check reads `%2e` in any case as a dot, as a
+  WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
+  the four-decode bound or cut at a decoded `?`, now resolves alike for an
+  upstream that re-parses it, so a five-times-encoded `..` or a `..`
+  behind `%253F` no longer climbs out (AGENT-287).
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG

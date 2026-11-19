@@ -1521,13 +1521,20 @@ fn separator_climbs(base: &str, path: &str, all: &[Dots]) -> bool {
         if list.iter().any(separator) {
             let dots = list
                 .iter()
-                .map(|r| r.split(['/', '\\']).filter(|p| name(p) == "..").count())
+                .map(|r| {
+                    r.split(['/', '\\'])
+                        .filter(|p| dot_segment(&name(p)) == 2)
+                        .count()
+                })
                 .max()
                 .unwrap_or(0);
             depth -= dots as i64;
-        } else if list.iter().any(|r| name(r) == "..") {
+        } else if list.iter().any(|r| dot_segment(&name(r)) == 2) {
             depth -= 1;
-        } else if list.iter().all(|r| !matches!(name(r).as_str(), "" | ".")) {
+        } else if list.iter().all(|r| {
+            let n = name(r);
+            !n.is_empty() && dot_segment(&n) == 0
+        }) {
             depth += 1;
         }
         if depth < 0 {
@@ -1830,17 +1837,30 @@ fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
 fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> {
     let name = raw.split(';').next().unwrap_or("");
     let empty = match params {
-        Params::Dropped => matches!(name, "" | "."),
-        Params::Unknown => matches!(raw, "" | "."),
+        Params::Dropped => name.is_empty() || dot_segment(name) == 1,
+        Params::Unknown => raw.is_empty() || dot_segment(raw) == 1,
     };
     if empty {
-    } else if name == ".." {
+    } else if dot_segment(name) == 2 {
         out.pop()?;
     } else {
         out.push(raw.to_string());
     }
     Some(())
 }
+/// 1 for a `.` segment and 2 for a `..` one, as a WHATWG parser reads
+/// them: `%2e` in any case is a dot (`.%2E`, `%2e%2e`), so a reading still
+/// holding one, past the decode bound or cut at a decoded `?`, resolves
+/// alike for an upstream that re-parses it (AGENT-287); 0 for a name.
+fn dot_segment(name: &str) -> u8 {
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "." | "%2e" => 1,
+        ".." | ".%2e" | "%2e." | "%2e%2e" => 2,
+        _ => 0,
+    }
+}
+
 /// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
 /// request path would leave the route's upstream base path.
 async fn record_upstream_path_escape(
@@ -2675,6 +2695,36 @@ mod base_path_tests {
     /// those as dot segments. Lenient decoders also read overlong UTF-8
     /// and `%u` escapes as `.`, `/` or `\`; a path holding one in any
     /// reading is refused (AGENT-287 L5).
+    /// A WHATWG parser reads `%2e` (any case) as `.`, so an upstream that
+    /// re-parses a reading still holding one resolves it as a dot: past
+    /// the decode bound, and in a reading cut at a decoded `?` (AGENT-287,
+    /// AGENT-332 review).
+    #[test]
+    fn a_percent_spelled_dot_is_a_dot_in_every_reading() {
+        let base = "https://h/v1/api";
+        // Five times encoded: `%2e` is still escaped after four decodes.
+        let five = "%252525252e";
+        let climb = format!("https://h/v1/api/{five}{five}/{five}{five}/admin");
+        assert!(!ok(base, &climb), "{climb}");
+        for spelled in ["%2525252E.", ".%2525252e", "%2525252E%2525252e"] {
+            let path = format!("https://h/v1/api/{spelled}/{spelled}/admin");
+            assert!(!ok(base, &path), "{path}");
+        }
+        // Cut at a decoded `?`, then re-parsed: the cut reading's `%2e%2e`.
+        assert!(!ok(
+            base,
+            "https://h/v1/api/%253F/%252e%252e/%252e%252e/admin%3F/%252e%252e/api/x"
+        ));
+        // Names that only contain a spelled dot stay names, and a spelled
+        // dot inside the base still passes.
+        for name in ["%252e%252efile", "a%252eb", "%252e%252e%252e"] {
+            let path = format!("https://h/v1/api/{name}/x");
+            assert!(ok(base, &path), "{path}");
+        }
+        let inside = format!("https://h/v1/api/a/{five}{five}/b");
+        assert!(ok(base, &inside), "{inside}");
+    }
+
     #[test]
     fn look_alike_dot_segments_cannot_climb() {
         let base = "https://h/v1/api";
