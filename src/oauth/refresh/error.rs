@@ -53,4 +53,16 @@ impl RefreshError {
             RefreshError::Persist(_) => "persist_failed",
         }
     }
+
+    /// The token endpoint's HTTP status, when the failure is its answer.
+    /// `provider_5xx` also covers a 300 or 304 (AGENT-328), so the
+    /// operational log carries the status to tell them apart.
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Revoked { status }
+            | Self::ProviderError { status }
+            | Self::Redirected { status } => Some(*status),
+            _ => None,
+        }
+    }
 }

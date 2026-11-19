@@ -23,8 +23,7 @@ pub(crate) async fn record_failure(
                     crate::repo::LogComponent::Oauth,
                     "oauth_refresh_reconnect_required",
                     "oauth refresh failed after its claim; session must be signed in again",
-                    Some(serde_json::json!({"registration": session.name,
-                        "session_label": session.session_label, "cause": error.audit_cause()})),
+                    Some(fields(session, error)),
                 );
             }
             return;
@@ -41,8 +40,18 @@ pub(crate) async fn record_failure(
             crate::repo::LogComponent::Oauth,
             "oauth_refresh_degraded",
             "oauth refresh failed; session marked degraded",
-            Some(serde_json::json!({"registration": session.name,
-                "session_label": session.session_label, "cause": error.audit_cause()})),
+            Some(fields(session, error)),
         );
     }
+}
+
+/// The operational-log fields for a failed refresh: the session, the
+/// cause, and the provider's status when it answered (AGENT-328).
+fn fields(session: &OauthSession, error: &RefreshError) -> serde_json::Value {
+    let mut fields = serde_json::json!({"registration": session.name,
+        "session_label": session.session_label, "cause": error.audit_cause()});
+    if let Some(status) = error.http_status() {
+        fields["http_status"] = status.into();
+    }
+    fields
 }

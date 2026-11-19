@@ -71,7 +71,9 @@
   now fails the refresh with cause `token_redirect` and a message naming
   `token_url`, not as `provider_5xx` (AGENT-302). 300 and 304 are not
   redirects and still report `provider_5xx` (AGENT-328). Token calls
-  still do not follow redirects.
+  still do not follow redirects. A failed refresh's operational-log
+  entry now carries the provider's `http_status` when it answered, so a
+  300 or 304 can be told from a 5xx (AGENT-328).
 - The operator consent guide says a redirect from the token endpoint is
   reported as `token_http_refused` (AGENT-328).
 - The upstream base-path check refuses a path holding a NUL (`%00`),

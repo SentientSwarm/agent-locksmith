@@ -114,6 +114,26 @@ mod failure_events {
     }
 
     #[tokio::test]
+    async fn a_provider_answer_logs_its_status() {
+        // AGENT-328: a 300 or 304 is `provider_5xx` like a 5xx, so only the
+        // status in `fields` tells the operator which it was.
+        let (_d, repo, key, store) = setup().await;
+        let log = OperationalLogEmitter::spawn(store.clone(), 16);
+        let session = repo
+            .create(&key, "codex", "default", "rt", Some("at"), Some(1), "")
+            .await
+            .unwrap();
+        repo.begin_refresh(&key, &session).await.unwrap();
+        let error = RefreshError::ProviderError { status: 304 };
+        record_failure(&repo, &session, &error, Some(&log)).await;
+        let rows = logged(&store).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let fields = rows[0].fields.clone().unwrap();
+        assert_eq!(fields["cause"], "provider_5xx");
+        assert_eq!(fields["http_status"], 304);
+    }
+
+    #[tokio::test]
     async fn a_failure_before_the_claim_is_logged_as_degraded() {
         let (_d, repo, key, store) = setup().await;
         let log = OperationalLogEmitter::spawn(store.clone(), 16);
@@ -126,6 +146,9 @@ mod failure_events {
         let rows = logged(&store).await;
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].event, "oauth_refresh_degraded");
+        // No provider answer, so no status.
+        let fields = rows[0].fields.clone().unwrap();
+        assert!(fields.get("http_status").is_none(), "{fields}");
     }
 
     #[tokio::test]

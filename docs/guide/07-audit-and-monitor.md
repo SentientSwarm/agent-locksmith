@@ -149,7 +149,9 @@ curl -fsS --unix-socket "$LOCKSMITH_SOCKET" -H "Authorization: Bearer $LOCKSMITH
 ![Recent operational events](img/07-audit-and-monitor/oplog.svg)
 
 Three `oauth` warnings are worth an alert. Each names the registration,
-session label and cause in `fields`:
+session label and cause in `fields`. When the token endpoint answered,
+`oauth_refresh_reconnect_required` also carries its `http_status`, since
+`provider_5xx` covers a 300 or 304 as well as a 5xx.
 
 - `oauth_refresh_reconnect_required`: a refresh tried the token
   endpoint and failed (the provider refused the refresh token or
