@@ -426,19 +426,25 @@ impl StreamInspector {
     /// (`MAX_LANES_CLOSED` under `fail_closed`) unfinished outputs, or
     /// `MAX_OUTPUTS` in all, or lane paths past `max_scan_bytes`, new
     /// outputs share one window, which can split a match: that is an
-    /// overflow (`None` under `fail_closed`).
+    /// overflow (`None` under `fail_closed`). A finished output written to
+    /// again counts as a new one under `fail_open` (AGENT-273), so reopened
+    /// outputs can't hold more than `MAX_LANES` windows; under
+    /// `fail_closed` that text blocks the stream anyway.
     fn lane(&mut self, lane: &Lane) -> Option<usize> {
-        if let Some(&i) = self.by_lane.get(lane) {
-            return Some(i);
-        }
-        let shared = Lane {
-            path: "*".into(),
-            tags: Vec::new(),
-        };
         let live = self.lanes.iter().filter(|l| !l.done).count();
         let max_lanes = match self.on_error {
             OnError::FailClosed => MAX_LANES_CLOSED,
             OnError::FailOpen => MAX_LANES,
+        };
+        if let Some(&i) = self.by_lane.get(lane) {
+            let reopens = self.lanes[i].done && self.on_error == OnError::FailOpen;
+            if !(reopens && live + 1 >= max_lanes) {
+                return Some(i);
+            }
+        }
+        let shared = Lane {
+            path: "*".into(),
+            tags: Vec::new(),
         };
         let full = live + 1 >= max_lanes
             || self.lanes.len() + 1 >= MAX_OUTPUTS
@@ -1412,6 +1418,52 @@ mod tests {
 
     /// AGENT-311: a key joined onto its BEGIN line with spaces, longer
     /// than an END is looked for across, is redacted whole when streamed.
+    /// AGENT-273: Azure "On Your Data" streams text in a choice's
+    /// `messages[].delta`, outside its `delta`; a key split across those
+    /// chunks is redacted like one split across chat deltas.
+    #[test]
+    fn a_key_split_across_on_your_data_chunks_is_redacted() {
+        // With and without the element's own `index`.
+        for tag in ["", "\"index\":0,"] {
+            let chunk = |d: &str| on_your_data(tag, d);
+            let k = key();
+            let mut events = vec![chunk("Here: ")];
+            events.extend(
+                k.as_bytes()
+                    .chunks(4)
+                    .map(|c| chunk(std::str::from_utf8(c).unwrap())),
+            );
+            events.push(chunk(" done."));
+            events.push(DONE.to_string());
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert!(!out.contains(&k[4..20]), "{tag}: {out}");
+            assert!(out.contains("[REDACTED:dlp]"), "{tag}: {out}");
+            assert_eq!(i.report().verdict, Verdict::Redact);
+        }
+    }
+
+    fn on_your_data(tag: &str, d: &str) -> String {
+        format!(
+            "data: {{\"choices\":[{{\"index\":0,\"messages\":[{{{tag}\"delta\":{{\"content\":{}}}}}]}}]}}\n\n",
+            q(d)
+        )
+    }
+
+    /// Under `fail_closed`, messages addressed both by index and by
+    /// position could be merged by a client into one: that blocks, as
+    /// for choices and tool calls.
+    #[test]
+    fn on_your_data_messages_by_index_and_by_position_fail_closed() {
+        let events = [
+            on_your_data("\"index\":0,", "Here "),
+            on_your_data("", "is "),
+            DONE.to_string(),
+        ];
+        let (out, i) = run(&closed(1 << 20, Verdict::Redact), &events);
+        assert!(out.contains("inspection_blocked"), "{out}");
+        assert_eq!(i.report().verdict, Verdict::Block);
+    }
+
     #[test]
     fn a_streamed_space_joined_key_is_redacted_whole() {
         let words: Vec<String> = (0..200).map(|_| "QUJD".repeat(16)).collect();
@@ -3009,6 +3061,35 @@ mod tests {
         assert!(!out.contains("inspection_blocked"), "{out}");
         let (out, i) = run(&policy(Verdict::Redact), &lanes(MAX_LANES));
         assert!(!out.contains("inspection_blocked") && i.hold_overflowed());
+    }
+
+    /// AGENT-273: an output written to after it finished counts against
+    /// the lane limit like a new one, so under `fail_open` reopened
+    /// outputs past it share a window and memory stays within the limit.
+    #[test]
+    fn reopened_outputs_past_the_lane_limit_share_a_window() {
+        let cap = 1 << 16;
+        let p = DirectionPolicy {
+            max_scan_bytes: cap,
+            ..policy(Verdict::Flag)
+        };
+        let n = 100;
+        let pad = " ".repeat(cap - 1024);
+        let mut i = StreamInspector::new(&p);
+        for k in 0..n {
+            i.push(anthropic_at(k, "a ").as_bytes());
+            i.push(anthropic_stop(k).as_bytes());
+        }
+        for k in 0..n {
+            i.push(anthropic_at(k, &pad).as_bytes());
+        }
+        let held: usize = i.lanes.iter().map(|l| l.window.held()).sum();
+        assert!(
+            held <= (MAX_LANES + 1) * (cap + cap / 8),
+            "{held} bytes held over {} windows",
+            i.lanes.iter().filter(|l| l.window.held() > 0).count()
+        );
+        assert!(i.hold_overflowed());
     }
 
     #[test]

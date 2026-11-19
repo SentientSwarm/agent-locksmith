@@ -22,6 +22,11 @@
 
 ### Fixed
 
+- Under `fail_open`, a streamed output written to again after it
+  finished counts against the 32-window limit, so an upstream can no
+  longer hold a window per output for up to 1024 outputs (AGENT-273).
+  Azure "On Your Data" text (`choices[].messages[].delta`) is scanned
+  across chunks, so a key split between chunks is caught.
 - A token endpoint that answers a redirect now fails the refresh with
   cause `token_redirect` and a message naming `token_url`, not as
   `provider_5xx` (AGENT-302). Token calls still do not follow redirects.

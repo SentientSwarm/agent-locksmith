@@ -148,15 +148,19 @@ pub fn tool_call(path: &str) -> Option<(&str, i64)> {
 }
 
 /// The arrays a chat lane's path passes through that clients merge by
-/// `index` (the choices, a choice's tool calls), each with whether this
+/// `index` (the choices, a choice's tool calls, its Azure "On Your Data"
+/// messages), each with whether this
 /// path addressed its element by `index` (`#n`) or only by position.
 pub fn chat_addressing(path: &str) -> Vec<(&str, bool)> {
     let mut out = Vec::new();
-    for array in ["/choices/", "/delta/tool_calls/"] {
+    for array in ["/choices/", "/delta/tool_calls/", "/messages/"] {
         let Some(at) = path.find(array).map(|i| i + array.len()) else {
             continue;
         };
         if array == "/choices/" && at != array.len() {
+            continue;
+        }
+        if array == "/messages/" && !path.starts_with("/choices/") {
             continue;
         }
         if at < path.len() {

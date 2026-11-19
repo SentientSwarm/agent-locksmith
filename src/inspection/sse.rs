@@ -609,7 +609,17 @@ fn stream_path(kind: Option<&str>, chat: bool, path: &str) -> Option<String> {
         {
             return None;
         }
-        return (field.starts_with("delta/") || field == "text").then(|| path.to_string());
+        // Azure "On Your Data" streams text in `messages/<n>/delta/`.
+        let on_your_data = field
+            .strip_prefix("messages/")
+            .and_then(|m| m.split_once('/'))
+            .is_some_and(|(n, rest)| {
+                // Its position, or `#<index>` when it has one.
+                n.strip_prefix('#').unwrap_or(n).parse::<i64>().is_ok()
+                    && rest.starts_with("delta/")
+            });
+        return (field.starts_with("delta/") || field == "text" || on_your_data)
+            .then(|| path.to_string());
     }
     if chat {
         return None;

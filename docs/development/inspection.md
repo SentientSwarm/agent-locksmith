@@ -256,7 +256,8 @@ whole only under that member, or whose `method` is `sampling/createMessage` or
 progress and log messages, keep their windows; other JSON-RPC, such as A2A
 artifact or ACP session chunks, which clients join, keeps its windows), a chat
 chunk's fields outside a choice's `delta` (`logprobs`, Azure content filter
-results, `usage`), and, within a choice, anything named as protocol metadata
+results, `usage`; Azure "On Your Data" text in a choice's `messages[].delta`
+gets a window like `delta`), and, within a choice, anything named as protocol metadata
 (`type`, `id`, `object`, `model`, `role`, `finish_reason`, `stop_reason`,
 `system_fingerprint`, `status`, `item_id`, `call_id`, `response_id`,
 `obfuscation`, `service_tier`, `instructions`), such as a delta's `role` or a
@@ -444,6 +445,29 @@ delay is the time the upstream takes to send another 8 KB, not scanning
 time. Routes that need the lowest time to first token should use
 `flag`. Re-run:
 `cargo test --release --lib measure_stream -- --ignored --nocapture`.
+
+Memory and cost bounds, per stream (AGENT-273):
+
+- **Windows.** Under `fail_open` at most 32 unfinished outputs have a
+  window of their own; more, and finished outputs written to again past
+  that limit, share one. Each window holds up to `max_scan_bytes` (an
+  eighth more under `flag` or `pass` once it has overflowed). A window
+  fills that far only while its text can't be trimmed: padding that
+  folds to nothing, or a PEM key still arriving. Under `fail_closed`
+  windows, bridges and carried tails together hold at most
+  `max_scan_bytes`, held events have a budget of their own of the same
+  size, and the SSE parser buffers up to `max_scan_bytes` of an
+  unfinished event. Size `max_scan_bytes` with these multiples in mind.
+- **CPU.** Stream scans run on the async worker that forwards the
+  stream, not on a blocking thread, and have no deadline; buffered bodies
+  are scanned on a blocking thread under a 5 s deadline. Streams use only
+  the built-in scanners (sidecars don't scan streams). An event's scan is
+  linear in the text it adds, except that past the cap under `redact` or
+  `block` each event rescans the full windows it touches.
+- **A repeated JSON key in a stream event** hides all but one copy from
+  the per-field windows. Under `fail_closed` the stream is blocked. Under
+  `fail_open` every copy is still scanned, but only within its own event,
+  and an `inspection_hold_overflow` row is written.
 
 ## Audit
 
