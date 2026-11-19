@@ -36,8 +36,15 @@
   16 KiB: the check costs about a hundred passes over such a path, and
   the listener accepts URIs of about 400 KiB. A path with no escape after
   the base has no bound, and is now decided in one pass (a 400 KB one
-  took 733 ms). A plain `..;` that dips into the base and comes back
+  took 733 ms). A plain `..;` that climbs out of the base and back
   (`/v1/api/..;/api/x`) is now refused.
+- The upstream base-path check no longer lets `..;` bring a path back
+  into the base after it climbed out. It reads `..;` as a name too, as
+  an RFC 3986 resolver does, and refuses a path that no longer starts
+  with the route's base. A climb by the URL parser's `..`
+  (`/v1/x/..;/a/y`), or by the upstream's own decode or fold
+  (`%252e%252e/x/..;/a/y`), reached an upstream outside `/v1/a` with the
+  route's credential (AGENT-333).
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG

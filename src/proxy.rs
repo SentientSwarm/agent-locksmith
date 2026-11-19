@@ -1415,7 +1415,15 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     let rest = path
         .strip_prefix(base.trim_end_matches('/'))
         .filter(|rest| rest.is_empty() || rest.starts_with('/'));
-    if let Some(rest) = rest.filter(|rest| !rest.contains('%')) {
+    // The URL is the base, a `/` and the request path, so a path that no
+    // longer starts with the base was climbed out of it by the URL parser's
+    // own `..`. A later `..;` brings it back only for an upstream
+    // that reads that as a dot; to one that reads it as a name,
+    // `/v1/x/..;/a/y` is outside `/v1/a` (AGENT-333).
+    let Some(rest) = rest else {
+        return false;
+    };
+    if !rest.contains('%') {
         let climbs = [Params::Dropped, Params::Unknown]
             .into_iter()
             .any(|params| upstream_segments(rest, params, DotRule::LITERAL).is_none());
@@ -1493,9 +1501,11 @@ fn within(base: &str, path: &str) -> bool {
     // level are one reading: folds act per character and never across a
     // `/`, so a segment, or a text rejoined from segments and decoded
     // again, folds alike too, except that folding a rejoined text a second
-    // time may compose an accent (NFKC after dropping U+200B). That yields
-    // only a letter, never a dot, separator or cut, and alike in the base
-    // and the path. Only distinct subsets are resolved below.
+    // time may compose a mark onto what precedes it (NFKC after dropping
+    // U+200B). That yields only a precomposed character, never a dot,
+    // separator or cut, and alike in the base and the path; joined to an
+    // escape's last digit, it only removes a separator, dot or cut. Only
+    // distinct subsets are resolved below.
     let mut distinct: Vec<Dots> = Vec::new();
     let mut seen: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for &dots in &all {
@@ -1927,7 +1937,11 @@ fn upstream_segments(path: &str, params: Params, rule: DotRule) -> Option<Vec<St
 }
 
 /// Resolve one segment onto `out`, reading `;` parameters as `params`
-/// says. `..;` climbs either way. A segment pushed keeps its parameters
+/// says: dropped, `..;x` climbs and `.;x` vanishes; unknown, both are
+/// names, as to an RFC 3986 resolver, which removes only an exact `.` or
+/// `..`. Every reading must stay inside, so a path whose `..;` brings it
+/// back after an upstream's own decode or fold climbed it out is refused
+/// (AGENT-333). A segment pushed keeps its parameters
 /// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
 /// that keeps them. Under a folding [`Dots`] reading the segment was
 /// already folded, so a look-alike `.` vanishes and a look-alike `..`
@@ -1939,8 +1953,12 @@ fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, rule: DotRule)
         Params::Dropped => name.is_empty() || dot_segment(name, rule) == 1,
         Params::Unknown => raw.is_empty() || dot_segment(raw, rule) == 1,
     };
+    let climbs = match params {
+        Params::Dropped => dot_segment(name, rule) == 2,
+        Params::Unknown => dot_segment(raw, rule) == 2,
+    };
     if empty {
-    } else if dot_segment(name, rule) == 2 {
+    } else if climbs {
         out.pop()?;
     } else {
         out.push(raw.to_string());
@@ -2818,6 +2836,23 @@ mod base_path_tests {
     #[test]
     fn parameters_on_the_base_segments_must_match() {
         assert!(!ok("https://h/v1/a", "https://h/v1/a/../a;x/y"));
+        // AGENT-333: the URL parser's `..` left the base, and `..;` comes
+        // back only for an upstream that reads it as a dot; one that reads
+        // it as a name serves `/v1/x/..;/a/y`.
+        assert!(!ok("https://h/v1/a", "https://h/v1/a/../x/..;/a/y"));
+        assert!(!ok("https://h/v1/a", "https://h/v1/x/..;/a/y"));
+        assert!(!ok("https://h/v1/a", "https://h/v1/x/..;/a/%79"));
+        assert!(!ok("https://h/v1/api", "https://h/v1/api/..;/api/x"));
+        // The upstream's own decode or fold may make the climb: twice
+        // decoded, `%252e%252e` pops `a` to an RFC 3986 resolver, which then
+        // keeps `..;` as a name (AGENT-333 review of d02e1cb).
+        assert!(!ok("https://h/v1/a", "https://h/v1/a/%252e%252e/x/..;/a/y"));
+        assert!(!ok(
+            "https://h/v1/a",
+            "https://h/v1/a/%EF%BC%8E%EF%BC%8E/x/..;/a/y"
+        ));
+        // Back into the base through the parser's own `..` still forwards.
+        assert!(ok("https://h/v1/a", "https://h/v1/a/../a/y"));
         let base = "https://h/base;v=1/api";
         assert!(!ok(base, "https://h/base;v=1/api/..;/..;/base;v=2/api/x"));
         assert!(ok(base, "https://h/base;v=1/api/x;y=2"));
