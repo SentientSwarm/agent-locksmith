@@ -342,7 +342,7 @@ pub(crate) fn path_views(raw: &str) -> Vec<String> {
 }
 
 /// Bounds [`path_views`]; each round shrinks a path that changes.
-const PATH_DECODE_ROUNDS: usize = 4;
+pub(crate) const PATH_DECODE_ROUNDS: usize = 4;
 
 fn decode(s: &str, plus_is_space: bool) -> String {
     let bytes = s.as_bytes();

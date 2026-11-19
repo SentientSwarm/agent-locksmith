@@ -22,6 +22,15 @@
 
 ### Fixed
 
+- The upstream base-path check refuses a path holding a NUL (`%00`),
+  decoded or still escaped at the decode bound, since an upstream reading
+  it as a C string sees `..%00` as `..`. That includes a literal `%2500`
+  in data (`50%2500off`), which a double-decoding upstream reads as a NUL. A decoded `?` or `#` ends the
+  path to an upstream that re-parses it, so the path cut there must stay
+  inside the base too (`..%3F`). A further reading drops Unicode's
+  default-ignorable characters (zero-width, bidi controls, variation
+  selectors, tag characters), held alongside the others, so `.` + U+200B
+  + `.` can't climb out on an upstream that ignores them (AGENT-287).
 - Under `fail_open`, a key split between two joined outputs (Anthropic
   text blocks, Responses content parts) no longer reaches the agent whole
   when an out-of-order output starts between them (AGENT-328). That

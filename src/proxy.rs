@@ -1410,28 +1410,42 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // spells `group/proj` pass, though an upstream reading `%2F` as data
     // serves another resource there. The shorter list repeats its last.
     let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
-    if [Dots::Literal, Dots::Lenient]
-        .into_iter()
-        .any(|dots| readings(out.path(), dots).iter().any(|r| lenient_escape(r)))
-    {
+    // A NUL ends the path to an upstream reading it as a C string, so
+    // `..%00` is `..` there; no path needs one (AGENT-287). One still
+    // escaped past the decode bound is refused too, as `lenient_escape`
+    // refuses escapes in the last reading.
+    if Dots::ALL.into_iter().any(|dots| {
+        readings(out.path(), dots)
+            .iter()
+            .any(|r| lenient_escape(r) || r.contains('\0') || r.contains("%00"))
+    }) {
         return false;
     }
     // Both readings of `;` parameters, and of look-alike dots, must stay
     // inside (AGENT-287).
     [Params::Dropped, Params::Unknown]
         .into_iter()
-        .flat_map(|params| [Dots::Literal, Dots::Lenient].map(|dots| (params, dots)))
+        .flat_map(|params| Dots::ALL.map(|dots| (params, dots)))
         .all(|(params, dots)| {
             let (bases, views) = (readings(base.path(), dots), readings(out.path(), dots));
+            let within = |base: &str, view: &str| match (
+                upstream_segments(base, params),
+                upstream_segments(view, params),
+            ) {
+                (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+                _ => false,
+            };
+            // A decoded `?` or `#` ends the path to an upstream that
+            // decodes and re-parses it, so `..%3F` is `..` there: the path
+            // cut there must stay inside the base cut alike (AGENT-287). A
+            // base holding one (`a%3Fb`) reads as cut to that upstream too.
+            let cut = |reading: &str, i: usize| match reading.find(['?', '#']) {
+                Some(end) if i > 0 => reading[..end].to_string(),
+                _ => reading.to_string(),
+            };
             let whole = (0..bases.len().max(views.len())).all(|i| {
                 let (base, view) = (at(&bases, i), at(&views, i));
-                match (
-                    upstream_segments(&base, params),
-                    upstream_segments(&view, params),
-                ) {
-                    (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
-                    _ => false,
-                }
+                within(&base, &view) && within(&cut(&base, i), &cut(&view, i))
             });
             // An upstream may also split first and decode each segment, so an
             // encoded `/` stays data while `%252e%252e` becomes `..` of the
@@ -1487,20 +1501,60 @@ enum Dots {
     /// (`．`, `‥`, `％`). Escapes only a lenient decoder reads are
     /// refused outright ([`lenient_escape`]).
     Lenient,
+    /// [`Dots::Lenient`], with default-ignorable characters dropped as
+    /// well, as NFKC_Casefold does. A reading of its own, held alongside
+    /// the others: an upstream that keeps U+200B serves `a\u{200B}pi`
+    /// as another segment than `api` (AGENT-287).
+    Ignorable,
 }
 
 impl Dots {
+    /// Every reading a path is held to.
+    const ALL: [Dots; 3] = [Dots::Literal, Dots::Lenient, Dots::Ignorable];
+
     /// A reading as a lenient upstream sees it, before it is decoded
-    /// again: tab and newline dropped, then NFKC. Folding each reading
-    /// lets a tab or `％` that splits an escape join it before the next
-    /// decode.
+    /// again: tab and newline dropped, then NFKC, and for
+    /// [`Dots::Ignorable`] default-ignorable characters dropped too
+    /// (`.` + U+200B + `.` is `..` to an upstream that ignores them).
+    /// Folding each reading lets a tab or `％` that splits an escape join
+    /// it before the next decode.
     fn fold(self, text: &str) -> String {
         use unicode_normalization::UnicodeNormalization;
+        if let Dots::Literal = self {
+            return text.to_string();
+        }
+        let plain = text.replace(['\t', '\n', '\r'], "");
+        let nfkc = plain.nfkc();
         match self {
-            Dots::Literal => text.to_string(),
-            Dots::Lenient => text.replace(['\t', '\n', '\r'], "").nfkc().collect(),
+            Dots::Ignorable => nfkc.filter(|&c| !ignorable(c)).collect(),
+            _ => nfkc.collect(),
         }
     }
+}
+
+/// Unicode's Default_Ignorable_Code_Point set (DerivedCoreProperties):
+/// characters an upstream may drop from a path (AGENT-287).
+fn ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{34F}'
+            | '\u{61C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
 /// AGENT-287 L5 — an escape only a lenient decoder reads: an overlong
@@ -1587,6 +1641,7 @@ fn overlong_lead(text: &str, mut at: usize, lead: u8) -> bool {
 /// How many times [`segmentwise`] decodes a segment, as `path_views` does
 /// a whole path.
 const SEGMENT_DECODE_ROUNDS: usize = 4;
+const _: () = assert!(SEGMENT_DECODE_ROUNDS == crate::inspection::PATH_DECODE_ROUNDS);
 
 /// AGENT-287 — the path as an upstream that splits before decoding reads
 /// it: split on its literal separators, each segment percent-decoded up
@@ -2203,6 +2258,91 @@ mod base_path_tests {
             "https://h/projects/group%2Fproj/%2e%2e/%2e%2e/projects/group/proj/x"
         ));
         assert!(!ok(base, "https://h/projects/group/proj/x"));
+    }
+
+    /// AGENT-287: a NUL ends the path to an upstream that reads it as a C
+    /// string, so `..%00` is `..` there; no path needs one, so it is
+    /// refused at any decoding depth.
+    #[test]
+    fn a_nul_in_any_reading_is_refused() {
+        let base = "https://h/v1/api";
+        assert!(!ok(base, "https://h/v1/api/..%00/..%00/admin"));
+        assert!(!ok(base, "https://h/v1/api/x%2500"));
+        assert!(!ok(base, "https://h/v1/api/x%00y"));
+        assert!(ok(base, "https://h/v1/api/x%30y"));
+    }
+
+    /// AGENT-287: an upstream may drop zero-width characters and soft
+    /// hyphens (default-ignorable), so `.` + U+200B + `.` is `..` there.
+    #[test]
+    fn ignorable_characters_cannot_hide_a_dot_segment() {
+        let base = "https://h/v1/api";
+        for pad in [
+            "%E2%80%8B",
+            "%C2%AD",
+            "%E2%80%8C",
+            "%E2%80%8D",
+            "%E2%81%A0",
+            "%EF%BB%BF",
+            "%E2%80%AE",
+            "%E2%81%A6",
+            "%CD%8F",
+            "%EF%B8%8F",
+            "%F3%A0%80%81",
+            "%E1%A0%8E",
+            "%E3%85%A4",
+            "%D8%9C",
+        ] {
+            let up = format!("https://h/v1/api/.{pad}./.{pad}./admin");
+            assert!(!ok(base, &up), "{pad}");
+        }
+        assert!(ok(base, "https://h/v1/api/a%E2%80%8Bb"));
+    }
+
+    /// The ignorable reading is held alongside NFKC, not in its place: to
+    /// an upstream that keeps U+200B, `a` + U+200B + `pi` is not `api`.
+    #[test]
+    fn an_ignorable_inside_the_base_name_is_another_segment() {
+        assert!(!ok(
+            "https://h/v1/api",
+            "https://h/v1/api/%EF%BC%8E%EF%BC%8E/%EF%BC%8E%EF%BC%8E/v1/a%E2%80%8Bpi/x"
+        ));
+    }
+
+    /// A decoded `?` or `#` ends the path to an upstream that re-parses
+    /// it, so `..%3F` climbs there; a NUL escaped past the decode bound
+    /// is refused too.
+    #[test]
+    fn a_decoded_query_or_fragment_mark_cannot_end_a_climb() {
+        let base = "https://h/v1/api";
+        assert!(!ok(base, "https://h/v1/api/..%3F"));
+        assert!(!ok(base, "https://h/v1/api/..%23"));
+        assert!(!ok(base, "https://h/v1/api/x/..%2F..%3Fq"));
+        assert!(ok(base, "https://h/v1/api/search%3Fq=1"));
+        assert!(!ok(base, "https://h/v1/api/x%2525252500"));
+    }
+
+    /// A base holding an encoded `?` or `#` is cut there alike, so its own
+    /// paths still pass; one that climbs out of it does not.
+    #[test]
+    fn a_base_holding_a_query_or_fragment_mark_still_serves_its_paths() {
+        for base in ["https://h/documents/a%3Fb", "https://h/documents/a%23b"] {
+            assert!(ok(base, base), "{base}");
+            assert!(ok(base, &format!("{base}/x")), "{base}");
+            assert!(!ok(base, &format!("{base}/..%2F..%2Fother")), "{base}");
+            assert!(!ok(base, "https://h/documents/other"), "{base}");
+        }
+    }
+
+    /// An upstream that splits first and decodes each segment twice reads
+    /// `.%25E2%2580%258B.` as `.` + U+200B + `.`, which is `..` once it
+    /// drops ignorables.
+    #[test]
+    fn an_ignorable_dot_segment_is_refused_when_split_first() {
+        assert!(!ok(
+            "https://h/v1/api",
+            "https://h/v1/api/a%2Fb/.%25E2%2580%258B./.%25E2%2580%258B."
+        ));
     }
 
     /// AGENT-287: `;` parameters are dropped only to find dot segments.
