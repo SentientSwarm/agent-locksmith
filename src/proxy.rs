@@ -1657,9 +1657,9 @@ fn plain(text: &str) -> bool {
 const MAX_FOLDED_PATH_BYTES: usize = 8 * 1024;
 
 /// The longest path with a `%` escape the check holds (AGENT-287). Its
-/// readings and two-stage resolves cost about a hundred passes over the
-/// path, in the request handler, and the listener accepts URIs of about
-/// 400 KiB; no real client sends an escaped path this long (common
+/// readings and two-stage resolves take up to about a tenth of a second
+/// at this length (release build, measured at 4b1475a), in the request
+/// handler, and the listener accepts URIs of about 400 KiB; no real client sends an escaped path this long (common
 /// servers cap a URL at 8 KiB), so a longer one is refused. A path with
 /// no escape has one reading and no bound.
 const MAX_ESCAPED_PATH_BYTES: usize = 16 * 1024;
@@ -2684,7 +2684,7 @@ mod base_path_tests {
         let spaced = "a%20b/".repeat(MAX_FOLDED_PATH_BYTES / 4);
         assert!(ok(base, &format!("https://h/v1/api/{spaced}x")));
         // Any escaped path is held to a longer bound (Codex review of
-        // 740e253): its two-stage resolves cost about a hundred passes.
+        // 740e253): its two-stage resolves are the costly part.
         let escaped = "a%252Fb/".repeat(MAX_ESCAPED_PATH_BYTES / 8 + 1);
         assert!(!ok(base, &format!("https://h/v1/api/{escaped}x")));
         let under = "a%252Fb/".repeat(MAX_ESCAPED_PATH_BYTES / 8 - 4);

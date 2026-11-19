@@ -33,8 +33,8 @@
   decoded `?` or `#`, and resolves again. A tail walking back into the
   base no longer hides such a climb (`q%2523/%252e%252e/..%2523/api/z`
   reached `/v1/`). A path holding a `%` escape is now refused above
-  16 KiB: the check costs about a hundred passes over such a path, and
-  the listener accepts URIs of about 400 KiB. A path with no escape after
+  16 KiB: at that length the check takes up to about a tenth of a
+  second, and the listener accepts URIs of about 400 KiB. A path with no escape after
   the base has no bound, and is now decided in one pass (a 400 KB one
   took 733 ms). A plain `..;` that climbs out of the base and back
   (`/v1/api/..;/api/x`) is now refused.
@@ -45,7 +45,8 @@
   (`/v1/x/..;/a/y`), or by the upstream's own decode or fold
   (`%252e%252e/x/..;/a/y`), reached an upstream outside `/v1/a` with the
   route's credential (AGENT-333). The two stages of a two-stage resolve
-  may also read `;` parameters differently.
+  may also read `;` parameters differently, and a path is refused when
+  either reading leaves the base.
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG
