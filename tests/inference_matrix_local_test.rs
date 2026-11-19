@@ -126,12 +126,14 @@ async fn fixture_streams_chat_completion_through_locksmith() {
 
     let mut full = Vec::new();
     let mut first_byte: Option<Duration> = None;
+    let mut last_byte = Duration::ZERO;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.expect("chunk ok");
         if first_byte.is_none() {
             first_byte = Some(start.elapsed());
         }
+        last_byte = start.elapsed();
         full.extend_from_slice(&bytes);
     }
     let body = String::from_utf8(full).expect("utf-8 body");
@@ -139,12 +141,21 @@ async fn fixture_streams_chat_completion_through_locksmith() {
     assert!(body.contains("world"));
     assert!(body.contains("[DONE]"));
 
-    // R-N6: first byte ≤100ms over upstream's first-byte. The fixture
-    // emits its first byte at t=0; allowing 200ms of slack for two
-    // hops (test client → locksmith → fixture) plus tokio scheduling.
+    // R-N6: Locksmith streams rather than buffers. The fixture spreads its
+    // chunks over 350 ms, so the first byte must reach the client at least
+    // one 150 ms gap before the last; a buffering proxy delivers them
+    // together. A wall-clock bound on the first byte measured the host, not
+    // Locksmith, and failed under load (AGENT-327); the latency target
+    // itself is streaming_passthrough_test's, relative to auth. The 5 s
+    // bound only catches a stall.
+    let first = first_byte.expect("at least one chunk");
     assert!(
-        first_byte.unwrap() < Duration::from_millis(200),
-        "first byte arrived {first_byte:?}"
+        last_byte.saturating_sub(first) >= Duration::from_millis(150),
+        "first byte {first:?}, last byte {last_byte:?}: the stream was buffered"
+    );
+    assert!(
+        first < Duration::from_secs(5),
+        "first byte stalled: {first:?}"
     );
 }
 
