@@ -72,6 +72,8 @@ pub struct TextWindow {
     /// so it stays held (AGENT-309).
     open: Option<usize>,
     overflowed: bool,
+    /// Past its cap, scan in batches too (see `batching_past_cap`).
+    batch_past_cap: bool,
     /// Spans already reported per (scanner, rule): disjoint intervals
     /// by start, so finding an overlap is a lookup, not a search.
     reported: HashMap<(String, String), BTreeMap<usize, usize>>,
@@ -93,8 +95,21 @@ impl TextWindow {
             scanned: 0,
             open: None,
             overflowed: false,
+            batch_past_cap: false,
             reported: HashMap::new(),
         }
+    }
+
+    /// Once it has overflowed, let the window run an eighth over its cap
+    /// until its next scan, so it keeps scanning in batches rather than
+    /// taking the whole cap again on each small push (AGENT-315). For a
+    /// window whose hits only need finding, not cutting before its text
+    /// goes: a stream that redacts holds its events only until they are
+    /// safe, and scanning every push is what keeps them held past a full
+    /// window until a match in them is found.
+    pub fn batching_past_cap(mut self) -> Self {
+        self.batch_past_cap = true;
+        self
     }
 
     /// Absolute offset of the oldest text still held: nothing before it
@@ -121,7 +136,12 @@ impl TextWindow {
     pub fn push(&mut self, text: &str) -> Result<Vec<WindowHit>, ScanError> {
         self.buf.push_str(text);
         let unscanned = self.buf.len() - self.scanned;
-        if unscanned == 0 || (unscanned * 8 < self.buf.len() && self.buf.len() <= self.cap) {
+        let room = if self.overflowed && self.batch_past_cap {
+            self.cap + self.cap / 8
+        } else {
+            self.cap
+        };
+        if unscanned == 0 || (unscanned * 8 < self.buf.len() && self.buf.len() <= room) {
             return Ok(Vec::new());
         }
         self.scan()
@@ -355,6 +375,85 @@ mod tests {
 
     fn literal(needle: &str, cap: usize) -> TextWindow {
         TextWindow::new(vec![Arc::new(Literal::new(needle).unwrap())], cap)
+    }
+
+    /// Finds nothing; counts the bytes it is given. Its long match keeps
+    /// the whole window, so the window stays pinned at its cap.
+    struct Pinned(Arc<std::sync::atomic::AtomicUsize>);
+    impl Scanner for Pinned {
+        fn id(&self) -> &str {
+            "pinned"
+        }
+        fn max_match_len(&self) -> usize {
+            1 << 20
+        }
+        fn scan(&self, text: &str, _: Direction) -> Result<Vec<super::super::Hit>, ScanError> {
+            self.0
+                .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        }
+    }
+
+    /// AGENT-315: a window pinned at its cap still scans once an eighth
+    /// of what it holds is new, rather than rescanning the cap per push.
+    #[test]
+    fn a_window_pinned_at_its_cap_does_not_rescan_per_push() {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut w =
+            TextWindow::new(vec![Arc::new(Pinned(count.clone()))], 4096).batching_past_cap();
+        w.push(&"x".repeat(8192)).unwrap();
+        assert!(w.overflowed());
+        let before = count.load(std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..10_000 {
+            w.push("y").unwrap();
+            assert!(w.held() <= 4096 + 4096 / 8, "{}", w.held());
+        }
+        w.flush().unwrap();
+        let scanned = count.load(std::sync::atomic::Ordering::Relaxed) - before;
+        assert!(scanned < 1_000_000, "{scanned} bytes scanned");
+    }
+
+    /// AGENT-315: batching past the cap keeps every match a scan of each
+    /// push would have found (a phrase ending in a later push).
+    #[test]
+    fn a_window_pinned_at_its_cap_still_finds_a_later_match() {
+        let mut w = TextWindow::new(vec![Arc::new(Injection)], 4096).batching_past_cap();
+        let mut hits = Vec::new();
+        for _ in 0..4 {
+            hits.extend(w.push(&" ".repeat(2048)).unwrap());
+        }
+        assert!(w.overflowed());
+        hits.extend(w.push(&format!("ignore all{}", " ".repeat(3970))).unwrap());
+        hits.extend(w.push("previous instructions").unwrap());
+        hits.extend(w.push(&" ".repeat(100)).unwrap());
+        hits.extend(w.flush().unwrap());
+        assert!(
+            hits.iter().any(|h| h.rule == "ignore_instructions"),
+            "{hits:?}"
+        );
+    }
+
+    /// A match nearly the cap long, streamed a byte at a time into a
+    /// window that overflowed earlier, is still found.
+    #[test]
+    fn a_pinned_window_finds_a_match_nearly_the_cap_long() {
+        for lead in [0, 97, 311, 509] {
+            let mut w = literal(&"q".repeat(3700), 4096).batching_past_cap();
+            w.push(&" ".repeat(8192)).unwrap();
+            assert!(w.overflowed());
+            let mut hits = 0;
+            for _ in 0..lead {
+                hits += w.push("z").unwrap().len();
+            }
+            for _ in 0..3700 {
+                hits += w.push("q").unwrap().len();
+            }
+            for _ in 0..600 {
+                hits += w.push("z").unwrap().len();
+            }
+            hits += w.flush().unwrap().len();
+            assert!(hits > 0, "missed after {lead} bytes");
+        }
     }
 
     /// AGENT-273: trimming gives back the memory a large piece took, so

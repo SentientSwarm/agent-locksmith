@@ -405,6 +405,18 @@ impl StreamInspector {
         step
     }
 
+    /// A window for one output. With no events held (`pass`, `flag`) its
+    /// hits need only be found, so it keeps batching its scans past its
+    /// cap (AGENT-315).
+    fn window(&self) -> TextWindow {
+        let window = TextWindow::new(self.scanners.clone(), self.max_held);
+        if self.hold {
+            window
+        } else {
+            window.batching_past_cap()
+        }
+    }
+
     /// The lane `lane`'s index, made on first use. Past `MAX_LANES`
     /// (`MAX_LANES_CLOSED` under `fail_closed`) unfinished outputs, or
     /// `MAX_OUTPUTS` in all, or lane paths past `max_scan_bytes`, new
@@ -448,13 +460,13 @@ impl StreamInspector {
             .and_then(|g| self.carry.remove(g))
             .map(|tail| {
                 let seed = tail.len();
-                let mut window = TextWindow::new(self.scanners.clone(), self.max_held);
+                let mut window = self.window();
                 window.seed(tail);
                 Bridge { window, seed }
             });
         self.lanes.push(LaneState {
             lane: lane.clone(),
-            window: TextWindow::new(self.scanners.clone(), self.max_held),
+            window: self.window(),
             done: false,
             superseded: false,
             bridge,
@@ -4325,6 +4337,63 @@ mod tests {
             started.elapsed()
         );
         assert!(!i.report().hits.is_empty());
+    }
+
+    /// AGENT-315: a stream that redacts keeps scanning every push past a
+    /// full window, so under `fail_open` a key is still found while its
+    /// events are held, even when the held events pass the limit.
+    #[test]
+    fn a_key_streamed_past_a_full_window_is_redacted_whole() {
+        for cap in [4096, 1 << 14] {
+            for per in [1, 3] {
+                let mut events: Vec<String> = (0..2 * cap / 2048 + 1)
+                    .map(|_| chat(&" ".repeat(2048)))
+                    .collect();
+                let secret: Vec<char> = format!(" {} ", key()).chars().collect();
+                events.extend(
+                    secret
+                        .chunks(per)
+                        .map(|c| chat(&c.iter().collect::<String>())),
+                );
+                events.extend((0..cap / 32).map(|_| chat("  ")));
+                events.push(chat(" done."));
+                events.push(DONE.to_string());
+                let p = DirectionPolicy {
+                    max_scan_bytes: cap,
+                    ..policy(Verdict::Redact)
+                };
+                let (out, i) = run(&p, &events);
+                assert!(!leaked(&out), "cap {cap}, {per} a time: the key went out");
+                assert!(i.hold_overflowed());
+                assert_eq!(i.report().verdict, Verdict::Redact);
+                assert!(client_texts(&out).concat().contains("done."));
+            }
+        }
+    }
+
+    /// AGENT-315: under `flag`, where nothing is held, a full window keeps
+    /// scanning in batches rather than taking the whole cap per delta.
+    #[test]
+    fn a_full_window_under_flag_scans_in_linear_time() {
+        let cap = 1 << 16;
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let p = DirectionPolicy {
+            scanners: vec![Arc::new(Counting(count.clone()))],
+            max_scan_bytes: cap,
+            ..policy(Verdict::Flag)
+        };
+        let mut events: Vec<String> = (0..(cap + cap / 2) / 4096)
+            .map(|_| chat(&" ".repeat(4096)))
+            .collect();
+        let n = 20_000;
+        events.extend((0..n).map(|_| chat("a")));
+        events.push(DONE.to_string());
+        let (out, i) = run(&p, &events);
+        assert_eq!(out, events.concat());
+        assert!(i.hold_overflowed());
+        let scanned = count.load(std::sync::atomic::Ordering::Relaxed);
+        let text = n + cap + cap / 2;
+        assert!(scanned < 20 * text, "{} per byte", scanned / text);
     }
 
     /// A scanner that does not take part in streams (a sidecar).

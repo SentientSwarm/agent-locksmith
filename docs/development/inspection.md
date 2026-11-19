@@ -311,7 +311,12 @@ line has not arrived), so the window holds it from its start until a scan
 finds it ended, or the window or the held events pass `max_scan_bytes`
 (AGENT-309). A window scans once the text it has not scanned reaches an eighth
 of what it holds, so padding that keeps the window long cannot make scanning
-quadratic. Up to 31 unfinished outputs under `fail_open`, or 255 under
+quadratic below `max_scan_bytes`. Past it, under `flag` or `pass` a window that
+has overflowed may run an eighth over the cap until its next scan and keeps
+that rule (AGENT-315). A stream that redacts or blocks scans every push past
+the cap, so under `fail_open` a match is found while its events are still
+held even once they pass the limit; that costs up to the cap per push in a
+full window. Up to 31 unfinished outputs under `fail_open`, or 255 under
 `fail_closed` (1023 in all), get their own window; a finished output's window
 drops its text, except for its kept tail. That tail carries over when the
 output belongs to a join group (AGENT-329): outputs a client joins into one

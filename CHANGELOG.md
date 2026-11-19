@@ -22,6 +22,16 @@
 
 ### Fixed
 
+- Under `on_hit: flag` (or `pass`), a stream window that has passed
+  `max_scan_bytes` no longer rescans its whole held text on every chunk
+  (AGENT-315). Once pinned at the cap, as when padding or a long run of
+  blank text keeps it full, each chunk rescanned up to the cap. Such a
+  window now runs up to an eighth over the cap until its next scan and
+  scans once an eighth of what it holds is new, as below the cap; each
+  scan sees all the text a scan of every chunk would have. A stream that
+  redacts or blocks keeps scanning every chunk past the cap: under
+  `fail_open`, that is what finds a key while its events are still held
+  once the held events pass the limit, and batching there let keys out.
 - Stream inspection now catches a secret split between two outputs that
   clients join into one text (AGENT-329): an Anthropic message's text
   blocks, or Responses content parts, which the SDK's `output_text` joins.
