@@ -1414,10 +1414,24 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // `..%00` is `..` there; no path needs one (AGENT-287). One still
     // escaped past the decode bound is refused too, as `lenient_escape`
     // refuses escapes in the last reading.
-    if Dots::ALL.into_iter().any(|dots| {
-        readings(out.path(), dots)
-            .iter()
-            .any(|r| lenient_escape(r) || r.contains('\0') || r.contains("%00"))
+    let all = Dots::for_path(out.path());
+    // A fold may act only on the last reading. An upstream may fold after
+    // one decode and not the next, a schedule per level no fixed set of
+    // readings models; when every earlier reading is plain, folds change
+    // nothing there, and since no fold makes an escape at the last (see
+    // `fold_crosses_escape`), the eight subsets are exact (AGENT-287).
+    if all.len() > 1 {
+        let literal = readings(out.path(), Dots::LITERAL);
+        let earlier = &literal[..literal.len() - 1];
+        if out.path().len() > MAX_FOLDED_PATH_BYTES || !earlier.iter().all(|r| plain(r)) {
+            return false;
+        }
+    }
+    if all.iter().copied().any(|dots| {
+        fold_crosses_escape(out.path(), dots)
+            || readings(out.path(), dots)
+                .iter()
+                .any(|r| lenient_escape(r) || r.contains('\0') || r.contains("%00"))
     }) {
         return false;
     }
@@ -1425,7 +1439,7 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // inside (AGENT-287).
     [Params::Dropped, Params::Unknown]
         .into_iter()
-        .flat_map(|params| Dots::ALL.map(|dots| (params, dots)))
+        .flat_map(|params| all.iter().map(move |&dots| (params, dots)))
         .all(|(params, dots)| {
             let (bases, views) = (readings(base.path(), dots), readings(out.path(), dots));
             let within = |base: &str, view: &str| match (
@@ -1465,6 +1479,18 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
         })
 }
 
+/// Whether every fold leaves `text` as it is: ASCII without tab or
+/// newline (NFKC leaves ASCII alone, and none of it is ignorable).
+fn plain(text: &str) -> bool {
+    text.bytes()
+        .all(|b| b.is_ascii() && !matches!(b, b'\t' | b'\n' | b'\r'))
+}
+
+/// The longest path held to the folded readings (AGENT-287). They cost
+/// about eight times one reading, run in the request handler, and no
+/// real path that needs them is this long; a longer one is refused.
+const MAX_FOLDED_PATH_BYTES: usize = 8 * 1024;
+
 /// The path undecoded, then decoded until nothing changes, at most
 /// [`SEGMENT_DECODE_ROUNDS`] times, as `path_views` does; `dots` folds
 /// each reading before the next decode.
@@ -1481,6 +1507,50 @@ fn readings(path: &str, dots: Dots) -> Vec<String> {
     list
 }
 
+/// Whether folding as `dots` crosses an escape anywhere in `path`'s
+/// readings (AGENT-287): it completes one (`%2` + tab + `e` is `%2e`), or
+/// NFKC composes one's last digit with a mark after it (`%4A` + U+0301 is
+/// `%4Á`, no longer an escape). The readings fold after every decode, so
+/// they miss an upstream that folds between decodes but not after the
+/// last, which reads such an escape differently (`a%2509pi` is `a`, a
+/// tab and `pi` there). The text between escapes is folded on its own:
+/// when that differs from folding the whole, or holds more escapes, the
+/// fold crossed one. No real path needs that.
+fn fold_crosses_escape(path: &str, dots: Dots) -> bool {
+    let escapes = |text: &str| {
+        let b = text.as_bytes();
+        (0..b.len())
+            .filter(|&i| escaped_byte(b, i).is_some())
+            .count()
+    };
+    let mut raw = path.to_string();
+    for _ in 0..=SEGMENT_DECODE_ROUNDS {
+        let folded = dots.fold(&raw);
+        let (b, mut kept, mut from) = (raw.as_bytes(), String::new(), 0);
+        let mut i = 0;
+        while i < b.len() {
+            if escaped_byte(b, i).is_some() {
+                kept.push_str(&dots.fold(&raw[from..i]));
+                kept.push_str(&raw[i..i + 3]);
+                i += 3;
+                from = i;
+            } else {
+                i += 1;
+            }
+        }
+        kept.push_str(&dots.fold(&raw[from..]));
+        if kept != folded || escapes(&kept) > escapes(&raw) {
+            return true;
+        }
+        let next = crate::inspection::percent_decode_path(&folded);
+        if next == folded {
+            return false;
+        }
+        raw = next;
+    }
+    false
+}
+
 /// How an upstream reads a `;` parameter on a path segment (AGENT-287).
 #[derive(Clone, Copy)]
 enum Params {
@@ -1491,44 +1561,50 @@ enum Params {
 }
 
 /// How an upstream reads a segment that only looks like `.` or `..`
-/// (AGENT-287 L5).
+/// (AGENT-287 L5): which fold steps it applies to each reading before it
+/// decodes again. Bit 0 drops tab and newline (a WHATWG re-parse), bit 1
+/// applies NFKC (`．`, `‥`, `％`, `／`), bit 2 drops default-ignorable
+/// characters (as NFKC_Casefold does). An upstream may apply any of them
+/// without the others: to one that drops U+200B but applies no NFKC,
+/// `.` + U+200B + `.` climbs while `ａｐｉ` stays its own segment. So every
+/// subset is a reading of its own (AGENT-287). Escapes only a lenient
+/// decoder reads are refused outright ([`lenient_escape`]).
 #[derive(Clone, Copy)]
-enum Dots {
-    /// Only `.` and `..` themselves are dot segments.
-    Literal,
-    /// Read as [`Dots::fold`] spells each reading: a WHATWG re-parse
-    /// drops tab and newline, and a normalising upstream applies NFKC
-    /// (`．`, `‥`, `％`). Escapes only a lenient decoder reads are
-    /// refused outright ([`lenient_escape`]).
-    Lenient,
-    /// [`Dots::Lenient`], with default-ignorable characters dropped as
-    /// well, as NFKC_Casefold does. A reading of its own, held alongside
-    /// the others: an upstream that keeps U+200B serves `a\u{200B}pi`
-    /// as another segment than `api` (AGENT-287).
-    Ignorable,
-}
+struct Dots(u8);
 
 impl Dots {
-    /// Every reading a path is held to.
-    const ALL: [Dots; 3] = [Dots::Literal, Dots::Lenient, Dots::Ignorable];
+    /// Only `.` and `..` themselves are dot segments.
+    const LITERAL: Dots = Dots(0);
 
-    /// A reading as a lenient upstream sees it, before it is decoded
-    /// again: tab and newline dropped, then NFKC, and for
-    /// [`Dots::Ignorable`] default-ignorable characters dropped too
-    /// (`.` + U+200B + `.` is `..` to an upstream that ignores them).
-    /// Folding each reading lets a tab or `％` that splits an escape join
-    /// it before the next decode.
+    /// The readings a path is held to. A path whose every literal
+    /// reading is ASCII without tab or newline folds to itself under
+    /// every step (NFKC leaves ASCII alone, and none is ignorable), so
+    /// the literal reading alone decides it; any other is held to all
+    /// eight step subsets.
+    fn for_path(path: &str) -> Vec<Dots> {
+        if readings(path, Dots::LITERAL).iter().all(|r| plain(r)) {
+            vec![Dots::LITERAL]
+        } else {
+            (0..8).map(Dots).collect()
+        }
+    }
+
+    /// A reading as an upstream applying these steps sees it, before it
+    /// is decoded again. Folding each reading lets a tab or `％` that
+    /// splits an escape join it before the next decode.
     fn fold(self, text: &str) -> String {
         use unicode_normalization::UnicodeNormalization;
-        if let Dots::Literal = self {
-            return text.to_string();
+        let mut out = text.to_string();
+        if self.0 & 1 != 0 {
+            out = out.replace(['\t', '\n', '\r'], "");
         }
-        let plain = text.replace(['\t', '\n', '\r'], "");
-        let nfkc = plain.nfkc();
-        match self {
-            Dots::Ignorable => nfkc.filter(|&c| !ignorable(c)).collect(),
-            _ => nfkc.collect(),
+        if self.0 & 2 != 0 {
+            out = out.nfkc().collect();
         }
+        if self.0 & 4 != 0 {
+            out = out.chars().filter(|&c| !ignorable(c)).collect();
+        }
+        out
     }
 }
 
@@ -1689,8 +1765,9 @@ fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
 /// Resolve one segment onto `out`, reading `;` parameters as `params`
 /// says. `..;` climbs either way. A segment pushed keeps its parameters
 /// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
-/// that keeps them. Under [`Dots::Lenient`] the segment was already
-/// folded, so a look-alike `.` vanishes and a look-alike `..` climbs.
+/// that keeps them. Under a folding [`Dots`] reading the segment was
+/// already folded, so a look-alike `.` vanishes and a look-alike `..`
+/// climbs.
 /// `None` when `..` climbs above the root.
 fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> {
     let name = raw.split(';').next().unwrap_or("");
@@ -2221,6 +2298,7 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod base_path_tests {
+    use super::MAX_FOLDED_PATH_BYTES;
     use super::stays_within_base as ok;
 
     #[test]
@@ -2270,6 +2348,96 @@ mod base_path_tests {
         assert!(!ok(base, "https://h/v1/api/x%2500"));
         assert!(!ok(base, "https://h/v1/api/x%00y"));
         assert!(ok(base, "https://h/v1/api/x%30y"));
+    }
+
+    /// A fold may act only on a path's last reading (AGENT-287): an
+    /// upstream may fold after one decode and not the next, which no
+    /// fixed set of readings models. To one that
+    /// decodes, drops tabs on a re-parse, then decodes again,
+    /// `.%09./api/%252e%252e/a%2509pi` climbs out twice.
+    #[test]
+    fn a_fold_may_act_only_on_the_last_reading() {
+        let base = "https://h/v1/api";
+        for path in [
+            "/.%09./api/%252e%252e/a%2509pi/x",
+            "/.%E2%80%8B./api/%252e%252e/a%25E2%2580%258Bpi/x",
+            "/%EF%BC%8E%EF%BC%8E/api/%252e%252e/%25EF%25BD%2581pi/x",
+            "/%E6%97%A5/%2541",
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api{path}")), "{path}");
+        }
+        assert!(ok(base, "https://h/v1/api/%E6%97%A5/x"));
+        // Double-encoded, it is plain until its last reading.
+        assert!(ok(base, "https://h/v1/api/%25E6%2597%25A5/x"));
+        assert!(ok(base, "https://h/v1/api/100%25%20/%E6%97%A5/x"));
+        assert!(ok(base, "https://h/v1/api/a%252Fb/x"));
+    }
+
+    /// The folded readings cost eight times one, so a path they are needed
+    /// for is held to a length bound; a plain path is not (AGENT-287).
+    #[test]
+    fn a_long_path_needing_folded_readings_is_refused() {
+        let base = "https://h/v1/api";
+        let plain = "a/".repeat(30_000);
+        assert!(ok(base, &format!("https://h/v1/api/{plain}x")));
+        let folded = "%EF%BD%81/".repeat(MAX_FOLDED_PATH_BYTES / 10 + 1);
+        assert!(!ok(base, &format!("https://h/v1/api/{folded}x")));
+        let short = "%EF%BD%81/".repeat(MAX_FOLDED_PATH_BYTES / 20);
+        assert!(ok(base, &format!("https://h/v1/api/{short}x")));
+        // Folding leaves ASCII other than tab and newline alone, so a long
+        // path with spaces is plain.
+        let spaced = "a%20b/".repeat(MAX_FOLDED_PATH_BYTES / 4);
+        assert!(ok(base, &format!("https://h/v1/api/{spaced}x")));
+    }
+
+    /// AGENT-287: an upstream may apply one fold step and not the rest:
+    /// drop zero-width characters or tabs but apply no NFKC, or apply NFKC
+    /// and keep tabs. To one that drops U+200B only, `.` + U+200B + `.`
+    /// climbs while `ａｐｉ` stays its own segment, which no stacked reading
+    /// sees. Each subset of the steps is a reading of its own.
+    #[test]
+    fn one_fold_step_cannot_pair_a_dot_segment_with_a_folded_name() {
+        let base = "https://h/v1/api";
+        let fullwidth = "%EF%BD%81%EF%BD%90%EF%BD%89";
+        let fw_dot = "%EF%BC%8E";
+        let fw_slash = "%EF%BC%8F";
+        let fw_escape = "%EF%BC%85%EF%BC%92%EF%BD%85";
+        for path in [
+            format!(".%E2%80%8B./{fullwidth}/x"),
+            format!(".%09./{fullwidth}/x"),
+            format!("{fw_dot}{fw_dot}/a%E2%80%8Bpi/x"),
+            // A fold that joins an escape the next decode reads as a dot.
+            format!("%2%09e%2%09e/{fullwidth}/x"),
+            format!("%2%E2%80%8Be%2%E2%80%8Be/{fullwidth}/x"),
+            format!("{fw_escape}{fw_escape}/a%09pi/x"),
+            // Two dot segments needing different steps.
+            format!(".%E2%80%8B./{fw_dot}{fw_dot}/v1/api/x"),
+            // NFKC makes a separator inside one segment.
+            format!("x{fw_slash}{fw_dot}{fw_dot}{fw_slash}{fw_dot}{fw_dot}/a%09pi/z"),
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
+        assert!(ok(base, &format!("https://h/v1/api/{fullwidth}/x")));
+        // A fold between decodes that completes an escape: an upstream
+        // that decodes, folds and decodes again without a last fold
+        // reads `a%09pi` as `a` + tab + `pi`.
+        for path in [
+            "%2%09e%2%09e/a%2509pi/x".to_string(),
+            "%2%E2%80%8Be%2%E2%80%8Be/a%25E2%2580%258Bpi/x".to_string(),
+            format!("{fw_escape}{fw_escape}/%25EF%25BD%2581pi/x"),
+            "%EF%BC%8541".to_string(),
+            // NFKC destroys an escape too (`%4A` + U+0301 is `%4Á`), so one
+            // created and one destroyed must not balance.
+            format!("{fw_escape}{fw_escape}/%25EF%25BD%2581pi/x%254A%CC%81%254A%CC%81"),
+            "%254A%CC%81".to_string(),
+        ] {
+            assert!(!ok(base, &format!("https://h/v1/api/{path}")), "{path}");
+        }
+        // Its dots need NFKC, which folds `ａｐｉ` back to `api` too.
+        let url = format!("https://h/v1/api/{fw_dot}%E2%80%8B{fw_dot}/{fullwidth}/x");
+        assert!(ok(base, &url));
+        assert!(ok(base, "https://h/v1/api/a/.%E2%80%8B./b"));
+        assert!(ok(base, "https://h/v1/api/%E4%B8%AD%E6%96%87/x"));
     }
 
     /// AGENT-287: an upstream may drop zero-width characters and soft
