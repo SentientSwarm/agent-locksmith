@@ -143,7 +143,7 @@ mod redirect_tests {
     /// token endpoint fails the refresh. It must say so, not report a 5xx.
     #[tokio::test]
     async fn a_redirected_token_call_is_reported_as_a_redirect() {
-        for status in [301, 302, 307, 308] {
+        for status in [301, 302, 303, 307, 308] {
             let Err(error) = parse_tokens(answer(status)).await else {
                 panic!("{status} must fail the refresh");
             };
@@ -166,7 +166,7 @@ mod redirect_tests {
             let Err(error) = parse_tokens(answer(status)).await else {
                 panic!("{status} must fail the refresh");
             };
-            assert_ne!(error.audit_cause(), "token_redirect", "{status}");
+            assert_eq!(error.audit_cause(), "provider_5xx", "{status}");
             assert!(!error.to_string().contains("token_url"), "{status}");
         }
     }

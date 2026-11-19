@@ -134,3 +134,28 @@ mod resource;
 
 #[path = "slack_metadata_tests.rs"]
 mod metadata;
+
+/// AGENT-328: consent token calls follow no redirect, so a 3xx from the
+/// token endpoint is refused as `token_http_refused`, at the initial
+/// exchange and at refresh (docs/operator/oauth-consent.md).
+#[test]
+fn a_redirected_consent_token_call_is_refused() {
+    let p = profile();
+    let old = token::Token {
+        access: "fixture-access".to_string().into(),
+        refresh: Some("fixture-refresh".to_string().into()),
+        expiry: None,
+        scope_echoed: false,
+        granted_scope: None,
+    };
+    for code in [301u16, 302, 303, 307, 308] {
+        let status = reqwest::StatusCode::from_u16(code).unwrap();
+        let body = br#"{"access_token":"redirected-access","token_type":"Bearer"}"#;
+        let exchange = token_io::exchange_status(&p, status, body, None).unwrap_err();
+        assert_eq!(exchange.0, "token_http_refused", "{code}");
+        let Err(refresh) = token_io::refreshed(&p, status, body, &old, None) else {
+            panic!("{code} must refuse the refresh");
+        };
+        assert_eq!(refresh.0, "token_http_refused", "{code}");
+    }
+}
