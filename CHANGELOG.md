@@ -26,7 +26,10 @@
   WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
   the four-decode bound or cut at a decoded `?`, now resolves alike for an
   upstream that re-parses it, so a five-times-encoded `..` or a `..`
-  behind `%253F` no longer climbs out (AGENT-287).
+  behind `%253F` no longer climbs out (AGENT-287). A path must also stay
+  inside when a segment that is a dot up to a decoded `?` or `#` counts
+  as that dot, since an upstream may resolve dots, decode again and cut
+  there (`x%2523/%252e%252e/..%2523`); it is held to both readings.
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG

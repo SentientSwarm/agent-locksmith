@@ -1438,16 +1438,18 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     }) {
         return false;
     }
-    // Both readings of `;` parameters, and of look-alike dots, must stay
-    // inside (AGENT-287).
+    // Both readings of `;` parameters, of look-alike dots and of a dot
+    // cut at a decoded `?` or `#` (see `dot_segment`) must stay inside
+    // (AGENT-287).
     [Params::Dropped, Params::Unknown]
         .into_iter()
         .flat_map(|params| all.iter().map(move |&dots| (params, dots)))
-        .all(|(params, dots)| {
+        .flat_map(|(params, dots)| [false, true].map(|cut| (params, dots, cut)))
+        .all(|(params, dots, cut_dots)| {
             let (bases, views) = (readings(base.path(), dots), readings(out.path(), dots));
             let within = |base: &str, view: &str| match (
-                upstream_segments(base, params),
-                upstream_segments(view, params),
+                upstream_segments(base, params, cut_dots),
+                upstream_segments(view, params, cut_dots),
             ) {
                 (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
                 _ => false,
@@ -1471,8 +1473,8 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
                 && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
                     [false, true].into_iter().all(|backslash| {
                         match (
-                            segmentwise(base.path(), rounds, backslash, params, dots),
-                            segmentwise(out.path(), rounds, backslash, params, dots),
+                            segmentwise(base.path(), rounds, backslash, params, dots, cut_dots),
+                            segmentwise(out.path(), rounds, backslash, params, dots, cut_dots),
                         ) {
                             (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
                             _ => false,
@@ -1523,17 +1525,17 @@ fn separator_climbs(base: &str, path: &str, all: &[Dots]) -> bool {
                 .iter()
                 .map(|r| {
                     r.split(['/', '\\'])
-                        .filter(|p| dot_segment(&name(p)) == 2)
+                        .filter(|p| dot_segment(&name(p), true) == 2)
                         .count()
                 })
                 .max()
                 .unwrap_or(0);
             depth -= dots as i64;
-        } else if list.iter().any(|r| dot_segment(&name(r)) == 2) {
+        } else if list.iter().any(|r| dot_segment(&name(r), true) == 2) {
             depth -= 1;
         } else if list.iter().all(|r| {
             let n = name(r);
-            !n.is_empty() && dot_segment(&n) == 0
+            !n.is_empty() && dot_segment(&n, false) == 0 && dot_segment(&n, true) == 0
         }) {
             depth += 1;
         }
@@ -1794,6 +1796,7 @@ fn segmentwise(
     backslash: bool,
     params: Params,
     dots: Dots,
+    cut: bool,
 ) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
@@ -1812,17 +1815,17 @@ fn segmentwise(
             vec![segment.as_str()]
         };
         for piece in pieces {
-            push_segment(&mut out, piece, params)?;
+            push_segment(&mut out, piece, params, cut)?;
         }
     }
     Some(out)
 }
 /// Path segments as a normalising upstream resolves them, or `None` when
 /// `..` climbs above the root.
-fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
+fn upstream_segments(path: &str, params: Params, cut: bool) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
-        push_segment(&mut out, raw, params)?;
+        push_segment(&mut out, raw, params, cut)?;
     }
     Some(out)
 }
@@ -1832,16 +1835,16 @@ fn upstream_segments(path: &str, params: Params) -> Option<Vec<String>> {
 /// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
 /// that keeps them. Under a folding [`Dots`] reading the segment was
 /// already folded, so a look-alike `.` vanishes and a look-alike `..`
-/// climbs.
+/// climbs. `cut` reads dots as [`dot_segment`] does with it.
 /// `None` when `..` climbs above the root.
-fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> {
+fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, cut: bool) -> Option<()> {
     let name = raw.split(';').next().unwrap_or("");
     let empty = match params {
-        Params::Dropped => name.is_empty() || dot_segment(name) == 1,
-        Params::Unknown => raw.is_empty() || dot_segment(raw) == 1,
+        Params::Dropped => name.is_empty() || dot_segment(name, cut) == 1,
+        Params::Unknown => raw.is_empty() || dot_segment(raw, cut) == 1,
     };
     if empty {
-    } else if dot_segment(name) == 2 {
+    } else if dot_segment(name, cut) == 2 {
         out.pop()?;
     } else {
         out.push(raw.to_string());
@@ -1852,12 +1855,23 @@ fn push_segment(out: &mut Vec<String>, raw: &str, params: Params) -> Option<()> 
 /// them: `%2e` in any case is a dot (`.%2E`, `%2e%2e`), so a reading still
 /// holding one, past the decode bound or cut at a decoded `?`, resolves
 /// alike for an upstream that re-parses it (AGENT-287); 0 for a name.
-fn dot_segment(name: &str) -> u8 {
-    let lower = name.to_ascii_lowercase();
-    match lower.as_str() {
-        "." | "%2e" => 1,
-        ".." | ".%2e" | "%2e." | "%2e%2e" => 2,
-        _ => 0,
+/// With `cut`, what follows a decoded `?` or `#` is not the segment's: an
+/// upstream may resolve dots, decode again and cut there, so `x%2523/
+/// %252e%252e/..%2523` ends `..#` and climbs, though cutting first stops
+/// at `x#`. Without it `..#x` is a name, as to an upstream that never
+/// cuts; a path must stay inside under both readings.
+fn dot_segment(name: &str, cut: bool) -> u8 {
+    let name = match name.find(['?', '#']) {
+        Some(end) if cut => &name[..end],
+        _ => name,
+    };
+    let is = |spellings: &[&str]| spellings.iter().any(|s| name.eq_ignore_ascii_case(s));
+    if is(&[".", "%2e"]) {
+        1
+    } else if is(&["..", ".%2e", "%2e.", "%2e%2e"]) {
+        2
+    } else {
+        0
     }
 }
 
@@ -2723,6 +2737,33 @@ mod base_path_tests {
         }
         let inside = format!("https://h/v1/api/a/{five}{five}/b");
         assert!(ok(base, &inside), "{inside}");
+        // Inside a segment with an encoded separator, the climb bound
+        // counts them too.
+        let split = format!("https://h/v1/api/a%252Fb%2F{five}{five}%2F{five}{five}/admin");
+        assert!(!ok(base, &split), "{split}");
+    }
+
+    /// An upstream may resolve dots, then decode again and cut at a decoded
+    /// `?` or `#`, so a segment that is a dot before one climbs there
+    /// (AGENT-287, 2e896d3 review).
+    #[test]
+    fn a_dot_before_a_decoded_query_or_fragment_still_climbs() {
+        let base = "https://h/v1/api";
+        for path in [
+            "https://h/v1/api/x%2523/%252e%252e/..%2523",
+            "https://h/v1/api/x%253F/%252e%252e/..%253F/admin",
+            "https://h/v1/api/x%2523/..;/..%2523",
+            // Never cut, `..#x` and `.#` are names: these climb to an
+            // upstream that decodes twice and resolves.
+            "https://h/v1/api/q%2523/%25252e%25252e/%25252e%25252e/w/..%2523x/api/z",
+            "https://h/v1/api/x%2523/%252e%252e/%25252e%25252e/.%2523/api/z",
+        ] {
+            assert!(!ok(base, path), "{path}");
+        }
+        // Cut inside the base, or after a name, it stays in.
+        assert!(ok(base, "https://h/v1/api/a/..%2523frag"));
+        assert!(ok(base, "https://h/v1/api/a/b%253Fq/..%2523/c"));
+        assert!(ok(base, "https://h/v1/api/x%253Fy/z"));
     }
 
     #[test]
