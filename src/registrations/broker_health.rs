@@ -54,9 +54,10 @@ pub struct HealthState {
     pub checked_at: i64,
     pub http_status: Option<u16>,
     /// Why a probe failed (AGENT-269): `unexpected_status`, `unreachable`
-    /// (any transport error: connect, TLS, timeout or a refusal by the
-    /// egress proxy), or the refusal code when no client may
-    /// reach the broker (`egress_proxy_unconfigured`,
+    /// (any transport error: connect, TLS, timeout or the egress proxy
+    /// refusing an HTTPS broker's CONNECT; an `http://` broker's refusal is
+    /// the proxy's response, so `unexpected_status`), or the refusal code
+    /// when no client may reach the broker (`egress_proxy_unconfigured`,
     /// `upstream_client_unavailable`). `None` when up.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<&'static str>,

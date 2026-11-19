@@ -585,7 +585,8 @@ impl StreamInspector {
                 // Clients join a group's outputs in index order: one
                 // starting below an earlier one joins before it.
                 let at: Vec<i64> = key.tags.iter().map(|&(_, v)| v).collect();
-                if self.last_join.get(group).is_some_and(|last| at < *last) {
+                let in_order = self.last_join.get(group).is_none_or(|last| at > *last);
+                if !in_order {
                     if self.on_error == OnError::FailClosed {
                         self.note_error("joined stream outputs out of order".into());
                         return self.block(step);
@@ -600,7 +601,10 @@ impl StreamInspector {
                         !l.done && !l.superseded && join_group(&l.lane) == Some(group)
                     })
                     .collect();
-                if let Some(&newest) = open.last() {
+                // Out of order, it joins before them: it takes no tail.
+                if let Some(&newest) = open.last()
+                    && in_order
+                {
                     self.lend_tail(group, newest);
                 }
                 for i in open {
@@ -840,11 +844,12 @@ impl StreamInspector {
             let split = f
                 .iter()
                 .any(|h| h.hit.new && self.verdict_of(&h.hit) == Verdict::Redact);
+            hits.extend(f);
             if split {
-                self.record(&f);
+                // The block ends the stream: audit everything found with it.
+                self.record(hits);
                 self.report.redaction_incomplete = true;
             }
-            hits.extend(f);
             split
         });
         if let Ok(true) = found {
@@ -1922,6 +1927,51 @@ mod tests {
             let (out, i) = run(&policy(Verdict::Redact), &events);
             assert_eq!(out, events.concat());
             assert!(i.hold_overflowed());
+        }
+    }
+
+    /// An out-of-order output starting while the earlier one is open takes
+    /// no tail from it: the client joins them the other way round.
+    #[test]
+    fn an_out_of_order_output_takes_no_tail_from_an_open_one() {
+        let k = key();
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![at(1, head), at(0, last), stop(0), stop(1), end.to_string()];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(out, events.concat());
+            assert!(i.hold_overflowed());
+            assert_ne!(i.report().verdict, Verdict::Block, "{:?}", i.report().hits);
+        }
+    }
+
+    /// A split that blocks still audits the other hits found with it.
+    #[test]
+    fn a_split_block_records_the_hits_found_with_it() {
+        let k = key();
+        let other = format!(
+            "ghp_{}",
+            &"Zx2Lk9Vb4Nc8Rt1Hy6Jd3Fg5Sa0WpQm7".repeat(2)[..36]
+        );
+        let (head, last) = k.split_at(k.len() - 1);
+        for (at, stop, end) in JOINED {
+            let events = vec![
+                at(0, &format!("Here: {head}")),
+                stop(0),
+                at(1, &format!("{last} and {other}")),
+                stop(1),
+                end.to_string(),
+            ];
+            let (out, i) = run(&policy(Verdict::Redact), &events);
+            assert_eq!(i.report().verdict, Verdict::Block, "{out}");
+            assert!(i.report().redaction_incomplete);
+            let named = i
+                .report()
+                .hits
+                .iter()
+                .filter(|h| h.rule != "entropy")
+                .count();
+            assert_eq!(named, 2, "{:?}", i.report().hits);
         }
     }
 

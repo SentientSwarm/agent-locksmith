@@ -361,8 +361,8 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   `health` (`status`, `http_status`, `checked_at`, and on a failure `cause`:
   `unexpected_status`, `unreachable` (any transport error, including an
   egress proxy refusing an HTTPS broker's CONNECT; for an `http://` broker
-  the proxy's refusal is a response, so it reads `unexpected_status`), or
-  `egress_proxy_unconfigured` /
+  the proxy's refusal is a response, so it reads `unexpected_status` with
+  the proxy's `http_status`), or `egress_proxy_unconfigured` /
   `upstream_client_unavailable` when the broker cannot be reached under the
   egress settings; `null` before the first). `broker_down` carries the
   `cause` at the transition to down.
