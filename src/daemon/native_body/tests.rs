@@ -46,7 +46,10 @@ async fn journey(tls: bool, method: &str, path: &str) {
         .is_ok();
     coord.trigger();
     let (normal_return, dropped_at_return, forced, aborted) = finish(&mut daemon, &f).await;
-    let lock = super::state_lock::acquire(Some(&f.dir.path().join("state.db")));
+    // A spawn elsewhere in the test binary can share the lock's file for a
+    // moment after the daemon drops it (AGENT-331).
+    let lock =
+        super::state_lock::acquire_within(&f.dir.path().join("state.db"), Duration::from_secs(5));
     let lock_reacquired = lock.is_ok();
     client.abort();
     let _ = (&mut client).await;

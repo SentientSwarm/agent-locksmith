@@ -1399,7 +1399,7 @@ mod native_body_tests;
 
 #[cfg(test)]
 pub(crate) fn body_test_lock(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
-    state_lock::acquire(Some(path))
+    state_lock::acquire_within(path, std::time::Duration::from_secs(5))
 }
 
 /// AGENT-261 — say once at startup who enforces `egress: proxied`, so
