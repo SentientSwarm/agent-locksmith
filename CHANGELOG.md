@@ -44,7 +44,8 @@
   with the route's base. A climb by the URL parser's `..`
   (`/v1/x/..;/a/y`), or by the upstream's own decode or fold
   (`%252e%252e/x/..;/a/y`), reached an upstream outside `/v1/a` with the
-  route's credential (AGENT-333).
+  route's credential (AGENT-333). The two stages of a two-stage resolve
+  may also read `;` parameters differently.
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG

@@ -2023,12 +2023,15 @@ fn two_stage_within(base: &str, path: &str, params: Params, dots: Dots) -> bool 
     let (bases, views) = (readings(base, dots), readings(path, dots));
     let rules = [DotRule::LITERAL, DotRule::spelled(false)];
     // A later resolve of one decoded text, plain or cut at `?` or `#`.
-    let finish = |text: &str, second: DotRule, cut: bool| {
+    // The later resolver may read `;` parameters otherwise than the first
+    // (AGENT-333): one that drops them cancels `b/..;`, and a later one that
+    // keeps them leaves a decoded `..;` a name after `%2e%2e` climbed.
+    let finish = |text: &str, later_params: Params, second: DotRule, cut: bool| {
         let text = match text.find(['?', '#']) {
             Some(end) if cut => &text[..end],
             _ => text,
         };
-        upstream_segments(text, params, second)
+        upstream_segments(text, later_params, second)
     };
     // Equal readings give equal stages, and an earlier level reaches every
     // later decode a later level does, so repeats are skipped.
@@ -2055,11 +2058,16 @@ fn two_stage_within(base: &str, path: &str, params: Params, dots: Dots) -> bool 
                 {
                     continue;
                 }
-                for second in rules {
-                    for cut in [false, true] {
-                        match (finish(&b_text, second, cut), finish(&v_text, second, cut)) {
-                            (Some(prefix), Some(segs)) if segs.starts_with(&prefix) => {}
-                            _ => return false,
+                for later_params in [Params::Dropped, Params::Unknown] {
+                    for second in rules {
+                        for cut in [false, true] {
+                            match (
+                                finish(&b_text, later_params, second, cut),
+                                finish(&v_text, later_params, second, cut),
+                            ) {
+                                (Some(prefix), Some(segs)) if segs.starts_with(&prefix) => {}
+                                _ => return false,
+                            }
                         }
                     }
                 }
@@ -2850,6 +2858,13 @@ mod base_path_tests {
         assert!(!ok(
             "https://h/v1/a",
             "https://h/v1/a/%EF%BC%8E%EF%BC%8E/x/..;/a/y"
+        ));
+        // Two hops reading `;` differently: the first drops parameters
+        // (`b/..;` cancels), the second decodes and keeps them, so `%2e%2e`
+        // climbs and `..;` stays a name.
+        assert!(!ok(
+            "https://h/v1/a",
+            "https://h/v1/a/b/..;/%252e%252e/x/..%3B/a/y"
         ));
         // Back into the base through the parser's own `..` still forwards.
         assert!(ok("https://h/v1/a", "https://h/v1/a/../a/y"));
