@@ -1402,6 +1402,39 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     if out.origin() != base.origin() {
         return false;
     }
+    let (base, path) = (base.path(), out.path());
+    // The part after the base, when it holds no escape, has only literal
+    // readings: the URL parser percent-encodes non-ASCII and controls,
+    // drops tab and newline, turns `\` into `/`, leaves no `?` or `#` and
+    // resolves its `.` and `..`. No decode or fold acts across the `/`
+    // before it, so every reading of the path is that reading of the base
+    // with this part after it, and the path stays inside exactly when the
+    // base passes its own readings and this part never climbs above its
+    // start (`..;` still does). One pass decides a path of any length, under
+    // an escaped base (`group%2Fproj`) too (AGENT-287).
+    let rest = path
+        .strip_prefix(base.trim_end_matches('/'))
+        .filter(|rest| rest.is_empty() || rest.starts_with('/'));
+    if let Some(rest) = rest.filter(|rest| !rest.contains('%')) {
+        let climbs = [Params::Dropped, Params::Unknown]
+            .into_iter()
+            .any(|params| upstream_segments(rest, params, DotRule::LITERAL).is_none());
+        // An overlong lead ending a base reading reads up to six bytes past
+        // it (`%C1` + `/` is `o` to a lenient decoder), so those join too.
+        let head = &rest[..rest.len().min(6)];
+        let joins = Dots::for_path(base).into_iter().any(|dots| {
+            readings(base, dots)
+                .iter()
+                .any(|r| lenient_escape(&format!("{r}{head}")))
+        });
+        return !climbs && !joins && within(base, base);
+    }
+    within(base, path)
+}
+
+/// Whether every reading of `path` stays under the same reading of `base`
+/// (both URL paths); [`stays_within_base`] after its plain-path shortcut.
+fn within(base: &str, path: &str) -> bool {
     // Each reading of the path must sit under the same reading of the base
     // (AGENT-287): the URL is the base, a `/` and the path, and no escape
     // can span that `/` (it is not a hex digit), so both decode alike, and
@@ -1414,42 +1447,73 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
     // `..%00` is `..` there; no path needs one (AGENT-287). One still
     // escaped past the decode bound is refused too, as `lenient_escape`
     // refuses escapes in the last reading.
-    let all = Dots::for_path(out.path());
+    // With no escape in the path or the base, every reading is the literal
+    // one, so resolving decides; a long plain path or base is not bounded.
+    if !path.contains('%') && !base.contains('%') {
+        return [Params::Dropped, Params::Unknown]
+            .into_iter()
+            .all(|params| {
+                match (
+                    upstream_segments(base, params, DotRule::LITERAL),
+                    upstream_segments(path, params, DotRule::LITERAL),
+                ) {
+                    (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
+                    _ => false,
+                }
+            });
+    }
+    if path.len() > MAX_ESCAPED_PATH_BYTES {
+        return false;
+    }
+    let all = Dots::for_path(path);
     // A fold may act only on the last reading. An upstream may fold after
     // one decode and not the next, a schedule per level no fixed set of
     // readings models; when every earlier reading is plain, folds change
     // nothing there, and since no fold makes an escape at the last (see
     // `fold_crosses_escape`), the eight subsets are exact (AGENT-287).
     if all.len() > 1 {
-        let literal = readings(out.path(), Dots::LITERAL);
+        let literal = readings(path, Dots::LITERAL);
         let earlier = &literal[..literal.len() - 1];
-        if out.path().len() > MAX_FOLDED_PATH_BYTES || !earlier.iter().all(|r| plain(r)) {
+        if path.len() > MAX_FOLDED_PATH_BYTES || !earlier.iter().all(|r| plain(r)) {
             return false;
         }
     }
-    if separator_climbs(base.path(), out.path(), &all) {
+    if separator_climbs(base, path, &all) {
         return false;
     }
     if all.iter().copied().any(|dots| {
-        fold_crosses_escape(out.path(), dots)
-            || readings(out.path(), dots)
+        fold_crosses_escape(path, dots)
+            || readings(path, dots)
                 .iter()
                 .any(|r| lenient_escape(r) || r.contains('\0') || r.contains("%00"))
     }) {
         return false;
+    }
+    // Fold subsets that leave the base and the path reading alike at every
+    // level are one reading: folds act per character and never across a
+    // `/`, so a segment, or a text rejoined from segments and decoded
+    // again, folds alike too. Only distinct ones are resolved below.
+    let mut distinct: Vec<Dots> = Vec::new();
+    let mut seen: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+    for &dots in &all {
+        let key = (readings(base, dots), readings(path, dots));
+        if !seen.contains(&key) {
+            seen.push(key);
+            distinct.push(dots);
+        }
     }
     // Both readings of `;` parameters, of look-alike dots and of a dot
     // cut at a decoded `?` or `#` (see `dot_segment`) must stay inside
     // (AGENT-287).
     [Params::Dropped, Params::Unknown]
         .into_iter()
-        .flat_map(|params| all.iter().map(move |&dots| (params, dots)))
+        .flat_map(|params| distinct.iter().map(move |&dots| (params, dots)))
         .flat_map(|(params, dots)| [false, true].map(|cut| (params, dots, cut)))
         .all(|(params, dots, cut_dots)| {
-            let (bases, views) = (readings(base.path(), dots), readings(out.path(), dots));
+            let (bases, views) = (readings(base, dots), readings(path, dots));
             let within = |base: &str, view: &str| match (
-                upstream_segments(base, params, cut_dots),
-                upstream_segments(view, params, cut_dots),
+                upstream_segments(base, params, DotRule::spelled(cut_dots)),
+                upstream_segments(view, params, DotRule::spelled(cut_dots)),
             ) {
                 (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
                 _ => false,
@@ -1469,12 +1533,28 @@ fn stays_within_base(upstream: &str, url: &str) -> bool {
             // An upstream may also split first and decode each segment, so an
             // encoded `/` stays data while `%252e%252e` becomes `..` of the
             // whole segment before it.
+            // `two_stage_within` holds both cut readings itself.
             whole
+                && (cut_dots || two_stage_within(base, path, params, dots))
                 && (0..=SEGMENT_DECODE_ROUNDS).all(|rounds| {
                     [false, true].into_iter().all(|backslash| {
                         match (
-                            segmentwise(base.path(), rounds, backslash, params, dots, cut_dots),
-                            segmentwise(out.path(), rounds, backslash, params, dots, cut_dots),
+                            segmentwise(
+                                base,
+                                rounds,
+                                backslash,
+                                params,
+                                dots,
+                                DotRule::spelled(cut_dots),
+                            ),
+                            segmentwise(
+                                path,
+                                rounds,
+                                backslash,
+                                params,
+                                dots,
+                                DotRule::spelled(cut_dots),
+                            ),
                         ) {
                             (Some(prefix), Some(segs)) => segs.starts_with(&prefix),
                             _ => false,
@@ -1525,17 +1605,22 @@ fn separator_climbs(base: &str, path: &str, all: &[Dots]) -> bool {
                 .iter()
                 .map(|r| {
                     r.split(['/', '\\'])
-                        .filter(|p| dot_segment(&name(p), true) == 2)
+                        .filter(|p| dot_segment(&name(p), DotRule::spelled(true)) == 2)
                         .count()
                 })
                 .max()
                 .unwrap_or(0);
             depth -= dots as i64;
-        } else if list.iter().any(|r| dot_segment(&name(r), true) == 2) {
+        } else if list
+            .iter()
+            .any(|r| dot_segment(&name(r), DotRule::spelled(true)) == 2)
+        {
             depth -= 1;
         } else if list.iter().all(|r| {
             let n = name(r);
-            !n.is_empty() && dot_segment(&n, false) == 0 && dot_segment(&n, true) == 0
+            !n.is_empty()
+                && dot_segment(&n, DotRule::spelled(false)) == 0
+                && dot_segment(&n, DotRule::spelled(true)) == 0
         }) {
             depth += 1;
         }
@@ -1557,6 +1642,14 @@ fn plain(text: &str) -> bool {
 /// about eight times one reading, run in the request handler, and no
 /// real path that needs them is this long; a longer one is refused.
 const MAX_FOLDED_PATH_BYTES: usize = 8 * 1024;
+
+/// The longest path with a `%` escape the check holds (AGENT-287). Its
+/// readings and two-stage resolves cost about a hundred passes over the
+/// path, in the request handler, and the listener accepts URIs of about
+/// 400 KiB; no real client sends an escaped path this long (common
+/// servers cap a URL at 8 KiB), so a longer one is refused. A path with
+/// no escape has one reading and no bound.
+const MAX_ESCAPED_PATH_BYTES: usize = 16 * 1024;
 
 /// The path undecoded, then decoded until nothing changes, at most
 /// [`SEGMENT_DECODE_ROUNDS`] times, as `path_views` does; `dots` folds
@@ -1796,7 +1889,7 @@ fn segmentwise(
     backslash: bool,
     params: Params,
     dots: Dots,
-    cut: bool,
+    rule: DotRule,
 ) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
@@ -1815,17 +1908,17 @@ fn segmentwise(
             vec![segment.as_str()]
         };
         for piece in pieces {
-            push_segment(&mut out, piece, params, cut)?;
+            push_segment(&mut out, piece, params, rule)?;
         }
     }
     Some(out)
 }
 /// Path segments as a normalising upstream resolves them, or `None` when
 /// `..` climbs above the root.
-fn upstream_segments(path: &str, params: Params, cut: bool) -> Option<Vec<String>> {
+fn upstream_segments(path: &str, params: Params, rule: DotRule) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in path.split(['/', '\\']) {
-        push_segment(&mut out, raw, params, cut)?;
+        push_segment(&mut out, raw, params, rule)?;
     }
     Some(out)
 }
@@ -1835,16 +1928,16 @@ fn upstream_segments(path: &str, params: Params, cut: bool) -> Option<Vec<String
 /// (AGENT-287): `a;v=2` is another resource than `a;v=1` to an upstream
 /// that keeps them. Under a folding [`Dots`] reading the segment was
 /// already folded, so a look-alike `.` vanishes and a look-alike `..`
-/// climbs. `cut` reads dots as [`dot_segment`] does with it.
+/// climbs. `rule` says how [`dot_segment`] reads dots.
 /// `None` when `..` climbs above the root.
-fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, cut: bool) -> Option<()> {
+fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, rule: DotRule) -> Option<()> {
     let name = raw.split(';').next().unwrap_or("");
     let empty = match params {
-        Params::Dropped => name.is_empty() || dot_segment(name, cut) == 1,
-        Params::Unknown => raw.is_empty() || dot_segment(raw, cut) == 1,
+        Params::Dropped => name.is_empty() || dot_segment(name, rule) == 1,
+        Params::Unknown => raw.is_empty() || dot_segment(raw, rule) == 1,
     };
     if empty {
-    } else if dot_segment(name, cut) == 2 {
+    } else if dot_segment(name, rule) == 2 {
         out.pop()?;
     } else {
         out.push(raw.to_string());
@@ -1860,19 +1953,100 @@ fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, cut: bool) -> 
 /// %252e%252e/..%2523` ends `..#` and climbs, though cutting first stops
 /// at `x#`. Without it `..#x` is a name, as to an upstream that never
 /// cuts; a path must stay inside under both readings.
-fn dot_segment(name: &str, cut: bool) -> u8 {
+fn dot_segment(name: &str, rule: DotRule) -> u8 {
     let name = match name.find(['?', '#']) {
-        Some(end) if cut => &name[..end],
+        Some(end) if rule.cut => &name[..end],
         _ => name,
     };
     let is = |spellings: &[&str]| spellings.iter().any(|s| name.eq_ignore_ascii_case(s));
-    if is(&[".", "%2e"]) {
+    if is(&["."]) || (rule.spelled && is(&["%2e"])) {
         1
-    } else if is(&["..", ".%2e", "%2e.", "%2e%2e"]) {
+    } else if is(&[".."]) || (rule.spelled && is(&[".%2e", "%2e.", "%2e%2e"])) {
         2
     } else {
         0
     }
+}
+
+/// How [`dot_segment`] reads a segment: `spelled` counts `%2e` as a dot,
+/// as a WHATWG parser does, where a plain resolver sees only `.` and
+/// `..`; `cut` ends the segment at a decoded `?` or `#`.
+#[derive(Clone, Copy)]
+struct DotRule {
+    cut: bool,
+    spelled: bool,
+}
+
+impl DotRule {
+    const LITERAL: DotRule = DotRule {
+        cut: false,
+        spelled: false,
+    };
+    fn spelled(cut: bool) -> DotRule {
+        DotRule { cut, spelled: true }
+    }
+}
+
+/// Whether `path` stays under `base` for an upstream that resolves in two
+/// stages (AGENT-287): it resolves a reading's dots (plainly or WHATWG's
+/// way), decodes the result again, may cut it at a decoded `?` or `#`,
+/// and resolves again. A tail that walks back into the base
+/// (`q%2523/%252e%252e/..%2523/api/z` reaches `/v1/api/..#/api/z`, then
+/// `/v1/`) hides that climb from every one-stage reading. A path with no
+/// escape decodes to itself, so one stage already decides it.
+fn two_stage_within(base: &str, path: &str, params: Params, dots: Dots) -> bool {
+    if !path.contains('%') {
+        return true;
+    }
+    let at = |list: &[String], i: usize| list[i.min(list.len() - 1)].clone();
+    let (bases, views) = (readings(base, dots), readings(path, dots));
+    let rules = [DotRule::LITERAL, DotRule::spelled(false)];
+    // A later resolve of one decoded text, plain or cut at `?` or `#`.
+    let finish = |text: &str, second: DotRule, cut: bool| {
+        let text = match text.find(['?', '#']) {
+            Some(end) if cut => &text[..end],
+            _ => text,
+        };
+        upstream_segments(text, params, second)
+    };
+    // Equal readings give equal stages, and an earlier level reaches every
+    // later decode a later level does, so repeats are skipped.
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for first_at in 0..=SEGMENT_DECODE_ROUNDS {
+        let pair = (at(&bases, first_at), at(&views, first_at));
+        if seen.contains(&pair) {
+            continue;
+        }
+        for first in rules {
+            let (Some(b), Some(v)) = (
+                upstream_segments(&pair.0, params, first),
+                upstream_segments(&pair.1, params, first),
+            ) else {
+                return false;
+            };
+            let again = |segs: Vec<String>| readings(&format!("/{}", segs.join("/")), dots);
+            let (b_again, v_again) = (again(b), again(v));
+            for later in 0..=SEGMENT_DECODE_ROUNDS - first_at {
+                let (b_text, v_text) = (at(&b_again, later), at(&v_again, later));
+                if later > 0
+                    && b_text == at(&b_again, later - 1)
+                    && v_text == at(&v_again, later - 1)
+                {
+                    continue;
+                }
+                for second in rules {
+                    for cut in [false, true] {
+                        match (finish(&b_text, second, cut), finish(&v_text, second, cut)) {
+                            (Some(prefix), Some(segs)) if segs.starts_with(&prefix) => {}
+                            _ => return false,
+                        }
+                    }
+                }
+            }
+        }
+        seen.push(pair);
+    }
+    true
 }
 
 /// AGENT-286 — 400 + `proxy/upstream_path_escape` audit row when the
@@ -2390,8 +2564,8 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod base_path_tests {
-    use super::MAX_FOLDED_PATH_BYTES;
     use super::stays_within_base as ok;
+    use super::{MAX_ESCAPED_PATH_BYTES, MAX_FOLDED_PATH_BYTES};
 
     #[test]
     fn base_path_edges() {
@@ -2480,6 +2654,35 @@ mod base_path_tests {
         // path with spaces is plain.
         let spaced = "a%20b/".repeat(MAX_FOLDED_PATH_BYTES / 4);
         assert!(ok(base, &format!("https://h/v1/api/{spaced}x")));
+        // Any escaped path is held to a longer bound (Codex review of
+        // 740e253): its two-stage resolves cost about a hundred passes.
+        let escaped = "a%252Fb/".repeat(MAX_ESCAPED_PATH_BYTES / 8 + 1);
+        assert!(!ok(base, &format!("https://h/v1/api/{escaped}x")));
+        let under = "a%252Fb/".repeat(MAX_ESCAPED_PATH_BYTES / 8 - 4);
+        assert!(ok(base, &format!("https://h/v1/api/{under}x")));
+        assert!(ok(
+            base,
+            &format!("https://h/v1/api/{}x", "a/".repeat(100_000))
+        ));
+        // The bound counts escapes after the base, so a long plain path
+        // under an escaped base still forwards (Codex review of 4437b23),
+        // and `..;` there still climbs.
+        let escaped_base = "https://h/projects/group%2Fproj";
+        let long = format!("https://h/projects/group%2Fproj/{}x", "a/".repeat(100_000));
+        assert!(ok(escaped_base, &long));
+        assert!(!ok(
+            escaped_base,
+            "https://h/projects/group%2Fproj/..;/..;/x"
+        ));
+        assert!(ok(escaped_base, "https://h/projects/group%2Fproj/a/..;/x"));
+        // A long plain base is not an escaped path (Codex review of 62ab6e0).
+        let long_base = format!("https://h/{}api", "b/".repeat(MAX_ESCAPED_PATH_BYTES));
+        assert!(ok(&long_base, &format!("{long_base}/x")));
+        assert!(!ok(&long_base, &format!("{long_base}/..;/x")));
+        // An overlong lead ending a base reading takes the bytes after it
+        // to a lenient decoder (`%C1` + `/` reads `o`), so the shortcut
+        // checks that join too (62ab6e0 review).
+        assert!(!ok("https://h/v1/api%C1", "https://h/v1/api%C1/x/..;/y"));
     }
 
     /// AGENT-287: an upstream may apply one fold step and not the rest:
@@ -2764,6 +2967,37 @@ mod base_path_tests {
         assert!(ok(base, "https://h/v1/api/a/..%2523frag"));
         assert!(ok(base, "https://h/v1/api/a/b%253Fq/..%2523/c"));
         assert!(ok(base, "https://h/v1/api/x%253Fy/z"));
+    }
+
+    /// An upstream may resolve dots (literal or WHATWG), decode again, cut
+    /// at a decoded `?` or `#` and resolve again; a tail that walks back
+    /// into the base hides that climb from every one-stage reading
+    /// (AGENT-287, 58ae223 review).
+    #[test]
+    fn no_two_stage_resolution_climbs_out() {
+        let base = "https://h/v1/api";
+        for path in [
+            "https://h/v1/api/q%2523/%252e%252e/..%2523/api/z",
+            "https://h/v1/api/q%253F/%252e%252e/..%253F/api/z",
+            "https://h/v1/api/q%2523/..;/..%2523/api/z",
+            "https://h/v1/api/%252E/%2525252e/.%252e/%2525252e%2e/v1/api/z",
+        ] {
+            assert!(!ok(base, path), "{path}");
+        }
+        for path in [
+            "https://h/v1/api/files/.%2523lock",
+            "https://h/v1/api/issues/%2523123/notes",
+            "https://h/v1/api/search%253Fq%253Dx/page",
+            "https://h/v1/api/wiki/C%2523/notes",
+            "https://h/v1/api/x/..%2Fy",
+            "https://h/v1/api/group%2Fproj/x",
+            "https://h/v1/api/a/..%2523frag",
+            "https://h/v1/api/a/b%253Fq/..%2523/c",
+            "https://h/v1/api/x%253Fy/z",
+            "https://h/v1/api/v;a=1/y",
+        ] {
+            assert!(ok(base, path), "{path}");
+        }
     }
 
     #[test]

@@ -28,8 +28,15 @@
   upstream that re-parses it, so a five-times-encoded `..` or a `..`
   behind `%253F` no longer climbs out (AGENT-287). A path must also stay
   inside when a segment that is a dot up to a decoded `?` or `#` counts
-  as that dot, since an upstream may resolve dots, decode again and cut
-  there (`x%2523/%252e%252e/..%2523`); it is held to both readings.
+  as that dot, and for an upstream that resolves in two stages: it
+  resolves dots (plainly or WHATWG's way), decodes again, may cut at a
+  decoded `?` or `#`, and resolves again. A tail walking back into the
+  base no longer hides such a climb (`q%2523/%252e%252e/..%2523/api/z`
+  reached `/v1/`). A path holding a `%` escape is now refused above
+  16 KiB: the check costs about a hundred passes over such a path, and
+  the listener accepts URIs of about 400 KiB. A path with no escape after
+  the base has no bound, and is now decided in one pass (a 400 KB one
+  took 733 ms).
 - The upstream base-path check bounds how far a `..` could climb when
   the path holds an encoded separator (`%2F`, `%5C`). An upstream may
   decode, split and resolve dots in any order, more than once (a WHATWG
