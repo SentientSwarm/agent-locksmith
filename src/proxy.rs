@@ -1688,8 +1688,8 @@ const MAX_FOLDED_PATH_BYTES: usize = 8 * 1024;
 /// took about a tenth of a second (release build, Linux, 4b1475a). The
 /// listener accepts URIs of about 400 KiB, and no real client sends an
 /// escaped path this long (common servers cap a URL at 8 KiB), so a
-/// longer one is refused. A path with
-/// no escape has one reading and no bound.
+/// longer one is refused with `path_too_long`. A path with no escape has
+/// one reading and no bound.
 const MAX_ESCAPED_PATH_BYTES: usize = 16 * 1024;
 
 /// The path undecoded, then decoded until nothing changes, at most
@@ -2897,10 +2897,6 @@ mod base_path_tests {
         ));
     }
 
-    /// AGENT-287: `;` parameters are dropped only to find dot segments.
-    /// A path that climbs back into the base with other parameters
-    /// (`../a;x`, `..;/..;/base;v=2`) reaches another resource on an
-    /// upstream that keeps them.
     /// A two-hop upstream decodes once, splits on `/`, then decodes each
     /// segment fully and resolves its dots, so an encoded separator stays
     /// inside a name there and a `..` pops the whole name (AGENT-287).
@@ -2926,6 +2922,10 @@ mod base_path_tests {
         }
     }
 
+    /// AGENT-287: `;` parameters are dropped only to find dot segments.
+    /// A path that climbs back into the base with other parameters
+    /// (`../a;x`, `..;/..;/base;v=2`) reaches another resource on an
+    /// upstream that keeps them.
     #[test]
     fn parameters_on_the_base_segments_must_match() {
         assert!(!ok("https://h/v1/a", "https://h/v1/a/../a;x/y"));

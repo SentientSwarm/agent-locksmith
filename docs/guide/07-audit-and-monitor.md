@@ -112,6 +112,12 @@ locksmith --format json audit query --decision denied \
 
 ![Refused requests and why](img/07-audit-and-monitor/audit-denied.svg)
 
+Two refusal events are worth an alert, since no ordinary client causes
+them: `upstream_path_escape`, a path that would leave the route's base
+path, and `path_too_long`, an escaped path too long to check. Padding a
+climb past the length bound turns the first into the second, so watch
+both.
+
 Filter further with `--agent`, `--tool`, `--event-class` (`proxy`,
 `operator` or `security`), `--since-ms` and `--until-ms` (Unix
 milliseconds), `--limit` and `--offset`. Admin changes are audited too:
