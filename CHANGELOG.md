@@ -38,10 +38,10 @@
   refusal, and a value no shape can carry is refused before it is sealed.
 - A refused per-agent stored-value write
   (`PUT /admin/operator/agents/{agent}/credentials/{reg}/credential`) now
-  writes an `agent_credential_set` audit row with decision `denied`, the
-  reason in `details.error` and, for a refusal made after the binding was
-  read, that binding as `previous`, as the plain `set-credential` path
-  does (AGENT-328). The value is never recorded.
+  writes an `agent_credential_set` audit row with decision `denied` and the
+  reason in `details.error`, as the plain `set-credential` path does
+  (AGENT-328). A value refused for its shape also names the binding
+  already in place as `previous`. The value is never recorded.
 - The upstream base-path check refuses a path that has not settled
   after its four decodes, with 400 `upstream_path_escape` (AGENT-287).
   A `..`, `;`, `?`, `#` or fullwidth dot that only a further decode
