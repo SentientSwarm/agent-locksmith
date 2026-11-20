@@ -230,6 +230,53 @@ async fn stored_credential_records_ref_never_value() {
     );
 }
 
+/// AGENT-328: a refused stored write is audited as denied, as the plain
+/// set-credential path audits its refusals, and never with the value.
+#[tokio::test]
+async fn a_refused_stored_credential_is_audited_as_denied() {
+    let h = setup().await;
+    h.modify(json!({ "allowlist": ["r"] })).await;
+    let path = format!("/admin/operator/agents/{}/credentials/r/credential", h.pid);
+    for body in [
+        // `r` names no header, so this would be a stored bearer.
+        json!({ "value": "has space" }),
+        json!({ "value": STORED_VALUE, "stored_header": true }),
+    ] {
+        let resp = h
+            .admin
+            .put(&path)
+            .add_header("authorization", &h.op)
+            .json(&body)
+            .await;
+        resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+    let rows = h.rows("agent_credential_set").await;
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for (class, op, agent, decision, d) in &rows {
+        assert_eq!(
+            (
+                class.as_str(),
+                op.as_str(),
+                agent.as_str(),
+                decision.as_str()
+            ),
+            ("operator", "alice", h.pid.as_str(), "denied")
+        );
+        assert_eq!(d["registration"], "r");
+        assert_eq!(d["error"], "invalid_stored_credential");
+    }
+    let all: Vec<Option<String>> = sqlx::query_scalar("SELECT details FROM audit")
+        .fetch_all(&h.pool)
+        .await
+        .unwrap();
+    assert!(
+        all.iter()
+            .flatten()
+            .all(|s| !s.contains(STORED_VALUE) && !s.contains("has space")),
+        "a refused value reached the audit log"
+    );
+}
+
 #[tokio::test]
 async fn unset_credential_records_removed_binding() {
     let h = setup().await;

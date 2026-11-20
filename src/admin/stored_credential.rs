@@ -45,7 +45,34 @@ pub(super) async fn set(
     if state.credential_sealing_key.is_none() || state.credential_secrets.is_none() {
         return failure("credential_store_unconfigured", StatusCode::NOT_FOUND);
     }
-    match write(&state, &op, &id, &registration, body).await {
+    let agent = match state.admin.get_agent(&op, &id).await {
+        Ok(agent) => agent,
+        Err(error) => return admin_err_response(error),
+    };
+    let result = write(&state, &agent, &registration, body).await;
+    if let Err(refused) = &result {
+        // AGENT-328: audit a refusal once the agent is known, as the plain
+        // set-credential path does. Never the value.
+        let error = match refused {
+            Refused::Admin(error) => error.to_string(),
+            Refused::Unnamed | Refused::Invalid => "invalid_stored_credential".into(),
+        };
+        state
+            .admin
+            .audit_binding(
+                &op,
+                "agent_credential_set",
+                super::authority_audit::BindingChange {
+                    agent_public_id: &agent.public_id,
+                    registration: &registration,
+                    binding: None,
+                    previous: None,
+                    error: Some(error),
+                },
+            )
+            .await;
+    }
+    match result {
         Ok((value, written)) => {
             state
                 .admin
@@ -107,12 +134,10 @@ struct Written {
 }
 async fn write(
     state: &UdsState,
-    op: &OperatorIdentity,
-    id: &str,
+    agent: &crate::repo::AgentRecord,
     registration: &str,
     body: Input,
 ) -> Result<(serde_json::Value, Written), Refused> {
-    let agent = state.admin.get_agent(op, id).await?;
     let creds = state.agent_creds.as_ref().ok_or_else(unavailable)?;
     let key = state
         .credential_sealing_key
@@ -150,7 +175,7 @@ async fn write(
     Ok((
         value,
         Written {
-            agent_public_id: agent.public_id,
+            agent_public_id: agent.public_id.clone(),
             binding: auth,
             previous,
         },

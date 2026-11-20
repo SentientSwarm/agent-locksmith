@@ -36,6 +36,11 @@
   bearer is held to the bearer rule, and a key rotated onto a header
   without restating it to the header rule. Nothing is stored or bound on
   refusal, and a value no shape can carry is refused before it is sealed.
+- A refused per-agent stored-value write
+  (`PUT /admin/operator/agents/{agent}/credentials/{reg}/credential`) now
+  writes an `agent_credential_set` audit row with decision `denied` and
+  the reason in `details.error`, as the plain `set-credential` path does
+  (AGENT-328). The value is never recorded.
 - The upstream base-path check reads `%2e` in any case as a dot, as a
   WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
   the four-decode bound or cut at a decoded `?`, now resolves alike for an
