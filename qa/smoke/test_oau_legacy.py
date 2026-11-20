@@ -2,7 +2,7 @@
 expiry and the recovery path (docs/concepts/oauth-flow.md,
 docs/operator/oauth-recovery.md), against the local fake provider in
 qa/fakes/oau_provider.py registered as an `oauth_pkce` tool through the
-operator PUT /admin/operator/tools/{name} interface (oauth-consent.md:58-64).
+operator PUT /admin/operator/tools/{name} interface (docs/operator/oauth-consent.md#configure-the-controlled-profile).
 No real provider is contacted."""
 
 import time
@@ -104,9 +104,9 @@ def status(t, label):
     ],
 )
 def test_bootstrap_status_list_and_selected_call(lg):
-    """oauth-flow.md:112-153 (bootstrap exchanges the handed-off refresh token at the
+    """docs/concepts/oauth-flow.md#operator-workflow-bootstrap (bootstrap exchanges the handed-off refresh token at the
     token endpoint and seals custody; an explicitly selected agent then calls through),
-    oauth-flow.md:182-205 (status fields) and oauth-recovery.md:16-23 (list includes
+    docs/concepts/oauth-flow.md#operator-workflow-status--revoke (status fields) and docs/operator/oauth-recovery.md#diagnose-and-reconnect-deliberately (list includes
     refresh_pending/reconnect_required)."""
     t, fake = lg
     before = fake.counts["refresh"]
@@ -137,7 +137,7 @@ def test_bootstrap_status_list_and_selected_call(lg):
 
 @case("SMK-OAU-002", area="OAU", kind="corner", covers=[BOOT, "cli.oauth.bootstrap"])
 def test_second_label_bootstrap_warns_about_single_grant_trap(lg):
-    """oauth-flow.md:246-268: bootstrapping a non-default label while other labels exist
+    """docs/concepts/oauth-flow.md#the-single-grant-trap: bootstrapping a non-default label while other labels exist
     returns an advisory `warnings` field naming the existing labels; bootstrap still succeeds."""
     t, fake = lg
     assert status(t, "default")["present"] is True
@@ -156,8 +156,8 @@ def test_second_label_bootstrap_warns_about_single_grant_trap(lg):
     codes=["oauth_session_missing"],
 )
 def test_revoke_clears_custody_and_selected_call_refuses(lg):
-    """oauth-flow.md:203-205 (revoke clears local state, idempotent per cli help) and
-    oauth-flow.md:308 (session missing -> 503 oauth_session_missing) without upstream dispatch."""
+    """docs/concepts/oauth-flow.md#operator-workflow-status--revoke (revoke clears local state, idempotent per cli help) and
+    docs/concepts/oauth-flow.md#per-request-hot-path (session missing -> 503 oauth_session_missing) without upstream dispatch."""
     t, fake = lg
     assert bootstrap(t, fake, "revoked").code == 0
     agent = bound_agent(t, "revoked")
@@ -232,7 +232,7 @@ def test_bootstrap_non_oauth_registration(lg):
     codes=["invalid_credential"],
 )
 def test_legacy_routes_require_operator(lg):
-    """oauth-flow.md:182-205 and src help: the legacy OAuth routes are operator-authenticated;
+    """docs/concepts/oauth-flow.md#operator-workflow-status--revoke and src help: the legacy OAuth routes are operator-authenticated;
     a wrong operator token is 401 invalid_credential and changes nothing."""
     t, fake = lg
     wrong = "qa-wrong.not-a-real-operator-token"
@@ -258,8 +258,8 @@ def test_legacy_routes_require_operator(lg):
 
 @case("SMK-OAU-007", area="OAU", kind="positive", covers=[TASK, API])
 def test_expired_access_is_refreshed_before_use(lg):
-    """oauth-flow.md:304-316 (expired access -> refresh under the per-label lock, the call
-    uses the fresh token) and oauth-flow.md:270-276. The fake rejects expired access
+    """docs/concepts/oauth-flow.md#per-request-hot-path (expired access -> refresh under the per-label lock, the call
+    uses the fresh token) and docs/concepts/oauth-flow.md#refresh-task. The fake rejects expired access
     tokens, so a 200 proves locksmith refreshed before dispatch."""
     t, fake = lg
     assert bootstrap(t, fake, "short", expires_in=2).code == 0
@@ -277,13 +277,13 @@ def test_expired_access_is_refreshed_before_use(lg):
 
 @case("SMK-OAU-008", area="OAU", kind="positive", covers=[TASK, STATUS])
 def test_background_task_refreshes_ahead_of_expiry(lg):
-    """oauth-flow.md:270-276: the background task wakes every 30 seconds and refreshes
+    """docs/concepts/oauth-flow.md#refresh-task: the background task wakes every 30 seconds and refreshes
     non-pending sessions whose access expires within 300 seconds, with no agent traffic.
     The label is selected by an agent first: refresh uses consistent selected metadata
-    (oauth-flow.md:147-153); an unselected session is not refreshed in the background."""
+    (docs/concepts/oauth-flow.md#codex-openai-chatgpt-subscription); an unselected session is not refreshed in the background."""
     t, fake = lg
     assert bootstrap(t, fake, "ahead", expires_in=120).code == 0
-    bound_agent(t, "ahead")  # refresh uses the selected metadata (oauth-flow.md:147-153)
+    bound_agent(t, "ahead")  # refresh uses the selected metadata (docs/concepts/oauth-flow.md#codex-openai-chatgpt-subscription)
     old_expiry = status(t, "ahead")["access_token_expires_at"]
     refreshes, resources = fake.counts["refresh"], fake.counts["resource"]
     deadline = time.monotonic() + 40
@@ -304,7 +304,7 @@ def test_background_task_refreshes_ahead_of_expiry(lg):
     codes=["oauth_reconnect_required"],
 )
 def test_failed_refresh_leaves_pending_custody_unavailable(lg):
-    """oauth-flow.md:278-291 and oauth-recovery.md:23-36: a rejected refresh leaves
+    """docs/concepts/oauth-flow.md#refresh-failure and docs/operator/oauth-recovery.md#diagnose-and-reconnect-deliberately: a rejected refresh leaves
     refresh_pending; status/list show reconnect_required; later calls return 503
     oauth_reconnect_required without another token request or upstream dispatch."""
     t, fake = lg
@@ -339,7 +339,7 @@ def test_failed_refresh_leaves_pending_custody_unavailable(lg):
     codes=["session_exists"],
 )
 def test_recovery_requires_revoke_then_fresh_bootstrap(lg):
-    """oauth-recovery.md:38-58: revoke must precede a fresh bootstrap (bootstrap over the
+    """docs/operator/oauth-recovery.md#diagnose-and-reconnect-deliberately: revoke must precede a fresh bootstrap (bootstrap over the
     uncertain row is refused); revoke + bootstrap with freshly issued credentials restores
     service and preserves the agent's selection."""
     t, fake = lg
@@ -368,7 +368,7 @@ def test_recovery_requires_revoke_then_fresh_bootstrap(lg):
     codes=["oauth_bootstrap_failed"],
 )
 def test_rejected_bootstrap_retains_uncertain_row(lg):
-    """oauth-recovery.md:49-50: a failed bootstrap after the exchange was claimed retains the
+    """docs/operator/oauth-recovery.md#diagnose-and-reconnect-deliberately: a failed bootstrap after the exchange was claimed retains the
     uncertain row; revoke must precede a fresh bootstrap."""
     t, fake = lg
     before = fake.counts["refresh-refused"]

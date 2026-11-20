@@ -16,7 +16,7 @@ import yaml
 
 
 def sealing_key() -> str:
-    """A fresh base64 encoding of 32 random bytes (sealed-state-recovery.md:11)."""
+    """A fresh base64 encoding of 32 random bytes (docs/operator/sealed-state-recovery.md#recover-sealed-state-and-its-keys)."""
     return base64.b64encode(os.urandom(32)).decode()
 
 

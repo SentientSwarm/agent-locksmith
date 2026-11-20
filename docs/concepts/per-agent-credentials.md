@@ -90,7 +90,9 @@ already authenticated. Authenticated admission still rechecks revocation/expiry.
 connections. JSON includes `account_selected`; selected source health is still
 `not_checked`. An active listed connection may deny an absent account (403) or a
 broken source (503). Config-only legacy discovery and `/admin/agent/tools` report
-`configuration_only`, never per-agent credential readiness. `/readyz` remains an
+`configuration_only`, never per-agent credential readiness. The operator's
+`GET /admin/operator/tools-legacy` lists the `config.tools` entries the same
+way, each with `activation: configuration_only`. `/readyz` remains an
 instance/startup dependency probe and does not attest every agent's account.
 
 ## Setting an explicit binding

@@ -82,7 +82,7 @@ def absent(t, kind, name):
     ],
 )
 def test_tool_put_get_list(cat):
-    """cli-reference.md:150-157,171-185: put saves the entry; reads report configured,
+    """docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator: put saves the entry; reads report configured,
     activation and credential_readiness: not_checked."""
     put = cat.cli(
         "tool",
@@ -125,7 +125,7 @@ def test_tool_put_get_list(cat):
     covers=["cli.tool.delete", "admin.DELETE./admin/operator/tools/{name}"],
 )
 def test_operator_tool_delete_is_hard(cat):
-    """cli-reference.md:162-163: delete on an operator-created entry hard-deletes it."""
+    """docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator: delete on an operator-created entry hard-deletes it."""
     assert (
         cat.cli(
             "tool", "put", "cat-gone", "--upstream", cat.upstream_url, "--auth", "none"
@@ -154,8 +154,8 @@ def test_operator_tool_delete_is_hard(cat):
     ],
 )
 def test_model_lifecycle_with_explicit_none(cat):
-    """kind-taxonomy.md:48 and cli-reference.md:205: kind=model accepts explicit
-    `--auth none`; cli-reference.md:162-163 operator rows hard-delete."""
+    """docs/concepts/kind-taxonomy.md#authless-tools and docs/reference/cli-reference.md#auth-spec-syntax---auth: kind=model accepts explicit
+    `--auth none`; docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator operator rows hard-delete."""
     put = cat.cli(
         "model",
         "put",
@@ -195,7 +195,7 @@ def test_model_lifecycle_with_explicit_none(cat):
     ],
 )
 def test_infra_lifecycle_defaults_to_no_auth(cat):
-    """cli-reference.md:206: kind=infra accepts no --auth flag (defaults to None)."""
+    """docs/reference/cli-reference.md#auth-spec-syntax---auth: kind=infra accepts no --auth flag (defaults to None)."""
     put = cat.cli(
         "infra",
         "put",
@@ -240,7 +240,7 @@ def test_infra_lifecycle_defaults_to_no_auth(cat):
     codes=["unknown_name"],
 )
 def test_unknown_name_is_404(cat):
-    """cli-reference.md:313-315: not found is exit 4 (HTTP 404)."""
+    """docs/reference/cli-reference.md#exit-codes: not found is exit 4 (HTTP 404)."""
     for args in (
         ("tool", "get"),
         ("tool", "delete"),
@@ -271,7 +271,7 @@ def test_unknown_name_is_404(cat):
     codes=["invalid_upstream"],
 )
 def test_invalid_upstream_changes_nothing(cat):
-    """cli-reference.md:166-168, connector-onboarding.md:31-42: a malformed URL, other
+    """docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator, docs/operator/connector-onboarding.md#prepare-the-service-and-caller: a malformed URL, other
     scheme, userinfo, query or fragment is HTTP 400 invalid_upstream / exit 1 before
     saving; the existing row, grant and selection remain unchanged."""
     before = cat.cli("tool", "get", "cat-keep").json
@@ -357,7 +357,7 @@ def test_invalid_name(cat):
     codes=["reserved_name"],
 )
 def test_reserved_name(cat):
-    """error-envelope.md:27: names on the reserved list are 400 reserved_name."""
+    """docs/reference/error-envelope.md#the-type--code-matrix: names on the reserved list are 400 reserved_name."""
     for name in (
         "livez",
         "readyz",
@@ -392,7 +392,7 @@ def test_reserved_name(cat):
     codes=["auth_required"],
 )
 def test_tool_and_model_require_auth(cat):
-    """kind-taxonomy.md:46, error-envelope.md:28, cli-reference.md:204-205: tool and model
+    """docs/concepts/kind-taxonomy.md#authless-tools, docs/reference/error-envelope.md#the-type--code-matrix, docs/reference/cli-reference.md#auth-spec-syntax---auth: tool and model
     registered without auth are rejected 400 auth_required."""
     for kind in ("tool", "model"):
         refused(
@@ -432,8 +432,8 @@ def test_tool_and_model_require_auth(cat):
     codes=["wrong_kind"],
 )
 def test_cross_kind_name_is_409(cat):
-    """error-envelope.md:26: an operation on a name registered under a different kind
-    is 409 wrong_kind (CLI exit 5, cli-reference.md:316); the tool is untouched."""
+    """docs/reference/error-envelope.md#the-type--code-matrix: an operation on a name registered under a different kind
+    is 409 wrong_kind (CLI exit 5, docs/reference/cli-reference.md#exit-codes); the tool is untouched."""
     before = cat.cli("tool", "get", "cat-keep").json
     refused(
         cat.cli(
@@ -472,7 +472,7 @@ def test_cross_kind_name_is_409(cat):
     codes=["invalid_metadata"],
 )
 def test_malformed_op_reference_is_rejected(cat):
-    """README.md:106-112: an op_* source carries an op:// reference; a malformed
+    """README.md#highlights-v300: an op_* source carries an op:// reference; a malformed
     reference is rejected at register time (400 invalid_metadata) and nothing is saved."""
     body = {
         "upstream": cat.upstream_url,
@@ -494,7 +494,7 @@ def test_malformed_op_reference_is_rejected(cat):
     covers=["cli.tool.put", "admin.PUT./admin/operator/tools/{name}"],
 )
 def test_service_description_metadata_keeps_selection(cat):
-    """connector-onboarding.md:78-92: --metadata-file publishes the reference description;
+    """docs/operator/connector-onboarding.md#publish-a-service-description: --metadata-file publishes the reference description;
     a metadata-only update retains grants and account selections."""
     put = cat.cli(
         "tool",
@@ -527,7 +527,7 @@ def test_service_description_metadata_keeps_selection(cat):
     codes=["invalid_http_service"],
 )
 def test_malformed_service_description(cat):
-    """cli-reference.md:189-191, connector-onboarding.md:90-91: a malformed http_service is
+    """docs/reference/cli-reference.md#per-route-upstream-ca, docs/operator/connector-onboarding.md#publish-a-service-description: a malformed http_service is
     HTTP 400 invalid_http_service / exit 1 before writing; file syntax errors are exit 2."""
     before = cat.cli("tool", "get", "cat-keep").json
     bad = cat.write_file("cat-bad-service.json", json.dumps(BAD_SERVICE))
@@ -581,7 +581,8 @@ def test_malformed_service_description(cat):
     covers=["cli.tool.put", "admin.PUT./admin/operator/tools/{name}"],
 )
 def test_native_connection_put(cat):
-    """native-mcp.md:66-92 and cli-reference.md:182-183: a native tool needs
+    """docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator and
+    docs/operator/native-mcp.md#configure-a-connection-and-a-named-agent: a native tool needs
     --protocol mcp_streamable_http, a strict config file, HTTPS and direct egress."""
     cfg = cat.write_file("cat-mcp.json", MCP_CONFIG)
     put = cat.cli(
@@ -621,7 +622,7 @@ def test_native_connection_put(cat):
     codes=["invalid_mcp"],
 )
 def test_native_validation_before_persistence(cat):
-    """native-mcp.md:87-92: native model/infra, proxied egress, non-HTTPS endpoints and
+    """docs/operator/native-mcp.md#configure-a-connection-and-a-named-agent: native model/infra, proxied egress, non-HTTPS endpoints and
     private destinations without opt-in are rejected before persistence (400 invalid_mcp)."""
     cfg = str(cat.write_file("cat-mcp.json", MCP_CONFIG))
     native = (

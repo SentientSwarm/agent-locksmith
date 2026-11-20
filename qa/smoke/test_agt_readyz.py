@@ -1,4 +1,4 @@
-"""Readiness semantics (docs/agents/wire-contract.md:49-61). Legacy mode, the
+"""Readiness semantics (docs/reference/wire-contract.md#get-livez--liveness). Legacy mode, the
 identityless deployment SMK-AGT-062..064 covered, was removed in 3.0.0
 (AGENT-297); SMK-DMN-012 covers its refusal to start."""
 
@@ -55,7 +55,7 @@ def unresolved(target_factory, up):
     "SMK-AGT-060", area="AGT", kind="refusal", covers=[READY, SEM], codes=["not_ready"]
 )
 def test_readyz_unresolved_config_credential(unresolved):
-    """wire-contract.md:55-61 — a tool with auth whose credential is unresolved makes /readyz
+    """docs/reference/wire-contract.md#get-readyz--readiness — a tool with auth whose credential is unresolved makes /readyz
     503 {status: not_ready, reason: tool_credentials_unresolved, tools: [...]}."""
     resp = unresolved.http("GET", "/readyz")
     assert resp.status == 503
@@ -72,7 +72,7 @@ def test_readyz_unresolved_config_credential(unresolved):
     codes=["oauth_sealing_key_unset"],
 )
 def test_oauth_selection_without_sealing_key_is_503(unresolved, up):
-    """wire-contract.md:233 + oauth-flow.md:311 — an OAuth registration on a daemon without
+    """docs/reference/wire-contract.md#error-envelope + docs/concepts/oauth-flow.md#per-request-hot-path — an OAuth registration on a daemon without
     LOCKSMITH_OAUTH_SEALING_KEY is 503 oauth_sealing_key_unset, no dispatch."""
     agent = enrol(
         unresolved, "qa-agt-nokey", ["codex"], {"codex": ["--oauth-session", "default"]}

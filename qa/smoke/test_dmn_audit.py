@@ -77,7 +77,7 @@ def call(t, path: str = "/api/accounts/check"):
 
 @case("SMK-DMN-040", area="DMN", kind="positive", covers=[MIRROR])
 def test_mirror_has_one_line_per_audit_row(mt):
-    """architecture.md:89,151-152 and README.md:296-300: every audit row is also appended to the
+    """docs/concepts/architecture.md#the-agents-request-flow, docs/concepts/architecture.md#state-that-survives-restarts and README.md#configuration-reference: every audit row is also appended to the
     optional JSONL mirror at audit.jsonl_path; one proxied request adds exactly one line."""
     before = len(mirror_lines(mirror_dir(mt)))
     call(mt)
@@ -101,7 +101,7 @@ def test_mirror_has_one_line_per_audit_row(mt):
 
 @case("SMK-DMN-041", area="DMN", kind="corner", covers=[MIRROR])
 def test_mirror_lines_hold_no_secrets(mt):
-    """README.md:96-97: credentials are never logged; architecture.md:89,151: the mirror carries
+    """README.md#highlights-v300: credentials are never logged; docs/concepts/architecture.md#the-agents-request-flow, docs/concepts/architecture.md#state-that-survives-restarts: the mirror carries
     the audit rows. Neither the injected value nor agent/operator tokens may appear in it."""
     call(mt)
     text = "\n".join(mirror_lines(mirror_dir(mt)))
@@ -117,7 +117,7 @@ def test_mirror_lines_hold_no_secrets(mt):
 
 @case("SMK-DMN-042", area="DMN", kind="positive", covers=[MIRROR])
 def test_mirror_rotates_at_max_bytes_keeping_keep_files(mt):
-    """README.md:298-300 and architecture.md:151-152: the mirror rotates when a file reaches
+    """README.md#configuration-reference and docs/concepts/architecture.md#state-that-survives-restarts: the mirror rotates when a file reaches
     jsonl_max_bytes and keeps at most jsonl_keep_files files."""
     for _ in range(30):
         call(mt)
@@ -135,7 +135,7 @@ def test_mirror_rotates_at_max_bytes_keeping_keep_files(mt):
 
 @case("SMK-DMN-043", area="DMN", kind="positive", covers=["beh.oplog.store"])
 def test_operational_log_store_is_queryable_and_secret_free(mt):
-    """README.md:113-116: secret-free operational events (config, registry, ...) in their own
+    """README.md#highlights-v300: secret-free operational events (config, registry, ...) in their own
     table, queried via GET /admin/operator/logs?level=&component=."""
     status, body = uds_get(mt, "/admin/operator/logs?component=registry&limit=100")
     assert status == 200
@@ -189,7 +189,7 @@ def agent_oplogs(t, public_id: str) -> list:
 
 @case("SMK-DMN-030", area="DMN", kind="positive", covers=[RETENTION])
 def test_audit_retention_sweeps_expired_rows(rt, t1):
-    """README.md:295-297: audit.retention_days with sweep_interval_seconds bounds audit history.
+    """README.md#configure: audit.retention_days with sweep_interval_seconds bounds audit history.
 
     retention_days 0 is the smallest window the schema accepts; with a 1 s sweep every row is
     expired within seconds. t1 (default 90 days) is the control for the same write.
@@ -204,7 +204,7 @@ def test_audit_retention_sweeps_expired_rows(rt, t1):
 
 @case("SMK-DMN-031", area="DMN", kind="positive", covers=[RETENTION, "beh.oplog.store"])
 def test_operational_log_retention_sweeps_expired_rows(rt, t1):
-    """README.md:113-116,302-304 and config.example.yaml:47-55: the operational-log stream has its
+    """README.md#highlights-v300, README.md#configuration-reference and config.example.yaml:47-55: the operational-log stream has its
     own retention (operational_log.retention_days / sweep_interval_seconds)."""
     swept, kept = revoked(rt, "dmn-oplog-retention"), revoked(t1, "dmn-oplog-control")
     assert wait_for(lambda: agent_oplogs(t1, kept), timeout=5), (

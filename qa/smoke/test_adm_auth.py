@@ -80,7 +80,7 @@ def sweep(t1, routes, tokens, victim):
 def test_operator_routes_refuse_missing_and_wrong_credentials(t1, victim):
     """Every operator admin route is operator-authenticated; a missing, malformed,
     wrong-secret or agent-namespace bearer is 401 invalid_credential
-    (docs/reference/error-envelope.md:23, cli-reference.md:18), and nothing changes."""
+    (docs/reference/error-envelope.md#the-type--code-matrix, docs/reference/cli-reference.md#global-flags), and nothing changes."""
     tokens = [None, BAD_OPERATOR, wrong_secret(t1.op_token), victim["token"]]
     sweep(t1, OPERATOR_ROUTES, tokens, victim)
     assert "adm-sweep-created" not in agent_names(t1, include_revoked=True)
@@ -98,8 +98,8 @@ def test_operator_routes_refuse_missing_and_wrong_credentials(t1, victim):
 )
 def test_agent_routes_refuse_missing_wrong_and_operator_credentials(t1, victim):
     """Agent self-service routes take the agent's own bearer
-    (cli-reference.md:295-303); missing, wrong, wrong-secret or operator tokens are
-    401 invalid_credential (error-envelope.md:23) and the agent stays active."""
+    (docs/reference/cli-reference.md#self-service-agent-token-required); missing, wrong, wrong-secret or operator tokens are
+    401 invalid_credential (docs/reference/error-envelope.md#the-type--code-matrix) and the agent stays active."""
     tokens = [None, BAD_AGENT, wrong_secret(victim["token"]), t1.op_token]
     sweep(t1, AGENT_ROUTES, tokens, victim)
     status = uds(t1, "GET", "/admin/agent/status", token=victim["token"])
@@ -139,7 +139,7 @@ OPERATOR_CLI = [
 def test_operator_cli_wrong_or_missing_token_exits_3(t1, victim):
     """A wrong operator token is an HTTP 401 → exit 3 with the daemon's
     invalid_credential code; an unset LOCKSMITH_OP_TOKEN is also exit 3
-    (cli-reference.md:18, 305-316)."""
+    (docs/reference/cli-reference.md#global-flags, docs/reference/cli-reference.md#exit-codes)."""
     wrong = []
     for cid, argv in OPERATOR_CLI:
         args = [a.format(id=victim["id"]) for a in argv]
@@ -161,8 +161,8 @@ def test_operator_cli_wrong_or_missing_token_exits_3(t1, victim):
     codes=["invalid_credential"],
 )
 def test_self_service_cli_wrong_or_missing_agent_token_exits_3(t1, victim):
-    """`status`/`rotate` take LOCKSMITH_AGENT_TOKEN (cli-reference.md:295-303); a wrong
-    token is 401 → exit 3, a missing one exit 3 (cli-reference.md:314)."""
+    """`status`/`rotate` take LOCKSMITH_AGENT_TOKEN (docs/reference/cli-reference.md#self-service-agent-token-required); a wrong
+    token is 401 → exit 3, a missing one exit 3 (docs/reference/cli-reference.md#exit-codes)."""
     for cmd in ("status", "rotate"):
         bad = t1.cli(cmd, use_op_token=False, agent_token=wrong_secret(victim["token"]))
         assert bad.code == 3, (cmd, bad.err)
@@ -183,7 +183,7 @@ def test_self_service_cli_wrong_or_missing_agent_token_exits_3(t1, victim):
 )
 def test_admin_401_uses_the_uniform_envelope(t1):
     """Every authentication failure carries the three-field envelope
-    {message, type: auth_error, code} (docs/reference/error-envelope.md:3-17, 23)."""
+    {message, type: auth_error, code} (docs/reference/error-envelope.md#error-envelope, docs/reference/error-envelope.md#the-type--code-matrix)."""
     for path in ("/admin/operator/audit", "/admin/agent/status"):
         r = uds(t1, "GET", path)
         assert r.status == 401

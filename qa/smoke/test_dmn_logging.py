@@ -1,4 +1,4 @@
-"""Daemon logging (config.example.yaml:34-36, README.md:313-314).
+"""Daemon logging (config.example.yaml:34-36, README.md#configuration-reference).
 
 The harness passes its own environment to the daemon; RUST_LOG, when set,
 overrides logging.level, so these cases expect RUST_LOG to be unset.

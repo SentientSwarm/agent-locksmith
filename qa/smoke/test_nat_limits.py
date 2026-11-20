@@ -1,8 +1,8 @@
 """Native MCP finite limits, deadlines and Host/Origin allowlists from the `mcp` block.
 
-Docs: docs/operator/native-mcp.md:32-45 (restart-only `mcp` block),
-docs/development/native-mcp.md:45-82 (finite policy table, linked from
-docs/agents/native-mcp.md:147-148 as "finite limits").
+Docs: docs/operator/native-mcp.md#before-setup (restart-only `mcp` block),
+docs/development/native-mcp.md#finite-policy (finite policy table, linked from
+docs/agents/native-mcp.md#errors-and-limits as "finite limits").
 """
 
 import threading
@@ -58,7 +58,7 @@ def close(env, agent, reply):
 def test_configured_host_and_origin_are_admitted(env):
     """`allowed_hosts` names the listener authority; a present Origin must exactly match `allowed_origins`.
 
-    docs/operator/native-mcp.md:32-44; docs/agents/native-mcp.md:144-145.
+    docs/operator/native-mcp.md#before-setup; docs/agents/native-mcp.md#errors-and-limits.
     """
     agent = register(env["t"], "nat-lim-allowed", "natlim")
     by_host = init(env, agent, [("Host", EXTERNAL)], host=False)
@@ -80,7 +80,7 @@ def test_configured_allowlists_are_exact(env):
     """A specified Host port must match; a configured list replaces the loopback default;
     Origin scheme and port matter, with no wildcards.
 
-    docs/operator/native-mcp.md:40-44.
+    docs/operator/native-mcp.md#before-setup.
     """
     agent = register(env["t"], "nat-lim-denied", "natlim")
     before = env["fake"].snapshot()
@@ -114,8 +114,8 @@ def test_per_agent_session_limit_is_429_with_retry_after(env):
     """429 is finite capacity with `Retry-After: 1`; close your session before requesting another.
     Standard and compact routes share the same agent session limits.
 
-    docs/agents/native-mcp.md:137-138; docs/operator/native-mcp.md:127;
-    docs/agents/compact-mcp.md:14-15; docs/development/native-mcp.md:54 (`sessions_per_agent`).
+    docs/agents/native-mcp.md#errors-and-limits; docs/operator/native-mcp.md#verify-and-diagnose;
+    docs/agents/compact-mcp.md#compact-native-mcp; docs/development/native-mcp.md#finite-policy (`sessions_per_agent`).
     """
     t = env["t"]
     agent = register(t, "nat-lim-sessions", "natlim")
@@ -143,7 +143,7 @@ def test_per_agent_session_limit_is_429_with_retry_after(env):
 def test_lowered_request_bytes_is_413(env):
     """`request_bytes` may be lowered; an oversized body is 413.
 
-    docs/development/native-mcp.md:47-49, :63; docs/agents/native-mcp.md:135.
+    docs/development/native-mcp.md#finite-policy, docs/agents/native-mcp.md#request-sequence; docs/agents/native-mcp.md#errors-and-limits.
     """
     agent = register(env["t"], "nat-lim-body", "natlim")
     body = (
@@ -167,7 +167,7 @@ def test_lowered_request_bytes_is_413(env):
 def test_stalled_body_hits_total_request_deadline(env):
     """One original ingress deadline spans auth/body; 408 is the total request deadline.
 
-    docs/agents/native-mcp.md:137, :172-173; docs/development/native-mcp.md:61.
+    docs/agents/native-mcp.md#errors-and-limits.
     """
     agent = register(env["t"], "nat-lim-deadline", "natlim")
     for path in PATHS:
@@ -193,7 +193,7 @@ def test_stalled_body_hits_total_request_deadline(env):
 def test_ingress_capacity_is_429(env):
     """`ingress` bounds concurrent HTTP operations including body waits; 429 with Retry-After: 1.
 
-    docs/development/native-mcp.md:52; docs/agents/native-mcp.md:137-138.
+    docs/development/native-mcp.md#finite-policy; docs/agents/native-mcp.md#errors-and-limits.
     """
     agent = register(env["t"], "nat-lim-ingress", "natlim")
     held = [w.stalled_post(env["t"], path, agent["token"]) for path in PATHS]
@@ -214,7 +214,7 @@ def test_ingress_capacity_is_429(env):
 def test_session_message_budget_exhaustion_is_429(env):
     """Request IDs and SDK messages are finite per session; exhaustion is 429 with Retry-After: 1.
 
-    docs/agents/native-mcp.md:67-70; docs/development/native-mcp.md:56.
+    docs/agents/native-mcp.md#request-sequence; docs/development/native-mcp.md#finite-policy.
     With `messages: 4`, initialize + initialized + two pings fill the budget.
     """
     agent = register(env["t"], "nat-lim-messages", "natlim")
@@ -237,8 +237,8 @@ def test_session_message_budget_exhaustion_is_429(env):
 def test_in_flight_request_at_shutdown_is_503(target_factory):
     """503 includes shutdown; shutdown rejects new ingress and cancels native work.
 
-    docs/agents/native-mcp.md:138; docs/operator/native-mcp.md:123-124;
-    docs/development/native-mcp.md:72-74.
+    docs/agents/native-mcp.md#errors-and-limits; docs/operator/native-mcp.md#verify-and-diagnose;
+    docs/development/native-mcp.md#finite-policy.
     """
     t, fake = native_target(target_factory, "nat-shutdown")
     try:
@@ -268,7 +268,7 @@ def test_in_flight_request_at_shutdown_is_503(target_factory):
 def test_out_of_range_mcp_config_refuses_startup(target_factory):
     """Defaults are maximums; they may be lowered but never set to zero; lists hold at most 16 entries.
 
-    docs/development/native-mcp.md:47-49, :80; docs/operator/native-mcp.md:32.
+    docs/development/native-mcp.md#finite-policy, docs/operator/native-mcp.md#configure-a-connection-and-a-named-agent; docs/operator/native-mcp.md#before-setup.
     """
     t = target_factory(label="nat-badconfig", upstream=False)
     t.stop()

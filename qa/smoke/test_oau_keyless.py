@@ -1,5 +1,5 @@
-"""A daemon started without LOCKSMITH_OAUTH_SEALING_KEY (docs/concepts/oauth-flow.md:101-110,
-docs/operator/oauth-consent.md:20-23)."""
+"""A daemon started without LOCKSMITH_OAUTH_SEALING_KEY (docs/concepts/oauth-flow.md#storage,
+docs/operator/oauth-consent.md#configure-the-controlled-profile)."""
 
 import socket
 import tempfile
@@ -37,7 +37,7 @@ def nk(target_factory):
     codes=["oauth_sealing_key_unset"],
 )
 def test_oauth_call_without_sealing_key(nk):
-    """oauth-flow.md:108-110 and 311: without the sealing key, proxy calls to OAuth
+    """docs/concepts/oauth-flow.md#storage and docs/concepts/oauth-flow.md#per-request-hot-path: without the sealing key, proxy calls to OAuth
     registrations return 503 oauth_sealing_key_unset, with no provider or upstream request."""
     t, fake = nk
     reg = t.cli("agent", "register", "--name", "oau-keyless", "--allowlist", NAME)
@@ -64,7 +64,7 @@ def test_oauth_call_without_sealing_key(nk):
     covers=["admin.GET./admin/operator/oauth", "cli.oauth.list"],
 )
 def test_oauth_admin_routes_not_mounted_without_key(nk):
-    """oauth-flow.md:108-109: if the key is not set, the OAuth admin routes are not mounted."""
+    """docs/concepts/oauth-flow.md#storage: if the key is not set, the OAuth admin routes are not mounted."""
     t, _ = nk
     listed = t.cli("oauth", "list")
     assert listed.code == 4, "CLI must report the missing route"
@@ -82,7 +82,7 @@ def test_oauth_admin_routes_not_mounted_without_key(nk):
     ],
 )
 def test_consent_config_requires_sealing_key(target_factory):
-    """oauth-consent.md:20-23: consent requires a valid LOCKSMITH_OAUTH_SEALING_KEY at
+    """docs/operator/oauth-consent.md#configure-the-controlled-profile: consent requires a valid LOCKSMITH_OAUTH_SEALING_KEY at
     startup; configuring `oauth_consent` without it refuses to start (no callback listener)."""
     holder: list = []
     consent = Consent(Path(tempfile.mkdtemp(prefix="oau-pki-"))).start(

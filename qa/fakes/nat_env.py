@@ -1,7 +1,7 @@
 """Native MCP setup through the documented operator CLI only.
 
 A native target trusts a per-run CA through `mcp.upstream_ca_bundle`
-(docs/operator/native-tool-review.md:55-63) and talks to a FakeMcp
+(docs/operator/native-tool-review.md#select-an-account-and-trust) and talks to a FakeMcp
 over verified TLS. Preparation follows native-tool-review.md and
 native-tool-grants.md: show, observe, review, grants show, grants replace,
 echoing exact returned preconditions.

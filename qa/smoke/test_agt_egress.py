@@ -1,5 +1,5 @@
-"""Egress routing and upstream TLS trust (docs/concepts/architecture.md:80-82,
-docs/reference/cli-reference.md:177, README.md:98-101, config.example.yaml egress_proxy / tls)."""
+"""Egress routing and upstream TLS trust (docs/concepts/architecture.md#the-agents-request-flow,
+docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator, README.md#highlights-v300, config.example.yaml egress_proxy / tls)."""
 
 import shutil
 import tempfile
@@ -65,7 +65,7 @@ def eg(target_factory):
 
 @case("SMK-AGT-050", area="AGT", kind="positive", covers=[API, EGRESS])
 def test_proxied_http_upstream_goes_through_egress_proxy(eg):
-    """architecture.md:80-82 + config.example.yaml (egress_proxy: tools with `egress: proxied`
+    """docs/concepts/architecture.md#the-agents-request-flow + config.example.yaml (egress_proxy: tools with `egress: proxied`
     route through the configured proxy)."""
     t, proxy, up = eg["t"], eg["proxy"], eg["http"]
     seen, before = proxy.count(), up.count("/via")
@@ -81,7 +81,7 @@ def test_proxied_http_upstream_goes_through_egress_proxy(eg):
 
 @case("SMK-AGT-051", area="AGT", kind="corner", covers=[API, EGRESS])
 def test_direct_egress_bypasses_proxy(eg):
-    """architecture.md:82 `egress: direct` goes straight to upstream; CLAUDE.md "LAN tools use
+    """docs/concepts/architecture.md#the-agents-request-flow `egress: direct` goes straight to upstream; CLAUDE.md "LAN tools use
     egress: direct and bypass the CONNECT proxy"."""
     t, proxy, up = eg["t"], eg["proxy"], eg["http"]
     seen, before = proxy.count(), up.count("/direct")
@@ -93,8 +93,8 @@ def test_direct_egress_bypasses_proxy(eg):
 
 @case("SMK-AGT-052", area="AGT", kind="positive", covers=[API, EGRESS, TLS])
 def test_proxied_https_upstream_uses_connect(eg):
-    """architecture.md:81 `egress: proxied -> HTTP CONNECT through pipelock`; the tunnelled
-    upstream is verified with tls.upstream_ca_bundle (README.md:98-101)."""
+    """docs/concepts/architecture.md#the-agents-request-flow `egress: proxied -> HTTP CONNECT through pipelock`; the tunnelled
+    upstream is verified with tls.upstream_ca_bundle (README.md#highlights-v300)."""
     t, proxy, up = eg["t"], eg["proxy"], eg["https"]
     seen, before = proxy.count(), up.count("/viatls")
     resp = t.http("GET", "/api/agt-via-tls/ping", token=eg["agent"]["token"])
@@ -105,7 +105,7 @@ def test_proxied_https_upstream_uses_connect(eg):
 
 @case("SMK-AGT-053", area="AGT", kind="positive", covers=[API, TLS])
 def test_private_ca_upstream_trusted_with_bundle(eg):
-    """README.md:98-101 + config.example.yaml `tls.upstream_ca_bundle` — the named PEM adds
+    """README.md#highlights-v300 + config.example.yaml `tls.upstream_ca_bundle` — the named PEM adds
     a trust root so an HTTPS upstream behind a private CA verifies."""
     t, up = eg["t"], eg["https"]
     before = up.count("/tls")
@@ -123,9 +123,9 @@ def test_private_ca_upstream_trusted_with_bundle(eg):
     codes=["upstream_error"],
 )
 def test_private_ca_upstream_refused_without_bundle(eg):
-    """README.md:98-101 + config.example.yaml — webpki roots ignore the system store and
+    """README.md#highlights-v300 + config.example.yaml — webpki roots ignore the system store and
     verification is never disabled: without the bundle the HTTPS upstream is refused
-    (wire-contract.md:227 502 upstream_error) and no HTTP request reaches it."""
+    (docs/reference/wire-contract.md#error-envelope 502 upstream_error) and no HTTP request reaches it."""
     t, up = eg["plain"], eg["https"]
     before = up.count("/tls")
     resp = t.http("GET", "/api/agt-tls/ping", token=eg["plain_agent"]["token"])
@@ -138,7 +138,7 @@ def test_private_ca_upstream_refused_without_bundle(eg):
 
 @case("SMK-AGT-055", area="AGT", kind="corner", covers=[EGRESS, "cli.tool.put", "cli.tool.get"])
 def test_egress_defaults_to_direct(eg):
-    """cli-reference.md:177 — `--egress direct|proxied` "Defaults `direct`": a tool put without
+    """docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator — `--egress direct|proxied` "Defaults `direct`": a tool put without
     --egress is saved direct and does not route through the egress proxy."""
     t, proxy, up = eg["t"], eg["proxy"], eg["http"]
     put = t.cli("tool", "put", "agt-default-egress", "--upstream", f"{up.url}/dflt", "--auth", "none")

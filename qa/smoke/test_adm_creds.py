@@ -1,5 +1,5 @@
 """Per-agent account bindings over the admin socket, without a credential-store key
-(docs/concepts/per-agent-credentials.md, cli-reference.md:100-125)."""
+(docs/concepts/per-agent-credentials.md, docs/reference/cli-reference.md#explicit-account-bindings)."""
 
 import pytest
 
@@ -47,7 +47,7 @@ def put_spec(t1, agent, spec):
 def test_set_and_replace_binding_reads_back_references_only(t1, bound):
     """`set-credential` upserts one binding per agent/registration; `credentials list`
     returns AuthSpec references and timestamps, never values
-    (cli-reference.md:112-116, per-agent-credentials.md:92-116)."""
+    (docs/reference/cli-reference.md#explicit-account-bindings, docs/concepts/per-agent-credentials.md#setting-an-explicit-binding)."""
     first = t1.cli(
         "agent", "set-credential", bound["id"], "accounts", "--auth", "bearer=SMOKE_X"
     )
@@ -85,7 +85,7 @@ def test_set_and_replace_binding_reads_back_references_only(t1, bound):
 )
 def test_unset_is_idempotent(t1, bound):
     """`unset-credential` removes the binding and is idempotent — removing an absent
-    binding returns success (cli-reference.md:123-125)."""
+    binding returns success (docs/reference/cli-reference.md#explicit-account-bindings)."""
     assert (
         t1.cli("agent", "set-credential", bound["id"], "accounts", "--no-auth").code
         == 0
@@ -112,7 +112,7 @@ def test_unset_is_idempotent(t1, bound):
 )
 def test_binding_commands_on_unknown_agent_exit_4(t1, accounts):
     """An unknown agent is HTTP 404 → exit 4 for every binding command
-    (cli-reference.md:315)."""
+    (docs/reference/cli-reference.md#exit-codes)."""
     for args in (
         ["credentials", "list", UNKNOWN],
         ["set-credential", UNKNOWN, "accounts", "--no-auth"],
@@ -126,7 +126,7 @@ def test_binding_commands_on_unknown_agent_exit_4(t1, accounts):
 @case("SMK-ADM-023", area="ADM", kind="refusal", covers=[PUT], codes=["selection_only"])
 def test_generic_write_cannot_create_controlled_oauth(t1, bound):
     """`controlled_oauth` is a selection-only stamp; generic credential writes cannot
-    create it (docs/operator/native-oauth.md:67-68)."""
+    create it (docs/operator/native-oauth.md#controlled-oauth-accounts-for-native-mcp)."""
     spec = {
         "kind": "controlled_oauth",
         "session_label": "x",
@@ -148,7 +148,7 @@ def test_generic_write_cannot_create_controlled_oauth(t1, bound):
     codes=["invalid_op_reference"],
 )
 def test_op_binding_requires_op_scheme(t1, bound):
-    """`op_*` bindings carry an `op://` reference (README.md:110-113); anything else is
+    """`op_*` bindings carry an `op://` reference (README.md#highlights-v300); anything else is
     refused before it is stored."""
     for ref in ("https://vault.example/item", "op://"):
         r = put_spec(t1, bound, {"kind": "op_bearer", "reference": ref})
@@ -165,8 +165,8 @@ def test_op_binding_requires_op_scheme(t1, bound):
 )
 def test_oauth_binding_requires_a_nonempty_label(t1, bound):
     """Every OAuth account selection must name a nonempty label; missing or empty
-    labels reject on operator writes (per-agent-credentials.md:166-168,
-    cli-reference.md:118)."""
+    labels reject on operator writes (docs/concepts/per-agent-credentials.md#oauth-labels,
+    docs/reference/cli-reference.md#explicit-account-bindings)."""
     for label in (None, "", "  "):
         spec = dict(OAUTH_SPEC)
         if label is not None:
@@ -186,7 +186,7 @@ def test_oauth_binding_requires_a_nonempty_label(t1, bound):
 def test_oauth_binding_requires_complete_metadata(t1, bound):
     """An OAuth selection carries the client and token-endpoint metadata its requests
     and refreshes use; placeholder selections with empty metadata are not usable
-    (per-agent-credentials.md:170-175, cli-reference.md:118-121)."""
+    (docs/concepts/per-agent-credentials.md#oauth-labels, docs/reference/cli-reference.md#explicit-account-bindings)."""
     for broken in (
         {"client_id": ""},
         {"token_url": "not-a-url"},
@@ -207,7 +207,7 @@ def test_oauth_binding_requires_complete_metadata(t1, bound):
 )
 def test_stored_value_without_sealing_key_is_refused(t1, bound):
     """Stored values are sealed with LOCKSMITH_CREDENTIAL_SEALING_KEY, which must be
-    supplied before startup (getting-started.md:81-82, native-tool-review.md:33-35);
+    supplied before startup (docs/getting-started.md#create-an-operator-and-configuration, docs/operator/native-tool-review.md#select-an-account-and-trust);
     without it nothing is stored or selected."""
     path = f"/admin/operator/agents/{bound['id']}/credentials/accounts/credential"
     r = uds(
@@ -240,7 +240,7 @@ def test_stored_value_without_sealing_key_is_refused(t1, bound):
 )
 def test_binding_an_unknown_connection_is_refused(t1, bound):
     """Unknown, disabled and infra names cannot be newly granted or bound
-    (per-agent-credentials.md:20-21)."""
+    (docs/concepts/per-agent-credentials.md#explicit-account-selection)."""
     out = t1.cli(
         "agent", "set-credential", bound["id"], "adm-not-a-connection", "--no-auth"
     )

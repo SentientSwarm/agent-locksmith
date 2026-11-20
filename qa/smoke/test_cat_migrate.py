@@ -1,6 +1,6 @@
 """Offline account-binding migration (`locksmith migrate-bindings`).
 
-Docs: docs/concepts/migrating-account-bindings.md and docs/reference/cli-reference.md:374-388.
+Docs: docs/concepts/migrating-account-bindings.md and docs/reference/cli-reference.md#offline-account-binding-migration.
 Runs the documented preview/apply commands with no operator token against a stopped
 daemon's database. Cases run in order on one target.
 """
@@ -60,7 +60,7 @@ def agent_row(plan, name):
 
 
 def review(t, plan, name, filename):
-    """Change only selected flags, for one agent's proposal and grant (lines 90-94)."""
+    """Change only selected flags, for one agent's proposal and grant (docs/concepts/migrating-account-bindings.md#preview-review-and-select)."""
     agent_id = agent_row(plan, name)["id"]
     for entry in plan["entries"]:
         if entry["agent_id"] == agent_id and entry["action"] == "propose":
@@ -91,7 +91,7 @@ def bindings(t, name):
     codes=["migration_invalid"],
 )
 def test_invalid_plan_exits_2(mig):
-    """migrating-account-bindings.md:147-150: invalid inputs exit 2 (migration_invalid),
+    """docs/concepts/migrating-account-bindings.md#apply-and-verify: invalid inputs exit 2 (migration_invalid),
     with no writes: a fresh preview reports the same snapshot."""
     before = preview(mig)["snapshot"]
     garbage = str(mig.write_file("cat-garbage.json", "{not a plan"))
@@ -119,7 +119,7 @@ def test_invalid_plan_exits_2(mig):
     codes=["migration_database"],
 )
 def test_missing_database_exits_1_without_creating_it(mig):
-    """migrating-account-bindings.md:37,47-48,147-148: preview does not create databases;
+    """docs/concepts/migrating-account-bindings.md#back-up-a-consistent-database, docs/concepts/migrating-account-bindings.md#apply-and-verify: preview does not create databases;
     database failures exit 1 (migration_database)."""
     missing = mig.work / "cat-absent.db"
     result = offline(mig, "preview", "--grants", "--database", str(missing))
@@ -144,7 +144,7 @@ def test_missing_database_exits_1_without_creating_it(mig):
     codes=["migration_conflict"],
 )
 def test_drift_after_review_exits_5_without_writes(mig):
-    """migrating-account-bindings.md:133-139: relevant inventory changes after preview
+    """docs/concepts/migrating-account-bindings.md#apply-and-verify: relevant inventory changes after preview
     (here the registration's auth) produce exit 5 migration_conflict with no partial writes."""
     plan = review(mig, preview(mig), "cat-mapped", "cat-drifted.json")
     reauth(mig, "SMOKE_Y")
@@ -176,7 +176,7 @@ def reauth(t, env):
     covers=["cli.migrate-bindings.preview", "cli.migrate-bindings.apply"],
 )
 def test_reviewed_plan_applies_once_and_routes(mig):
-    """migrating-account-bindings.md:65-72,90-94,119-131,152-156: preview prints a plan;
+    """docs/concepts/migrating-account-bindings.md#preview-review-and-select, docs/concepts/migrating-account-bindings.md#apply-and-verify: preview prints a plan;
     apply of selected proposals prints {"inserted":N}, an unchanged repeat {"inserted":0};
     after restart the mapped caller reaches X and the unmapped caller is 403 with zero
     upstream requests."""

@@ -1,7 +1,7 @@
 """Agent listener in auth_mode mtls: certificate identity maps to an agent.
 
 Docs: docs/operator/runbooks/mtls-onboarding.md (§2-§6), mtls-migration.md
-(stage B and failure modes), docs/reference/cli-reference.md:91. Identity is the
+(stage B and failure modes), docs/reference/cli-reference.md#agent--agent-management-operator. Identity is the
 CN, else the first SAN DNS, else the first SAN URI (CLAUDE.md agent listener;
 `locksmith agent set-cert-identity --help`: "CN, SAN_DNS, or SAN_URI string").
 """
@@ -118,7 +118,7 @@ def assert_reaches_as(mt, key, account):
     covers=[IDENTITY, API, *SET_ID, "cli.agent.get"],
 )
 def test_cn_identity_maps_to_agent(mt):
-    """mtls-onboarding.md:49,76-82,113-123: the CN bound with set-cert-identity
+    """docs/operator/runbooks/mtls-onboarding.md#3-provision-agent-certs, docs/operator/runbooks/mtls-onboarding.md#4-onboard-the-agent, docs/operator/runbooks/mtls-onboarding.md#6-verify: the CN bound with set-cert-identity
     authenticates the agent; `agent get` carries cert_identity; audit shows mtls."""
     shown = mt["t"].cli("agent", "get", mt["cn"][0]["id"])
     assert shown.code == 0, shown.err
@@ -128,7 +128,7 @@ def test_cn_identity_maps_to_agent(mt):
 
 @case("SMK-TLS-002", area="TLS", kind="positive", covers=[IDENTITY, API, *SET_ID])
 def test_san_dns_identity_maps_to_agent(mt):
-    """mtls-onboarding.md:49 "The CN (or SAN) becomes the cert_identity";
+    """docs/operator/runbooks/mtls-onboarding.md#3-provision-agent-certs "The CN (or SAN) becomes the cert_identity";
     a cert with no CN maps by its SAN DNS name."""
     assert_reaches_as(mt, "dns", "Y")
 
@@ -162,7 +162,7 @@ def test_cn_wins_over_san_dns(mt, pki):
     codes=["invalid_credential"],
 )
 def test_unbound_identity_is_401_and_audited(mt, pki):
-    """mtls-migration.md:93: a cert whose identity is bound to no agent fails
+    """docs/operator/runbooks/mtls-migration.md#5-failure-modes-during-migration: a cert whose identity is bound to no agent fails
     authentication; the refusal is a 401 invalid_credential envelope and a security row."""
     t = mt["t"]
     before, since = t.upstream_counts(), now_ms()
@@ -226,7 +226,7 @@ def test_foreign_ca_cert_is_refused_at_handshake(mt, pki):
     codes=["invalid_credential"],
 )
 def test_cleared_identity_no_longer_authenticates(mt, pki):
-    """mtls-onboarding.md:82-86: `set-cert-identity --clear` removes the binding;
+    """docs/operator/runbooks/mtls-onboarding.md#4-onboard-the-agent: `set-cert-identity --clear` removes the binding;
     the agent's cert then no longer authenticates."""
     t = mt["t"]
     agent = enrol(t, "qa-tls-cleared", "SMOKE_X", "qa-tls-cleared.agent")

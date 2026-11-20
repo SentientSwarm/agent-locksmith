@@ -22,6 +22,14 @@
 
 ### Fixed
 
+- QA cases now cite the docs they check by heading
+  (`docs/reference/cli-reference.md#exit-codes`) rather than by line, and
+  `qa/tests/test_doc_citations.py` fails when a cited heading is gone or a
+  line citation to a living doc returns (AGENT-296); 279 of the old line
+  citations had drifted. Re-checking them found three tested promises
+  missing from the docs, now documented: `register` refuses a name in use
+  with 409 `agent_name_conflict`, an agent can deregister itself, and the
+  operator's `tools-legacy` listing.
 - The admin API refuses a stored credential value no upstream could
   receive intact, whatever the client checked (AGENT-328): an empty
   value, one over 8 KiB, one with a control character, a line break or

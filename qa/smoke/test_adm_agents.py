@@ -26,9 +26,9 @@ def not_found(result):
 
 @case("SMK-ADM-010", area="ADM", kind="positive", covers=["cli.agent.get", GET])
 def test_get_by_public_id_and_name_without_secrets(t1, managed):
-    """`agent get <public_id>` shows one agent (cli-reference.md:81); the help accepts
+    """`agent get <public_id>` shows one agent (docs/reference/cli-reference.md#agent--agent-management-operator); the help accepts
     a name too. Reads never return the bearer or its hash
-    (agent-identity-and-acl.md:13, cli-reference.md:93)."""
+    (docs/concepts/agent-identity-and-acl.md#what-is-an-agent-identity, docs/reference/cli-reference.md#agent--agent-management-operator)."""
     by_id = t1.cli("agent", "get", managed["id"])
     assert by_id.code == 0, by_id.err
     assert by_id.json["public_id"] == managed["id"]
@@ -50,7 +50,7 @@ def test_get_by_public_id_and_name_without_secrets(t1, managed):
     codes=["agent_not_found"],
 )
 def test_get_unknown_agent_is_404_exit_4(t1):
-    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315; docs/archive/v2/SPEC.md:2783 `404`)."""
+    """Unknown agent → HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes; docs/archive/v2/SPEC.md:2783 `404`)."""
     not_found(t1.cli("agent", "get", UNKNOWN))
     raw = uds(t1, "GET", f"/admin/operator/agents/{UNKNOWN}", token=t1.op_token)
     assert (raw.status, raw.code) == (404, "agent_not_found")
@@ -61,7 +61,7 @@ def test_modify_replaces_and_clears_allowlist_keeping_omitted_fields(
     t1, managed, accounts
 ):
     """`modify --allowlist` replaces the full set, `-` clears it, omitted fields stay
-    unchanged (cli-reference.md:95-97)."""
+    unchanged (docs/reference/cli-reference.md#agent--agent-management-operator)."""
     deny = t1.cli("agent", "modify", managed["id"], "--denylist", "elsewhere")
     assert deny.code == 0, deny.err
     clear = t1.cli("agent", "modify", managed["id"], "--allowlist", "-")
@@ -82,7 +82,7 @@ def test_modify_replaces_and_clears_allowlist_keeping_omitted_fields(
     codes=["agent_not_found"],
 )
 def test_modify_unknown_agent_is_exit_4(t1, accounts):
-    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315)."""
+    """Unknown agent → HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes)."""
     not_found(t1.cli("agent", "modify", UNKNOWN, "--allowlist", accounts))
 
 
@@ -95,7 +95,7 @@ def test_modify_unknown_agent_is_exit_4(t1, accounts):
 )
 def test_modify_to_unknown_connection_is_refused_unchanged(t1, managed):
     """Allowlist names must be existing enabled tool/model registrations
-    (cli-reference.md:95, per-agent-credentials.md:20-21); the policy is unchanged."""
+    (docs/reference/cli-reference.md#agent--agent-management-operator, docs/concepts/per-agent-credentials.md#explicit-account-selection); the policy is unchanged."""
     bad = t1.cli(
         "agent", "modify", managed["id"], "--allowlist", "accounts,adm-not-a-connection"
     )
@@ -112,7 +112,7 @@ def test_modify_to_unknown_connection_is_refused_unchanged(t1, managed):
 )
 def test_set_and_clear_cert_identity(t1, managed):
     """`set-cert-identity` binds an identity visible via `agent get`; `--clear` removes
-    it (cli-reference.md:91, docs/operator/runbooks/mtls-onboarding.md:76-86)."""
+    it (docs/reference/cli-reference.md#agent--agent-management-operator, docs/operator/runbooks/mtls-onboarding.md#4-onboard-the-agent)."""
     bind = t1.cli("agent", "set-cert-identity", managed["id"], "adm-managed.qa.local")
     assert bind.code == 0, bind.err
     assert (
@@ -132,7 +132,7 @@ def test_set_and_clear_cert_identity(t1, managed):
     codes=["agent_not_found"],
 )
 def test_cert_identity_unknown_agent_is_exit_4(t1):
-    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315)."""
+    """Unknown agent → HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes)."""
     not_found(t1.cli("agent", "set-cert-identity", UNKNOWN, "adm-x.qa.local"))
 
 
@@ -144,7 +144,7 @@ def test_cert_identity_unknown_agent_is_exit_4(t1):
 )
 def test_revoke_hides_agent_and_rejects_its_bearer(t1):
     """`revoke` sets the row to revoked and subsequent calls 401
-    (cli-reference.md:93-94); `list --include-revoked` still shows it."""
+    (docs/reference/cli-reference.md#agent--agent-management-operator); `list --include-revoked` still shows it."""
     doomed = register(t1, "adm-doomed")
     assert uds(t1, "GET", "/admin/agent/status", token=doomed["token"]).status == 200
     out = t1.cli("agent", "revoke", doomed["id"], "--reason", "qa")
@@ -168,14 +168,14 @@ def test_revoke_hides_agent_and_rejects_its_bearer(t1):
     codes=["agent_not_found"],
 )
 def test_revoke_unknown_agent_is_exit_4(t1):
-    """Unknown agent → HTTP 404 → exit 4 (cli-reference.md:315)."""
+    """Unknown agent → HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes)."""
     not_found(t1.cli("agent", "revoke", UNKNOWN))
 
 
 @case("SMK-ADM-019", area="ADM", kind="positive", covers=["cli.export.agents"])
 def test_export_agents_is_a_secret_free_snapshot(t1, managed):
     """`export agents` emits a JSON snapshot of agent records for backup
-    (cli-reference.md:278-286) with no secret material (docs/archive/v2/SPEC.md:2789 "no cleartext")."""
+    (docs/reference/cli-reference.md#export--operator-visible-state-snapshot-uc-10) with no secret material (docs/archive/v2/SPEC.md:2789 "no cleartext")."""
     out = t1.cli("export", "agents")
     assert out.code == 0, out.err
     assert isinstance(out.json, list)

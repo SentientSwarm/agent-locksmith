@@ -1,7 +1,7 @@
 """Integration definitions: import, exact reads, disabled pins and deliberate activation.
 
 Docs: docs/operator/integration-definitions.md, docs/operator/
-customer-mcp-journey.md:36-84, docs/reference/cli-reference.md:36-55 and
+docs/operator/customer-mcp-journey.md#1-import-pin-and-promote, docs/reference/cli-reference.md#integration-and-tool-from-definition--offline-authoring and
 docs/changes/integration-definitions.md. Cases run in order on one daemon.
 """
 
@@ -54,7 +54,7 @@ def control(t, name="customer"):
     ],
 )
 def test_import_is_idempotent_and_readable(defs):
-    """docs/operator/integration-definitions.md:33-44,146-147: import/get return definition, digest,
+    """docs/operator/integration-definitions.md#prepare-and-import, docs/operator/integration-definitions.md#revisions-refusals-and-removal: import/get return definition, digest,
     authoring_only, verification_source and provider_readiness; identical re-import is a no-op."""
     first = defs.cli("integration", "import", "--file", str(CUSTOMER))
     assert first.code == 0, first.err
@@ -86,7 +86,7 @@ def test_import_is_idempotent_and_readable(defs):
     codes=["definition_conflict"],
 )
 def test_different_content_same_revision_conflicts(defs):
-    """docs/operator/integration-definitions.md:148-149: different content at an existing ID/revision is
+    """docs/operator/integration-definitions.md#revisions-refusals-and-removal: different content at an existing ID/revision is
     HTTP 409 / CLI 5; the saved revision is unchanged."""
     changed = json.loads(CUSTOMER.read_text())
     changed["summary"] = "a different summary"
@@ -111,7 +111,7 @@ def test_different_content_same_revision_conflicts(defs):
     codes=["definition_invalid"],
 )
 def test_invalid_input_is_rejected_whole(defs):
-    """docs/operator/integration-definitions.md:150-151,170-173: a JSON array is rejected before storage;
+    """docs/operator/integration-definitions.md#revisions-refusals-and-removal: a JSON array is rejected before storage;
     invalid/unsupported input is 400; local CLI decoding exits 2 before sending."""
     doc = json.loads(CUSTOMER.read_text())
     doc["revision"] = 2
@@ -150,7 +150,7 @@ def test_invalid_input_is_rejected_whole(defs):
     codes=["definition_not_found", "definition_invalid"],
 )
 def test_missing_revision_is_404(defs):
-    """docs/operator/integration-definitions.md:150,170-171: no latest alias; a missing exact revision is
+    """docs/operator/integration-definitions.md#revisions-refusals-and-removal: no latest alias; a missing exact revision is
     404 / CLI 4; a malformed revision (e.g. `latest`) is invalid input, 400."""
     refused(
         defs.cli("integration", "get", "local.customer", "--revision", "9"),
@@ -178,7 +178,7 @@ def test_missing_revision_is_404(defs):
     ],
 )
 def test_from_definition_creates_disabled_pin(defs):
-    """docs/operator/integration-definitions.md:41-53: the connection reports configured, disabled,
+    """docs/operator/integration-definitions.md#prepare-and-import: the connection reports configured, disabled,
     activation disabled, credential_readiness not_checked and an mcp.definition pin;
     private destinations need --allow-private-destination."""
     created = defs.cli(
@@ -227,7 +227,7 @@ def test_from_definition_creates_disabled_pin(defs):
     codes=["definition_conflict", "definition_not_found", "definition_invalid"],
 )
 def test_from_definition_refusals(defs):
-    """docs/operator/integration-definitions.md:48-51,153-154,170-172: create-only (existing name 409 even for
+    """docs/operator/integration-definitions.md#prepare-and-import, docs/operator/integration-definitions.md#revisions-refusals-and-removal: create-only (existing name 409 even for
     the same input); missing revision 404; a private destination without the flag or an
     unknown auth profile is 400 (CLI 1)."""
     refused(
@@ -300,7 +300,7 @@ def test_from_definition_refusals(defs):
     codes=["definition_pending"],
 )
 def test_general_writers_cannot_edit_a_pin(defs):
-    """docs/operator/integration-definitions.md:155-157: derived instances cannot be enabled or edited by
+    """docs/operator/integration-definitions.md#revisions-refusals-and-removal: derived instances cannot be enabled or edited by
     general tool PUT or enable; these return definition_pending."""
     before = control(defs)
     refused(
@@ -332,7 +332,7 @@ def test_general_writers_cannot_edit_a_pin(defs):
     ],
 )
 def test_activation_promotes_without_authority(defs):
-    """docs/operator/integration-definitions.md:79-98: activation with the current revision promotes the
+    """docs/operator/integration-definitions.md#deliberate-customer-activation: activation with the current revision promotes the
     pin (phase promoted, activation active), preserves pin and destination, and leaves
     credential_readiness not_checked and provider_readiness unverified."""
     before = control(defs)
@@ -380,7 +380,7 @@ def test_activation_promotes_without_authority(defs):
     ],
 )
 def test_activation_preconditions(defs):
-    """docs/operator/integration-definitions.md:135-140: a stale revision always returns 409; a missing
+    """docs/operator/integration-definitions.md#disable-and-repair: a stale revision always returns 409; a missing
     precondition 428; malformed/unsupported input 400; an absent/unpinned target 404."""
     current = control(defs)["definition_control"]["revision"]
     stale = "0" * len(current)
@@ -415,7 +415,7 @@ def test_activation_preconditions(defs):
     covers=["cli.tool.deactivate-definition"],
 )
 def test_deactivation_retains_the_pin(defs):
-    """docs/operator/integration-definitions.md:119-128: disable retains the pin, destination and compact
+    """docs/operator/integration-definitions.md#disable-and-repair: disable retains the pin, destination and compact
     setting; the connection is disabled again."""
     before = control(defs)
     off = defs.cli(
@@ -447,7 +447,7 @@ def test_deactivation_retains_the_pin(defs):
     codes=["definition_not_found", "invalid_credential"],
 )
 def test_error_envelope_has_three_fields(defs):
-    """error-envelope.md:5-17: every error response carries message, type and code."""
+    """docs/reference/error-envelope.md#the-shape: every error response carries message, type and code."""
     responses = [
         uds(defs, "GET", DEF_PATH.format(9)),
         uds(defs, "GET", "/admin/operator/tools", token="lkop_qacatbadoperator.not-a-real-operator-secret"),

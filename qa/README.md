@@ -74,6 +74,11 @@ def test_unallowlisted_tool_is_403(t1, caller):
 - A case encodes the documented promise. When product and docs disagree the
   case fails and a ticket decides which one changes; never edit a case or a
   doc to make a failure pass.
+- Cite the promise by heading, as `docs/reference/cli-reference.md#exit-codes`,
+  not by line number: line citations drift with every edit above them.
+  `qa/tests/test_doc_citations.py` fails on a line citation to a living doc and
+  on an anchor that names no heading. The frozen `docs/archive/` keeps its line
+  citations.
 - Assert zero dispatch for refusals with `t1.upstream_counts()`.
 
 ## Evidence

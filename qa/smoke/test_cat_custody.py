@@ -1,7 +1,7 @@
 """Credential custody: operator stored values, env/stored/op sources and retention.
 
-Docs: README.md:106-112 (custody backends), docs/concepts/per-agent-credentials.md,
-docs/operator/sealed-state-recovery.md, docs/operator/native-tool-review.md:32-48
+Docs: README.md#highlights-v300 (custody backends), docs/concepts/per-agent-credentials.md,
+docs/operator/sealed-state-recovery.md, docs/operator/native-tool-review.md#select-an-account-and-trust
 and config.example.yaml:57-63 (credential store).
 """
 
@@ -88,7 +88,7 @@ def store(t, kind, name, value):
     covers=["admin.PUT./admin/operator/tools/{name}/credential", "beh.secret.backends"],
 )
 def test_operator_stored_value_is_reference_only_and_selectable(cust):
-    """per-agent-credentials.md:140-152, README.md:106-110: the operator credential PUT
+    """docs/concepts/per-agent-credentials.md#legacy-file-backed-credentials, README.md#highlights-v300: the operator credential PUT
     seals the value and returns only {secret_ref, set_at}; selecting that reference makes
     requests reach the stored account; reads never reveal the value."""
     response = store(cust, "tools", "cat-acc", SMOKE_Y)
@@ -118,7 +118,7 @@ def test_operator_stored_value_is_reference_only_and_selectable(cust):
     covers=["admin.DELETE./admin/operator/tools/{name}/credential"],
 )
 def test_operator_stored_value_clear_is_idempotent(cust):
-    """README.md:106-112: stored custody is set and cleared through the operator API. No user
+    """README.md#highlights-v300: stored custody is set and cleared through the operator API. No user
     doc describes DELETE .../credential; this encodes the route contract (clears back to
     `auth: none`, idempotent; src/registrations/api.rs:752-756) and is reported as a doc gap."""
     assert (
@@ -149,7 +149,7 @@ def test_operator_stored_value_clear_is_idempotent(cust):
     covers=[*CRED_ROUTES["models"], *CRED_ROUTES["infra"]],
 )
 def test_model_and_infra_stored_values(cust):
-    """README.md:106-110: a registration (any kind) can hold a stored_* credential set via
+    """README.md#highlights-v300: a registration (any kind) can hold a stored_* credential set via
     PUT /admin/operator/{kind}/{name}/credential; reads return only the reference."""
     assert (
         cust.cli(
@@ -189,7 +189,7 @@ def test_model_and_infra_stored_values(cust):
     codes=["unknown_name", "wrong_kind"],
 )
 def test_stored_value_for_absent_or_other_kind(cust):
-    """cli-reference.md:313-316 and error-envelope.md:26: an absent registration is 404;
+    """docs/reference/cli-reference.md#exit-codes and docs/reference/error-envelope.md#the-type--code-matrix: an absent registration is 404;
     a name registered under another kind is 409 wrong_kind; nothing is attached."""
     model = cust.cli("model", "put", "cat-wk-model", "--upstream", cust.upstream_url, "--auth", "none",
                      "--egress", "direct")
@@ -217,7 +217,7 @@ def test_stored_value_for_absent_or_other_kind(cust):
     codes=["definition_pending"],
 )
 def test_stored_value_cannot_attach_to_a_pin(cust):
-    """docs/operator/integration-definitions.md:155-157,166-167: derived instances cannot be edited by
+    """docs/operator/integration-definitions.md#revisions-refusals-and-removal: derived instances cannot be edited by
     credential writers (definition_pending); a refused attachment commits no sealed value."""
     imported = cust.cli("integration", "import", "--file", str(REPO / "definitions" / "customer.example.json"))
     assert imported.code == 0, imported.err
@@ -234,7 +234,7 @@ def test_stored_value_cannot_attach_to_a_pin(cust):
 
 @case("SMK-CAT-024", area="CAT", kind="positive", covers=["beh.secret.backends"])
 def test_env_selection_reaches_account(cust):
-    """per-agent-credentials.md:112-115: a bearer=<ENV> selection reads the daemon's env var."""
+    """docs/concepts/per-agent-credentials.md#setting-an-explicit-binding: a bearer=<ENV> selection reads the daemon's env var."""
     public_id, token = agent(cust, "cat-env")
     assert (
         cust.cli(
@@ -255,7 +255,7 @@ def test_env_selection_reaches_account(cust):
     codes=["credential_unresolved"],
 )
 def test_missing_env_value_is_503_without_dispatch(cust):
-    """per-agent-credentials.md:112-115, error-envelope.md:32: a missing selected env value
+    """docs/concepts/per-agent-credentials.md#setting-an-explicit-binding, docs/reference/error-envelope.md#the-type--code-matrix: a missing selected env value
     fails 503 credential_unresolved before any upstream request."""
     public_id, token = agent(cust, "cat-env-missing")
     sel = cust.cli(
@@ -274,7 +274,7 @@ def test_missing_env_value_is_503_without_dispatch(cust):
 
 @case("SMK-CAT-026", area="CAT", kind="positive", covers=["beh.secret.backends"])
 def test_op_reference_resolved_off_the_hot_path(cust, op_fake):
-    """README.md:110-112, per-agent-credentials.md:120-122: an op:// reference is resolved
+    """README.md#highlights-v300, docs/concepts/per-agent-credentials.md#custody-failures-and-legacy-admission: an op:// reference is resolved
     by the 1Password CLI on change, never per request; the request reads the cache."""
     public_id, token = agent(cust, "cat-op")
     sel = uds(
@@ -300,7 +300,7 @@ def test_op_reference_resolved_off_the_hot_path(cust, op_fake):
     codes=["credential_unresolved"],
 )
 def test_unresolvable_op_reference_is_503(cust):
-    """per-agent-credentials.md:120-123: an unreadable op reference returns 503 before
+    """docs/concepts/per-agent-credentials.md#custody-failures-and-legacy-admission: an unreadable op reference returns 503 before
     dispatch even when another source is healthy."""
     public_id, token = agent(cust, "cat-op-missing")
     sel = uds(
@@ -332,7 +332,7 @@ def deleted_by_sweeps(t):
 )
 def test_rotated_value_is_retired_then_swept(cust):
     """config.example.yaml:57-63: the store tombstones values nothing references and the
-    sweep hard-deletes tombstoned values past retention; native-tool-review.md:48 a
+    sweep hard-deletes tombstoned values past retention; docs/operator/native-tool-review.md#select-an-account-and-trust a
     selected reference must be live. Sweep evidence is the daemon's log stream."""
     first = store(cust, "tools", "cat-rot", SMOKE_X)
     assert first.status == 200
@@ -383,7 +383,7 @@ def test_rotated_value_is_retired_then_swept(cust):
     codes=["invalid_credential"],
 )
 def test_wrong_operator_token_is_401_everywhere(cust):
-    """error-envelope.md:23 and architecture.md:30-31: every operator catalog route needs a
+    """docs/reference/error-envelope.md#the-type--code-matrix and docs/concepts/architecture.md#the-daemon: every operator catalog route needs a
     valid operator bearer; a wrong one is 401 invalid_credential and changes nothing."""
     before = cust.cli("tool", "get", "cat-acc").json
     put = {"upstream": cust.upstream_url, "auth": {"kind": "none"}, "egress": "direct"}

@@ -35,7 +35,7 @@ def tool_with_patterns(patterns: list) -> dict:
 
 @case("SMK-DMN-001", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_unknown_top_level_field_refuses_start(t1):
-    """architecture.md:170-171: startup validates the whole file (deny_unknown_fields) and refuses to start on any error."""
+    """docs/concepts/architecture.md#changing-configuration: startup validates the whole file (deny_unknown_fields) and refuses to start on any error."""
     refused(
         run_once(t1, "dmn-unknown-top", minimal(bogus_top_field=1)),
         "unknown field",
@@ -45,7 +45,7 @@ def test_unknown_top_level_field_refuses_start(t1):
 
 @case("SMK-DMN-002", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_unknown_nested_field_refuses_start(t1):
-    """architecture.md:170-171: deny_unknown_fields applies to the whole file, nested blocks included."""
+    """docs/concepts/architecture.md#changing-configuration: deny_unknown_fields applies to the whole file, nested blocks included."""
     cfg = minimal()
     cfg["listen"]["bogus_listen_field"] = True
     refused(
@@ -55,7 +55,7 @@ def test_unknown_nested_field_refuses_start(t1):
 
 @case("SMK-DMN-003", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_wrong_type_refuses_start(t1):
-    """architecture.md:170-171: any validation error refuses start; a string port is a type error."""
+    """docs/concepts/architecture.md#changing-configuration: any validation error refuses start; a string port is a type error."""
     cfg = minimal()
     cfg["listen"]["port"] = "not-a-port"
     refused(run_once(t1, "dmn-bad-type", cfg), "invalid type", "not-a-port")
@@ -63,7 +63,7 @@ def test_wrong_type_refuses_start(t1):
 
 @case("SMK-DMN-004", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_malformed_yaml_refuses_start(t1):
-    """architecture.md:170-171: a file that does not parse refuses start."""
+    """docs/concepts/architecture.md#changing-configuration: a file that does not parse refuses start."""
     once = run_once(t1, "dmn-bad-yaml", "listen: {host: 127.0.0.1\n  port: [\n")
     refused(once, "Failed to load config")
 
@@ -75,7 +75,7 @@ def test_malformed_yaml_refuses_start(t1):
     covers=[VALIDATION, "beh.response-controls"],
 )
 def test_invalid_redaction_regex_refuses_start(t1):
-    """response-controls.md:14,170: a malformed redaction_patterns[].regex fails config load with `regex compile failed`."""
+    """docs/operator/runbooks/response-controls.md#1-m7-acceptance-checklist, docs/operator/runbooks/response-controls.md#7-common-errors: a malformed redaction_patterns[].regex fails config load with `regex compile failed`."""
     cfg = minimal(tools=[tool_with_patterns([{"id": "broken", "regex": "(unclosed"}])])
     refused(run_once(t1, "dmn-bad-regex", cfg), "regex compile failed", "broken")
 
@@ -87,7 +87,7 @@ def test_invalid_redaction_regex_refuses_start(t1):
     covers=[VALIDATION, "beh.response-controls"],
 )
 def test_duplicate_redaction_id_refuses_start(t1):
-    """response-controls.md:15,171: two patterns sharing an id fail with `duplicate redaction_patterns id`."""
+    """docs/operator/runbooks/response-controls.md#1-m7-acceptance-checklist, docs/operator/runbooks/response-controls.md#7-common-errors: two patterns sharing an id fail with `duplicate redaction_patterns id`."""
     pattern = {"id": "dup", "regex": "secret-[0-9]+"}
     cfg = minimal(tools=[tool_with_patterns([pattern, dict(pattern)])])
     refused(
@@ -123,14 +123,14 @@ CONSENT = {
 
 @case("SMK-DMN-007", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_consent_without_admin_substrate_refuses_start(t1):
-    """oauth-consent.md:21-22: consent requires the admin substrate (the documented example block, no admin_socket)."""
+    """docs/operator/oauth-consent.md#configure-the-controlled-profile: consent requires the admin substrate (the documented example block, no admin_socket)."""
     once = run_once(t1, "dmn-consent-no-admin", minimal(oauth_consent=CONSENT))
     refused(once, "oauth_consent requires admin substrate")
 
 
 @case("SMK-DMN-008", area="DMN", kind="refusal", covers=[VALIDATION])
 def test_duplicate_operator_public_id_refuses_start(t1):
-    """oauth-consent.md:78-79: duplicate operator public IDs are rejected at startup."""
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect: duplicate operator public IDs are rejected at startup."""
     text, _token = mint_operator(t1, "dmn-dup")
     body = text[text.index("operators:") :]
     entry = body.split("\n", 1)[1]
@@ -160,7 +160,7 @@ def test_legacy_mode_refuses_start(t1):
 
 @case("SMK-DMN-009", area="DMN", kind="positive", covers=[VALIDATION])
 def test_env_var_expansion_in_config(target_factory):
-    """config.example.yaml:82 and sealed-secrets.md:35: `${VAR}` in the YAML expands from the daemon environment.
+    """config.example.yaml:82 and docs/operator/runbooks/sealed-secrets.md#2-choosing-a-credential-resolution-path: `${VAR}` in the YAML expands from the daemon environment.
 
     The listen host is given only as `${QA_DMN_LISTEN_HOST}`; the daemon can bind only if it expanded.
     """
@@ -197,9 +197,9 @@ def legacy(target_factory):
     "SMK-DMN-010", area="DMN", kind="positive", covers=[VALIDATION, "beh.seed.catalog"]
 )
 def test_deprecated_fields_are_translated(legacy):
-    """inference-hardening.md:128-137: legacy `cloud: true` -> egress proxied, `timeout_seconds: N` ->
+    """docs/operator/runbooks/inference-hardening.md#5-migrating-from-cloud-to-egress: legacy `cloud: true` -> egress proxied, `timeout_seconds: N` ->
     timeouts.request_seconds N with idle default 60, `telemetry` dropped; the deployment still works.
-    architecture.md:187-189: legacy config.tools are migrated into registrations at startup."""
+    docs/concepts/architecture.md#changing-configuration: legacy config.tools are migrated into registrations at startup."""
     got = legacy.cli("tool", "get", "dmn-legacy")
     assert got.code == 0, got.err
     assert got.json["egress"] == "proxied"
@@ -208,7 +208,7 @@ def test_deprecated_fields_are_translated(legacy):
 
 @case("SMK-DMN-011", area="DMN", kind="corner", covers=[VALIDATION])
 def test_deprecated_fields_warn_once_each(legacy):
-    """inference-hardening.md:105,132-135: each legacy field produces a one-shot WARN log naming it."""
+    """docs/operator/runbooks/inference-hardening.md#5-migrating-from-cloud-to-egress: each legacy field produces a one-shot WARN log naming it."""
     warns = [e for e in legacy.log_events() if e.get("level") == "WARN"]
     for field in ("tools[].cloud", "tools[].timeout_seconds", "telemetry"):
         named = [e for e in warns if e.get("fields", {}).get("field") == field]

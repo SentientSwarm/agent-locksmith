@@ -24,7 +24,7 @@ def operators(stdout: str) -> list:
 
 @case("SMK-DMN-070", area="DMN", kind="positive", covers=[BOOT])
 def test_bootstrap_operator_writes_yaml_and_token_once(t1):
-    """cli-reference.md:58-74: offline; operators.yaml content (argon2 hash, commented header by
+    """docs/reference/cli-reference.md#bootstrap-operator--mint-operator-credential-offline: offline; operators.yaml content (argon2 hash, commented header by
     default) on stdout; the cleartext `lkop_<public_id>.<secret>` token on stderr only."""
     proc = bootstrap_operator(t1, "--name", "dmn-boot")
     assert proc.returncode == 0
@@ -44,7 +44,7 @@ def test_bootstrap_operator_writes_yaml_and_token_once(t1):
 
 @case("SMK-DMN-071", area="DMN", kind="positive", covers=[BOOT])
 def test_bootstrap_operator_header_false(t1):
-    """cli-reference.md:72-74: `--header false` omits the comment header for piping."""
+    """docs/reference/cli-reference.md#bootstrap-operator--mint-operator-credential-offline: `--header false` omits the comment header for piping."""
     proc = bootstrap_operator(t1, "--name", "dmn-boot-bare", "--header", "false")
     assert proc.returncode == 0
     assert not [
@@ -68,7 +68,7 @@ def test_bootstrap_operator_header_false_from_help(t1):
 
 @case("SMK-DMN-073", area="DMN", kind="refusal", covers=[BOOT])
 def test_bootstrap_operator_bad_header_value_is_usage_error(t1):
-    """cli-reference.md:71 (`--header true|false`) and cli-reference.md:314 (exit 2 = usage error)."""
+    """docs/reference/cli-reference.md#bootstrap-operator--mint-operator-credential-offline (`--header true|false`) and docs/reference/cli-reference.md#exit-codes (exit 2 = usage error)."""
     proc = bootstrap_operator(t1, "--header", "maybe")
     assert proc.returncode == 2
     assert "maybe" in proc.stderr
@@ -79,8 +79,8 @@ def test_bootstrap_operator_bad_header_value_is_usage_error(t1):
 
 @case("SMK-DMN-074", area="DMN", kind="refusal", covers=[LIST])
 def test_build_info_with_a_command_is_usage_error(t1):
-    """build-identity.md:3-9: --build-info prints identity without contacting a daemon;
-    cli-reference.md:314: misuse is exit 2."""
+    """docs/development/build-identity.md#inspect-and-verify-build-identity: --build-info prints identity without contacting a daemon;
+    docs/reference/cli-reference.md#exit-codes: misuse is exit 2."""
     result = t1.cli("--build-info", "agent", "list", fmt=None, socket_flag=False)
     assert result.code == 2
     assert "--build-info" in result.err and "cannot be combined" in result.err
@@ -88,7 +88,7 @@ def test_build_info_with_a_command_is_usage_error(t1):
 
 @case("SMK-DMN-075", area="DMN", kind="refusal", covers=["cli.agent.register"])
 def test_missing_required_flag_is_usage_error(t1):
-    """cli-reference.md:79,314: `agent register --name` is required; a missing flag is exit 2."""
+    """docs/reference/cli-reference.md#agent--agent-management-operator, docs/reference/cli-reference.md#exit-codes: `agent register --name` is required; a missing flag is exit 2."""
     before = t1.cli("agent", "list")
     result = t1.cli("agent", "register")
     assert result.code == 2
@@ -98,7 +98,7 @@ def test_missing_required_flag_is_usage_error(t1):
 
 @case("SMK-DMN-076", area="DMN", kind="refusal", covers=[LIST])
 def test_bad_format_value_is_usage_error(t1):
-    """cli-reference.md:14,314: `--format` is table/json/yaml; bad input is exit 2."""
+    """docs/reference/cli-reference.md#global-flags, docs/reference/cli-reference.md#exit-codes: `--format` is table/json/yaml; bad input is exit 2."""
     result = t1.cli("--format", "xml", "agent", "list", fmt=None)
     assert result.code == 2
     assert "xml" in result.err
@@ -125,7 +125,7 @@ def test_socket_flag_wins_over_env(t1):
 
 @case("SMK-DMN-079", area="DMN", kind="refusal", covers=[LIST])
 def test_missing_operator_token_is_exit_3(t1):
-    """cli-reference.md:18,315: operator commands read LOCKSMITH_OP_TOKEN; missing credentials are exit 3."""
+    """docs/reference/cli-reference.md#global-flags, docs/reference/cli-reference.md#exit-codes: operator commands read LOCKSMITH_OP_TOKEN; missing credentials are exit 3."""
     result = t1.cli("agent", "list", use_op_token=False)
     assert result.code == 3
     assert "LOCKSMITH_OP_TOKEN" in result.err
@@ -133,7 +133,7 @@ def test_missing_operator_token_is_exit_3(t1):
 
 @case("SMK-DMN-080", area="DMN", kind="refusal", covers=[LIST])
 def test_daemon_not_running_is_transport_exit_1(t1):
-    """cli-reference.md:312: transport errors are exit 1 (admin socket absent: daemon not running)."""
+    """docs/reference/cli-reference.md#exit-codes: transport errors are exit 1 (admin socket absent: daemon not running)."""
     absent = t1.work / "not-running.sock"
     result = t1.cli(
         "agent", "list", socket_flag=False, env={"LOCKSMITH_SOCKET": str(absent)}
@@ -144,7 +144,7 @@ def test_daemon_not_running_is_transport_exit_1(t1):
 
 @case("SMK-DMN-081", area="DMN", kind="refusal", covers=["cli.mtls.revoke"])
 def test_mtls_revoke_without_blocklist_path_is_usage_error(t1):
-    """`locksmith mtls revoke --help` (--blocklist-path is required) and cli-reference.md:314."""
+    """`locksmith mtls revoke --help` (--blocklist-path is required) and docs/reference/cli-reference.md#exit-codes."""
     result = t1.cli("mtls", "revoke", "0a1b2c", use_op_token=False, fmt=None)
     assert result.code == 2
     assert "--blocklist-path" in result.err
@@ -152,7 +152,7 @@ def test_mtls_revoke_without_blocklist_path_is_usage_error(t1):
 
 @case("SMK-DMN-082", area="DMN", kind="refusal", covers=["cli.mtls.list-blocklist"])
 def test_mtls_list_blocklist_without_path_is_usage_error(t1):
-    """`locksmith mtls list-blocklist --help` (--blocklist-path is required) and cli-reference.md:314."""
+    """`locksmith mtls list-blocklist --help` (--blocklist-path is required) and docs/reference/cli-reference.md#exit-codes."""
     result = t1.cli("mtls", "list-blocklist", use_op_token=False, fmt=None)
     assert result.code == 2
     assert "--blocklist-path" in result.err

@@ -133,9 +133,9 @@ def audit_reason(t, tool: str, key: str) -> list:
 
 @case("SMK-AGT-010", area="AGT", kind="positive", covers=[API, STRIP])
 def test_bearer_selected_credential_replaces_agent_auth(px):
-    """wire-contract.md:155-180 — method, body, query string and path are forwarded; agent
+    """docs/reference/wire-contract.md#any-apitool_namepath--proxy-hot-path — method, body, query string and path are forwarded; agent
     Authorization and x-api-key are stripped; only the selected `Authorization: Bearer
-    <env value>` is injected; other headers forwarded as-is. README.md:102 query forwarding."""
+    <env value>` is injected; other headers forwarded as-is. README.md#highlights-v300 query forwarding."""
     t, up, agent = px
     before = up.count("/bearer")
     resp = t.http(
@@ -158,7 +158,7 @@ def test_bearer_selected_credential_replaces_agent_auth(px):
 
 @case("SMK-AGT-011", area="AGT", kind="positive", covers=[API, STRIP])
 def test_header_selected_credential_strips_agent_values(px):
-    """wire-contract.md:155-176 — the target's own auth header (x-api-key) and the agent's
+    """docs/reference/wire-contract.md#any-apitool_namepath--proxy-hot-path — the target's own auth header (x-api-key) and the agent's
     Authorization are stripped; only `X-Api-Key: <selected env value>` reaches upstream."""
     t, up, agent = px
     resp = t.http(
@@ -175,7 +175,7 @@ def test_header_selected_credential_strips_agent_values(px):
 
 @case("SMK-AGT-012", area="AGT", kind="positive", covers=[API, STRIP])
 def test_explicit_none_forwards_no_credentials(px):
-    """wire-contract.md:155-176 — Authorization and x-api-key are stripped even when the
+    """docs/reference/wire-contract.md#any-apitool_namepath--proxy-hot-path — Authorization and x-api-key are stripped even when the
     selection is `none`, and nothing is injected."""
     t, up, agent = px
     resp = t.http(
@@ -199,7 +199,7 @@ def test_explicit_none_forwards_no_credentials(px):
     codes=["tool_not_allowed", "account_binding_missing"],
 )
 def test_missing_binding_is_403_audited_account_binding_missing(px):
-    """wire-contract.md:149-150,240-243 + error-envelope.md:24,85-90 — an allowed tool with no
+    """docs/reference/wire-contract.md#any-apitool_namepath--proxy-hot-path, docs/reference/wire-contract.md#error-envelope + docs/reference/error-envelope.md#the-type--code-matrix, docs/reference/error-envelope.md#rate-limited — an allowed tool with no
     explicit binding denies 403 tool_not_allowed before dispatch; audit reason
     account_binding_missing."""
     t, up, agent = px
@@ -219,7 +219,7 @@ def test_missing_binding_is_403_audited_account_binding_missing(px):
     codes=["credential_unresolved", "selected_credential_unavailable"],
 )
 def test_selected_env_unset_is_503_without_dispatch(px):
-    """wire-contract.md:151-152,229 + error-envelope.md:31 — an unavailable selected source is
+    """docs/reference/wire-contract.md#any-apitool_namepath--proxy-hot-path, docs/reference/wire-contract.md#error-envelope + docs/reference/error-envelope.md#the-type--code-matrix — an unavailable selected source is
     503 credential_unresolved with no alternate/default dispatch (the registration template
     here would resolve)."""
     t, up, agent = px
@@ -241,7 +241,7 @@ def test_selected_env_unset_is_503_without_dispatch(px):
     codes=["credential_unresolved", "selected_credential_unavailable"],
 )
 def test_selected_env_empty_is_503_without_dispatch(px):
-    """error-envelope.md:31 — an empty selected environment value is unavailable: 503
+    """docs/reference/error-envelope.md#the-type--code-matrix — an empty selected environment value is unavailable: 503
     credential_unresolved, no dispatch."""
     t, up, agent = px
     before = up.count("/empty")
@@ -262,8 +262,8 @@ def test_selected_env_empty_is_503_without_dispatch(px):
     codes=["tool_not_found"],
 )
 def test_disabled_registration_is_404(px):
-    """architecture.md:57-61 — a disabled registration is 404 and never falls through;
-    wire-contract.md:225 404 type not_found. cli-reference.md:162 delete disables a seed row."""
+    """docs/concepts/architecture.md#the-agents-request-flow — a disabled registration is 404 and never falls through;
+    docs/reference/wire-contract.md#error-envelope 404 type not_found. docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator delete disables a seed row."""
     t, up, agent = px
     assert t.http("GET", "/api/agt-seeded/ping", token=agent["token"]).status == 200
     delete = t.cli("tool", "delete", "agt-seeded")
@@ -278,7 +278,7 @@ def test_disabled_registration_is_404(px):
 
 @case("SMK-AGT-017", area="AGT", kind="corner", covers=[API, "cli.tool.enable"])
 def test_reenable_preserves_grant_and_selection(px):
-    """getting-started.md:271-272 + cli-reference.md:161 — disable/re-enable preserves grants
+    """docs/getting-started.md#configure-your-own-http-service + docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator — disable/re-enable preserves grants
     and account selections: the same bearer works again with no new grant or binding."""
     t, up, agent = px
     if t.cli("tool", "get", "agt-seeded").json.get("disabled") is not True:
@@ -293,7 +293,7 @@ def test_reenable_preserves_grant_and_selection(px):
 
 @case("SMK-AGT-018", area="AGT", kind="refusal", covers=[API], codes=["bad_request"])
 def test_request_body_over_limit_is_400(px):
-    """wire-contract.md:212,226 400 bad_request; response-controls.md:162 request-side
+    """docs/reference/wire-contract.md#error-envelope 400 bad_request; docs/operator/runbooks/response-controls.md#3-streaming-vs-buffered-path--the-dispatch-rule request-side
     limit is body_limit_bytes. No dispatch."""
     t, up, agent = px
     before = up.count("/small")
@@ -322,7 +322,7 @@ def test_body_limit_applies_to_requests_only(px):
 
 @case("SMK-AGT-020", area="AGT", kind="refusal", covers=[API], codes=["upstream_error"])
 def test_unreachable_upstream_is_502(px):
-    """wire-contract.md:212,227 — upstream unreachable is 502 type upstream_error."""
+    """docs/reference/wire-contract.md#error-envelope — upstream unreachable is 502 type upstream_error."""
     t, _, agent = px
     resp = t.http("GET", "/api/agt-down/ping", token=agent["token"])
     assert resp.status == 502
@@ -337,8 +337,8 @@ def test_unreachable_upstream_is_502(px):
     codes=["timeout"],
 )
 def test_slow_upstream_is_504_timeout(px):
-    """wire-contract.md:212,228 — upstream slower than the configured timeout is 504 with
-    type timeout and code timeout (cli-reference.md:178 `--timeout-request`)."""
+    """docs/reference/wire-contract.md#error-envelope — upstream slower than the configured timeout is 504 with
+    type timeout and code timeout (docs/reference/cli-reference.md#tool--model--infra--catalog-management-operator `--timeout-request`)."""
     t, up, agent = px
     before = up.count("/slow")
     resp = t.http("GET", "/api/agt-slow/ping", token=agent["token"])
@@ -355,7 +355,7 @@ def test_slow_upstream_is_504_timeout(px):
     covers=["agent.GET./readyz", "beh.readyz.semantics"],
 )
 def test_readyz_is_not_a_per_agent_probe(px):
-    """wire-contract.md:49-61 + CLAUDE.md /readyz — readiness does not attest per-agent
+    """docs/reference/wire-contract.md#get-readyz--readiness + CLAUDE.md /readyz — readiness does not attest per-agent
     bindings: ready while a selected source is unavailable (503 at admission)."""
     t, _, agent = px
     assert t.http("GET", "/api/agt-unset/ping", token=agent["token"]).status == 503

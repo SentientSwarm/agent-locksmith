@@ -42,7 +42,7 @@ MCP_HEADERS = {
 @pytest.fixture(scope="module")
 def cs(target_factory):
     """Configured profile, activated definition pin and sealed confidential client
-    (custom-oauth-workflow.md:8-38)."""
+    (docs/operator/custom-oauth-workflow.md#activate-and-use-a-declared-oauth-service)."""
     holder: dict = {}
     pending: list = []
     consent = oc.Consent(Path(tempfile.mkdtemp(prefix="oau-pki-")))
@@ -179,7 +179,7 @@ def native_call(t, agent):
 
 
 def prepare(t, agent_id):
-    """Observe, review and grant both selected tools (native-tool-review.md:75-136)."""
+    """Observe, review and grant both selected tools (docs/operator/native-tool-review.md#observe-inspect-and-review)."""
     shown = t.cli("tool", "mcp", "show", N, "--agent", agent_id)
     assert shown.code == 0, shown.err
     generation = (shown.json.get("observation") or {}).get("generation")
@@ -265,9 +265,9 @@ def prepare(t, agent_id):
     ],
 )
 def test_consent_completes_without_a_browser(cs):
-    """custom-oauth-workflow.md:33-52 (client set, config_revision, connect, poll) and
-    oauth-consent.md:81-130 (201 pending attempt with the URL only once; poll never returns it;
-    callback with state+code; account connected_unbound) and custom-oauth.md:39-44, 102-110
+    """docs/operator/custom-oauth-workflow.md#activate-and-use-a-declared-oauth-service (client set, config_revision, connect, poll) and
+    docs/operator/oauth-consent.md#connect-inspect-disconnect (201 pending attempt with the URL only once; poll never returns it;
+    callback with state+code; account connected_unbound) and docs/operator/custom-oauth.md#declare-the-contract, docs/operator/custom-oauth.md#callback-and-lifecycle
     (identity observed before commit; verified_subject; distinct_redirect callback)."""
     t, c = cs
     client = t.cli(
@@ -345,7 +345,7 @@ def test_consent_completes_without_a_browser(cs):
     ],
 )
 def test_selected_account_calls_through_native_mcp(cs):
-    """custom-oauth-workflow.md:52-63 and native-oauth.md:26-52: a deliberately selected
+    """docs/operator/custom-oauth-workflow.md#activate-and-use-a-declared-oauth-service and docs/operator/native-oauth.md#controlled-oauth-accounts-for-native-mcp: a deliberately selected
     account (connection ACL, select-oauth with the account revision, observe/review/grant)
     lets the agent call the granted tool with the consented access token."""
     t, c = cs
@@ -390,9 +390,9 @@ cs_agents: list = [None]
     codes=["source_conflict"],
 )
 def test_manual_refresh_with_current_revision(cs):
-    """oauth-consent.md:141-157 and 159-176: one explicit renewal with the current revision
+    """docs/operator/oauth-consent.md#renew-custody-or-reconnect: one explicit renewal with the current revision
     commits a verified pair, advances token_version and keeps the generation; reusing the old
-    revision is refused (409) and sends no token request. native-oauth.md:85-89: existing
+    revision is refused (409) and sends no token request. docs/operator/native-oauth.md#refresh-reconnect-and-token-lifetime: existing
     sessions no longer authorize calls until reobserve/review/regrant."""
     t, c = cs
     before = oc.account(t, "reader")
@@ -444,7 +444,7 @@ def test_manual_refresh_with_current_revision(cs):
     codes=["if_match_required"],
 )
 def test_refresh_and_disconnect_require_if_match(cs):
-    """oauth-consent.md:128-129 and 150-152: missing If-Match is 428, a nonempty refresh body is
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect and docs/operator/oauth-consent.md#renew-custody-or-reconnect: missing If-Match is 428, a nonempty refresh body is
     400; neither contacts the provider or changes the account."""
     t, c = cs
     before, counts = oc.account(t, "reader"), dict(c.fake.counts)
@@ -475,7 +475,7 @@ def test_refresh_and_disconnect_require_if_match(cs):
     codes=["callback_refused"],
 )
 def test_invalid_callbacks_refuse_without_consuming_the_attempt(cs):
-    """oauth-consent.md:91-94 and custom-oauth.md:104-110: wrong state, wrong host authority,
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect and docs/operator/custom-oauth.md#callback-and-lifecycle: wrong state, wrong host authority,
     a wrong issuer and duplicate parameters refuse (400 static refusal page; the internal
     callback_refused reason is not exposed) without consuming the attempt or exchanging a
     code; the genuine callback then succeeds once, and a replay refuses (code claimed once)."""
@@ -519,7 +519,7 @@ def test_invalid_callbacks_refuse_without_consuming_the_attempt(cs):
     covers=[CANCEL, POLL, "cli.oauth.cancel"],
 )
 def test_cancel_is_idempotent_and_refuses_later_callback(cs):
-    """oauth-consent.md:96-111 and 132: cancel is idempotent for the owning attempt; the attempt
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect: cancel is idempotent for the owning attempt; the attempt
     reads canceled and its callback no longer exchanges a code."""
     t, c = cs
     created = oc.connect(t, "canceled")
@@ -543,7 +543,7 @@ def test_cancel_is_idempotent_and_refuses_later_callback(cs):
     covers=[POLL, CALLBACK, "cli.oauth.attempt-status"],
 )
 def test_unfinished_attempts_do_not_survive_a_stop(cs):
-    """oauth-consent.md:132-139: graceful shutdown marks unfinished attempts failed
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect: graceful shutdown marks unfinished attempts failed
     (daemon_stopped); after an abrupt stop, startup marks them expired (daemon_restarted);
     neither resumes provider work and their callbacks refuse. Committed accounts survive."""
     t, c = cs
@@ -579,7 +579,7 @@ def test_unfinished_attempts_do_not_survive_a_stop(cs):
     codes=["authorization_denied"],
 )
 def test_denied_consent_fails_the_attempt(cs):
-    """oauth-consent.md:91-94 and 104-106: a callback carrying `error` instead of `code`
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect: a callback carrying `error` instead of `code`
     fails the attempt with a static safe_reason and no token request."""
     t, c = cs
     created = oc.connect(t, "denied")
@@ -607,7 +607,7 @@ def test_denied_consent_fails_the_attempt(cs):
     codes=["reconnect_required"],
 )
 def test_uncertain_refresh_requires_reconnect(cs):
-    """oauth-consent.md:159-169, 185-187 and 203-208: a rejected refresh (400 invalid_grant)
+    """docs/operator/oauth-consent.md#renew-custody-or-reconnect: a rejected refresh (400 invalid_grant)
     is reported as refresh_invalid_grant with outcome unknown and leaves pending custody;
     status reads reconnect_required; a further refresh is refused 409 reconnect_required with
     no token request; disconnect then fresh consent restores a connected account."""
@@ -656,10 +656,10 @@ def test_uncertain_refresh_requires_reconnect(cs):
     codes=["source_conflict"],
 )
 def test_disconnect_with_current_revision(cs):
-    """oauth-consent.md:125-130 and native-oauth.md:89: disconnect needs the current revision
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect and docs/operator/native-oauth.md#refresh-reconnect-and-token-lifetime: disconnect needs the current revision
     (stale 409), returns disconnected with remote_revocation unsupported, never contacts the
     provider, removes controlled selections, and the label reads absent. The owner's
-    selection is visible in the generic listing beforehand (native-oauth.md:41)."""
+    selection is visible in the generic listing beforehand (docs/operator/native-oauth.md#controlled-oauth-accounts-for-native-mcp)."""
     t, c = cs
     agent = cs_agents[0]
     assert agent is not None, "depends on SMK-OAU-021"
@@ -697,8 +697,8 @@ def test_disconnect_with_current_revision(cs):
     codes=["not_found", "account_conflict"],
 )
 def test_unknown_registration_and_existing_account_refuse(cs):
-    """oauth-consent.md:123 (absent account with no registration is 404) and 132-134 (a new
-    connect conflicts with an existing account; disconnect first)."""
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect (absent account with no registration is 404;
+    a new connect conflicts with an existing account; disconnect first)."""
     t, c = cs
     authorizes = c.fake.counts["authorize"]
     missing = t.cli("oauth", "account-status", "no-such-tool", "--label", "reader")
@@ -736,7 +736,7 @@ def test_unknown_registration_and_existing_account_refuse(cs):
     codes=["oauth_kind_unsupported"],
 )
 def test_legacy_interfaces_refuse_consent_accounts(cs):
-    """oauth-consent.md:237-243: legacy `oauth list` hides owner-bound rows; legacy
+    """docs/operator/oauth-consent.md#identity-and-isolation-boundaries: legacy `oauth list` hides owner-bound rows; legacy
     status/revoke/bootstrap refuse them with oauth_kind_unsupported and leave them intact."""
     t, c = cs
     listed = t.cli("oauth", "list")
@@ -773,7 +773,7 @@ def test_legacy_interfaces_refuse_consent_accounts(cs):
     codes=["invalid_credential"],
 )
 def test_consent_routes_require_operator(cs):
-    """oauth-consent.md:76-79: consent routes use the operator token; a wrong token is 401
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect: consent routes use the operator token; a wrong token is 401
     invalid_credential and reaches neither custody nor the provider."""
     t, c = cs
     wrong = "qa-wrong.not-a-real-operator-token"
@@ -811,8 +811,8 @@ def test_consent_routes_require_operator(cs):
     codes=["source_conflict"],
 )
 def test_stale_account_revision_is_refused(cs):
-    """oauth-consent.md:128-130 and 150-157 (stale revision is 409; repeated use of an old
-    revision sends no token request) and native-oauth.md:64-65 (a stale selection revision is
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect and docs/operator/oauth-consent.md#renew-custody-or-reconnect (stale revision is 409; repeated use of an old
+    revision sends no token request) and docs/operator/native-oauth.md#controlled-oauth-accounts-for-native-mcp (a stale selection revision is
     409 source_conflict). The account revision is made stale by one committed renewal."""
     t, c = cs
     old = oc.account(t, "fragile")
@@ -845,7 +845,7 @@ def test_stale_account_revision_is_refused(cs):
     codes=["if_match_required"],
 )
 def test_selection_requires_if_match(cs):
-    """native-oauth.md:56-64: the selection API body is only `label` and missing If-Match is 428."""
+    """docs/operator/native-oauth.md#controlled-oauth-accounts-for-native-mcp: the selection API body is only `label` and missing If-Match is 428."""
     t, _ = cs
     agent = t.cli("agent", "register", "--name", "oau-no-if-match", "--allowlist", N)
     assert agent.code == 0, agent.err
@@ -865,8 +865,8 @@ def test_selection_requires_if_match(cs):
     codes=["not_found"],
 )
 def test_unknown_attempts_and_accounts_are_not_found(cs):
-    """oauth-consent.md:110-111 and 126 (attempt-status/cancel take the owner's attempt id;
-    another or unknown attempt is 404) and 119-123 (an absent account with no registration
+    """docs/operator/oauth-consent.md#connect-inspect-disconnect (attempt-status/cancel take the owner's attempt id;
+    another or unknown attempt is 404; an absent account with no registration
     is 404). Nothing reaches the provider."""
     t, c = cs
     counts = dict(c.fake.counts)
@@ -894,7 +894,7 @@ def test_unknown_attempts_and_accounts_are_not_found(cs):
     ],
 )
 def test_retired_client_generation_cannot_start_consent(cs):
-    """custom-oauth.md:112-116 and custom-oauth-workflow.md:33-38, 78-82: retiring a
+    """docs/operator/custom-oauth.md#callback-and-lifecycle and docs/operator/custom-oauth-workflow.md#activate-and-use-a-declared-oauth-service: retiring a
     confidential client generation is local and permanent (replacement needs a new
     generation); a later consent with that generation is refused before any IdP contact."""
     t, c = cs

@@ -3,7 +3,7 @@
 Docs: docs/operator/runbooks/remote-management.md (bearer, CLI over --admin-url /
 LOCKSMITH_ADMIN_URL with a CA bundle, bootstrap register without operator auth),
 docs/operator/runbooks/mtls-onboarding.md §5 (operator cert_identity in operators.yaml),
-docs/concepts/architecture.md:195-201 (admin HTTPS picks bearer | mtls | both).
+docs/concepts/architecture.md#auth-surfaces-are-independent (admin HTTPS picks bearer | mtls | both).
 """
 
 import pytest
@@ -37,7 +37,7 @@ def admin_target(target_factory, mode: str, label: str):
             "key_path": files["key"],
         }
         if mode != "bearer":
-            # mtls-onboarding.md:99-107: add cert_identity to the operator's entry.
+            # docs/operator/runbooks/mtls-onboarding.md#5-onboard-the-operator-t67: add cert_identity to the operator's entry.
             ops = work / "operators.yaml"
             ops.write_text(
                 ops.read_text().rstrip("\n") + f'\n    cert_identity: "{OPERATOR_ID}"\n'
@@ -84,7 +84,7 @@ def both(target_factory):
 
 @case("SMK-TLS-030", area="TLS", kind="positive", covers=[LIST, "cli.agent.list"])
 def test_cli_over_https_env_matches_uds(bearer):
-    """remote-management.md:97-105,124,206-217: with LOCKSMITH_ADMIN_URL and
+    """docs/operator/runbooks/remote-management.md#operator-side-remote, docs/operator/runbooks/remote-management.md#same-commands-work, docs/operator/runbooks/remote-management.md#7-verifying-m4-end-to-end: with LOCKSMITH_ADMIN_URL and
     LOCKSMITH_CA_BUNDLE the CLI runs over HTTPS and its JSON equals the UDS output."""
     t = bearer["t"]
     assert t.cli("agent", "register", "--name", "qa-tls-https-seen").code == 0
@@ -96,7 +96,7 @@ def test_cli_over_https_env_matches_uds(bearer):
 
 @case("SMK-TLS-031", area="TLS", kind="positive", covers=[CREATE, "cli.agent.register"])
 def test_cli_admin_url_flag_registers_over_https(bearer):
-    """remote-management.md:107-116: the --admin-url/--ca-bundle flag form routes the
+    """docs/operator/runbooks/remote-management.md#operator-side-remote: the --admin-url/--ca-bundle flag form routes the
     CLI over HTTPS; an agent registered that way exists for the UDS too."""
     t = bearer["t"]
     result = t.cli(
@@ -123,7 +123,7 @@ def test_cli_admin_url_flag_registers_over_https(bearer):
     codes=["invalid_credential"],
 )
 def test_wrong_operator_token_over_https_is_401(bearer):
-    """remote-management.md:229: a wrong LOCKSMITH_OP_TOKEN gets 401 from the HTTPS
+    """docs/operator/runbooks/remote-management.md#8-common-errors: a wrong LOCKSMITH_OP_TOKEN gets 401 from the HTTPS
     endpoint; the CLI maps it to exit 3 (cli-reference.md exit codes)."""
     ctx = client_context(bearer["t"], bearer["ca_path"])
     response, refused = https(
@@ -144,7 +144,7 @@ def test_wrong_operator_token_over_https_is_401(bearer):
 
 @case("SMK-TLS-033", area="TLS", kind="corner", covers=[LIST, "cli.agent.list"])
 def test_cli_without_ca_bundle_refuses_private_cert(bearer):
-    """remote-management.md:118-120,226: without --ca-bundle the CLI uses the system
+    """docs/operator/runbooks/remote-management.md#ca-bundle, docs/operator/runbooks/remote-management.md#8-common-errors: without --ca-bundle the CLI uses the system
     roots, so a private-CA admin certificate is not trusted and the command fails."""
     result = remote(bearer, "agent", "list", ca=False)
     assert result.code == 1, result.err
@@ -155,7 +155,7 @@ def test_cli_without_ca_bundle_refuses_private_cert(bearer):
     "SMK-TLS-034", area="TLS", kind="positive", covers=[REGISTER, "cli.bootstrap.mint"]
 )
 def test_bootstrap_register_over_https_without_operator(bearer):
-    """remote-management.md:128-150: bootstrap-token register works over HTTPS with
+    """docs/operator/runbooks/remote-management.md#5-bootstrap-registration-over-https: bootstrap-token register works over HTTPS with
     no operator credentials."""
     t = bearer["t"]
     mint = t.cli("bootstrap", "mint")
@@ -176,7 +176,7 @@ def test_bootstrap_register_over_https_without_operator(bearer):
 
 @case("SMK-TLS-035", area="TLS", kind="positive", covers=[LIST])
 def test_operator_cert_authenticates_in_mtls_mode(mtls):
-    """mtls-onboarding.md:90-109: an operator cert whose identity is the operator's
+    """docs/operator/runbooks/mtls-onboarding.md#5-onboard-the-operator-t67: an operator cert whose identity is the operator's
     cert_identity in operators.yaml authenticates admin HTTPS without a bearer."""
     response, refused = https(
         mtls["t"], "GET", "/admin/operator/agents", mtls["port"], operator_ctx(mtls)
@@ -193,7 +193,7 @@ def test_operator_cert_authenticates_in_mtls_mode(mtls):
     codes=["invalid_credential"],
 )
 def test_unmapped_operator_cert_is_401(mtls):
-    """mtls-onboarding.md:99-109 (only a declared cert_identity maps to an operator):
+    """docs/operator/runbooks/mtls-onboarding.md#5-onboard-the-operator-t67 (only a declared cert_identity maps to an operator):
     a CA-valid cert naming no operator gets 401 invalid_credential."""
     ctx = operator_ctx(mtls, "qa-not-an-operator@example.test", "not-operator")
     response, refused = https(
@@ -225,7 +225,7 @@ def test_missing_operator_cert_in_mtls_mode_is_refused(mtls):
 
 @case("SMK-TLS-038", area="TLS", kind="positive", covers=[LIST, "cli.agent.list"])
 def test_both_mode_accepts_cert_and_bearer(both):
-    """architecture.md:199 (`both`) and mtls-onboarding.md:109 ("operators can use
+    """docs/concepts/architecture.md#auth-surfaces-are-independent (`both`) and docs/operator/runbooks/mtls-onboarding.md#5-onboard-the-operator-t67 ("operators can use
     either"): an operator cert alone and the CLI with a bearer and no cert both work."""
     response, refused = https(
         both["t"], "GET", "/admin/operator/agents", both["port"], operator_ctx(both)
@@ -244,7 +244,7 @@ def test_both_mode_accepts_cert_and_bearer(both):
     codes=["invalid_credential"],
 )
 def test_both_mode_no_cert_wrong_bearer_is_401(both):
-    """remote-management.md:229 in `both` mode: no cert falls back to bearer and a wrong
+    """docs/operator/runbooks/remote-management.md#8-common-errors in `both` mode: no cert falls back to bearer and a wrong
     bearer is 401 invalid_credential (CLI exit 3)."""
     ctx = client_context(both["t"], both["ca_path"])
     response, refused = https(
@@ -278,7 +278,8 @@ def https_register(adm, token, name):
     codes=["invalid_credential"],
 )
 def test_https_register_wrong_secret_is_401(bearer):
-    """remote-management.md:128-150 with CHANGELOG.md:10-12: over admin HTTPS a token
+    """docs/operator/runbooks/remote-management.md#5-bootstrap-registration-over-https with CHANGELOG.md#300 and
+    docs/reference/error-envelope.md#the-type--code-matrix: over admin HTTPS a token
     with the wrong secret is 401 invalid_credential and creates no agent."""
     t = bearer["t"]
     mint = t.cli("bootstrap", "mint")
@@ -299,8 +300,9 @@ def test_https_register_wrong_secret_is_401(bearer):
     codes=["agent_name_conflict"],
 )
 def test_https_register_name_conflict_is_409(bearer):
-    """remote-management.md:128-150 (register works over HTTPS exactly as over UDS):
-    a valid token registering a name in use gets 409 agent_name_conflict."""
+    """docs/operator/runbooks/remote-management.md#5-bootstrap-registration-over-https (register works over HTTPS exactly as over UDS)
+    and docs/reference/cli-reference.md#agent--agent-management-operator: a valid token registering a name in use gets 409
+    agent_name_conflict."""
     t = bearer["t"]
     mint = t.cli("bootstrap", "mint")
     assert mint.code == 0, mint.err

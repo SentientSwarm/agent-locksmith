@@ -1,5 +1,5 @@
 """Bootstrap tokens and agent self-service over the admin socket
-(docs/reference/cli-reference.md:127-143, 295-303; docs/archive/v2/SPEC.md:2769-2788)."""
+(docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator, docs/reference/cli-reference.md#self-service-agent-token-required; docs/archive/v2/SPEC.md:2769-2788)."""
 
 import time
 
@@ -45,12 +45,12 @@ def enrolled(t1, accounts):
 )
 def test_mint_returns_token_once_and_list_omits_it(t1, enrolled):
     """`mint` returns the cleartext once with its scope; `list` shows tokens with no
-    cleartext (cli-reference.md:127-143, docs/archive/v2/SPEC.md:2786)."""
+    cleartext (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator, docs/archive/v2/SPEC.md:2786)."""
     bt = enrolled["bootstrap"]
     assert bt["token"] and bt["public_id"]
     assert bt["scope"]["tool_allowlist"] == ["accounts"]
     assert bt["scope"]["single_use"] is True, (
-        "default is single-use (cli-reference.md:142)"
+        "default is single-use (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator)"
     )
     raw = uds(t1, "GET", "/admin/operator/bootstrap_tokens", token=t1.op_token)
     assert raw.status == 200 and bt["token"] not in raw.text
@@ -63,8 +63,8 @@ def test_mint_returns_token_once_and_list_omits_it(t1, enrolled):
 )
 def test_self_registration_consumes_token_and_constrains_acl(t1, enrolled):
     """A bootstrap token enrols an agent whose ACL is the token's allowlist
-    (cli-reference.md:141; docs/archive/v2/SPEC.md:2773); `locksmith status` shows that agent with
-    its own bearer (cli-reference.md:298, getting-started.md:170-173)."""
+    (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator; docs/archive/v2/SPEC.md:2773); `locksmith status` shows that agent with
+    its own bearer (docs/reference/cli-reference.md#self-service-agent-token-required, docs/getting-started.md#register-explicitly-select-then-call)."""
     reg = enrolled["reg"]
     assert reg.status == 200, reg.text
     assert reg.json["allowlist"] == ["accounts"]
@@ -86,7 +86,7 @@ def test_self_registration_consumes_token_and_constrains_acl(t1, enrolled):
 )
 def test_wrong_bootstrap_secret_is_401_and_does_not_consume(t1):
     """A wrong bootstrap secret is 401 invalid_credential (docs/archive/v2/SPEC.md:2773,
-    error-envelope.md:23); the token stays unused and still enrols afterwards."""
+    docs/reference/error-envelope.md#the-type--code-matrix); the token stays unused and still enrols afterwards."""
     bt = mint(t1)
     refused(self_register(t1, wrong_secret(bt["token"]), "adm-wrong-secret"))
     assert listed(t1, bt["public_id"])["used_at"] is None
@@ -101,7 +101,7 @@ def test_wrong_bootstrap_secret_is_401_and_does_not_consume(t1):
     codes=["invalid_credential"],
 )
 def test_single_use_token_cannot_be_reused(t1, enrolled):
-    """Tokens are single-use by default (cli-reference.md:142); a second consume is 401
+    """Tokens are single-use by default (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator); a second consume is 401
     and creates no agent."""
     refused(self_register(t1, enrolled["bootstrap"]["token"], "adm-reuse"))
     assert "adm-reuse" not in agent_names(t1, include_revoked=True)
@@ -112,7 +112,7 @@ def test_single_use_token_cannot_be_reused(t1, enrolled):
 )
 def test_revoke_marks_token_revoked(t1):
     """`bootstrap revoke <public_id>` revokes an outstanding token
-    (cli-reference.md:136; docs/archive/v2/SPEC.md:2787)."""
+    (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator; docs/archive/v2/SPEC.md:2787)."""
     bt = mint(t1)
     out = t1.cli("bootstrap", "revoke", bt["public_id"])
     assert out.code == 0, out.err
@@ -129,7 +129,7 @@ def test_revoke_marks_token_revoked(t1):
     codes=["invalid_credential"],
 )
 def test_expired_token_cannot_enrol(t1):
-    """`--expires-at` sets the token's expiry (cli-reference.md:143); after it, enrolment
+    """`--expires-at` sets the token's expiry (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator); after it, enrolment
     is 401 and creates no agent."""
     bt = mint(t1, "--expires-at", str(int(time.time()) - 60))
     refused(self_register(t1, bt["token"], "adm-expired"))
@@ -160,7 +160,7 @@ def test_name_conflict_is_409_and_keeps_token(t1, enrolled):
     covers=["cli.bootstrap.mint", MINT, REGISTER],
 )
 def test_reusable_token_enrols_more_than_once(t1):
-    """`--reusable` allows multiple consumes (cli-reference.md:142)."""
+    """`--reusable` allows multiple consumes (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator)."""
     bt = mint(t1, "--reusable")
     assert bt["scope"]["single_use"] is False
     for name in ("adm-reuse-a", "adm-reuse-b"):
@@ -175,7 +175,7 @@ def test_reusable_token_enrols_more_than_once(t1):
     codes=["agent_not_found"],
 )
 def test_revoke_unknown_bootstrap_token_is_exit_4(t1):
-    """An unknown bootstrap token is HTTP 404 → exit 4 (cli-reference.md:315). The
+    """An unknown bootstrap token is HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes). The
     code is undocumented; the product returns `agent_not_found` (surface.yaml)."""
     out = t1.cli("bootstrap", "revoke", "adm-no-such-token")
     assert out.code == 4, out.err
@@ -192,7 +192,7 @@ def test_revoke_unknown_bootstrap_token_is_exit_4(t1):
 @case("SMK-ADM-039", area="ADM", kind="positive", covers=["cli.rotate", ROTATE])
 def test_rotate_replaces_the_bearer(t1):
     """`locksmith rotate` mints a new bearer; the old one is rejected for future
-    authentication (cli-reference.md:299, per-agent-credentials.md:76-78)."""
+    authentication (docs/reference/cli-reference.md#self-service-agent-token-required, docs/concepts/per-agent-credentials.md#configuration-activation-and-admission)."""
     agent = register(t1, "adm-rotor")
     out = t1.cli("rotate", use_op_token=False, agent_token=agent["token"])
     assert out.code == 0, out.err
@@ -211,7 +211,7 @@ def test_rotate_replaces_the_bearer(t1):
     codes=["invalid_credential"],
 )
 def test_rotate_with_wrong_current_secret_keeps_old_bearer(t1):
-    """Rotation proves the current secret (cli-reference.md:299 `--current-secret`);
+    """Rotation proves the current secret (docs/reference/cli-reference.md#self-service-agent-token-required `--current-secret`);
     a wrong one is 401 → exit 3 and the bearer is unchanged."""
     agent = register(t1, "adm-rotor-wrong")
     out = t1.cli(
@@ -234,7 +234,7 @@ def test_rotate_with_wrong_current_secret_keeps_old_bearer(t1):
 )
 def test_deregister_revokes_own_identity(t1):
     """`POST /admin/agent/deregister` (agent token) returns 204 (docs/archive/v2/SPEC.md:2777); the
-    agent is revoked and its bearer 401s (cli-reference.md:93-94)."""
+    agent is revoked and its bearer 401s (docs/reference/cli-reference.md#self-service-agent-token-required)."""
     agent = register(t1, "adm-leaver")
     out = uds(t1, "POST", "/admin/agent/deregister", token=agent["token"])
     assert out.status == 204, out.text
@@ -252,8 +252,8 @@ def test_deregister_revokes_own_identity(t1):
     codes=["grant_target_invalid"],
 )
 def test_mint_with_unknown_connection_is_refused(t1, accounts):
-    """Bootstrap allowlists use current finite names (cli-reference.md:129-131);
-    unknown names cannot be newly granted (per-agent-credentials.md:20-21). Nothing
+    """Bootstrap allowlists use current finite names (docs/reference/cli-reference.md#bootstrap--bootstrap-token-management-operator);
+    unknown names cannot be newly granted (docs/concepts/per-agent-credentials.md#explicit-account-selection). Nothing
     is minted."""
     before = len(t1.cli("bootstrap", "list").json)
     out = t1.cli("bootstrap", "mint", "--allowlist", "accounts,adm-not-a-connection")

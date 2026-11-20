@@ -1,9 +1,9 @@
 """Native MCP HTTP ingress guards under the default `mcp` configuration.
 
 Every guard is checked on the standard path and the opted-in compact path,
-which share the same ingress boundary (docs/agents/compact-mcp.md:9-15).
-Docs: docs/agents/native-mcp.md:32-33, :132-147 and
-docs/operator/native-mcp.md:32-45.
+which share the same ingress boundary (docs/agents/compact-mcp.md#compact-native-mcp).
+Docs: docs/agents/native-mcp.md#request-sequence, docs/agents/native-mcp.md#errors-and-limits and
+docs/operator/native-mcp.md#before-setup.
 """
 
 import pytest
@@ -51,8 +51,8 @@ def refused(env, reply, status, code, path):
 def test_default_host_allowlist_admits_loopback_listener(env):
     """Defaults are localhost, 127.0.0.1 and [::1] with their listener ports; absent Origin is allowed.
 
-    docs/operator/native-mcp.md:40-42; docs/agents/native-mcp.md:144;
-    docs/agents/compact-mcp.md:9-10.
+    docs/operator/native-mcp.md#before-setup; docs/agents/native-mcp.md#errors-and-limits;
+    docs/agents/compact-mcp.md#compact-native-mcp.
     """
     port = env["t"].port
     for path in PATHS:
@@ -82,7 +82,7 @@ def test_default_host_allowlist_admits_loopback_listener(env):
     codes=["query_unsupported"],
 )
 def test_query_string_is_400(env):
-    """Query strings reject. docs/agents/native-mcp.md:145-146."""
+    """Query strings reject. docs/agents/native-mcp.md#errors-and-limits."""
     for path in PATHS:
         refused(env, post(env, path + "?cursor=1"), 400, "query_unsupported", path)
 
@@ -97,7 +97,7 @@ def test_query_string_is_400(env):
 def test_missing_or_foreign_host_is_refused(env):
     """Host must match its configured authority.
 
-    docs/agents/native-mcp.md:144-145, :134, :136; docs/operator/native-mcp.md:40-42.
+    docs/agents/native-mcp.md#errors-and-limits, docs/operator/native-mcp.md#verify-and-diagnose, docs/operator/native-mcp.md#verify-and-diagnose; docs/operator/native-mcp.md#before-setup.
     """
     for path in PATHS:
         refused(env, post(env, path, host=False), 400, "host_required", path)
@@ -120,7 +120,7 @@ def test_missing_or_foreign_host_is_refused(env):
 def test_any_present_origin_is_denied_by_default(env):
     """An empty `allowed_origins` rejects every present Origin.
 
-    docs/operator/native-mcp.md:42-44; docs/agents/native-mcp.md:144-145.
+    docs/operator/native-mcp.md#before-setup; docs/agents/native-mcp.md#errors-and-limits.
     """
     port = env["t"].port
     for path in PATHS:
@@ -138,7 +138,7 @@ def test_any_present_origin_is_denied_by_default(env):
     codes=["duplicate_header"],
 )
 def test_duplicate_security_headers_are_400(env):
-    """Duplicate security headers reject. docs/agents/native-mcp.md:145-146."""
+    """Duplicate security headers reject. docs/agents/native-mcp.md#errors-and-limits."""
     dup = [("MCP-Protocol-Version", w.PROTOCOL), ("MCP-Protocol-Version", w.PROTOCOL)]
     for path in PATHS:
         refused(env, post(env, path, dup), 400, "duplicate_header", path)
@@ -159,7 +159,7 @@ def test_duplicate_security_headers_are_400(env):
     codes=["method_not_allowed"],
 )
 def test_unsupported_http_method_is_405(env):
-    """POST, GET and DELETE are the documented operations. docs/agents/native-mcp.md:32, :76-80."""
+    """POST, GET and DELETE are the documented operations. docs/agents/native-mcp.md#request-sequence, docs/agents/native-mcp.md#request-sequence."""
     for path in PATHS:
         for method in ("PUT", "PATCH"):
             reply = w.send(
@@ -182,7 +182,7 @@ def test_unsupported_http_method_is_405(env):
 def test_media_negotiation_is_406_or_415(env):
     """POST needs JSON content and both Accept types; GET needs text/event-stream.
 
-    docs/agents/native-mcp.md:32-33, :79, :134.
+    docs/agents/native-mcp.md#request-sequence, docs/agents/native-mcp.md#request-sequence, docs/agents/native-mcp.md#errors-and-limits.
     """
     t, token = env["t"], env["agent"]["token"]
     for path in PATHS:
@@ -224,7 +224,7 @@ def test_media_negotiation_is_406_or_415(env):
 def test_body_over_default_limit_is_413(env):
     """413 oversized body; default `request_bytes` is 262144.
 
-    docs/agents/native-mcp.md:135; docs/development/native-mcp.md:63.
+    docs/agents/native-mcp.md#errors-and-limits; docs/development/native-mcp.md#finite-policy.
     """
     body = (
         b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"'
@@ -245,7 +245,7 @@ def test_body_over_default_limit_is_413(env):
 def test_oversized_headers_are_431(env):
     """431 oversized headers; native headers are bounded at 16 KiB / 64 fields.
 
-    docs/agents/native-mcp.md:135; docs/development/native-mcp.md:65.
+    docs/agents/native-mcp.md#errors-and-limits; docs/development/native-mcp.md#finite-policy.
     """
     for path in PATHS:
         refused(
@@ -268,7 +268,7 @@ def test_oversized_headers_are_431(env):
 def test_jsonrpc_envelope_refusals_are_bounded(env):
     """Batches, unknown methods and null/float IDs reject with JSON-RPC errors; invalid IDs become null.
 
-    docs/agents/native-mcp.md:55, :139-141, :145-146.
+    docs/agents/native-mcp.md#request-sequence, docs/agents/native-mcp.md#errors-and-limits, docs/agents/native-mcp.md#errors-and-limits.
     """
     for path in PATHS:
         s = w.Session(env["t"], env["agent"]["token"], path).open()

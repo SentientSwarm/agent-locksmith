@@ -1,7 +1,7 @@
 """mTLS revocation on the agent listener: CRL and the local emergency blocklist.
 
-Docs: docs/operator/runbooks/mtls-revocation.md and CHANGELOG.md 3.0.0 ("Enforce mTLS
-revocation on the agent listener", lines 29-53). The cases run in order against
+Docs: docs/operator/runbooks/mtls-revocation.md and CHANGELOG.md#300 ("Enforce mTLS
+revocation on the agent listener"). The cases run in order against
 one daemon: no CRL ever in force, an untrusted CRL, a trusted CRL, a CRL
 revocation, then the blocklist. The CRL is served by fakes.tls_crl on 127.0.0.1.
 """
@@ -118,7 +118,7 @@ def assert_refused(rv, key, reason, since):
     codes=["crl_unavailable"],
 )
 def test_no_crl_in_force_refuses_mtls(rv, crl):
-    """mtls-revocation.md:66: with neither a fetched nor a cached CRL the daemon logs
+    """docs/operator/runbooks/mtls-revocation.md#2-standard-crl-revocation: with neither a fetched nor a cached CRL the daemon logs
     `no CRL in force` at error level and refuses every mTLS client, audited as
     `mtls_auth_failure reason=crl_unavailable`."""
     since = now_ms()
@@ -139,7 +139,7 @@ def test_no_crl_in_force_refuses_mtls(rv, crl):
     codes=["crl_unavailable"],
 )
 def test_crl_from_untrusted_signer_is_not_applied(rv, crl):
-    """CHANGELOG.md:35-37: a CRL is applied only when a CA certificate in the agent CA
+    """CHANGELOG.md#300: a CRL is applied only when a CA certificate in the agent CA
     bundle that matches its issuer signed it. An impostor CA with the same name is
     fetched but not applied, so mTLS stays refused as crl_unavailable."""
     impostor = CA.create("qa-tls-rev-ca")
@@ -154,7 +154,7 @@ def test_crl_from_untrusted_signer_is_not_applied(rv, crl):
 
 @case("SMK-TLS-022", area="TLS", kind="positive", covers=[REVOCATION, API])
 def test_trusted_crl_restores_mtls(rv, crl):
-    """mtls-revocation.md:66 ("until a CRL is applied") and CHANGELOG.md:32-46: a CRL
+    """docs/operator/runbooks/mtls-revocation.md#2-standard-crl-revocation ("until a CRL is applied") and CHANGELOG.md#300: a CRL
     signed by the bundle CA is applied on the next refresh, mTLS clients are served, and
     the last good CRL is kept in mtls-crl-cache.pem beside the database."""
     crl.serve(rv["ca"].crl())
@@ -174,7 +174,7 @@ def test_trusted_crl_restores_mtls(rv, crl):
     codes=["revoked_by_crl"],
 )
 def test_crl_revoked_serial_is_refused(rv, crl):
-    """mtls-revocation.md:53-64,74-88: a serial on the CA's CRL is refused after the
+    """docs/operator/runbooks/mtls-revocation.md#2-standard-crl-revocation, docs/operator/runbooks/mtls-revocation.md#3-verify-the-revoke-landed: a serial on the CA's CRL is refused after the
     next refresh, audited `mtls_auth_failure` reason revoked_by_crl;
     other certs of the same CA keep working."""
     since = now_ms()
@@ -192,7 +192,7 @@ def test_crl_revoked_serial_is_refused(rv, crl):
     codes=["revoked_by_blocklist"],
 )
 def test_blocklist_revoke_refuses_within_reload_interval(rv):
-    """mtls-revocation.md:35-49: `locksmith mtls revoke` adds the serial; the daemon
+    """docs/operator/runbooks/mtls-revocation.md#1-emergency-revoke-immediately: `locksmith mtls revoke` adds the serial; the daemon
     picks it up within blocklist_reload_interval_seconds and the next request is refused
     `mtls_auth_failure reason=revoked_by_blocklist`; `list-blocklist` shows it."""
     t, serial = rv["t"], serial_hex(rv["c"]["cert"])
@@ -226,7 +226,7 @@ def test_blocklist_revoke_refuses_within_reload_interval(rv):
 
 @case("SMK-TLS-025", area="TLS", kind="positive", covers=[REVOCATION, API])
 def test_blocklist_removal_restores_access(rv):
-    """mtls-revocation.md:140-147 (tabletop drill step 4): removing the serial from
+    """docs/operator/runbooks/mtls-revocation.md#7-tabletop-drill (tabletop drill step 4): removing the serial from
     the blocklist restores access within the reload interval."""
     t = rv["t"]
     t.write_file("tls/blocklist", "# qa drill complete\n")
@@ -243,7 +243,7 @@ def test_blocklist_removal_restores_access(rv):
     codes=[],
 )
 def test_revoke_rejects_non_hex_serial(rv):
-    """CHANGELOG.md:52-53: `locksmith mtls revoke` rejects a non-hex serial (usage error,
+    """CHANGELOG.md#300: `locksmith mtls revoke` rejects a non-hex serial (usage error,
     exit 2 per cli-reference.md exit codes) and leaves the file unchanged."""
     path = rv["t"].work / "tls" / "blocklist"
     before = path.read_text()
@@ -276,8 +276,8 @@ def test_crl_status_points_to_the_daemon_log(rv, crl):
 
 @case("SMK-TLS-028", area="TLS", kind="corner", covers=[REVOCATION])
 def test_revocation_audit_rows_carry_serial(rv):
-    """mtls-revocation.md:28-30 (find the serial via `.details.serial_hex` in audit)
-    and :76-88 (rejected-request row shape with "serial_hex"): the revoked_by_crl and
+    """docs/operator/runbooks/mtls-revocation.md#1-emergency-revoke-immediately (find the serial via `.details.serial_hex` in audit)
+    and docs/operator/runbooks/mtls-revocation.md#3-verify-the-revoke-landed (rejected-request row shape with "serial_hex"): the revoked_by_crl and
     revoked_by_blocklist rows written by SMK-TLS-023/024 name the refused cert's serial."""
     assert set(rv["rows"]) == {"b", "c"}, (
         "SMK-TLS-023/024 did not record their refusal rows"
@@ -295,8 +295,8 @@ def test_revocation_audit_rows_carry_serial(rv):
     covers=["cli.mtls.revoke", "cli.mtls.list-blocklist"],
 )
 def test_revoke_canonicalises_serials_and_keeps_reason(rv):
-    """CHANGELOG.md:50-53 (`7A:11`, `0x7a11` and `007a11` match `7a11`; revoke replaces
-    the file atomically) and mtls-revocation.md:35-46,135 (`--reason` is kept as a
+    """CHANGELOG.md#300 (`7A:11`, `0x7a11` and `007a11` match `7a11`; revoke replaces
+    the file atomically) and docs/operator/runbooks/mtls-revocation.md#1-emergency-revoke-immediately, docs/operator/runbooks/mtls-revocation.md#6-common-mistakes (`--reason` is kept as a
     comment for the next operator; list-blocklist prints the serials)."""
     t = rv["t"]
     path = str(t.work / "tls" / "drill-blocklist")

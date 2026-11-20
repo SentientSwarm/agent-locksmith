@@ -1,5 +1,5 @@
 """A daemon with a credential-store key and one legacy config tool: stored per-agent
-values and the legacy tool listings (per-agent-credentials.md, native-tool-review.md:33-50)."""
+values and the legacy tool listings (per-agent-credentials.md, docs/operator/native-tool-review.md#select-an-account-and-trust)."""
 
 import base64
 import os
@@ -70,8 +70,8 @@ def call_counts(t, agent):
 )
 def test_stored_bearer_is_sealed_selected_and_used(keyed, holder):
     """`--stored-bearer-stdin` seals the value and returns only an opaque reference;
-    the proxy then injects it (native-tool-review.md:33-44, README.md:105-110).
-    Reads reveal only the reference (reveal-never: README.md:109)."""
+    the proxy then injects it (docs/operator/native-tool-review.md#select-an-account-and-trust, README.md#highlights-v300).
+    Reads reveal only the reference (reveal-never: README.md#highlights-v300)."""
     out = keyed.cli(
         "agent",
         "set-credential",
@@ -92,8 +92,8 @@ def test_stored_bearer_is_sealed_selected_and_used(keyed, holder):
 @case("SMK-ADM-061", area="ADM", kind="positive", covers=[STORED])
 def test_stored_value_api_replaces_selection_with_new_reference(keyed, holder):
     """The stored-value API (`{value, bearer: true}`) creates a fresh reference and
-    selects it; reads never return the value (native-tool-review.md:39-44,
-    sealed-state-recovery.md:138-141)."""
+    selects it; reads never return the value (docs/operator/native-tool-review.md#select-an-account-and-trust,
+    docs/operator/sealed-state-recovery.md#verify-accounts-then-reopen-deliberately)."""
     old = selection(keyed, holder)
     path = f"/admin/operator/agents/{holder['id']}/credentials/accounts/credential"
     r = uds(
@@ -124,7 +124,7 @@ def test_stored_value_api_replaces_selection_with_new_reference(keyed, holder):
 def test_malformed_stored_value_is_refused_without_change(keyed, holder):
     """A bearer value must be 1–8192 printable ASCII bytes with no spaces, and bearer
     and header intent are exclusive; a refused write changes nothing
-    (native-tool-review.md:39-44)."""
+    (docs/operator/native-tool-review.md#select-an-account-and-trust)."""
     before = selection(keyed, holder)
     path = f"/admin/operator/agents/{holder['id']}/credentials/accounts/credential"
     for body in (
@@ -149,7 +149,7 @@ def test_malformed_stored_value_is_refused_without_change(keyed, holder):
 )
 def test_operator_legacy_listing_shows_config_tools(keyed):
     """Legacy `config.tools` entries are listed for the operator as configuration-only
-    (cli-reference.md:283 "legacy config.tools"; per-agent-credentials.md:83-84)."""
+    (docs/concepts/per-agent-credentials.md#configuration-activation-and-admission)."""
     r = uds(keyed, "GET", "/admin/operator/tools-legacy", token=keyed.op_token)
     assert r.status == 200, r.text
     tools = {t["name"]: t for t in r.json["tools"]}
@@ -163,7 +163,7 @@ def test_operator_legacy_listing_shows_config_tools(keyed):
 def test_agent_legacy_listing_is_acl_filtered_configuration_only(keyed, holder):
     """`/admin/agent/tools` reports config-only legacy discovery as
     `configuration_only`, never per-agent credential readiness, filtered by the
-    agent's ACL (per-agent-credentials.md:83-84, agent-identity-and-acl.md:37-41)."""
+    agent's ACL (docs/concepts/per-agent-credentials.md#configuration-activation-and-admission, docs/concepts/agent-identity-and-acl.md#discovery-endpoints)."""
     granted = register(keyed, "adm-legacy-user", allowlist="adm-legacy")
     mine = uds(keyed, "GET", "/admin/agent/tools", token=granted["token"])
     assert mine.status == 200, mine.text
@@ -183,7 +183,7 @@ def test_agent_legacy_listing_is_acl_filtered_configuration_only(keyed, holder):
     codes=["agent_not_found"],
 )
 def test_stored_value_for_unknown_agent_is_404(keyed):
-    """An unknown agent is HTTP 404 → exit 4 (cli-reference.md:315); nothing is
+    """An unknown agent is HTTP 404 → exit 4 (docs/reference/cli-reference.md#exit-codes); nothing is
     sealed or selected."""
     path = "/admin/operator/agents/adm-no-such-agent/credentials/accounts/credential"
     r = uds(
@@ -215,8 +215,8 @@ def test_stored_value_for_unknown_agent_is_404(keyed):
 )
 def test_stored_value_for_unknown_connection_is_refused(keyed, holder):
     """Unknown, disabled and infra names cannot be newly bound
-    (per-agent-credentials.md:20-21); the refused write leaves the agent's
-    selections unchanged (native-tool-review.md:43-44)."""
+    (docs/concepts/per-agent-credentials.md#explicit-account-selection); the refused write leaves the agent's
+    selections unchanged (docs/operator/native-tool-review.md#select-an-account-and-trust)."""
     before = keyed.cli("agent", "credentials", "list", holder["id"]).json
     path = f"/admin/operator/agents/{holder['id']}/credentials/adm-not-a-connection/credential"
     r = uds(

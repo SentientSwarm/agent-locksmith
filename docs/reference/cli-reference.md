@@ -91,7 +91,9 @@ locksmith agent prune-revoked [--dry-run]
 | `--denylist x,y` | Comma-separated names the agent CANNOT call (deny wins when both match). |
 | `agent set-cert-identity <public_id> <identity>` | Bind an mTLS certificate identity. |
 
-`register` returns the bearer once. `revoke` sets the agent's row
+`register` returns the bearer once; a name already in use is refused with
+409 `agent_name_conflict`, over the admin socket, admin HTTPS and the
+bootstrap listener alike. `revoke` sets the agent's row
 to revoked; subsequent calls 401. In the same write it removes the agent's
 account bindings (including those stashed for inactive route backends), its
 grants and its native grant sets, and audits `agent_revoke` with their counts.
@@ -644,6 +646,10 @@ locksmith rotate [--current-secret <secret>]  # rotate your bearer
 
 These don't need an operator token — they take the agent's bearer
 from `LOCKSMITH_AGENT_TOKEN`.
+
+An agent can also remove itself, with no CLI command, through
+`POST /admin/agent/deregister` on its own bearer: 204, the same revocation
+as `agent revoke`, audited as `agent_deregister`. Its bearer then gets 401.
 
 ## Exit codes
 

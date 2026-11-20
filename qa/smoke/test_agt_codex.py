@@ -1,4 +1,4 @@
-"""Codex wire fixups (CLAUDE.md Phase G2-G5, docs/concepts/oauth-flow.md:293-600)
+"""Codex wire fixups (CLAUDE.md Phase G2-G5, docs/concepts/oauth-flow.md#per-request-hot-path)
 and the OAuth proxy refusals, against a fake upstream whose path contains
 /backend-api/codex and a fake token endpoint."""
 
@@ -99,9 +99,9 @@ def bootstrap(t, label: str, refresh_token: str):
 
 @case("SMK-AGT-030", area="AGT", kind="positive", covers=[API, FIX])
 def test_codex_responses_body_and_headers_fixed_up(cx):
-    """oauth-flow.md:478-499 (G3 store:false, stream:true, default instructions), CLAUDE.md G5
-    (max_output_tokens removed), oauth-flow.md:574-590 (G4 OpenAI-Beta forced, originator =
-    agent name), oauth-flow.md:521-536 audit details.codex_body_fixup."""
+    """docs/concepts/oauth-flow.md#how-it-works (G3 store:false, stream:true, default instructions), CLAUDE.md G5
+    (max_output_tokens removed), docs/concepts/oauth-flow.md#required-header-injection-phase-g4 (G4 OpenAI-Beta forced, originator =
+    agent name), docs/concepts/oauth-flow.md#audit audit details.codex_body_fixup."""
     t, up, agent = cx["t"], cx["up"], cx["agent"]
     body = {
         "model": "qa-model",
@@ -162,8 +162,8 @@ def test_explicit_codex_profile_applies_fixups_off_codex_path(cx):
 
 @case("SMK-AGT-031", area="AGT", kind="corner", covers=[API, FIX])
 def test_codex_preserves_agent_instructions_and_originator(cx):
-    """oauth-flow.md:494-496 instructions preserved if set; :580-584 agent-supplied originator
-    preserved; :533-536 codex_body_fixup omitted when the body was already correct."""
+    """docs/concepts/oauth-flow.md#how-it-works instructions preserved if set; docs/concepts/oauth-flow.md#required-header-injection-phase-g4 agent-supplied originator
+    preserved; docs/concepts/oauth-flow.md#size-cap codex_body_fixup omitted when the body was already correct."""
     t, up, agent = cx["t"], cx["up"], cx["agent"]
     body = {
         "model": "qa-model",
@@ -191,7 +191,7 @@ def test_codex_preserves_agent_instructions_and_originator(cx):
 
 @case("SMK-AGT-032", area="AGT", kind="corner", covers=[API, FIX])
 def test_codex_non_responses_path_keeps_body_gets_headers(cx):
-    """oauth-flow.md:484-486 other codex endpoints pass through untouched; :570-572 the G4
+    """docs/concepts/oauth-flow.md#how-it-works other codex endpoints pass through untouched; docs/concepts/oauth-flow.md#wire-framing--content-length--transfer-encoding-stripped the G4
     headers apply to every /backend-api/codex/* request."""
     t, up, agent = cx["t"], cx["up"], cx["agent"]
     body = {"store": True, "max_output_tokens": 3}
@@ -211,7 +211,7 @@ def test_codex_non_responses_path_keeps_body_gets_headers(cx):
     codes=["codex_body_too_large"],
 )
 def test_codex_body_over_one_mib_is_413(cx):
-    """oauth-flow.md:502-517 — a /responses body over the 1 MiB inspection cap is 413 with
+    """docs/concepts/oauth-flow.md#size-cap — a /responses body over the 1 MiB inspection cap is 413 with
     code codex_body_too_large; nothing is dispatched."""
     t, up, agent = cx["t"], cx["up"], cx["agent"]
     before = up.count("/backend-api")
@@ -236,9 +236,9 @@ def test_codex_body_over_one_mib_is_413(cx):
     covers=[API, FIX, "cli.oauth.bootstrap", "cli.agent.set-credential"],
 )
 def test_codex_oauth_injects_token_and_account_header(cx):
-    """oauth-flow.md:119-150 bootstrap + explicit label selection; :320-326 and :365-377 G2
-    `ChatGPT-Account-ID` from the access-token JWT claim; :318-322 agent auth stripped and
-    `Authorization: Bearer <access_token>` injected; :415-427 audit fields."""
+    """docs/concepts/oauth-flow.md#codex-openai-chatgpt-subscription bootstrap + explicit label selection; docs/concepts/oauth-flow.md#per-request-hot-path and docs/concepts/oauth-flow.md#the-codex-special-case-phase-g2 G2
+    `ChatGPT-Account-ID` from the access-token JWT claim; docs/concepts/oauth-flow.md#per-request-hot-path agent auth stripped and
+    `Authorization: Bearer <access_token>` injected; docs/concepts/oauth-flow.md#audit-fields audit fields."""
     t, up, tokens = cx["t"], cx["up"], cx["tokens"]
     boot = bootstrap(t, "default", "agt-rt-default-0001")
     assert boot.code == 0, boot.err
@@ -272,7 +272,7 @@ def test_codex_oauth_injects_token_and_account_header(cx):
     codes=["oauth_session_missing"],
 )
 def test_selected_oauth_label_without_session_is_503(cx):
-    """oauth-flow.md:303-310 + wire-contract.md:231 — the selected label has no bootstrapped
+    """docs/concepts/oauth-flow.md#per-request-hot-path + docs/reference/wire-contract.md#error-envelope — the selected label has no bootstrapped
     session: 503 oauth_session_missing, no upstream dispatch, no other label used."""
     t, up = cx["t"], cx["up"]
     agent = enrol(
@@ -295,7 +295,7 @@ def test_selected_oauth_label_without_session_is_503(cx):
     codes=["oauth_refresh_failed"],
 )
 def test_failed_refresh_is_503_oauth_refresh_failed(cx):
-    """oauth-flow.md:303-315 + wire-contract.md:232 — an expiring access token is refreshed
+    """docs/concepts/oauth-flow.md#per-request-hot-path + docs/reference/wire-contract.md#error-envelope — an expiring access token is refreshed
     inline; when the provider refresh fails the session is degraded and the call is 503
     oauth_refresh_failed with no upstream dispatch."""
     t, up = cx["t"], cx["up"]

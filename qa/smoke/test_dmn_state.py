@@ -35,7 +35,7 @@ def agent_names(t) -> list[str]:
     "SMK-DMN-020", area="DMN", kind="positive", covers=["beh.migrations.forward-only"]
 )
 def test_fresh_database_migrates_and_survives_restart(st):
-    """architecture.md:114-115 (open SQLite, run migrations at startup) and architecture.md:136-138
+    """docs/concepts/architecture.md#composition-root-daemonrun (open SQLite, run migrations at startup) and docs/concepts/architecture.md#state-that-survives-restarts
     (state that must outlive locksmithd lives in the DB): a fresh database is usable at once and a
     restart re-opens the migrated database with its rows intact."""
     assert agent_names(st) == []
@@ -60,7 +60,7 @@ def second_daemon_config(st, **db) -> dict:
 
 @case("SMK-DMN-021", area="DMN", kind="refusal", covers=[SINGLE])
 def test_second_daemon_on_same_database_refused(st):
-    """changes/native-mcp.md:57-62: a process-lifetime `<database>.daemon.lock` is held; a second
+    """docs/changes/native-mcp.md#upgrade-and-recovery: a process-lifetime `<database>.daemon.lock` is held; a second
     daemon using that state refuses before listeners. Run one daemon per database."""
     once = run_once(st, "dmn-second", second_daemon_config(st))
     assert once.code == 1, f"expected exit 1, got {once.code}"
@@ -73,7 +73,7 @@ def test_second_daemon_on_same_database_refused(st):
 
 @case("SMK-DMN-022", area="DMN", kind="corner", covers=[SINGLE])
 def test_relative_path_alias_is_the_same_lock(st):
-    """changes/native-mcp.md:58: equivalent ordinary relative/absolute paths resolve to the same lock."""
+    """docs/changes/native-mcp.md#upgrade-and-recovery: equivalent ordinary relative/absolute paths resolve to the same lock."""
     cfg = second_daemon_config(st, path="./locksmith.db")
     once = run_once(st, "dmn-second-relative", cfg, cwd=st.work)
     assert once.code == 1, f"expected exit 1, got {once.code}"
@@ -82,7 +82,7 @@ def test_relative_path_alias_is_the_same_lock(st):
 
 @case("SMK-DMN-023", area="DMN", kind="positive", covers=[SINGLE])
 def test_owner_keeps_serving_and_lock_releases_on_stop(st):
-    """changes/native-mcp.md:57-62: the refusal leaves the owning daemon serving; the lock is
+    """docs/changes/native-mcp.md#upgrade-and-recovery: the refusal leaves the owning daemon serving; the lock is
     process-lifetime, so once the owner stops a new daemon on the same database starts."""
     assert run_once(st, "dmn-second-again", second_daemon_config(st)).code == 1
     assert st.cli("agent", "list").code == 0
@@ -93,7 +93,7 @@ def test_owner_keeps_serving_and_lock_releases_on_stop(st):
 
 @case("SMK-DMN-024", area="DMN", kind="positive", covers=[RESTART_ONLY])
 def test_config_edit_applies_only_after_restart(st):
-    """architecture.md:166-172: the YAML is read once at startup; no reload; restart to apply an edit.
+    """docs/concepts/architecture.md#changing-configuration: the YAML is read once at startup; no reload; restart to apply an edit.
 
     The edit adds an audit JSONL mirror: an audited write before the restart must not create it,
     one after the restart must land in it.
@@ -118,7 +118,7 @@ def test_config_edit_applies_only_after_restart(st):
 
 @case("SMK-DMN-025", area="DMN", kind="positive", covers=[RESTART_ONLY])
 def test_operator_file_replacement_applies_only_after_restart(st):
-    """architecture.md:168-170: operator_credentials_path is read once at startup; restart to apply."""
+    """docs/concepts/architecture.md#changing-configuration: operator_credentials_path is read once at startup; restart to apply."""
     old = st.op_token
     text, new = mint_operator(st, "dmn-rotated")
     st.write_file("operators.yaml", text)

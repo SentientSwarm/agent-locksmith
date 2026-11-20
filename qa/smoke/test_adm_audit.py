@@ -1,5 +1,5 @@
-"""Audit queries and the operational-log stream (cli-reference.md:258-276,
-error-envelope.md:95-114, README.md:113-117, 243)."""
+"""Audit queries and the operational-log stream (docs/reference/cli-reference.md#audit--audit-log-queries-operator,
+docs/reference/error-envelope.md#operator-practical-guidance, README.md#highlights-v300, README.md#operator-operator-credential-authenticated-uds-or-https)."""
 
 import time
 
@@ -31,7 +31,7 @@ def query(t1, *flags):
 @case("SMK-ADM-050", area="ADM", kind="positive", covers=["cli.audit.query", AUDIT])
 def test_audit_filters_narrow_results(t1, audited):
     """`audit query` filters by agent, event class, decision, time and page size
-    (cli-reference.md:265-276)."""
+    (docs/reference/cli-reference.md#audit--audit-log-queries-operator)."""
     rows = query(t1, "--agent", audited["id"])
     assert rows and all(r["agent_public_id"] == audited["id"] for r in rows)
     assert "agent_create" in {r["event"] for r in rows}
@@ -56,7 +56,7 @@ def test_audit_filters_narrow_results(t1, audited):
 @case("SMK-ADM-051", area="ADM", kind="positive", covers=["cli.audit.query", AUDIT])
 def test_security_query_discriminates_bearer_failure(t1, audited):
     """The wire says only invalid_credential; `audit query --event-class security
-    --agent <pid>` carries details.reason `secret_mismatch` (error-envelope.md:95-114)."""
+    --agent <pid>` carries details.reason `secret_mismatch` (docs/reference/error-envelope.md#operator-practical-guidance)."""
     rows = query(
         t1,
         "--event-class",
@@ -101,7 +101,7 @@ def test_until_ms_is_exclusive(t1, audited):
 def test_operational_log_records_config_and_registry_events(t1, accounts, audited):
     """Secret-free operational events (config, registry, OAuth, proxy, credential
     resolution) are stored in their own table and queried via
-    `GET /admin/operator/logs?level=&component=` (README.md:113-117, 243)."""
+    `GET /admin/operator/logs?level=&component=` (README.md#highlights-v300, README.md#operator-operator-credential-authenticated-uds-or-https)."""
 
     def logs(query):
         r = uds(t1, "GET", f"/admin/operator/logs?{query}", token=t1.op_token)
@@ -133,7 +133,7 @@ def test_operational_log_records_config_and_registry_events(t1, accounts, audite
     codes=["invalid_level", "invalid_component"],
 )
 def test_logs_reject_unknown_level_and_component(t1):
-    """`/logs` filters by `level` and `component` (README.md:113-117, 243). The value
+    """`/logs` filters by `level` and `component` (README.md#highlights-v300, README.md#operator-operator-credential-authenticated-uds-or-https). The value
     sets are undocumented; an unknown value is a 400 with a stable code rather than
     a silently empty or unfiltered result."""
     for query, code in (
