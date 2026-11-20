@@ -53,9 +53,11 @@ pub(super) async fn set(
     if let Err(refused) = &result {
         // AGENT-328: audit a refusal once the agent is known, as the plain
         // set-credential path does. Never the value.
-        let error = match refused {
-            Refused::Admin(error) => error.to_string(),
-            Refused::Unnamed | Refused::Invalid => "invalid_stored_credential".into(),
+        let (error, previous) = match refused {
+            Refused::Admin(error) => (error.to_string(), None),
+            Refused::Unnamed(previous) | Refused::Invalid(previous) => {
+                ("invalid_stored_credential".into(), previous.as_ref())
+            }
         };
         state
             .admin
@@ -66,7 +68,7 @@ pub(super) async fn set(
                     agent_public_id: &agent.public_id,
                     registration: &registration,
                     binding: None,
-                    previous: None,
+                    previous,
                     error: Some(error),
                 },
             )
@@ -92,7 +94,7 @@ pub(super) async fn set(
             Json(value).into_response()
         }
         Err(Refused::Admin(error)) => admin_err_response(error),
-        Err(Refused::Unnamed | Refused::Invalid) => {
+        Err(Refused::Unnamed(_) | Refused::Invalid(_)) => {
             failure("invalid_stored_credential", StatusCode::BAD_REQUEST)
         }
     }
@@ -111,10 +113,11 @@ fn invalid(body: &Input) -> bool {
 /// Why a write changed nothing.
 enum Refused {
     Admin(AdminError),
-    /// `stored_header` with no `header` on a route that names none.
-    Unnamed,
+    /// `stored_header` with no `header` on a route that names none. Both
+    /// shape refusals carry the binding already in place, for the audit.
+    Unnamed(Option<AuthSpec>),
     /// A value that would be a stored bearer but can't be sent as one.
-    Invalid,
+    Invalid(Option<AuthSpec>),
 }
 impl From<AdminError> for Refused {
     fn from(e: AdminError) -> Self {
@@ -150,12 +153,12 @@ async fn write(
         .map_err(|_| unavailable())?;
     let (header, previous) = shape(&mut tx, agent.id, registration, &body).await?;
     if body.stored_header && header.is_none() {
-        return Err(Refused::Unnamed);
+        return Err(Refused::Unnamed(previous));
     }
     // AGENT-328: a value that falls back to a stored bearer is held to the
     // bearer rule, as if the caller had asked for one.
     if header.is_none() && !valid_credential_value(body.value.expose_secret(), true) {
-        return Err(Refused::Invalid);
+        return Err(Refused::Invalid(previous));
     }
     let old_ref = previous
         .as_ref()

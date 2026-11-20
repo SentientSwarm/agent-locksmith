@@ -154,8 +154,9 @@ explicit binding is set again.
 `agent_credential_unset`. The event's `tool` is the registration, and its
 details name the new and previous binding by kind, with the header name, OAuth
 session label or stored `secret_ref` where the kind has one. A refused
-write, once the agent is found, is recorded too, with decision `denied`
-and the reason in `details.error`. Env-var names, `op://` references and
+write, once the agent is found, is recorded too, with decision `denied`,
+the reason in `details.error` and, for a stored value refused after the
+binding was read, that binding as the previous one. Env-var names, `op://` references and
 credential values are never recorded.
 
 ### `bootstrap` — bootstrap-token management (operator)

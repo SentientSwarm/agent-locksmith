@@ -88,10 +88,11 @@ async fn stage(f: &Fixture, child: &mut process::Guard, name: &str) {
 }
 /// The worker's output goes to a file in the fixture directory, never the
 /// test's; only its panic location and message are shown. That is a
-/// deliberate exception to the fixture's "private log withheld" rule. The
-/// panic is an assertion in this file; at most it quotes a daemon startup
-/// error, which carries no secret value. The rest of the log, including
-/// the daemon's own output, stays withheld; two lines at most are shown.
+/// deliberate exception to the fixture's "private log withheld" rule. A
+/// panic here quotes at most a daemon, config or I/O error, which never
+/// carries a secret value, and every credential in this fixture is
+/// synthetic. The rest of the log, including the daemon's own output,
+/// stays withheld; two lines at most are shown.
 fn worker_panic(f: &Fixture) -> String {
     let log = std::fs::read_to_string(f.path().join("worker.log")).unwrap_or_default();
     let lines: Vec<&str> = log.lines().collect();

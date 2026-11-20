@@ -44,22 +44,27 @@ fn try_piped(f: &Fixture, args: &[&str], value: &str) -> bool {
 }
 
 /// Runs the CLI with `value` on stdin; returns its exit code and stderr.
+/// As in `process::run`, stderr goes to a file, so a noisy child cannot
+/// fill a pipe, and the guard kills a child that outlives the wait.
 fn run_piped(f: &Fixture, args: &[&str], value: &str) -> (Option<i32>, String) {
+    let stderr = tempfile::NamedTempFile::new().unwrap();
     let mut c = f.command(args);
     c.stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    let mut child = c.spawn().unwrap();
+        .stderr(Stdio::from(stderr.reopen().unwrap()));
+    let mut child = process::Guard(c.spawn().unwrap());
     child
+        .0
         .stdin
         .take()
         .unwrap()
         .write_all(value.as_bytes())
         .unwrap();
-    let status = process::wait(&mut child);
-    let mut err = String::new();
-    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut err).unwrap();
-    (status.code(), err)
+    let status = process::wait(&mut child.0);
+    (
+        status.code(),
+        std::fs::read_to_string(stderr.path()).unwrap(),
+    )
 }
 
 /// Sealed values in the daemon's store, read beside it.
@@ -72,10 +77,12 @@ async fn sealed_count(f: &Fixture) -> i64 {
     )
     .await
     .unwrap();
-    sqlx::query_scalar("SELECT COUNT(*) FROM credential_secrets")
+    let count = sqlx::query_scalar("SELECT COUNT(*) FROM credential_secrets")
         .fetch_one(&mut c)
         .await
-        .unwrap()
+        .unwrap();
+    c.close().await.unwrap();
+    count
 }
 
 #[tokio::test]
@@ -200,7 +207,10 @@ async fn a_stored_header_from_stdin_is_sent_bare() {
         Some(1),
         "a header route is needed without --header: {err}"
     );
-    assert!(err.contains("invalid_stored_credential"), "{err}");
+    assert!(
+        err.contains("400") && err.contains("invalid_stored_credential"),
+        "{err}"
+    );
     assert_eq!(sealed_count(&f).await, before, "a refusal seals nothing");
     let listed = f.op(&["agent", "credentials", "list", id]);
     assert!(

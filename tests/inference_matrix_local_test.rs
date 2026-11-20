@@ -146,13 +146,12 @@ async fn fixture_streams_chat_completion_through_locksmith() {
     // before the last; a buffering proxy delivers them together. The
     // fixture's sleeps are minimums, so load can only stretch the gap at
     // the source. It shrinks only when a reader on the path, Locksmith or
-    // this client, is starved after the first chunk and then reads the
-    // rest at once, so the bound is 100 ms, leaving 250 ms of the 350 ms
-    // for such a stall (AGENT-328). A
-    // wall-clock bound on the first byte measured the host, not Locksmith,
-    // and failed under load (AGENT-327); the latency target itself is
-    // streaming_passthrough_test's, relative to auth. The 5 s bound only
-    // catches a stall.
+    // this client, is starved after the first chunk is sent and then reads
+    // the rest at once, so the bound is 100 ms, leaving 250 ms of the 350 ms
+    // for such a stall (AGENT-328). A wall-clock bound on the first byte
+    // measured the host, not Locksmith, and failed under load (AGENT-327);
+    // the latency target itself is streaming_passthrough_test's, relative
+    // to auth. The 5 s bound only catches a stall.
     let first = first_byte.expect("at least one chunk");
     assert!(
         last_byte.saturating_sub(first) >= Duration::from_millis(100),

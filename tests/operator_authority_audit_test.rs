@@ -236,6 +236,9 @@ async fn stored_credential_records_ref_never_value() {
 async fn a_refused_stored_credential_is_audited_as_denied() {
     let h = setup().await;
     h.modify(json!({ "allowlist": ["r"] })).await;
+    // A binding already in place: a denied row names it, as the plain
+    // set-credential path does (AGENT-328).
+    h.bind("r", json!({ "kind": "none" })).await;
     let path = format!("/admin/operator/agents/{}/credentials/r/credential", h.pid);
     for body in [
         // `r` names no header, so this would be a stored bearer.
@@ -250,7 +253,12 @@ async fn a_refused_stored_credential_is_audited_as_denied() {
             .await;
         resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
     }
-    let rows = h.rows("agent_credential_set").await;
+    let rows: Vec<_> = h
+        .rows("agent_credential_set")
+        .await
+        .into_iter()
+        .filter(|row| row.3 == "denied")
+        .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");
     for (class, op, agent, decision, d) in &rows {
         assert_eq!(
@@ -264,6 +272,7 @@ async fn a_refused_stored_credential_is_audited_as_denied() {
         );
         assert_eq!(d["registration"], "r");
         assert_eq!(d["error"], "invalid_stored_credential");
+        assert_eq!(d["previous"]["kind"], "none", "{d}");
     }
     let all: Vec<Option<String>> = sqlx::query_scalar("SELECT details FROM audit")
         .fetch_all(&h.pool)
