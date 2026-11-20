@@ -133,6 +133,24 @@ If you accept Locksmith's deployment model — non-root daemon, systemd-creds-se
 1. **An attacker who can run code as `locksmith` reads everything.** Compensating control: keep the host attack surface small (single-purpose VM, no co-located services).
 2. **Root reads everything.** Compensating control: limit who has sudo on the host.
 3. **A 0-day in `axum` / `rustls` / `tokio` could give RCE.** Compensating control: dependency monitoring + fast patch cadence.
+4. **The base-path check models common upstream path decoders, not every
+   decoder.** Locksmith refuses a request whose path would leave a route's
+   base under any reading it models. Those readings cover up to four
+   percent-decodes of the upstream URL path, WHATWG and plain dot rules,
+   `;` parameters, cuts at a decoded `?` or `#`, Unicode compatibility
+   folds, and the overlong UTF-8 and `%u` escapes lenient decoders accept.
+   A path that still changes after four decodes is refused, so a decoder
+   that decodes more often sees nothing the check did not. Two decoder
+   behaviours are accepted, not modelled:
+   - a decoder that keeps only the low 16 bits of a valid four-byte
+     character, so that U+E002E reads as `.`;
+   - a decoder that skips the UTF-8 continuation-byte check and then
+     applies NFKC, so that `%EF<N` reads as U+FF0E and then `.`.
+
+   Covering the first would mean refusing U+X0000 to U+X007F in every
+   plane, including the tag characters in flag emoji. Compensating
+   control: give a route a base path its upstream enforces too, and do not
+   rely on the base alone to fence off a sensitive upstream path.
 
 Locksmith is a useful link in a chain. It is not the chain.
 

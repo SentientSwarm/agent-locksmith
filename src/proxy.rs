@@ -1514,10 +1514,13 @@ fn within(base: &str, path: &str) -> bool {
     // A NUL ends the path to an upstream reading it as a C string, so
     // `..%00` is `..` there; no path needs one (AGENT-287). One still
     // escaped past the decode bound is refused too, as `lenient_escape`
-    // refuses escapes in the last reading.
+    // refuses escapes in the last reading, and so is a path that has not
+    // settled within the bound ([`unsettled`]).
     if all.iter().copied().any(|dots| {
+        let list = readings(path, dots);
         fold_crosses_escape(path, dots)
-            || readings(path, dots)
+            || unsettled(list.last().expect("one reading"), dots)
+            || list
                 .iter()
                 .any(|r| lenient_escape(r) || r.contains('\0') || r.contains("%00"))
     }) {
@@ -1770,6 +1773,13 @@ enum Params {
 /// `.` + U+200B + `.` climbs while `ａｐｉ` stays its own segment. So every
 /// subset is a reading of its own (AGENT-287). Escapes only a lenient
 /// decoder reads are refused outright ([`lenient_escape`]).
+///
+/// Within a reading the steps run in that order. An upstream that drops
+/// ignorables before NFKC can differ only where an ignorable stood
+/// between a character and a mark NFKC would compose onto it. A composed
+/// character is never ASCII, so the other order can change a name but
+/// never makes a dot, a separator, a `%` or a hex digit these readings
+/// miss, and the decision stands.
 #[derive(Clone, Copy)]
 struct Dots(u8);
 
@@ -1807,6 +1817,16 @@ impl Dots {
         }
         out
     }
+}
+
+/// AGENT-287 — whether the last reading still changes on another decode.
+/// The readings stop at the bound, so a `;`, `?`, `#`, fold or dot that
+/// only a further decode reveals would go unchecked; no real client
+/// encodes a path five times, so such a path is refused (5585b26
+/// review). A settled reading holds no `%2e`, so the spelled-dot rule in
+/// [`dot_segment`] is now a second guard here.
+fn unsettled(last: &str, dots: Dots) -> bool {
+    dots.fold(&crate::inspection::percent_decode_path(last)) != last
 }
 
 /// Unicode's Default_Ignorable_Code_Point set (DerivedCoreProperties):
@@ -3076,12 +3096,42 @@ mod base_path_tests {
             let path = format!("https://h/v1/api/{name}/x");
             assert!(ok(base, &path), "{path}");
         }
+        // Five times encoded is unsettled at the bound, so refused even
+        // inside the base (AGENT-287, 5585b26 review).
         let inside = format!("https://h/v1/api/a/{five}{five}/b");
-        assert!(ok(base, &inside), "{inside}");
+        assert!(!ok(base, &inside), "{inside}");
         // Inside a segment with an encoded separator, the climb bound
         // counts them too.
         let split = format!("https://h/v1/api/a%252Fb%2F{five}{five}%2F{five}{five}/admin");
         assert!(!ok(base, &split), "{split}");
+    }
+
+    /// The check holds four decodes. A `;`, `?`, `#` or fold that only a
+    /// fifth decode reveals would go unseen, so a path whose last reading
+    /// still changes on another decode is refused (AGENT-287, 5585b26
+    /// review): no real client encodes a path five times.
+    #[test]
+    fn a_path_still_escaped_past_the_decode_bound_is_refused() {
+        let base = "https://h/v1/api";
+        let six = "%25252525252e";
+        let climb = format!("https://h/v1/api/{six}{six}/{six}{six}/admin");
+        assert!(!ok(base, &climb), "{climb}");
+        let letter = format!("https://h/v1/api/%2525252525{}/x", "41");
+        assert!(!ok(base, &letter), "{letter}");
+        // Revealed only by a fifth decode: fullwidth dots, a `;` and a `?`.
+        let wide = "%25252525EF%25252525BC%252525258E";
+        for path in [
+            format!("https://h/v1/api/{wide}{wide}/{wide}{wide}/admin"),
+            "https://h/v1/api/..%252525253B/admin".to_string(),
+            "https://h/v1/api/..%252525253Fx/admin".to_string(),
+        ] {
+            assert!(!ok(base, &path), "{path}");
+        }
+        // Settled within four decodes: still judged, and passes.
+        let four = "%2525252e";
+        let inside = format!("https://h/v1/api/a/{four}{four}/b");
+        assert!(ok(base, &inside), "{inside}");
+        assert!(ok(base, "https://h/v1/api/100%2525/x"));
     }
 
     /// An upstream may resolve dots, then decode again and cut at a decoded

@@ -41,6 +41,11 @@
   writes an `agent_credential_set` audit row with decision `denied` and
   the reason in `details.error`, as the plain `set-credential` path does
   (AGENT-328). The value is never recorded.
+- The upstream base-path check refuses a path that has not settled
+  after its four decodes, with 400 `upstream_path_escape` (AGENT-287).
+  A `..`, `;`, `?`, `#` or fullwidth dot that only a further decode
+  reveals went unchecked, so an upstream that decoded more times could
+  climb out (`%25252525252e`). No real client encodes a path five times.
 - The upstream base-path check reads `%2e` in any case as a dot, as a
   WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
   the four-decode bound or cut at a decoded `?`, now resolves alike for an
