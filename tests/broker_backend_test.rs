@@ -231,6 +231,25 @@ async fn an_unsendable_backend_key_is_refused() {
     assert_eq!(got["auth"]["kind"], "stored_header");
 }
 
+/// AGENT-328: a value no shape can carry is refused before it is sealed or
+/// any backend state is read, so even the active backend answers 400.
+#[tokio::test]
+async fn an_unsendable_key_is_refused_before_anything_else() {
+    let (h, _a, _b) = scenario().await;
+    let long = "k".repeat(8193);
+    for value in ["", "a\r\nX-Injected: y", long.as_str()] {
+        let r = h
+            .op_req(Method::PUT, "/routes/r/backends/primary/credential")
+            .json(&json!({ "value": value }))
+            .await;
+        assert_eq!(r.status_code(), 400, "{value:.20}");
+        assert_eq!(
+            r.json::<Value>()["error"]["code"],
+            "invalid_credential_value"
+        );
+    }
+}
+
 #[tokio::test]
 async fn backend_broker_validated() {
     let (h, _a, _b) = scenario().await;

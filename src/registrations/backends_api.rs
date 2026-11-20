@@ -338,6 +338,12 @@ async fn put_credential(
     let Some(key) = st.regs.credential_sealing_key.as_ref() else {
         return backend_error(&BackendError::NotFound);
     };
+    // AGENT-328: refuse a value no shape can carry before sealing it or
+    // reading any state. The shape's own rule (a bearer holds no space)
+    // is rechecked in the transaction, once the stored header is known.
+    if !super::validators::valid_credential_value(body.value.expose_secret(), false) {
+        return backend_error(&BackendError::InvalidCredentialValue);
+    }
     if let Err(r) = route_of(&st, &route).await {
         return r;
     }

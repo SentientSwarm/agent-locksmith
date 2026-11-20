@@ -34,8 +34,8 @@
   `invalid_stored_credential` for these too. Each write checks the shape
   the value will be stored in, so a value that falls back to a stored
   bearer is held to the bearer rule, and a key rotated onto a header
-  without restating it to the header rule. Nothing is sealed or bound on
-  refusal.
+  without restating it to the header rule. Nothing is stored or bound on
+  refusal, and a value no shape can carry is refused before it is sealed.
 - The upstream base-path check reads `%2e` in any case as a dot, as a
   WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
   the four-decode bound or cut at a decoded `?`, now resolves alike for an
