@@ -2014,9 +2014,11 @@ fn push_segment(out: &mut Vec<String>, raw: &str, params: Params, rule: DotRule)
     Some(())
 }
 /// 1 for a `.` segment and 2 for a `..` one, as a WHATWG parser reads
-/// them: `%2e` in any case is a dot (`.%2E`, `%2e%2e`), so a reading still
-/// holding one, past the decode bound or cut at a decoded `?`, resolves
-/// alike for an upstream that re-parses it (AGENT-287); 0 for a name.
+/// them: `%2e` in any case is a dot (`.%2E`, `%2e%2e`), so an
+/// intermediate, cut or two-stage reading still holding one resolves
+/// alike for an upstream that re-parses it (AGENT-287); 0 for a name. A
+/// path still holding one past the decode bound is refused first
+/// ([`unsettled`]).
 /// With `cut`, what follows a decoded `?` or `#` is not the segment's: an
 /// upstream may resolve dots, decode again and cut there, so `x%2523/
 /// %252e%252e/..%2523` ends `..#` and climbs, though cutting first stops
@@ -3071,13 +3073,14 @@ mod base_path_tests {
     /// and `%u` escapes as `.`, `/` or `\`; a path holding one in any
     /// reading is refused (AGENT-287 L5).
     /// A WHATWG parser reads `%2e` (any case) as `.`, so an upstream that
-    /// re-parses a reading still holding one resolves it as a dot: past
-    /// the decode bound, and in a reading cut at a decoded `?` (AGENT-287,
-    /// AGENT-332 review).
+    /// re-parses a reading still holding one resolves it as a dot, as in
+    /// a reading cut at a decoded `?` (AGENT-287, AGENT-332 review). Past
+    /// the decode bound, [`unsettled`] now refuses such a path first.
     #[test]
     fn a_percent_spelled_dot_is_a_dot_in_every_reading() {
         let base = "https://h/v1/api";
-        // Five times encoded: `%2e` is still escaped after four decodes.
+        // Five times encoded: `%2e` is still escaped after four decodes,
+        // so `unsettled` refuses it before the spelled-dot rule applies.
         let five = "%252525252e";
         let climb = format!("https://h/v1/api/{five}{five}/{five}{five}/admin");
         assert!(!ok(base, &climb), "{climb}");

@@ -47,10 +47,11 @@
   reveals went unchecked, so an upstream that decoded more times could
   climb out (`%25252525252e`). No real client encodes a path five times.
 - The upstream base-path check reads `%2e` in any case as a dot, as a
-  WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, past
-  the four-decode bound or cut at a decoded `?`, now resolves alike for an
-  upstream that re-parses it, so a five-times-encoded `..` or a `..`
-  behind `%253F` no longer climbs out (AGENT-287). A path must also stay
+  WHATWG parser does (`%2e%2e`, `.%2E`). A reading still holding one, such
+  as one cut at a decoded `?`, now resolves alike for an upstream that
+  re-parses it, so a `..` behind `%253F` no longer climbs out
+  (AGENT-287). A path five times encoded is now refused outright (see
+  above). A path must also stay
   inside when a segment that is a dot up to a decoded `?` or `#` counts
   as that dot, and for an upstream that resolves in two stages: it
   resolves dots (plainly or WHATWG's way), decodes again, may cut at a
