@@ -62,26 +62,36 @@ fn worker_succeeded(f: &Fixture, child: &mut process::Guard) {
         panic!("embedding worker failed: {}", worker_panic(f));
     }
 }
-/// Wait for a stage file the worker writes; if it never comes, say what
-/// became of the worker rather than only that the stage timed out.
+/// Wait for a stage file the worker writes. A worker that exits first fails
+/// at once with its panic line, rather than after the full 12 s
+/// (AGENT-328).
 async fn stage(f: &Fixture, child: &mut process::Guard, name: &str) {
     let path = f.path().join(name);
-    let reached = tokio::time::timeout(Duration::from_secs(12), async {
-        while !path.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    while !path.exists() {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            // It may have written the stage just before it exited.
+            if path.exists() {
+                return;
+            }
+            panic!(
+                "embedded stage {name} not reached; worker exited {status}: {}",
+                worker_panic(f)
+            );
         }
-    })
-    .await;
-    if reached.is_err() {
-        let state = match child.0.try_wait().unwrap() {
-            Some(status) => format!("exited {status}: {}", worker_panic(f)),
-            None => "still running".into(),
-        };
-        panic!("embedded stage {name} not reached in 12s; worker {state}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "embedded stage {name} not reached in 12s; worker still running"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 /// The worker's output goes to a file in the fixture directory, never the
-/// test's; only its panic location and message are shown.
+/// test's; only its panic location and message are shown. That is a
+/// deliberate exception to the fixture's "private log withheld" rule. The
+/// panic is an assertion in this file; at most it quotes a daemon startup
+/// error, which carries no secret value. The rest of the log, including
+/// the daemon's own output, stays withheld; two lines at most are shown.
 fn worker_panic(f: &Fixture) -> String {
     let log = std::fs::read_to_string(f.path().join("worker.log")).unwrap_or_default();
     let lines: Vec<&str> = log.lines().collect();
@@ -121,9 +131,12 @@ pub async fn worker() {
     let dir = std::path::PathBuf::from(dir);
     let config = config(&dir);
     let port = config.listen.port;
-    // Ready means this daemon's own admin socket exists and the port answers,
-    // as for the fixture: a port alone could be another run's daemon
-    // (fixed_port.rs), so the stale socket the stopped fixture left goes first.
+    // Ready means this daemon's own admin socket exists and `/livez` answers.
+    // The fixture waits for `/readyz`, which adds only a check on legacy
+    // `config.tools` credentials; this config has none, so the two answer
+    // alike once the listener is up. A port alone could be another run's
+    // daemon (fixed_port.rs), so the stale socket the stopped fixture left
+    // goes first.
     let socket = config.listen.admin_socket.as_ref().unwrap().path.clone();
     let _ = std::fs::remove_file(&socket);
     let coord = agent_locksmith::shutdown::ShutdownCoordinator::new(Duration::from_millis(10));
