@@ -2,7 +2,7 @@
 template: arc42
 status: as-built, scoped to sealed Slack credential ingestion
 date: 2026-11-23
-revision: agent-locksmith@6f64f7b plus AGENT-340 on agent-338-slack-via-locksmith
+revision: agent-locksmith@ff80e6d31710dbd1ef0f13b7c0474d4d18b7d380
 ---
 
 # Slack workspace credential ingestion
