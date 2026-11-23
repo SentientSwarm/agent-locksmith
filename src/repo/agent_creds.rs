@@ -156,6 +156,34 @@ impl AgentCredentialRepository {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Replace or clear a policy only on an existing HTTP binding.
+    pub async fn set_method_policy(
+        &self,
+        agent: i64,
+        registration: &str,
+        policy: Option<&crate::method_policy::MethodPolicy>,
+    ) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_credential_overrides b JOIN registrations r ON r.name=b.registration WHERE b.agent_id=? AND b.registration=? AND r.protocol='http' AND r.kind IN ('tool','model'))")
+            .bind(agent).bind(registration).fetch_one(&mut *tx).await?;
+        if !exists || policy.is_some_and(|p| !p.validate()) {
+            return Err(RepoError::InvalidGrantTarget);
+        }
+        if let Some(policy) = policy {
+            sqlx::query("INSERT INTO binding_method_policies(agent_id,registration,policy) VALUES(?,?,?) ON CONFLICT(agent_id,registration) DO UPDATE SET policy=excluded.policy")
+                .bind(agent).bind(registration).bind(serde_json::to_string(policy)?)
+                .execute(&mut *tx).await?;
+        } else {
+            sqlx::query("DELETE FROM binding_method_policies WHERE agent_id=? AND registration=?")
+                .bind(agent)
+                .bind(registration)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Test-only accessor for the underlying pool. Used by FK-cascade
     /// tests that need to bypass the agent repo.
     #[cfg(test)]

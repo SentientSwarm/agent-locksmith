@@ -12,6 +12,7 @@ pub mod config;
 pub mod daemon;
 pub mod deprecation;
 pub mod inspection;
+pub mod method_policy;
 pub mod migrations;
 pub mod mtls;
 pub mod oauth;

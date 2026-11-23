@@ -117,6 +117,29 @@ routes:
   - grant_target_invalid
   - oauth_session_label_required
   - invalid_oauth_selection
+- id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}/method-policy
+  refusals:
+  - invalid_credential
+  - agent_not_found
+  - grant_target_invalid
+  - invalid_method_policy
+- id: admin.DELETE./admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  listener: admin
+  method: DELETE
+  path: /admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}/method-policy
+  refusals:
+  - invalid_credential
+  - agent_not_found
+  - grant_target_invalid
 - id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}/credential
   listener: admin
   method: PUT
@@ -664,6 +687,7 @@ routes:
   refusals:
   - invalid_credential
   - tool_not_allowed
+  - method_not_allowed
   - tool_not_found
   - bad_request
   - codex_body_too_large
@@ -1150,6 +1174,8 @@ cli:
   command: agent mcp-grants replace
 - id: cli.agent.mcp-grants.show
   command: agent mcp-grants show
+- id: cli.agent.method-policy
+  command: agent method-policy
 - id: cli.agent.modify
   command: agent modify
 - id: cli.agent.register

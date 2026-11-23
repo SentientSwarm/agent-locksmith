@@ -10,6 +10,20 @@ use crate::output::{Format, print};
 
 #[derive(Subcommand)]
 pub enum AgentCmd {
+    /// Replace or clear a binding's upstream method policy (live).
+    MethodPolicy {
+        id: String,
+        registration: String,
+        /// Exact methods, family.* or * (comma separated). Empty denies all.
+        #[arg(long, value_delimiter = ',', conflicts_with = "clear")]
+        allow: Vec<String>,
+        /// Deny wins over allow (comma separated).
+        #[arg(long, value_delimiter = ',', conflicts_with = "clear")]
+        deny: Vec<String>,
+        /// Remove policy, restoring unrestricted methods.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Inspect or replace finite reviewed native MCP tool grants.
     McpGrants {
         #[command(subcommand)]
@@ -223,6 +237,26 @@ pub async fn run(client: &CliClient, format: Format, cmd: AgentCmd) -> Result<()
                     "/admin/operator/agents",
                     Auth::Operator(&token),
                     Some(&body),
+                )
+                .await?;
+            print(&resp, format);
+        }
+        AgentCmd::MethodPolicy {
+            id,
+            registration,
+            allow,
+            deny,
+            clear,
+        } => {
+            let path =
+                format!("/admin/operator/agents/{id}/credentials/{registration}/method-policy");
+            let body = json!({"allow":allow,"deny":deny});
+            let resp: Value = client
+                .json(
+                    if clear { "DELETE" } else { "PUT" },
+                    &path,
+                    Auth::Operator(&token),
+                    if clear { None } else { Some(&body) },
                 )
                 .await?;
             print(&resp, format);

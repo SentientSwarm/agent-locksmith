@@ -63,6 +63,9 @@ When an agent calls `POST /api/anthropic/v1/messages` with
 5. Explicit account admission:
      Missing selection → 403 tool_not_allowed; audit account_binding_missing.
      Use only this snapshot's selected binding, never the template.
+     Optional per-binding upstream method policy is read in that same snapshot.
+     Deny wins; unlisted/nonliteral methods return 403 method_not_allowed
+     before resolving credentials or dispatch. Absent policy is unrestricted.
      Unavailable selected source → 503; no upstream dispatch.
      For selected OAuth, require a nonempty session label and consistent
      metadata across bindings sharing that registration/label.
@@ -235,3 +238,14 @@ The settings are independent.
   trust boundary, error envelope.
 - [`docs/archive/v2/SPEC.md`](../archive/v2/SPEC.md) — historical 2.x spec;
   explains task references (T1.x, T2.x, …).
+
+## Binding method policy (AGENT-339)
+
+The operator owns optional upstream method policies; the daemon stores them in
+SQLite alongside explicit bindings and reads them at admission. Changes through
+the [operator CLI/API](../reference/cli-reference.md#upstream-method-policy)
+apply live. Credential replacement preserves a policy, while deleting a binding
+removes it. Existing routes have no policy after upgrade. No new process or
+network connection is involved. See [ADR-0001](../adr/0001-binding-method-policy.md)
+for the contract and tradeoffs. This scoped description is based on
+`agent-locksmith@031c742` plus the AGENT-339 change on this branch.

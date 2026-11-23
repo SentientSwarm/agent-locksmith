@@ -57,6 +57,29 @@ pub(super) async fn target(
             selection::record_failure(&state.audit, ctx, selection::Failure::Missing).await,
         ));
     };
+    if let Some(policy) = &row.method_policy {
+        let prefix = format!("/api/{}/", ctx.tool_name);
+        let method = ctx.request_path.strip_prefix(&prefix).unwrap_or("");
+        if !policy.allows(method) {
+            let mut event = ctx.audit_event_base();
+            event.event_class = EventClass::Security;
+            event.event = "method_policy_denied".into();
+            event.status = Some(403);
+            event.decision = Decision::Denied;
+            event.details = Some(json!({"reason":"method_not_allowed"}));
+            audit_record(&state.audit, event).await;
+            return Err(Box::new(
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": {
+                        "type":"authorization_error", "code":"method_not_allowed",
+                        "message":"the binding's upstream method policy refuses this method"
+                    }})),
+                )
+                    .into_response(),
+            ));
+        }
+    }
     let mut target = ProxyTarget::from_registration(&row.registration);
     if row.registration.broker.is_some() {
         return broker(state, ctx, target, &row.registration, account, identity).await;

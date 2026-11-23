@@ -161,6 +161,40 @@ and the reason in `details.error`. A stored value refused for its shape
 also names the binding already in place as the previous one. Env-var
 names, `op://` references and credential values are never recorded.
 
+#### Upstream method policy
+
+An existing HTTP tool/model binding can restrict Slack-style method names:
+
+```sh
+locksmith agent method-policy <public_id> slack-wemodulate \
+  --allow 'conversations.*,chat.*,reactions.*,files.*,users.*,search.*,pins.*,auth.test' \
+  --deny 'admin.*,team.*,users.profile.set,apps.*'
+locksmith agent method-policy <public_id> slack-wemodulate --clear
+```
+
+Each call replaces the entire policy, live. `--allow` and `--deny` accept
+comma-separated exact names, `family.*` prefixes or `*`. Matching is case-sensitive;
+deny wins. An empty allow list denies everything. At most 256 patterns are accepted,
+with method names up to 128 ASCII letters, digits, underscores and dots (no empty
+segments). Quote wildcards to keep the shell from expanding them.
+
+With no policy (including after `--clear`), methods remain unrestricted.
+A policy belongs to one agent/route binding, survives credential replacement,
+and is removed when that binding is deleted. Other bindings are unaffected.
+Policies apply to the literal single method segment after `/api/<route>/`;
+encoded aliases, extra slashes and traversal are refused. Query parameters do not
+change the selected method. This is a Slack-style method gate, not a general REST
+path policy. Requests admitted before a policy change may finish under that snapshot.
+
+Operator API: `PUT /admin/operator/agents/{public_id}/credentials/{registration}/method-policy`
+with `{"allow":["chat.*"],"deny":[]}`; `DELETE` clears it. Successful writes return
+`registration` and `method_policy` (null when cleared). Invalid patterns return
+400 `invalid_method_policy`; missing or non-HTTP bindings return 400
+`grant_target_invalid`. Refusals return 403 `method_not_allowed` before credential
+resolution or upstream dispatch. `method_policy_changed` operator events record
+changes; `method_policy_denied` security events record refusals, attributed to the
+agent and route, without credential values.
+
 ### `bootstrap` — bootstrap-token management (operator)
 
 For pre-seeding agents that self-register via the bootstrap listener. Omitted

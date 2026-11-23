@@ -6,6 +6,7 @@ use sqlx::Row;
 pub struct HttpAdmission {
     pub registration: Registration,
     pub account: Option<AuthSpec>,
+    pub method_policy: Option<crate::method_policy::MethodPolicy>,
     pub agent_active: bool,
     pub grant: Result<(), &'static str>,
     pub instance: String,
@@ -55,10 +56,11 @@ impl RegistrationRepository {
         let rows = sqlx::query(
             "SELECT r.*, a.id AS current_agent_id, a.mcp_epoch, \
              i.instance_id, i.revision, a.revoked_at, a.expires_at, a.grants_reviewed, \
-             a.tool_allowlist, a.tool_denylist, b.auth_spec AS selected_auth \
+             a.tool_allowlist, a.tool_denylist, b.auth_spec AS selected_auth, p.policy AS method_policy \
              FROM registrations r JOIN registration_instances i ON i.name=r.name \
              LEFT JOIN agents a ON a.id = ? AND a.public_id = ? \
              LEFT JOIN agent_credential_overrides b ON b.agent_id=a.id AND b.registration=r.name \
+             LEFT JOIN binding_method_policies p ON p.agent_id=b.agent_id AND p.registration=b.registration \
              WHERE (? IS NULL OR r.name=?) AND r.protocol=? \
              AND r.kind IN ('tool','model') ORDER BY r.name",
         )
@@ -102,6 +104,20 @@ fn snapshot(
     Ok(HttpAdmission {
         grant: current.allows_tool(&row.get::<String, _>("name")),
         agent_active: active(&row),
+        method_policy: row
+            .get::<Option<String>, _>("method_policy")
+            .map(|s| {
+                serde_json::from_str::<crate::method_policy::MethodPolicy>(&s)
+                    .map_err(|_| AdmissionUnavailable)
+                    .and_then(|p| {
+                        if p.validate() {
+                            Ok(p)
+                        } else {
+                            Err(AdmissionUnavailable)
+                        }
+                    })
+            })
+            .transpose()?,
         account: row
             .get::<Option<String>, _>("selected_auth")
             .map(|s| serde_json::from_str(&s).map_err(|_| AdmissionUnavailable))

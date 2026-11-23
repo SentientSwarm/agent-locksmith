@@ -273,6 +273,10 @@ pub fn build_router(state: UdsState) -> Router {
             "/agents/{public_id}/credentials/{registration}",
             axum::routing::put(op_set_agent_credential).delete(op_unset_agent_credential),
         )
+        .route(
+            "/agents/{public_id}/credentials/{registration}/method-policy",
+            axum::routing::put(super::method_policy::set).delete(super::method_policy::clear),
+        )
         // Phase J / M2 (CCS-7) — set a STORED value on a per-agent
         // override: seal → insert → mint ref → write a stored_* override.
         .route(
