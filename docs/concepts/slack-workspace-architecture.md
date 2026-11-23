@@ -124,7 +124,8 @@ verified by this check. Broker routes still require broker-only selections,
 which needs resolution before sharing one route with app-specific stored keys.
 
 Not yet documented here: MCP reads, OAuth consent, file and Socket Mode routes,
-VM distribution and production cutovers. D-001 owns the broader Slack ADR.
+VM distribution and production cutovers. The broader [Slack architecture](slack-architecture.md)
+and [ADR-0003](../adr/0003-slack-route-and-binding.md) record those boundaries.
 
 ## 12 Glossary
 
