@@ -303,6 +303,8 @@ pub fn unknown_name_response(name: &str) -> Response {
 /// the repo but no in-memory cache exists to invalidate.
 #[derive(Clone)]
 pub struct AdminRegistrationsState {
+    /// Daemon configuration used by credential verification egress/TLS clients.
+    pub credential_check_config: Option<Arc<crate::config::AppConfig>>,
     pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
     pub local_listener: Option<(String, u16)>,
     pub repo: Arc<RegistrationRepository>,
@@ -672,6 +674,9 @@ pub async fn op_put(
         updated_at: now,
     };
 
+    if let Err(e) = super::slack_workspace::validate(&r) {
+        return registration_error_response(&e);
+    }
     let is_update = created_at != now;
     let written = if keep_key {
         state.repo.upsert_keeping_key(&r).await
@@ -822,6 +827,17 @@ pub async fn op_put_credential(
         if let Err(e) = super::broker::validate(spec, &shape) {
             return registration_error_response(&e);
         }
+    }
+
+    if let Err(error) = super::slack_workspace::verify(
+        &existing,
+        &body.value,
+        header,
+        state.credential_check_config.as_deref(),
+    )
+    .await
+    {
+        return error.into_response();
     }
 
     // Seal the cleartext; the SecretString zeroizes on drop. Never logged /

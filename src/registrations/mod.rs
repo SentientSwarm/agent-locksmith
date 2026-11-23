@@ -32,6 +32,7 @@ pub mod profile;
 pub mod protocol;
 pub mod repo;
 pub mod seed_loader;
+pub mod slack_workspace;
 pub mod upstream_ca;
 pub mod validators;
 

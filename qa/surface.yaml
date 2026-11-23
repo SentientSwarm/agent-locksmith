@@ -153,6 +153,8 @@ routes:
   - credential_store_unconfigured
   - agent_not_found
   - grant_target_invalid
+  - slack_workspace_mismatch
+  - slack_workspace_check_failed
 - id: admin.POST./admin/operator/agents/{public_id}/revoke
   listener: admin
   method: POST
@@ -645,6 +647,8 @@ routes:
   - invalid_broker
   - invalid_metadata
   - definition_pending
+  - slack_workspace_mismatch
+  - slack_workspace_check_failed
 - id: admin.POST./admin/operator/tools/{name}/enable
   listener: admin
   method: POST

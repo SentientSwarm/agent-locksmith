@@ -813,3 +813,36 @@ See [Slack OAuth](../operator/slack-oauth.md) for `oauth client set --secret-std
 `--profile` and `--client-generation`. Set seals a new immutable owner generation;
 reads never reveal the value. Slack `oauth connect` requires explicit
 `--scopes search:read.public,channels:history`.
+
+## Slack workspace check
+
+Create a Slack HTTP tool route with `tool put slack-wemodulate --upstream
+https://slack.com/api --auth none --broker --slack-team-id T0123456789` (choose
+`--egress direct` or configure the egress proxy). The declaration is stored as
+`metadata.slack_team_id`; the operator API accepts that same metadata string.
+Only HTTP tools accept it. Team ids start with `T`, followed by uppercase
+letters or digits, with a total length of 2–64 characters.
+
+Before `tool set-key` or `agent set-credential --stored-bearer-stdin` seals a
+value on that route, Locksmith sends `POST <upstream>/auth.test` with the value
+as a bearer. Supply it on stdin only. Each replacement repeats the check live,
+without restarting the daemon. `ok:true` and the exact expected `team_id` are
+required. A mismatch returns 400 `slack_workspace_mismatch`, naming the expected
+and actual team ids; no key is stored or replaced. An unsuccessful, malformed,
+missing-team, oversized, redirecting or unreachable reply returns 502
+`slack_workspace_check_failed`, with no provider text. Checks have a five-second
+request deadline and a 16 KiB response limit. They use the route's egress and CA
+settings, never follow redirects and never retry. Custom-header keys are refused
+on workspace-declared routes. Neither the value nor provider error text appears
+in the response, audit or operational log.
+
+The declaration is immutable: repeat it on subsequent full `tool put` writes.
+Removing, adding or changing it on an existing route is refused; create a new
+route and seal its keys instead. This prevents changing the workspace beneath
+already accepted credentials. A concurrent route edit invalidates an in-flight
+credential write. A refused replacement leaves the prior key usable.
+
+Routes without the declaration retain offline credential ingestion. This check
+covers sealed-value ingestion, not OAuth or environment/1Password references;
+it does not constrain where an operator can point the upstream. Use it on the
+Slack Web API route, not the Socket Mode `xapp-` route or file-download route.

@@ -87,6 +87,10 @@ pub struct PutOpts {
     #[arg(long, conflicts_with = "metadata")]
     pub metadata_file: Option<std::path::PathBuf>,
 
+    /// Slack workspace expected from auth.test before sealing any token. Immutable.
+    #[arg(long)]
+    pub slack_team_id: Option<String>,
+
     /// Optional description. Empty by default.
     #[arg(long)]
     pub description: Option<String>,
@@ -365,6 +369,16 @@ pub async fn do_put(
     }
     if let Some(broker) = opts.broker.to_spec() {
         body.insert("broker".into(), broker);
+    }
+    if let Some(team) = opts.slack_team_id {
+        let metadata = body.entry("metadata").or_insert_with(|| json!({}));
+        let object = metadata
+            .as_object_mut()
+            .ok_or_else(|| CliError::Usage("metadata must be an object".into()))?;
+        if object.contains_key("slack_team_id") {
+            return Err(CliError::Usage("declare slack_team_id only once".into()));
+        }
+        object.insert("slack_team_id".into(), json!(team));
     }
     if let Some(path) = opts.upstream_ca_file {
         body.insert(

@@ -249,3 +249,13 @@ removes it. Existing routes have no policy after upgrade. No new process or
 network connection is involved. See [ADR-0001](../adr/0001-binding-method-policy.md)
 for the contract and tradeoffs. This scoped description is based on
 `agent-locksmith@031c742` plus the AGENT-339 change on this branch.
+
+## Slack workspace credential ingestion (AGENT-340)
+
+An HTTP tool can declare `metadata.slack_team_id` (`tool put --slack-team-id`).
+Route and per-agent sealed bearer writes then verify `auth.test` before storing
+the token, using the route's egress and CA policy. Refusals preserve the prior
+key. The immutable expectation belongs to the route, while the credential
+selection still belongs to the binding. See the [scoped architecture](slack-workspace-architecture.md)
+and [ADR-0002](../adr/0002-slack-workspace-ingestion.md) for the contract, race
+boundary and limits. D-001 remains responsible for the broader Slack model.

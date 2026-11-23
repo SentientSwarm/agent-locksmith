@@ -125,6 +125,7 @@ fn build_registrations_admin_router(
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
+        credential_check_config: Some(Arc::clone(&state.admin.config_snapshot())),
         consent: state.oauth.as_ref().and_then(|o| o.consent.clone()),
         local_listener: Some(state.admin.local_listener()),
         repo,
