@@ -858,3 +858,21 @@ Routes without the declaration retain offline credential ingestion. This check
 covers sealed-value ingestion, not OAuth or environment/1Password references;
 it does not constrain where an operator can point the upstream. Use it on the
 Slack Web API route, not the Socket Mode `xapp-` route or file-download route.
+
+
+| Credential path on a declared route | Result |
+|---|---|
+| `tool set-key` / route credential PUT, bearer value | `auth.test` before storage; replacement repeats the check |
+| `agent set-credential --stored-bearer-stdin` / binding credential-value PUT | `auth.test` before storage; transaction compares route snapshot |
+| `agent set-credential --stored-bearer-ref` / `StoredBearer{secret_ref}` selection (including live-reference mode) | 400 `slack_workspace_selection_unsupported`; a live reference is not workspace proof |
+| `StoredHeader` reference selection | 400 `slack_workspace_selection_unsupported` |
+| Custom-header value ingestion, explicit or inherited | Refused; only bearer values can be verified for this contract |
+| Explicit stored auth in route PUT | 400 `invalid_metadata`; use `tool set-key`. A broker edit omitting auth may retain its existing checked key only with unchanged destination and a transactional key comparison |
+| `route backend set-credential` / `PUT /admin/operator/routes/{route}/backends/{backend}/credential` | 409 `slack_workspace_backend_unsupported`; nothing stored |
+| `route switch` / switch API | 409 `slack_workspace_backend_unsupported`, including preexisting backend keys or bindings; no activation or revision change |
+| Environment, 1Password and OAuth references | Existing exclusions unchanged; no new workspace check |
+
+Backend declarations may still be managed, but cannot be activated on a declared
+route. Reference selections and backend operations refuse locally without an
+`auth.test` call. Use the value-ingestion paths to install or rotate a verified
+bearer. Routes without `slack_team_id` keep every path's existing behavior.

@@ -89,6 +89,11 @@ fn backend_error(e: &BackendError) -> Response {
             "conflict",
             "backend_method_policy_present",
         ),
+        BackendError::SlackWorkspaceUnsupported => error(
+            StatusCode::CONFLICT,
+            "conflict",
+            "slack_workspace_backend_unsupported",
+        ),
         BackendError::RevisionConflict => {
             error(StatusCode::CONFLICT, "conflict", "revision_conflict")
         }

@@ -46,6 +46,8 @@ pub enum BackendError {
     AuthUnsupported,
     #[error("clear binding method policies explicitly before switching backends")]
     MethodPolicyPresent,
+    #[error("Slack workspace routes do not support backend credentials or switches")]
+    SlackWorkspaceUnsupported,
     #[error("route revision changed")]
     RevisionConflict,
     #[error("invalid broker: {0}")]
@@ -289,6 +291,7 @@ impl BackendRepository {
         header: Option<&str>,
     ) -> Result<String, BackendError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        refuse_slack_workspace(&mut tx, route).await?;
         refuse_active(&mut tx, route, backend).await?;
         let row = sqlx::query(
             "SELECT auth_json, broker_json FROM registration_backends \
@@ -395,6 +398,7 @@ impl BackendRepository {
         expected_revision: i64,
     ) -> Result<SwitchOutcome, BackendError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        refuse_slack_workspace(&mut tx, route).await?;
         let row = sqlx::query(
             "SELECT r.kind, r.protocol, r.mcp_json, r.upstream, r.egress, r.upstream_ca_pem, \
                     r.auth_json, r.broker_json, r.active_backend, i.revision \
@@ -552,6 +556,19 @@ impl BackendRepository {
             revision,
         })
     }
+}
+
+/// Metadata is read under the same writer lock as activation/credential writes.
+async fn refuse_slack_workspace(
+    c: &mut sqlx::SqliteConnection,
+    route: &str,
+) -> Result<(), BackendError> {
+    let declared: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM registrations WHERE name=? AND json_extract(metadata_json, '$.slack_team_id') IS NOT NULL)")
+        .bind(route).fetch_one(c).await?;
+    if declared {
+        return Err(BackendError::SlackWorkspaceUnsupported);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

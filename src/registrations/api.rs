@@ -677,6 +677,17 @@ pub async fn op_put(
     if let Err(e) = super::slack_workspace::validate(&r) {
         return registration_error_response(&e);
     }
+    if super::slack_workspace::expected(&r)
+        .ok()
+        .flatten()
+        .is_some()
+        && r.auth.stored_secret_ref().is_some()
+        && !keep_key
+    {
+        return registration_error_response(&RegistrationError::InvalidMetadata(
+            "Slack workspace routes require tool set-key; stored references cannot be attached directly".into(),
+        ));
+    }
     let is_update = created_at != now;
     let written = if keep_key {
         state.repo.upsert_keeping_key(&r).await

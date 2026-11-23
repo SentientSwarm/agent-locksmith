@@ -174,3 +174,83 @@ def test_slack_workspace_verification_cannot_bypass_required_egress(workspace):
     r = t.cli("tool", "set-key", "slack-proxied", stdin=TOKEN_A)
     assert r.code != 0 and "slack_workspace_check_failed" in r.err
     assert up.count() == 0
+
+
+@case("SMK-CAT-105", area="CAT", kind="refusal",
+      covers=["admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}", STORED, PUT],
+      codes=["slack_workspace_selection_unsupported", "invalid_metadata"])
+def test_slack_workspace_refuses_unverified_selections(workspace):
+    from fakes.cat_uds import uds
+    t, up, a = workspace
+    # A live secret from another, undeclared route is not proof of workspace.
+    put_tool(t, "source-ref", up.url, "none", "--egress", "direct")
+    assert t.cli("tool", "set-key", "source-ref", stdin=TOKEN_B).code == 0
+    ref = t.cli("tool", "get", "source-ref").json["auth"]["secret_ref"]
+    reply(up)
+    assert set_key(t, a, TOKEN_A, True).code == 0
+    before = reference(t, a, True)
+    sent = up.count()
+    for auth in ({"kind": "stored_bearer", "secret_ref": ref},
+                 {"kind": "stored_header", "secret_ref": ref, "header": "X-Slack-Key"}):
+        r = uds(t, "PUT", f"/admin/operator/agents/{a['id']}/credentials/slack-agent",
+                {"auth_spec": auth})
+        assert r.status == 400 and r.code == "slack_workspace_selection_unsupported", r.text
+        assert reference(t, a, True) == before
+    r = t.cli("agent", "set-credential", a["id"], "slack-agent", "--stored-bearer-ref", ref)
+    assert r.code != 0 and "slack_workspace_selection_unsupported" in r.err
+    assert reference(t, a, True) == before
+    assert up.count() == sent  # Refused locally, with no provider call.
+    # Direct route-auth reference attachment is also unverified.
+    r = uds(t, "PUT", "/admin/operator/tools/slack-agent", {
+        "upstream": f"{up.url}/api", "auth": {"kind": "stored_bearer", "secret_ref": ref},
+        "metadata": {"slack_team_id": TEAM}, "egress": "direct"})
+    assert r.status == 400 and r.code == "invalid_metadata", r.text
+    # Custom-header stdin selections, explicit and inferred, store nothing.
+    for body, status, code in (
+        ({"value": TOKEN_B, "header": "X-Slack-Key"}, 502, "slack_workspace_check_failed"),
+        ({"value": TOKEN_B, "stored_header": True}, 400, "invalid_stored_credential"),
+    ):
+        r = uds(t, "PUT", f"/admin/operator/agents/{a['id']}/credentials/slack-agent/credential", body)
+        assert r.status == status and r.code == code, r.text
+        assert reference(t, a, True) == before
+    # Same selections still work on undeclared routes.
+    put_tool(t, "plain-ref", up.url, "none", "--egress", "direct")
+    for auth in ({"kind": "stored_bearer", "secret_ref": ref},
+                 {"kind": "stored_header", "secret_ref": ref, "header": "X-Slack-Key"}):
+        r = uds(t, "PUT", f"/admin/operator/agents/{a['id']}/credentials/plain-ref", {"auth_spec": auth})
+        assert r.status == 200, r.text
+    reply(up)
+    assert t.http("POST", "/api/slack-agent/auth.test", token=a["token"]).status == 200
+    assert up.last("/api/auth.test").header("authorization") == f"Bearer {TOKEN_A}"
+
+
+@case("SMK-CAT-106", area="CAT", kind="refusal",
+      covers=["admin.PUT./admin/operator/routes/{route}/backends/{backend}/credential",
+              "admin.POST./admin/operator/routes/{route}/switch"],
+      codes=["slack_workspace_backend_unsupported"])
+def test_slack_workspace_refuses_backend_credentials_and_switch(workspace):
+    from fakes.cat_uds import uds
+    t, up, a = workspace
+    reply(up)
+    assert set_key(t, a, TOKEN_A).code == 0
+    put = t.cli("route", "backend", "put", "slack-ws", "other", "--upstream", up.url,
+                "--auth", "none", "--egress", "direct", "--broker")
+    assert put.code == 0, put.err
+    ref = t.cli("tool", "get", "slack-ws").json["auth"]["secret_ref"]
+    assert uds(t, "PUT", "/admin/operator/routes/slack-ws/backends/other", {
+        "upstream": up.url, "egress": "direct", "broker": t.cli("tool", "get", "slack-ws").json["broker"],
+        "auth": {"kind": "stored_bearer", "secret_ref": ref}}).status == 200
+    before = t.cli("route", "backend", "list", "slack-ws").json
+    sent = up.count()
+    path = "/admin/operator/routes/slack-ws"
+    for value in (TOKEN_A, TOKEN_B):
+        r = uds(t, "PUT", path + "/backends/other/credential", {"value": value})
+        assert r.status == 409 and r.code == "slack_workspace_backend_unsupported", r.text
+        assert value not in r.text
+    r = uds(t, "POST", path + "/switch", {"backend": "other"},
+            headers={"If-Match": str(before["revision"])})
+    assert r.status == 409 and r.code == "slack_workspace_backend_unsupported", r.text
+    assert t.cli("route", "backend", "list", "slack-ws").json == before
+    assert up.count() == sent
+    assert t.http("POST", "/api/slack-ws/auth.test", token=a["token"]).status == 200
+    assert up.last("/api/auth.test").header("authorization") == f"Bearer {TOKEN_A}"

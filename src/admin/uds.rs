@@ -466,6 +466,10 @@ pub(super) fn admin_err_response(e: AdminError) -> Response {
         AdminError::AgentNotFound => (StatusCode::NOT_FOUND, "agent_not_found"),
         AdminError::NotAuthorized => (StatusCode::FORBIDDEN, "forbidden"),
         AdminError::InvalidGrantTarget => (StatusCode::BAD_REQUEST, "grant_target_invalid"),
+        AdminError::SlackWorkspaceSelectionUnsupported => (
+            StatusCode::BAD_REQUEST,
+            "slack_workspace_selection_unsupported",
+        ),
         AdminError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backend_error"),
     };
     (

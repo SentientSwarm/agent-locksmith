@@ -109,6 +109,7 @@ routes:
     file: src/admin/uds.rs
     route: /agents/{public_id}/credentials/{registration}
   refusals:
+  - slack_workspace_selection_unsupported
   - invalid_credential
   - selection_only
   - invalid_metadata
@@ -1145,6 +1146,7 @@ routes:
     file: src/registrations/backends_api.rs
     route: /routes/{route}/backends/{backend}/credential
   refusals:
+  - slack_workspace_backend_unsupported
   - invalid_credential
   - unknown_name
   - route_not_switchable
@@ -1159,6 +1161,7 @@ routes:
     file: src/registrations/backends_api.rs
     route: /routes/{route}/switch
   refusals:
+  - slack_workspace_backend_unsupported
   - invalid_credential
   - unknown_name
   - route_not_switchable

@@ -139,6 +139,11 @@ It does not restrict message content or channels. Audit attributes refused and
 accepted requests to the Locksmith identity, not necessarily the displayed Slack
 author (`src/proxy/admission.rs:64`). Direct WebSocket frames bypass that audit.
 
+Stored references cannot be selected directly on declared routes (400
+`slack_workspace_selection_unsupported`); backend credential writes and all
+switches refuse (409 `slack_workspace_backend_unsupported`). Explicit stored auth
+in route PUT refuses as `invalid_metadata`. Writer transactions prevent selection
+or activation of an unchecked stored credential; see [ADR-0005](../adr/0005-slack-unverified-credential-paths.md).
 Workspace checking covers sealed bearer ingestion only, not env/1Password or
 OAuth references. OAuth performs its own workspace/user verification. The
 verifier bounds provider responses and avoids reflecting their text
@@ -153,6 +158,7 @@ These accepted decisions separate implementation mechanics from rollout topology
 |---|---|
 | [0001: binding method policy](../adr/0001-binding-method-policy.md) | Accepted, implemented |
 | [0002: workspace ingestion](../adr/0002-slack-workspace-ingestion.md) | Accepted, implemented |
+| [0005: unchecked credential paths](../adr/0005-slack-unverified-credential-paths.md) | Accepted, implemented |
 | [0003: Slack route and binding](../adr/0003-slack-route-and-binding.md) | Accepted, rollout incomplete |
 | [0004: refuse switching with policies](../adr/0004-refuse-backend-switch-with-policy.md) | Accepted, implemented |
 

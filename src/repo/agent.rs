@@ -26,6 +26,8 @@ pub enum RepoError {
     InvalidAccountBinding,
     #[error("grant_target_invalid: select a currently configured HTTP tool or model")]
     InvalidGrantTarget,
+    #[error("Slack workspace routes require verified stored bearer stdin ingestion")]
+    SlackWorkspaceSelectionUnsupported,
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("rng: {0}")]

@@ -58,11 +58,20 @@ successful check reaches the credential sealing writer.
 ### 5.2 Interfaces
 
 The existing operator PUT route accepts `metadata.slack_team_id` and the CLI
-provides `--slack-team-id`. Both credential PUT paths invoke the same verifier
+provides `--slack-team-id`. Both credential-value PUT paths invoke the same verifier
 (`src/registrations/api.rs:832`, `src/admin/stored_credential.rs:63`). A successful
 check requires HTTP success, `ok:true` and an exact team id. Refusals use
 `slack_workspace_mismatch` (400) or `slack_workspace_check_failed` (502), described
 in the [CLI reference](../reference/cli-reference.md#slack-workspace-check).
+
+Stored-reference selection refuses with 400
+`slack_workspace_selection_unsupported`; explicit stored references in route PUT
+refuse as `invalid_metadata`. Backend credential writes and all switches refuse
+with 409 `slack_workspace_backend_unsupported`, including old backend keys and
+stashed bindings. Repository writer transactions own these checks; only checked
+value ingestion can attach a stored token. Broker key retention keeps its existing
+key/destination comparison. See [ADR-0005](../adr/0005-slack-unverified-credential-paths.md)
+and the CLI reference for the complete path inventory.
 
 ## 6 Runtime view
 
@@ -106,6 +115,9 @@ request is added to the ordinary proxy path.
 
 The governing decision is [ADR-0002: Check Slack workspace before sealing a
 token](../adr/0002-slack-workspace-ingestion.md), Accepted.
+
+[ADR-0005](../adr/0005-slack-unverified-credential-paths.md), Accepted, records
+refusal of unchecked reference and backend paths.
 
 ## 10 Quality requirements
 
