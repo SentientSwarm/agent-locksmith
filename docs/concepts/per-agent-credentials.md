@@ -27,7 +27,9 @@ in the same database write; recreating the name requires deliberate reapproval.
 Changing upstream or egress also removes grants and bindings transactionally.
 Switching a route between declared backends
 (`locksmith route switch`) is the exception: grants stay and bindings move
-with the backend. See the CLI reference, "Route backends".
+with the backend. A switch is refused with 409 `backend_method_policy_present`
+while any route binding has a method policy; no state changes. See the CLI
+reference, [Route backends](../reference/cli-reference.md#route-backends).
 Description, timeout and credential-template edits retain identity. Reapprove the
 finite allowlist and account after a destination replacement. Old bootstrap
 scopes are also cleaned so enrollment cannot recover removed authority.

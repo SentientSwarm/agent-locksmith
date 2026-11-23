@@ -34,6 +34,7 @@ fn admission() -> HttpAdmission {
             AuthSpec::None,
         ),
         account: Some(AuthSpec::None),
+        method_policy: None,
         agent_active: true,
         grant: Ok(()),
         instance: "instance".into(),

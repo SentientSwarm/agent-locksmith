@@ -206,3 +206,50 @@ async fn dead_stored_binding_is_not_restored() {
     assert_eq!(back["bindings_restored"], 0);
     assert_eq!(binding(&h).await, None);
 }
+
+#[tokio::test]
+async fn workspace_backend_refusals_leave_all_persisted_state_intact() {
+    let h = setup().await;
+    route(&h).await;
+    seal_binding(&h, "existing-binding").await;
+    // Simulate persisted backends/bindings from before workspace enforcement.
+    sqlx::query(
+        "UPDATE registrations SET metadata_json='{\"slack_team_id\":\"TQA123\"}' WHERE name='r'",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    let repo = BackendRepository::new(h.pool.clone());
+    let rev = revision(&h).await;
+    let selected = binding(&h).await;
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM credential_secrets")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repo.store_credential("r", "b", "candidate", b"sealed", b"nonce", None)
+            .await,
+        Err(BackendError::SlackWorkspaceUnsupported)
+    ));
+    assert!(matches!(
+        repo.switch("r", "b", rev).await,
+        Err(BackendError::SlackWorkspaceUnsupported)
+    ));
+    assert_eq!(revision(&h).await, rev);
+    assert_eq!(binding(&h).await, selected);
+    assert_eq!(repo.active_backend("r").await.unwrap(), "primary");
+    assert_eq!(
+        repo.get("r", "b").await.unwrap().unwrap().auth,
+        AuthSpec::None
+    );
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM credential_secrets")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    let stash: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backend_bindings WHERE route='r'")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(stash, 0);
+}

@@ -125,6 +125,7 @@ fn build_registrations_admin_router(
 ) -> Router {
     use crate::registrations::api;
     let st = api::AdminRegistrationsState {
+        credential_check_config: Some(Arc::clone(&state.admin.config_snapshot())),
         consent: state.oauth.as_ref().and_then(|o| o.consent.clone()),
         local_listener: Some(state.admin.local_listener()),
         repo,
@@ -272,6 +273,10 @@ pub fn build_router(state: UdsState) -> Router {
         .route(
             "/agents/{public_id}/credentials/{registration}",
             axum::routing::put(op_set_agent_credential).delete(op_unset_agent_credential),
+        )
+        .route(
+            "/agents/{public_id}/credentials/{registration}/method-policy",
+            axum::routing::put(super::method_policy::set).delete(super::method_policy::clear),
         )
         // Phase J / M2 (CCS-7) — set a STORED value on a per-agent
         // override: seal → insert → mint ref → write a stored_* override.
@@ -461,6 +466,10 @@ pub(super) fn admin_err_response(e: AdminError) -> Response {
         AdminError::AgentNotFound => (StatusCode::NOT_FOUND, "agent_not_found"),
         AdminError::NotAuthorized => (StatusCode::FORBIDDEN, "forbidden"),
         AdminError::InvalidGrantTarget => (StatusCode::BAD_REQUEST, "grant_target_invalid"),
+        AdminError::SlackWorkspaceSelectionUnsupported => (
+            StatusCode::BAD_REQUEST,
+            "slack_workspace_selection_unsupported",
+        ),
         AdminError::Backend(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backend_error"),
     };
     (

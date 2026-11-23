@@ -161,6 +161,43 @@ and the reason in `details.error`. A stored value refused for its shape
 also names the binding already in place as the previous one. Env-var
 names, `op://` references and credential values are never recorded.
 
+#### Upstream method policy
+
+An existing HTTP tool/model binding can restrict Slack-style method names:
+
+```sh
+locksmith agent method-policy <public_id> slack-wemodulate \
+  --allow 'conversations.*,chat.*,reactions.*,files.*,users.*,search.*,pins.*,auth.test' \
+  --deny 'admin.*,team.*,users.profile.set,apps.*'
+locksmith agent method-policy <public_id> slack-wemodulate --clear
+```
+
+Each call replaces the entire policy, live. `--allow` and `--deny` accept
+comma-separated exact names, `family.*` prefixes or `*`. Matching is case-sensitive;
+deny wins. An empty allow list denies everything. At most 256 patterns are accepted,
+with method names up to 128 ASCII letters, digits, underscores and dots (no empty
+segments). Quote wildcards to keep the shell from expanding them.
+
+With no policy (including after `--clear`), methods remain unrestricted.
+A policy belongs to one agent/route binding, survives credential replacement,
+and is removed when that binding is deleted. Other bindings are unaffected.
+Backend switching is refused while any binding on the route has a policy
+(409 `backend_method_policy_present`); the policy and binding remain intact.
+See [Route backends](#route-backends).
+Policies apply to the literal single method segment after `/api/<route>/`;
+encoded aliases, extra slashes and traversal are refused. Query parameters do not
+change the selected method. This is a Slack-style method gate, not a general REST
+path policy. Requests admitted before a policy change may finish under that snapshot.
+
+Operator API: `PUT /admin/operator/agents/{public_id}/credentials/{registration}/method-policy`
+with `{"allow":["chat.*"],"deny":[]}`; `DELETE` clears it. Successful writes return
+`registration` and `method_policy` (null when cleared). Invalid patterns return
+400 `invalid_method_policy`; missing or non-HTTP bindings return 400
+`grant_target_invalid`. Refusals return 403 `method_not_allowed` before credential
+resolution or upstream dispatch. `method_policy_changed` operator events record
+changes; `method_policy_denied` security events record refusals, attributed to the
+agent and route, without credential values.
+
 ### `bootstrap` — bootstrap-token management (operator)
 
 For pre-seeding agents that self-register via the bootstrap listener. Omitted
@@ -267,6 +304,15 @@ locksmith route switch codex --backend broker --if-match <revision>
   and restored when it becomes active again. An agent with no binding on the
   new backend is refused (403 `tool_not_allowed`, audit
   `account_binding_missing`) until you select an account for it.
+- A switch is refused with 409 `backend_method_policy_present` while any
+  binding on the route has a method policy, including an empty policy. No
+  destination, binding, policy, stash or revision changes. The check runs
+  inside the switch transaction, serialized with policy writes. The backend
+  stash stores credentials only, so it cannot restore method policies.
+  To switch deliberately, clear every policy with `agent method-policy
+  <public_id> <route> --clear` first. This removes method restrictions;
+  reapply the intended policies to bindings on the destination after switching.
+  Routes with no policies keep the usual switch behavior.
 - `--if-match` is the route revision from `route backend list`. Editing or
   deleting any backend also moves the revision, so a switch cannot land on
   a destination changed after you read it. A missing revision is 428
@@ -779,3 +825,54 @@ See [Slack OAuth](../operator/slack-oauth.md) for `oauth client set --secret-std
 `--profile` and `--client-generation`. Set seals a new immutable owner generation;
 reads never reveal the value. Slack `oauth connect` requires explicit
 `--scopes search:read.public,channels:history`.
+
+## Slack workspace check
+
+Create a Slack HTTP tool route with `tool put slack-wemodulate --upstream
+https://slack.com/api --auth none --broker --slack-team-id T0123456789` (choose
+`--egress direct` or configure the egress proxy). The declaration is stored as
+`metadata.slack_team_id`; the operator API accepts that same metadata string.
+Only HTTP tools accept it. Team ids start with `T`, followed by uppercase
+letters or digits, with a total length of 2–64 characters.
+
+Before `tool set-key` or `agent set-credential --stored-bearer-stdin` seals a
+value on that route, Locksmith sends `POST <upstream>/auth.test` with the value
+as a bearer. Supply it on stdin only. Each replacement repeats the check live,
+without restarting the daemon. `ok:true` and the exact expected `team_id` are
+required. A mismatch returns 400 `slack_workspace_mismatch`, naming the expected
+and actual team ids; no key is stored or replaced. An unsuccessful, malformed,
+missing-team, oversized, redirecting or unreachable reply returns 502
+`slack_workspace_check_failed`, with no provider text. Checks have a five-second
+request deadline and a 16 KiB response limit. They use the route's egress and CA
+settings, never follow redirects and never retry. Custom-header keys are refused
+on workspace-declared routes. Neither the value nor provider error text appears
+in the response, audit or operational log.
+
+The declaration is immutable: repeat it on subsequent full `tool put` writes.
+Removing, adding or changing it on an existing route is refused; create a new
+route and seal its keys instead. This prevents changing the workspace beneath
+already accepted credentials. A concurrent route edit invalidates an in-flight
+credential write. A refused replacement leaves the prior key usable.
+
+Routes without the declaration retain offline credential ingestion. This check
+covers sealed-value ingestion, not OAuth or environment/1Password references;
+it does not constrain where an operator can point the upstream. Use it on the
+Slack Web API route, not the Socket Mode `xapp-` route or file-download route.
+
+
+| Credential path on a declared route | Result |
+|---|---|
+| `tool set-key` / route credential PUT, bearer value | `auth.test` before storage; replacement repeats the check |
+| `agent set-credential --stored-bearer-stdin` / binding credential-value PUT | `auth.test` before storage; transaction compares route snapshot |
+| `agent set-credential --stored-bearer-ref` / `StoredBearer{secret_ref}` selection (including live-reference mode) | 400 `slack_workspace_selection_unsupported`; a live reference is not workspace proof |
+| `StoredHeader` reference selection | 400 `slack_workspace_selection_unsupported` |
+| Custom-header value ingestion, explicit or inherited | Refused; only bearer values can be verified for this contract |
+| Explicit stored auth in route PUT | 400 `invalid_metadata`; use `tool set-key`. A broker edit omitting auth may retain its existing checked key only with unchanged destination and a transactional key comparison |
+| `route backend set-credential` / `PUT /admin/operator/routes/{route}/backends/{backend}/credential` | 409 `slack_workspace_backend_unsupported`; nothing stored |
+| `route switch` / switch API | 409 `slack_workspace_backend_unsupported`, including preexisting backend keys or bindings; no activation or revision change |
+| Environment, 1Password and OAuth references | Existing exclusions unchanged; no new workspace check |
+
+Backend declarations may still be managed, but cannot be activated on a declared
+route. Reference selections and backend operations refuse locally without an
+`auth.test` call. Use the value-ingestion paths to install or rotate a verified
+bearer. Routes without `slack_team_id` keep every path's existing behavior.

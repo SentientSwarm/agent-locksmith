@@ -7,7 +7,7 @@ native routes and the active backend.
 
 import pytest
 
-from fakes.agt_support import enrol, put_tool
+from fakes.agt_support import enrol, put_tool, sealing_key
 from fakes.agt_upstream import Upstream
 from fakes.cat_uds import uds
 
@@ -44,6 +44,79 @@ def switch(t, backend, route="rte-r"):
     return t.cli(
         "route", "switch", route, "--backend", backend, "--if-match", str(revision(t, route))
     )
+
+
+@case(
+    "SMK-RTE-010", area="RTE", kind="refusal",
+    covers=[SWITCH, API, BEH, "cli.route.switch"],
+    codes=["backend_method_policy_present", "method_not_allowed"],
+)
+def test_switch_refuses_binding_method_policy(target_factory):
+    """F-017: docs/reference/cli-reference.md#route-backends.
+
+    A policy on any binding blocks both legs of A -> B -> A before mutation.
+    Only explicit policy removal permits switching; unprotected routes still work.
+    """
+    a, b = Upstream(), Upstream()
+    try:
+        t = target_factory(label="rte-policy-switch", upstream=False,
+                           env={"LOCKSMITH_CREDENTIAL_SEALING_KEY": sealing_key()})
+        route = "rte-policy"
+        keys = ("qa-rte-policy-key-a", "qa-rte-policy-key-b")
+        for key in keys:
+            t.canaries.add(key, "synthetic-backend-key")
+        put_tool(t, route, a.url, "none", "--egress", "direct", "--broker")
+        assert t.cli("tool", "set-key", route, stdin=keys[0]).code == 0
+        # The first binding has no policy: checking only it would miss the second.
+        enrol(t, "qa-rte-unrestricted", [route], {route: ["--broker"]})
+        agent = enrol(t, "qa-rte-policy", [route], {route: ["--broker"]})
+        put = t.cli("route", "backend", "put", route, "alt", "--upstream", b.url,
+                    "--auth", "none", "--egress", "direct", "--broker")
+        assert put.code == 0, put.err
+        assert t.cli("route", "backend", "set-credential", route, "alt", stdin=keys[1]).code == 0
+
+        for destination, source in (("alt", a), ("primary", b)):
+            if destination == "primary":
+                bind = t.cli("agent", "set-credential", agent["id"], route, "--broker")
+                assert bind.code == 0, bind.err
+            # Allowlist, deny-over-allow and explicit empty policies all block switches.
+            for args in (("--allow", "auth.test"),
+                         ("--allow", "*", "--deny", "admin.*"), ()):
+                policy = t.cli("agent", "method-policy", agent["id"], route, *args)
+                assert policy.code == 0, policy.err
+                before = t.cli("route", "backend", "list", route).json
+                sent = (len(a.records), len(b.records))
+                path = f"/admin/operator/routes/{route}/switch"
+                refusal = uds(t, "POST", path, {"backend": destination},
+                              headers={"If-Match": str(before["revision"])})
+                assert refusal.status == 409 and refusal.code == "backend_method_policy_present", refusal.text
+                cli = switch(t, destination, route)
+                assert cli.code != 0 and "backend_method_policy_present" in cli.err
+                assert t.cli("route", "backend", "list", route).json == before
+                assert (len(a.records), len(b.records)) == sent
+                # The binding and its policy still enforce the original restrictions.
+                refused = t.http("POST", f"/api/{route}/admin.users.list", token=agent["token"])
+                assert refused.status == 403 and refused.code == "method_not_allowed"
+                assert (len(a.records), len(b.records)) == sent
+                allowed = t.http("POST", f"/api/{route}/auth.test", token=agent["token"])
+                assert allowed.status == (200 if args else 403)
+                assert len(source.records) == (sent[0] if source is a else sent[1]) + bool(args)
+                if args:
+                    key = keys[0] if source is a else keys[1]
+                    assert source.records[-1].header("authorization") == f"Bearer {key}"
+            clear = t.cli("agent", "method-policy", agent["id"], route, "--clear")
+            assert clear.code == 0, clear.err
+            switched = switch(t, destination, route)
+            assert switched.code == 0, switched.err
+
+        # Back on A: the original binding is restored only after deliberate removal.
+        assert t.cli("route", "backend", "list", route).json["active_backend"] == "primary"
+        assert t.http("POST", f"/api/{route}/auth.test", token=agent["token"]).status == 200
+        rows = t.cli("audit", "query", "--tool", route, "--limit", "100").json
+        assert len([r for r in rows if r.get("event") == "route_backend_switched"]) == 2
+    finally:
+        a.close()
+        b.close()
 
 
 @case(

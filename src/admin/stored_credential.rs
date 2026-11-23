@@ -49,12 +49,34 @@ pub(super) async fn set(
         Ok(agent) => agent,
         Err(error) => return admin_err_response(error),
     };
-    let result = write(&state, &agent, &registration, body).await;
+    // Verify outside the write transaction. The transaction below rechecks the
+    // complete route snapshot so a concurrent edit cannot attach an unchecked key.
+    let result = async {
+        let route = match state.registrations.as_ref() {
+            Some(repo) => repo
+                .get(&registration)
+                .await
+                .map_err(|_| unavailable())?
+                .ok_or(AdminError::InvalidGrantTarget)?,
+            None => return Err(Refused::Admin(unavailable())),
+        };
+        crate::registrations::slack_workspace::verify(
+            &route,
+            &body.value,
+            body.header.as_deref(),
+            Some(&state.admin.config_snapshot()),
+        )
+        .await
+        .map_err(Refused::Workspace)?;
+        write(&state, &agent, &registration, body, &route).await
+    }
+    .await;
     if let Err(refused) = &result {
         // AGENT-328: audit a refusal once the agent is known, as the plain
         // set-credential path does. Never the value.
         let (error, previous) = match refused {
             Refused::Admin(error) => (error.to_string(), None),
+            Refused::Workspace(error) => (error.code().into(), None),
             Refused::Unnamed(previous) | Refused::Invalid(previous) => {
                 ("invalid_stored_credential".into(), previous.as_ref())
             }
@@ -94,6 +116,7 @@ pub(super) async fn set(
             Json(value).into_response()
         }
         Err(Refused::Admin(error)) => admin_err_response(error),
+        Err(Refused::Workspace(error)) => error.into_response(),
         Err(Refused::Unnamed(_) | Refused::Invalid(_)) => {
             failure("invalid_stored_credential", StatusCode::BAD_REQUEST)
         }
@@ -113,6 +136,7 @@ fn invalid(body: &Input) -> bool {
 /// Why a write changed nothing.
 enum Refused {
     Admin(AdminError),
+    Workspace(crate::registrations::slack_workspace::Refusal),
     /// `stored_header` with no `header` on a route that names none. Both
     /// shape refusals carry the binding already in place, for the audit.
     Unnamed(Option<AuthSpec>),
@@ -140,6 +164,7 @@ async fn write(
     agent: &crate::repo::AgentRecord,
     registration: &str,
     body: Input,
+    expected: &crate::registrations::Registration,
 ) -> Result<(serde_json::Value, Written), Refused> {
     let creds = state.agent_creds.as_ref().ok_or_else(unavailable)?;
     let key = state
@@ -151,7 +176,25 @@ async fn write(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|_| unavailable())?;
+    let row = sqlx::query("SELECT * FROM registrations WHERE name = ?")
+        .bind(registration)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| unavailable())?
+        .ok_or(AdminError::InvalidGrantTarget)?;
+    let current =
+        crate::registrations::repo::row_to_registration(row).map_err(|_| unavailable())?;
+    if current != *expected {
+        return Err(unavailable().into());
+    }
     let (header, previous) = shape(&mut tx, agent.id, registration, &body).await?;
+    if crate::registrations::slack_workspace::expected(expected)
+        .map_err(|_| unavailable())?
+        .is_some()
+        && header.is_some()
+    {
+        return Err(Refused::Invalid(previous));
+    }
     if body.stored_header && header.is_none() {
         return Err(Refused::Unnamed(previous));
     }

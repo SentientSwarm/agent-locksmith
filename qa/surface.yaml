@@ -109,6 +109,7 @@ routes:
     file: src/admin/uds.rs
     route: /agents/{public_id}/credentials/{registration}
   refusals:
+  - slack_workspace_selection_unsupported
   - invalid_credential
   - selection_only
   - invalid_metadata
@@ -117,6 +118,29 @@ routes:
   - grant_target_invalid
   - oauth_session_label_required
   - invalid_oauth_selection
+- id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  listener: admin
+  method: PUT
+  path: /admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}/method-policy
+  refusals:
+  - invalid_credential
+  - agent_not_found
+  - grant_target_invalid
+  - invalid_method_policy
+- id: admin.DELETE./admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  listener: admin
+  method: DELETE
+  path: /admin/operator/agents/{public_id}/credentials/{registration}/method-policy
+  source:
+    file: src/admin/uds.rs
+    route: /agents/{public_id}/credentials/{registration}/method-policy
+  refusals:
+  - invalid_credential
+  - agent_not_found
+  - grant_target_invalid
 - id: admin.PUT./admin/operator/agents/{public_id}/credentials/{registration}/credential
   listener: admin
   method: PUT
@@ -130,6 +154,8 @@ routes:
   - credential_store_unconfigured
   - agent_not_found
   - grant_target_invalid
+  - slack_workspace_mismatch
+  - slack_workspace_check_failed
 - id: admin.POST./admin/operator/agents/{public_id}/revoke
   listener: admin
   method: POST
@@ -622,6 +648,8 @@ routes:
   - invalid_broker
   - invalid_metadata
   - definition_pending
+  - slack_workspace_mismatch
+  - slack_workspace_check_failed
 - id: admin.POST./admin/operator/tools/{name}/enable
   listener: admin
   method: POST
@@ -664,6 +692,7 @@ routes:
   refusals:
   - invalid_credential
   - tool_not_allowed
+  - method_not_allowed
   - tool_not_found
   - bad_request
   - codex_body_too_large
@@ -1117,6 +1146,7 @@ routes:
     file: src/registrations/backends_api.rs
     route: /routes/{route}/backends/{backend}/credential
   refusals:
+  - slack_workspace_backend_unsupported
   - invalid_credential
   - unknown_name
   - route_not_switchable
@@ -1131,6 +1161,7 @@ routes:
     file: src/registrations/backends_api.rs
     route: /routes/{route}/switch
   refusals:
+  - slack_workspace_backend_unsupported
   - invalid_credential
   - unknown_name
   - route_not_switchable
@@ -1139,6 +1170,7 @@ routes:
   - revision_conflict
   - active_backend
   - backend_auth_unsupported
+  - backend_method_policy_present
 cli:
 - id: cli.agent.credentials.list
   command: agent credentials list
@@ -1150,6 +1182,8 @@ cli:
   command: agent mcp-grants replace
 - id: cli.agent.mcp-grants.show
   command: agent mcp-grants show
+- id: cli.agent.method-policy
+  command: agent method-policy
 - id: cli.agent.modify
   command: agent modify
 - id: cli.agent.register

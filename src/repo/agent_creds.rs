@@ -46,6 +46,7 @@ impl AgentCredentialRepository {
         auth_spec: &AuthSpec,
     ) -> Result<(), RepoError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        Self::refuse_unverified_stored(&mut tx, registration, auth_spec).await?;
         Self::set_into(&mut tx, agent_id, registration, auth_spec).await?;
         tx.commit().await?;
         Ok(())
@@ -61,6 +62,7 @@ impl AgentCredentialRepository {
             return Err(RepoError::InvalidGrantTarget);
         };
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        Self::refuse_unverified_stored(&mut tx, registration, auth).await?;
         let live: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_secrets WHERE secret_ref=? AND tombstoned_at IS NULL)")
             .bind(secret_ref).fetch_one(&mut *tx).await?;
         if !live {
@@ -68,6 +70,23 @@ impl AgentCredentialRepository {
         }
         Self::set_into(&mut tx, agent, registration, auth).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// Only the stdin ingestion path may install a stored token on a declared
+    /// route. A live secret reference proves custody, not Slack workspace.
+    async fn refuse_unverified_stored(
+        c: &mut sqlx::SqliteConnection,
+        registration: &str,
+        auth: &AuthSpec,
+    ) -> Result<(), RepoError> {
+        if auth.stored_secret_ref().is_some() {
+            let declared: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM registrations WHERE name=? AND json_extract(metadata_json, '$.slack_team_id') IS NOT NULL)")
+                .bind(registration).fetch_one(c).await?;
+            if declared {
+                return Err(RepoError::SlackWorkspaceSelectionUnsupported);
+            }
+        }
         Ok(())
     }
 
@@ -154,6 +173,34 @@ impl AgentCredentialRepository {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// Replace or clear a policy only on an existing HTTP binding.
+    pub async fn set_method_policy(
+        &self,
+        agent: i64,
+        registration: &str,
+        policy: Option<&crate::method_policy::MethodPolicy>,
+    ) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_credential_overrides b JOIN registrations r ON r.name=b.registration WHERE b.agent_id=? AND b.registration=? AND r.protocol='http' AND r.kind IN ('tool','model'))")
+            .bind(agent).bind(registration).fetch_one(&mut *tx).await?;
+        if !exists || policy.is_some_and(|p| !p.validate()) {
+            return Err(RepoError::InvalidGrantTarget);
+        }
+        if let Some(policy) = policy {
+            sqlx::query("INSERT INTO binding_method_policies(agent_id,registration,policy) VALUES(?,?,?) ON CONFLICT(agent_id,registration) DO UPDATE SET policy=excluded.policy")
+                .bind(agent).bind(registration).bind(serde_json::to_string(policy)?)
+                .execute(&mut *tx).await?;
+        } else {
+            sqlx::query("DELETE FROM binding_method_policies WHERE agent_id=? AND registration=?")
+                .bind(agent)
+                .bind(registration)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Test-only accessor for the underlying pool. Used by FK-cascade
@@ -253,6 +300,46 @@ mod tests {
             .unwrap();
         let rec = agents.get_by_name(name).await.unwrap().unwrap();
         rec.id
+    }
+
+    #[tokio::test]
+    async fn declared_workspace_refuses_stored_selections_without_mutation() {
+        let (_d, agents, creds) = fresh().await;
+        let id = make_agent(&agents, "workspace").await;
+        creds.set(id, "lmstudio", &AuthSpec::None).await.unwrap();
+        sqlx::query("UPDATE registrations SET metadata_json='{\"slack_team_id\":\"TQA123\"}' WHERE name='lmstudio'")
+            .execute(&creds.pool).await.unwrap();
+        let auth = AuthSpec::StoredBearer {
+            secret_ref: "cs_other_workspace".into(),
+        };
+        for result in [
+            creds.set(id, "lmstudio", &auth).await,
+            creds.set_live_bearer(id, "lmstudio", &auth).await,
+            creds
+                .set(
+                    id,
+                    "lmstudio",
+                    &AuthSpec::StoredHeader {
+                        secret_ref: "cs_other_workspace".into(),
+                        header: "X-Key".into(),
+                    },
+                )
+                .await,
+        ] {
+            assert!(matches!(
+                result,
+                Err(RepoError::SlackWorkspaceSelectionUnsupported)
+            ));
+        }
+        assert_eq!(
+            creds.get(id, "lmstudio").await.unwrap().unwrap().auth_spec,
+            AuthSpec::None
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM credential_secrets")
+            .fetch_one(&creds.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

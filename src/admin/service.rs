@@ -28,6 +28,8 @@ pub enum AdminError {
     NotAuthorized,
     #[error("grant_target_invalid: select a currently configured tool or model connection")]
     InvalidGrantTarget,
+    #[error("Slack workspace routes require verified stored bearer stdin ingestion")]
+    SlackWorkspaceSelectionUnsupported,
     #[error("backend: {0}")]
     Backend(String),
 }
@@ -40,6 +42,9 @@ impl From<RepoError> for AdminError {
             RepoError::AgentNotFound => AdminError::AgentNotFound,
             RepoError::InvalidCredential => AdminError::InvalidBootstrap,
             RepoError::InvalidGrantTarget => AdminError::InvalidGrantTarget,
+            RepoError::SlackWorkspaceSelectionUnsupported => {
+                AdminError::SlackWorkspaceSelectionUnsupported
+            }
             other => AdminError::Backend(other.to_string()),
         }
     }

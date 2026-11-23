@@ -203,7 +203,13 @@ impl RegistrationRepository {
     /// caller layer — the repo doesn't enforce, just persists what's
     /// passed).
     pub async fn upsert(&self, r: &Registration) -> Result<(), RegistrationError> {
-        self.upsert_where(r, "").await.map(|_| ())
+        let changed = self.upsert_where(r, "").await?;
+        if changed == 0 {
+            return Err(RegistrationError::InvalidMetadata(
+                "slack_team_id is immutable; create a new route".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// #159 M2 — [`Self::upsert`] for a broker edit that kept the route's
@@ -214,7 +220,7 @@ impl RegistrationRepository {
         let changed = self
             .upsert_where(
                 r,
-                " WHERE registrations.auth_json = excluded.auth_json \
+                " AND registrations.auth_json = excluded.auth_json \
                   AND registrations.upstream = excluded.upstream \
                   AND registrations.egress = excluded.egress \
                   AND registrations.upstream_ca_pem IS excluded.upstream_ca_pem",
@@ -257,7 +263,8 @@ impl RegistrationRepository {
                 seed = excluded.seed, \
                 disabled = excluded.disabled, \
                 updated_at = excluded.updated_at, protocol = excluded.protocol, mcp_json = excluded.mcp_json, \
-                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json{guard}",
+                upstream_ca_pem = excluded.upstream_ca_pem, profile = excluded.profile, broker_json = excluded.broker_json \
+                WHERE json_extract(registrations.metadata_json, '$.slack_team_id') IS json_extract(excluded.metadata_json, '$.slack_team_id'){guard}",
         );
         let done = sqlx::query(&sql)
             .bind(&r.name)
