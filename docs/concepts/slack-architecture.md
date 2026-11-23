@@ -2,7 +2,7 @@
 template: arc42
 status: as-built primitives and accepted rollout boundaries; deployment pending
 date: 2026-11-23
-revision: agent-locksmith@9598c9e9475e1a109ffea80ef7a463d284453ff3
+revision: agent-locksmith@62114328d0971d7f7d31f17fa10d3d9c4ead0a95
 related_revisions: [layer8-proxy-site@67fa280b, hermes-agent@0f602c5f6f]
 ---
 
