@@ -1167,6 +1167,7 @@ routes:
   - revision_conflict
   - active_backend
   - backend_auth_unsupported
+  - backend_method_policy_present
 cli:
 - id: cli.agent.credentials.list
   command: agent credentials list

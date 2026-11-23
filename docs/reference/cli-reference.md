@@ -181,6 +181,9 @@ segments). Quote wildcards to keep the shell from expanding them.
 With no policy (including after `--clear`), methods remain unrestricted.
 A policy belongs to one agent/route binding, survives credential replacement,
 and is removed when that binding is deleted. Other bindings are unaffected.
+Backend switching is refused while any binding on the route has a policy
+(409 `backend_method_policy_present`); the policy and binding remain intact.
+See [Route backends](#route-backends).
 Policies apply to the literal single method segment after `/api/<route>/`;
 encoded aliases, extra slashes and traversal are refused. Query parameters do not
 change the selected method. This is a Slack-style method gate, not a general REST
@@ -301,6 +304,15 @@ locksmith route switch codex --backend broker --if-match <revision>
   and restored when it becomes active again. An agent with no binding on the
   new backend is refused (403 `tool_not_allowed`, audit
   `account_binding_missing`) until you select an account for it.
+- A switch is refused with 409 `backend_method_policy_present` while any
+  binding on the route has a method policy, including an empty policy. No
+  destination, binding, policy, stash or revision changes. The check runs
+  inside the switch transaction, serialized with policy writes. The backend
+  stash stores credentials only, so it cannot restore method policies.
+  To switch deliberately, clear every policy with `agent method-policy
+  <public_id> <route> --clear` first. This removes method restrictions;
+  reapply the intended policies to bindings on the destination after switching.
+  Routes with no policies keep the usual switch behavior.
 - `--if-match` is the route revision from `route backend list`. Editing or
   deleting any backend also moves the revision, so a switch cannot land on
   a destination changed after you read it. A missing revision is 428

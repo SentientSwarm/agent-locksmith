@@ -44,6 +44,8 @@ pub enum BackendError {
     RouteNotSwitchable,
     #[error("backend auth is not supported for switching")]
     AuthUnsupported,
+    #[error("clear binding method policies explicitly before switching backends")]
+    MethodPolicyPresent,
     #[error("route revision changed")]
     RevisionConflict,
     #[error("invalid broker: {0}")]
@@ -384,7 +386,8 @@ impl BackendRepository {
     /// onto the route under a `route_switch_guard` row (so the 0009/0023
     /// authority triggers keep grants), and the target's stashed bindings
     /// are restored. Stored-credential bindings whose sealed value is gone
-    /// are not restored. Grants are never touched.
+    /// are not restored. Grants are never touched. A route with any binding
+    /// method policy is refused before mutation: the stash cannot preserve it.
     pub async fn switch(
         &self,
         route: &str,
@@ -430,6 +433,19 @@ impl BackendRepository {
         let t = row_to_backend(&t)?;
         if !switchable_auth(&current_auth) || !switchable_auth(&t.auth) {
             return Err(BackendError::AuthUnsupported);
+        }
+        // Deleting active bindings cascades to binding_method_policies, but
+        // backend_bindings cannot stash those policies. Never silently restore
+        // an unrestricted binding. BEGIN IMMEDIATE serializes this check with
+        // policy writes, so none can appear between the check and deletion.
+        let has_policy: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM binding_method_policies WHERE registration = ?)",
+        )
+        .bind(route)
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_policy {
+            return Err(BackendError::MethodPolicyPresent);
         }
         let now = unix_now();
 
@@ -621,6 +637,64 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn policy_switch_refusal_preserves_binding_stash_and_revision() {
+        let (_d, pool) = pool().await;
+        route(&pool, "r", "https://a.example").await;
+        let id = granted_bound_agent(&pool, "r").await;
+        let repo = BackendRepository::new(pool.clone());
+        repo.put(&backend("r", "alt", "https://b.example"))
+            .await
+            .unwrap();
+        let creds = crate::repo::AgentCredentialRepository::new(pool.clone());
+        let policy = crate::method_policy::MethodPolicy {
+            allow: vec!["auth.test".into()],
+            deny: vec![],
+        };
+        creds
+            .set_method_policy(id, "r", Some(&policy))
+            .await
+            .unwrap();
+        let revision = repo.revision("r").await.unwrap();
+        assert!(matches!(
+            repo.switch("r", "alt", revision).await,
+            Err(BackendError::MethodPolicyPresent)
+        ));
+        assert_eq!(repo.revision("r").await.unwrap(), revision);
+        assert_eq!(repo.active_backend("r").await.unwrap(), PRIMARY);
+        assert!(allowlisted(&pool, id, "r").await);
+        assert!(bound(&pool, id, "r").await);
+        let saved: String = sqlx::query_scalar(
+            "SELECT policy FROM binding_method_policies WHERE agent_id=? AND registration='r'",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(saved, serde_json::to_string(&policy).unwrap());
+        let stashed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backend_bindings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(stashed, 0);
+        assert!(repo.get("r", PRIMARY).await.unwrap().is_none());
+        // A protected route does not block switches on another route.
+        route(&pool, "other", "https://a.example").await;
+        repo.put(&backend("other", "alt", "https://b.example"))
+            .await
+            .unwrap();
+        repo.switch("other", "alt", repo.revision("other").await.unwrap())
+            .await
+            .unwrap();
+        // Clearing is explicit; the original round trip then behaves as before.
+        creds.set_method_policy(id, "r", None).await.unwrap();
+        repo.switch("r", "alt", revision).await.unwrap();
+        repo.switch("r", PRIMARY, repo.revision("r").await.unwrap())
+            .await
+            .unwrap();
+        assert!(bound(&pool, id, "r").await);
     }
 
     #[tokio::test]

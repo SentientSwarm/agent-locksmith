@@ -81,6 +81,7 @@ These are the built contracts; target deployment paths are identified explicitly
 | Web API route | `/api/<route>/<method>`; method refusal is 403 `method_not_allowed` before credential dispatch (`src/proxy/admission.rs:60`) |
 | Workspace ingestion | `--slack-team-id` declares `metadata.slack_team_id`; route/per-agent sealed bearer PUT checks `auth.test`; mismatch 400 `slack_workspace_mismatch`, verification failure 502 `slack_workspace_check_failed` (`src/registrations/slack_workspace.rs:54`) |
 | Binding policy | Optional allow/deny strings; deny wins; literal methods only, no encoded aliases or separators (`src/method_policy.rs:19`); [CLI flags and API](../reference/cli-reference.md#upstream-method-policy) |
+| Backend switch | 409 `backend_method_policy_present` if any route binding has a policy; checked before mutation inside the switch transaction (`src/registrations/backends.rs:438`); [ADR-0004](../adr/0004-refuse-backend-switch-with-policy.md) |
 | Account selection | Broker sends route key; ordinary stored bearer materializes only selected source (`src/proxy/admission.rs:84`, `src/proxy/selection.rs:60`) |
 | MCP account | Fixed `slack-confidential-v1` scope and workspace/user checks (`src/oauth/consent/slack.rs:8`, `src/oauth/consent/slack_identity.rs:19`); [operator contract](../operator/slack-oauth.md) |
 | Socket setup, planned | Separate route for `apps.connections.open` with app-level credential, then direct WebSocket; existing matrix HTTP check in layer8-proxy-site `edge/evo-x2-1/locksmith/route_matrix.py:59` |
@@ -113,6 +114,12 @@ sequenceDiagram
 The accepted app flow obtains a Socket Mode URL through the separate route, then
 opens a direct WebSocket. Private file requests instead traverse the file route.
 Neither path has been cut over by this documentation entry.
+
+Backend switching and policy writes serialize through SQLite `BEGIN IMMEDIATE`.
+A switch checks for any policy before stashing or deleting bindings and refuses
+without mutation when one exists. Operators must explicitly clear policies before
+switching, then reapply destination policies. Credential-only stashes cannot carry
+method policies; refusal avoids restoring a restricted binding unrestricted.
 
 ## 7 Deployment view
 
@@ -147,6 +154,7 @@ These accepted decisions separate implementation mechanics from rollout topology
 | [0001: binding method policy](../adr/0001-binding-method-policy.md) | Accepted, implemented |
 | [0002: workspace ingestion](../adr/0002-slack-workspace-ingestion.md) | Accepted, implemented |
 | [0003: Slack route and binding](../adr/0003-slack-route-and-binding.md) | Accepted, rollout incomplete |
+| [0004: refuse switching with policies](../adr/0004-refuse-backend-switch-with-policy.md) | Accepted, implemented |
 
 ## 10 Quality requirements
 
@@ -159,6 +167,9 @@ checks are `qa/smoke/test_cat_slack_workspace.py` and
 `qa/smoke/test_agt_method_policy.py`; they establish these local contracts, not
 live Slack eligibility. User-visible cutovers must also prove posting identity,
 receive behavior and scheduled posts in attended checks.
+`qa/smoke/test_rte_backends.py::test_switch_refuses_binding_method_policy`
+checks refusal on both legs of a backend round trip, unchanged revision and
+zero upstream dispatch for denied methods.
 
 ## 11 Risks and technical debt
 

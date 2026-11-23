@@ -84,6 +84,11 @@ fn backend_error(e: &BackendError) -> Response {
         BackendError::AuthUnsupported => {
             error(StatusCode::CONFLICT, "conflict", "backend_auth_unsupported")
         }
+        BackendError::MethodPolicyPresent => error(
+            StatusCode::CONFLICT,
+            "conflict",
+            "backend_method_policy_present",
+        ),
         BackendError::RevisionConflict => {
             error(StatusCode::CONFLICT, "conflict", "revision_conflict")
         }
