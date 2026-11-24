@@ -50,23 +50,39 @@ pub(super) fn roots(p: &config::Profile) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 pub(super) fn client(p: &config::Profile) -> Result<reqwest::Client> {
+    let total = if p.hosted() || p.slack() || p.custom() {
+        30
+    } else {
+        5
+    };
+    let (total, connect) = test_bounds().unwrap_or((total, 3));
     let mut b = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(
-            if p.hosted() || p.slack() || p.custom() {
-                30
-            } else {
-                5
-            },
-        ))
-        .connect_timeout(Duration::from_secs(3));
+        .timeout(Duration::from_secs(total))
+        .connect_timeout(Duration::from_secs(connect));
     for c in
         reqwest::Certificate::from_pem_bundle(&roots(p)?).map_err(|_| Error("tls_unavailable"))?
     {
         b = b.add_root_certificate(c);
     }
     b.build().map_err(|_| Error("tls_unavailable"))
+}
+/// Test builds only: a process-wide override for the token client's bounds,
+/// set by a parent test on the worker processes it spawns so a CPU-starved
+/// fixture provider can finish its TLS handshake (AGENT-349). Release builds
+/// always use the bounds above.
+#[cfg(test)]
+fn test_bounds() -> Option<(u64, u64)> {
+    let secs = std::env::var("LOCKSMITH_TEST_TOKEN_TIMEOUT_SECS")
+        .ok()?
+        .parse()
+        .ok()?;
+    Some((secs, secs))
+}
+#[cfg(not(test))]
+fn test_bounds() -> Option<(u64, u64)> {
+    None
 }
 pub(super) async fn exchange(
     p: &config::Profile,

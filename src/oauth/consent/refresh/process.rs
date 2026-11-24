@@ -61,6 +61,7 @@ fn spawn(root: &Path, point: &str) -> ChildGuard {
                 "--nocapture",
             ])
             .env("CONTROLLED_REFRESH_WORKER", root)
+            .env("LOCKSMITH_TEST_TOKEN_TIMEOUT_SECS", "30")
             .env("CONTROLLED_REFRESH_MODE", point)
             .env("OAUTH_RECOVERY_POINT", format!("controlled_{point}"))
             .env("OAUTH_RECOVERY_OBSERVED", root.join("observed"))
@@ -138,6 +139,8 @@ async fn killed_workers_preserve_pending_or_complete_pair_without_replay() {
         f.rt.publish(&a, &token, None).await.unwrap();
         if point == "consumed" {
             std::fs::write(root.join("hold-refresh"), "held").unwrap();
+            // A starved provider must not fail the worker's connect (AGENT-349).
+            std::fs::write(root.join("slow-accept"), "4s").unwrap();
         }
         let mut child = spawn(root, point);
         wait(&root.join(if point == "consumed" {

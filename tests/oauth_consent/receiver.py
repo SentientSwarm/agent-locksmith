@@ -284,6 +284,18 @@ server = base.Server(("127.0.0.1", 0), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / "server.pem", root / "server.key")
 server.socket = context.wrap_socket(server.socket, server_side=True)
+accept = server.get_request
+
+
+def get_request():
+    # The TLS handshake runs inside accept on this one thread. `slow-accept`
+    # stands in for a CPU-starved host: the client's connect waits 4 s.
+    if (root / "slow-accept").exists():
+        time.sleep(4)
+    return accept()
+
+
+server.get_request = get_request
 # Publish atomically: the test polls for this file and must never read it
 # truncated-but-not-yet-written.
 (root / "provider-port.new").write_text(json.dumps(server.server_port))
