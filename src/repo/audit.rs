@@ -160,9 +160,10 @@ impl AuditRepository {
     /// AGENT-251: the outcome also updates [`WriteHealth`], so one failed
     /// insert makes `/readyz` not ready and stops further proxying.
     pub async fn record(&self, event: &AuditEvent) -> Result<(), RepoError> {
+        let attempt = self.health.begin();
         match self.insert(event).await {
             Ok(()) => {
-                self.health.succeeded();
+                self.health.succeeded(attempt);
                 self.mirror(event).await;
                 Ok(())
             }
