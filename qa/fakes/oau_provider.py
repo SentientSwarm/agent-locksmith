@@ -121,6 +121,10 @@ class FakeProvider:
         self.devices: dict[str, int] = {}
         self.device_approve_after = 2
         self.device_fails = False
+        # When set, a code exchange signals `code_entered` and then waits for
+        # this event before answering, so a case can act mid-exchange.
+        self.code_hold: threading.Event | None = None
+        self.code_entered = threading.Event()
         self.generation = 0
         self.server: ThreadingHTTPServer | None = None
         self.port = 0
@@ -385,6 +389,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _code_grant(self, form: dict) -> None:
         fake = self.fake
         self._count("code-exchange")
+        hold = fake.code_hold
+        if hold is not None:
+            fake.code_entered.set()
+            hold.wait(timeout=60)
         with fake.lock:
             issued = fake.codes.pop(form.get("code", ""), None)
         if (

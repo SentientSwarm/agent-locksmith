@@ -518,10 +518,10 @@ routes:
   - unknown_attempt
   - device_login_failed
   - authority_changed
+  - revoked_during_login
   fault_refusals:
   - device_login_expired
-  - revoked_during_login
-  fault_reason: needs a 15-minute wait, or a revoke racing the final publish
+  fault_reason: needs a 15-minute wait
 - id: admin.ANY./admin/agent/register
   listener: admin
   method: ANY
@@ -1411,106 +1411,120 @@ behaviours:
 - id: beh.bootstrap-listener
   summary: bootstrap_only listener binds and enrols with a bootstrap token
 journeys: []
-# Fault-only codes waived under the owner's class approval for 3.0.0 (D4); each expires
-# within 30 days. Remove a gap once a case produces its code.
+# Fault-only codes waived under the owner's class approval for 3.0.0; each expires
+# within 30 days and records that approval. Remove a gap once a case produces its code.
 known_gaps:
 - id: admin.GET./admin/operator/egress/policy
   code: registrations_unavailable
   reason: 'fault-only: needs the registrations or agent bindings table to fail a read; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.GET./admin/operator/egress/policy
   code: bindings_unavailable
   reason: 'fault-only: needs the registrations or agent bindings table to fail a read; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.PUT./admin/operator/models/{name}
   code: broker_key_changed
   reason: 'fault-only: needs a key rotation or re-point racing a keep-key broker put; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.POST./admin/operator/oauth/{name}/bootstrap
   code: authority_changed
   reason: 'fault-only: needs a serving catalog that still shows the name as infra (a failed catalog refresh, or a change racing the bootstrap); no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.POST./admin/operator/oauth/{name}/device-login
   code: oauth_kind_unsupported
   reason: 'fault-only: needs a consent-managed account already under the label; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.GET./admin/operator/oauth/{name}/device-login/{attempt}
   code: device_login_expired
-  reason: 'fault-only: needs a 15-minute wait, or a revoke racing the final publish; no case can produce it until the fault-injection build'
+  reason: 'fault-only: needs a 15-minute wait; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
-- id: admin.GET./admin/operator/oauth/{name}/device-login/{attempt}
-  code: revoked_during_login
-  reason: 'fault-only: needs a 15-minute wait, or a revoke racing the final publish; no case can produce it until the fault-injection build'
-  ticket: AGENT-227
-  expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.POST./admin/agent/rotate
   code: rotation_in_progress
   reason: 'fault-only: needs two rotations racing; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.PUT./admin/operator/tools/{name}
   code: broker_key_changed
   reason: 'fault-only: needs a key rotation or re-point racing a keep-key broker put; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./api/{tool_name}/{*path}
   code: connection_not_active
   reason: 'fault-only: needs saved and running registration to diverge (activation refresh failure), or an upstream client that fails to build; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./api/{tool_name}/{*path}
   code: upstream_client_unavailable
   reason: 'fault-only: needs saved and running registration to diverge (activation refresh failure), or an upstream client that fails to build; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}
   code: agent_inactive
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}
   code: authority_changed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}
   code: session_closed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}
   code: connection_not_active
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}/compact
   code: agent_inactive
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}/compact
   code: authority_changed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}/compact
   code: session_closed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}/compact
   code: connection_not_active
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: admin.PUT./admin/operator/tools/{name}/definition-activation
   code: definition_unavailable
   reason: 'fault-only: activation refresh failure after commit; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
+  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'

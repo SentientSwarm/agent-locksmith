@@ -59,6 +59,9 @@ def test_unparseable_route_fails_closed(tmp_path):
         source_routes(repo)
 
 
+APPROVED = "the owner, 2026-11-24"
+
+
 def rec(covers, kind, status=Status.PASS, codes=()):
     return CaseRecord("C", "A", kind, covers, status, codes=list(codes))
 
@@ -79,7 +82,7 @@ def test_failed_covering_case_marks_fail(tmp_path):
 
 
 def test_known_gap_expiry(tmp_path):
-    gap = {"id": "r.save", "reason": "later", "ticket": "AGENT-1", "expires": "2026-12-01"}
+    gap = {"id": "r.save", "reason": "later", "ticket": "AGENT-1", "expires": "2026-12-01", "approved": APPROVED}
     contract = write(tmp_path, gaps=[gap])
     assert coverage(contract, [], dt.date(2026, 11, 30))["r.save"] == "NOT_APPLICABLE"
     assert coverage(contract, [], dt.date(2026, 12, 2))["r.save"] == "NOT_EXERCISED"
@@ -87,7 +90,20 @@ def test_known_gap_expiry(tmp_path):
 
 def test_known_gap_requires_ticket(tmp_path):
     with pytest.raises(ContractError, match="lacks"):
-        write(tmp_path, gaps=[{"id": "r.save", "reason": "x", "expires": "2026-12-01"}])
+        write(tmp_path, gaps=[{"id": "r.save", "reason": "x", "expires": "2026-12-01", "approved": APPROVED}])
+
+
+def test_known_gap_requires_owner_approval(tmp_path):
+    # No PRs on this repo's fast-forward lane: the approval is recorded on the gap.
+    with pytest.raises(ContractError, match="lacks"):
+        write(tmp_path, gaps=[{"id": "r.save", "reason": "x", "ticket": "AGENT-1", "expires": "2026-12-01"}])
+
+
+@pytest.mark.parametrize("field", ["reason", "ticket", "approved"])
+def test_known_gap_fields_must_not_be_empty(tmp_path, field):
+    gap = {"id": "r.save", "reason": "x", "ticket": "AGENT-1", "expires": "2026-12-01", "approved": APPROVED}
+    with pytest.raises(ContractError, match="empty"):
+        write(tmp_path, gaps=[dict(gap, **{field: "  "})])
 
 
 def test_duplicate_ids_rejected(tmp_path):
@@ -112,7 +128,7 @@ TODAY = dt.date(2026, 11, 24)
 
 def fault_gap(code, expires="2026-12-24", **extra):
     return {"id": "r.show", "code": code, "reason": "needs a fault build", "ticket": "AGENT-227",
-            "expires": expires, **extra}
+            "expires": expires, "approved": APPROVED, **extra}
 
 
 def test_code_gap_waives_only_that_fault_code(tmp_path):
