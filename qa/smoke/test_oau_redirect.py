@@ -146,7 +146,7 @@ def refresh_failure_logged(t, label) -> bool:
     codes=["oauth_bootstrap_failed"],
 )
 def test_bootstrap_does_not_follow_a_token_redirect(rd):
-    """oauth-flow.md#refresh-task: token calls never follow a redirect. A bootstrap
+    """docs/concepts/oauth-flow.md#refresh-task: token calls never follow a redirect. A bootstrap
     whose token endpoint answers 307, to the same host or another, fails with 502
     oauth_bootstrap_failed saying so, and the redirect target sees nothing. The
     exchange had been claimed, so the row is kept as uncertain custody that needs a
@@ -179,7 +179,8 @@ def test_bootstrap_does_not_follow_a_token_redirect(rd):
     codes=["oauth_refresh_failed"],
 )
 def test_inline_refresh_does_not_follow_a_token_redirect(rd):
-    """oauth-flow.md#refresh-task and #refresh-failure: an expired session's inline
+    """docs/concepts/oauth-flow.md#refresh-task and
+    docs/concepts/oauth-flow.md#refresh-failure: an expired session's inline
     refresh whose token endpoint answers 307 to another host fails the call with 503
     oauth_refresh_failed, logs cause token_redirect, and leaves the session needing
     a reconnect; the redirect target sees nothing."""
@@ -201,7 +202,7 @@ def test_inline_refresh_does_not_follow_a_token_redirect(rd):
 
 @case("SMK-OAU-056", area="OAU", kind="refusal", covers=[TASK, STATUS])
 def test_background_refresh_does_not_follow_a_token_redirect(rd):
-    """oauth-flow.md#refresh-task: the background task's refresh, through the token
+    """docs/concepts/oauth-flow.md#refresh-task: the background task's refresh, through the token
     client the daemon builds at startup, does not follow a 307 to another host; it
     logs cause token_redirect and the session needs a reconnect. The redirect is set
     before an agent selects the label, so the first background refresh meets it."""
@@ -232,7 +233,7 @@ def test_background_refresh_does_not_follow_a_token_redirect(rd):
     codes=["device_login_failed"],
 )
 def test_device_login_does_not_follow_a_token_redirect(rd):
-    """oauth-flow.md#refresh-task: device login's code exchange does not follow a
+    """docs/concepts/oauth-flow.md#refresh-task: device login's code exchange does not follow a
     307 to another host. The attempt ends 502 device_login_failed naming the redirect,
     no session is created, and the redirect target sees nothing."""
     t, fake, sinks = rd
