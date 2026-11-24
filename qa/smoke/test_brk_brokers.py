@@ -340,6 +340,68 @@ def test_down_broker_refuses_without_dispatch(brk):
         health.close()
 
 
+def broker_events(t, route):
+    r = uds(t, "GET", "/admin/operator/logs?component=broker&limit=1000")
+    assert r.status == 200, r.text
+    # Newest first.
+    return [e["event"] for e in r.json["logs"] if (e.get("fields") or {}).get("route") == route]
+
+
+@case(
+    "SMK-BRK-008",
+    area="BRK",
+    kind="positive",
+    covers=[API, READY, TOOL_GET, "beh.broker.health"],
+)
+def test_broker_recovers_when_a_probe_passes(brk):
+    """docs/reference/cli-reference.md#broker-routes, Health: a down broker answers
+    503 only "until a probe passes". When its probe passes again it is reported up,
+    requests reach it again, the transitions are logged as `broker_down` then
+    `broker_up`, and /readyz counts it as up without naming it."""
+    t = brk["t"]
+    health = Upstream()
+    try:
+        health.routes["/healthz"] = Reply(status=200)
+        broker_tool(
+            t, "brk-recover", health.url,
+            "--health-path", "/healthz", "--health-interval", "5",
+        )
+        agent = enrol(t, "qa-brk-recover", ["brk-recover"], {"brk-recover": ["--broker"]})
+        first = wait_health(t, "brk-recover", "up")
+        assert first["http_status"] == 200 and first.get("checked_at")
+        up_ready = t.http("GET", "/readyz").json["brokers"]
+        health.routes["/healthz"] = Reply(status=500)
+        wait_health(t, "brk-recover", "down", timeout=60.0)
+        down_ready = t.http("GET", "/readyz").json["brokers"]
+        assert down_ready["down"] == up_ready["down"] + 1
+        refused = t.http("GET", "/api/brk-recover/v1/r", token=agent["token"])
+        assert refused.status == 503 and refused.code == "backend_unavailable"
+        ups = broker_events(t, "brk-recover").count("broker_up")
+        before = health.count("/v1/")
+        health.routes["/healthz"] = Reply(status=200)
+        got = wait_health(t, "brk-recover", "up", timeout=30.0)
+        assert got["http_status"] == 200 and not got.get("cause")
+        r = t.http("GET", "/api/brk-recover/v1/r", token=agent["token"])
+        assert r.status == 200, r.text
+        assert health.count("/v1/") == before + 1, "a recovered broker was not dispatched to"
+        assert health.last("/v1/r").header("authorization") == f"Bearer {KEY}"
+        ready = t.http("GET", "/readyz")
+        assert ready.status == 200
+        assert ready.json["brokers"]["up"] == up_ready["up"]
+        assert ready.json["brokers"]["down"] == up_ready["down"]
+        assert "brk-recover" not in ready.text
+        deadline = time.monotonic() + 5
+        events = broker_events(t, "brk-recover")
+        while events.count("broker_up") <= ups and time.monotonic() < deadline:
+            time.sleep(0.2)
+            events = broker_events(t, "brk-recover")
+        assert events.count("broker_up") == ups + 1, (ups, events)
+        assert events[:2] == ["broker_up", "broker_down"], events
+        assert KEY not in str(uds(t, "GET", "/admin/operator/logs?component=broker&limit=1000").json)
+    finally:
+        health.close()
+
+
 @case(
     "SMK-BRK-006",
     area="BRK",

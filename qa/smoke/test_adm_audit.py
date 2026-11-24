@@ -85,6 +85,23 @@ def test_every_documented_event_class_is_accepted(t1, audited):
     assert other.code == 1 and other.error_code == "invalid_event_class", other.err
 
 
+@case("SMK-ADM-068", area="ADM", kind="refusal", covers=["cli.audit.query", AUDIT],
+      codes=["invalid_decision"])
+def test_unknown_decision_is_refused(t1, audited):
+    """`--decision` accepts `allowed|denied|error`; any other value is 400
+    `invalid_decision` (docs/reference/cli-reference.md#audit--audit-log-queries-operator),
+    over the CLI and on the admin route, and no rows are returned."""
+    for decision in ("allowed", "denied", "error"):
+        assert t1.cli("audit", "query", "--decision", decision, "--limit", "1").code == 0
+    out = t1.cli("audit", "query", "--decision", "refused", "--limit", "1")
+    assert out.code == 1 and out.error_code == "invalid_decision", out.err
+    for value in ("refused", "Denied"):
+        r = uds(t1, "GET", f"/admin/operator/audit?decision={value}&limit=1", token=t1.op_token)
+        assert r.status == 400 and r.code == "invalid_decision", (value, r.status, r.text)
+        assert r.json["error"].get("type") == "bad_request", r.text
+        assert "events" not in r.json
+
+
 @case("SMK-ADM-053", area="ADM", kind="corner", covers=["cli.audit.query", AUDIT])
 def test_until_ms_is_exclusive(t1, audited):
     """`--since-ms` is inclusive and `--until-ms` exclusive (cli-reference.md, audit

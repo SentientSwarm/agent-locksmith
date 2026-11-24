@@ -649,7 +649,7 @@ Filter flags:
 | `--agent <public_id>` | Filter to one agent. |
 | `--tool <name>` | Filter to one tool/model name. |
 | `--event-class <class>` | `proxy\|operator\|security`. Other values return 400 `invalid_event_class`. |
-| `--decision <d>` | `allowed\|denied\|error`. |
+| `--decision <d>` | `allowed\|denied\|error`. Other values return 400 `invalid_decision`. |
 | `--limit <n>` | Default 100. |
 | `--offset <n>` | Default 0. |
 
