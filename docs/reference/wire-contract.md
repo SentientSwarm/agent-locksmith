@@ -278,13 +278,13 @@ Codes:
 
 | HTTP | type | code | When |
 |---|---|---|---|
-| 400 | `bad_request` | `bad_request` | Request body unreadable or larger than the registration's body limit. |
+| 400 | `bad_request` | `bad_request` | Request body unreadable, or larger than the registration's body limit on a request that is not a Codex `/responses` call. |
 | 400 | `bad_request` | `upstream_path_escape` | The request path would leave the route's upstream base path, as Locksmith or the upstream may resolve it. Nothing is sent. |
 | 400 | `bad_request` | `path_too_long` | The upstream URL path (base included, after Locksmith decodes the request path once) still holds an escape and is too long to check against the base path: over 16 KiB, or 8 KiB when it needs folded readings. Nothing is sent. |
 | 401 | `auth_error` | `invalid_credential` | Bearer missing, malformed or rejected (uniform wire code), or the agent is no longer active. |
 | 403 | `authz_error` | `tool_not_allowed` | ACL denies, or no explicit account binding; audit distinguishes the cause. |
 | 404 | `not_found` | `tool_not_found` | Allowlisted name that is not registered or not enabled. |
-| 413 | `payload_too_large` | `codex_body_too_large` | Codex `/responses` request body over 1 MiB. |
+| 413 | `payload_too_large` | `codex_body_too_large` | Codex `/responses` request body over the route's `body_limit_bytes`. Nothing is sent. |
 | 502 | `upstream_error` | `upstream_error` | Upstream unreachable, the request to it failed, or its response body could not be read. |
 | 502 | `response_content_type_disallowed` | `response_content_type_disallowed` | M7 content-type allowlist rejected the response. |
 | 502 | `response_size_exceeded` | `response_size_exceeded` | M7 size cap exceeded on a buffered response (redaction configured). Streamed responses are truncated instead; see below. |

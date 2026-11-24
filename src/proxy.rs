@@ -659,8 +659,21 @@ async fn proxy_request(
             axum::http::HeaderValue::from_static("identity"),
         );
     }
+    // Phase G3 / AGENT-248 — a codex `/responses` request gets the body
+    // fixup below, bounded only by the route's `body_limit_bytes`.
+    let codex_fixup =
+        target.profile.is_codex() && request_path_ends_with_responses(&ctx.request_path);
     let body_bytes = match read_request_body(req, target.body_limit_bytes).await {
         Ok(b) => b,
+        Err(BodyReadError::TooLarge) if codex_fixup => {
+            return record_codex_body_too_large(
+                &state.audit,
+                &ctx,
+                upstream_host,
+                target.body_limit_bytes,
+            )
+            .await;
+        }
         Err(_) => {
             return record_body_read_error(&state.audit, &ctx, upstream_host).await;
         }
@@ -676,30 +689,22 @@ async fn proxy_request(
 
     // Phase G3 — codex Responses API body fixup. Only when both
     // predicates match (upstream is chatgpt.com codex AND request
-    // path is /responses). Skips on empty body (passthrough) and on
-    // non-JSON bodies (passthrough). Returns 413 only on the >1MB
-    // size cap. The summary is stashed on `ctx` so audit_details
-    // can emit `details.codex_body_fixup` when fixup happened.
-    let body_bytes =
-        if target.profile.is_codex() && request_path_ends_with_responses(&ctx.request_path) {
-            match crate::codex_body::fixup(&body_bytes) {
-                Ok((new_body, summary)) => {
-                    if !summary.is_noop() {
-                        ctx.codex_body_fixup = Some(serde_json::json!({
-                            "fields_added": summary.fields_added,
-                            "fields_overridden": summary.fields_overridden,
-                            "fields_removed": summary.fields_removed,
-                        }));
-                    }
-                    Bytes::from(new_body)
-                }
-                Err(crate::codex_body::CodexBodyError::TooLarge) => {
-                    return record_codex_body_too_large(&state.audit, &ctx, upstream_host).await;
-                }
-            }
-        } else {
-            body_bytes
-        };
+    // path is /responses). Non-JSON bodies pass through unchanged.
+    // The summary is stashed on `ctx` so audit_details can emit
+    // `details.codex_body_fixup` when fixup happened.
+    let body_bytes = if codex_fixup {
+        let (new_body, summary) = crate::codex_body::fixup(&body_bytes);
+        if !summary.is_noop() {
+            ctx.codex_body_fixup = Some(serde_json::json!({
+                "fields_added": summary.fields_added,
+                "fields_overridden": summary.fields_overridden,
+                "fields_removed": summary.fields_removed,
+            }));
+        }
+        Bytes::from(new_body)
+    } else {
+        body_bytes
+    };
 
     let upstream_req = match build_upstream_request(
         &state,
@@ -755,14 +760,30 @@ fn resolve_target(state: &AppState, name: &str) -> Option<ProxyTarget> {
         .map(ProxyTarget::from_tool_config)
 }
 
-/// Read the request body up to the tool's `body_limit_bytes`. On error
-/// returns `()` — the caller emits the audit row with `RequestCtx`
-/// fields it already has.
-async fn read_request_body(req: Request<Body>, body_limit: u64) -> Result<Bytes, ()> {
+/// Why reading the agent's request body failed.
+#[derive(Debug, PartialEq, Eq)]
+enum BodyReadError {
+    /// The body is larger than the route's `body_limit_bytes`.
+    TooLarge,
+    /// Anything else, e.g. the agent disconnected mid-upload.
+    Other,
+}
+
+/// Read the request body up to the tool's `body_limit_bytes`. The caller
+/// emits the audit row with `RequestCtx` fields it already has.
+async fn read_request_body(req: Request<Body>, body_limit: u64) -> Result<Bytes, BodyReadError> {
     let limit = usize::try_from(body_limit).unwrap_or(usize::MAX);
     axum::body::to_bytes(req.into_body(), limit)
         .await
-        .map_err(|_| ())
+        .map_err(|err| {
+            let over_limit = std::error::Error::source(&err)
+                .is_some_and(|source| source.is::<http_body_util::LengthLimitError>());
+            if over_limit {
+                BodyReadError::TooLarge
+            } else {
+                BodyReadError::Other
+            }
+        })
 }
 
 /// Forward request headers (with auth-related headers stripped) plus
@@ -2199,14 +2220,14 @@ async fn record_body_read_error(
 }
 
 /// Phase G3 — emit a `proxy/codex_body_too_large` audit row + 413
-/// wire response when the codex Responses request body exceeds the
-/// 1 MiB cap. Tighter than the per-tool `body_limit_bytes`: this is
-/// the size at which locksmith refuses to inspect the body for
-/// fixup, even if `body_limit_bytes` would allow more.
+/// wire response when a codex Responses request body exceeds the
+/// route's `body_limit_bytes`. AGENT-248: the fixup has no cap of its
+/// own, so the route limit is the only bound.
 async fn record_codex_body_too_large(
     audit: &Option<AuditRepository>,
     ctx: &RequestCtx,
     upstream_host: Option<String>,
+    body_limit_bytes: u64,
 ) -> Response {
     let mut event = ctx.audit_event_base();
     event.event_class = EventClass::Proxy;
@@ -2219,7 +2240,7 @@ async fn record_codex_body_too_large(
         StatusCode::PAYLOAD_TOO_LARGE,
         Json(json!({
             "error": {
-                "message": format!("Codex request body exceeds {} byte cap", crate::codex_body::MAX_BODY_BYTES),
+                "message": format!("Codex request body exceeds the route's {body_limit_bytes} byte limit"),
                 "type": "payload_too_large",
                 "code": "codex_body_too_large",
             }

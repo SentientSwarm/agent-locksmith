@@ -22,6 +22,12 @@
 
 ### Fixed
 
+- Large Codex `/responses` bodies get the body fixups instead of a 413
+  (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
+  only bound now is the route's `body_limit_bytes` (10 MiB by default), and
+  a body over it is refused with `413 codex_body_too_large` without being
+  sent. Other routes still answer an over-limit body with 400. See
+  [size cap](docs/concepts/oauth-flow.md#size-cap).
 - A database that stops taking writes no longer loses audit silently
   (AGENT-251). On 2026-11-14 a filesystem shutdown left the daemon ready
   for 2.5 hours while every audit row was dropped. Now a failed audit

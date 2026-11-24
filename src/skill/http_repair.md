@@ -27,7 +27,7 @@ Status codes:
 - `403` — `type: authz_error code: tool_not_allowed`: token valid, but the
   requested tool is excluded by your ACL or has no explicit account binding.
 - `413` — `type: payload_too_large code: codex_body_too_large`: codex
-  request body exceeds the 1 MiB cap.
+  request body exceeds the route's body limit (10 MiB by default).
 - `429` — `type: auth_error code: rate_limited`: includes a `Retry-After`
   header (seconds).
 - `500` — `type: auth_error code: internal_error | backend_error`: server-side

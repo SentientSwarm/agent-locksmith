@@ -37,23 +37,10 @@
 
 use serde_json::{Map, Value};
 
-/// Cap on inspectable body size (1 MiB). Larger bodies return
-/// [`CodexBodyError::TooLarge`]; the proxy maps this to 413. Codex
-/// request bodies are tiny in practice (a few KB at most), so this
-/// mainly defends against pathological streaming bodies during the
-/// inspect+rewrite pass.
-pub const MAX_BODY_BYTES: usize = 1024 * 1024;
-
 /// Default `instructions` injected when the agent didn't set any.
 /// Operators can document an override later if this becomes a
 /// soft-API; for now it's neutral phrasing.
 const DEFAULT_INSTRUCTIONS: &str = "You are a helpful assistant.";
-
-#[derive(Debug, thiserror::Error)]
-pub enum CodexBodyError {
-    #[error("codex body exceeds {MAX_BODY_BYTES} byte cap")]
-    TooLarge,
-}
 
 /// What [`fixup`] changed. `is_noop` returns true when nothing was
 /// touched — proxy.rs uses this to decide whether to emit
@@ -86,18 +73,16 @@ impl FixupSummary {
 /// 400 on malformed bodies; that's the right error for the agent to
 /// see.
 ///
-/// Errors only on size cap exceeded. Caller (proxy.rs) maps to 413.
-pub fn fixup(body: &[u8]) -> Result<(Vec<u8>, FixupSummary), CodexBodyError> {
-    if body.len() > MAX_BODY_BYTES {
-        return Err(CodexBodyError::TooLarge);
-    }
-
+/// There is no size cap of its own (AGENT-248): the body has already been
+/// read under the route's `body_limit_bytes`, and the proxy answers a
+/// codex `/responses` body over that limit with 413 before calling this.
+pub fn fixup(body: &[u8]) -> (Vec<u8>, FixupSummary) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return Ok((body.to_vec(), FixupSummary::default()));
+        return (body.to_vec(), FixupSummary::default());
     };
 
     let Value::Object(mut map) = value else {
-        return Ok((body.to_vec(), FixupSummary::default()));
+        return (body.to_vec(), FixupSummary::default());
     };
 
     let mut summary = FixupSummary::default();
@@ -109,12 +94,12 @@ pub fn fixup(body: &[u8]) -> Result<(Vec<u8>, FixupSummary), CodexBodyError> {
     if summary.is_noop() {
         // Avoid re-serializing when we didn't change anything —
         // preserves the caller's exact bytes (formatting, key order).
-        return Ok((body.to_vec(), summary));
+        return (body.to_vec(), summary);
     }
 
     let new_body =
         serde_json::to_vec(&Value::Object(map)).expect("re-serializing a parsed Value cannot fail");
-    Ok((new_body, summary))
+    (new_body, summary)
 }
 
 fn apply_store_rule(map: &mut Map<String, Value>, summary: &mut FixupSummary) {
@@ -175,7 +160,7 @@ mod tests {
 
     #[test]
     fn empty_object_gets_all_three_fields() {
-        let (out, summary) = fixup(b"{}").unwrap();
+        let (out, summary) = fixup(b"{}");
         let v = parse(&out);
         assert_eq!(v["store"], Value::Bool(false));
         assert_eq!(v["stream"], Value::Bool(true));
@@ -193,7 +178,7 @@ mod tests {
     #[test]
     fn store_true_is_overridden_to_false() {
         let body = json!({"store": true}).to_string();
-        let (out, summary) = fixup(body.as_bytes()).unwrap();
+        let (out, summary) = fixup(body.as_bytes());
         let v = parse(&out);
         assert_eq!(v["store"], Value::Bool(false));
         assert!(summary.fields_overridden.contains(&"store"));
@@ -203,7 +188,7 @@ mod tests {
     #[test]
     fn store_false_is_preserved_no_override() {
         let body = json!({"store": false, "stream": true, "instructions": "x"}).to_string();
-        let (_out, summary) = fixup(body.as_bytes()).unwrap();
+        let (_out, summary) = fixup(body.as_bytes());
         assert!(
             summary.is_noop(),
             "store/stream/instructions all valid → noop"
@@ -213,7 +198,7 @@ mod tests {
     #[test]
     fn stream_false_is_overridden_to_true() {
         let body = json!({"stream": false}).to_string();
-        let (out, summary) = fixup(body.as_bytes()).unwrap();
+        let (out, summary) = fixup(body.as_bytes());
         let v = parse(&out);
         assert_eq!(v["stream"], Value::Bool(true));
         assert!(summary.fields_overridden.contains(&"stream"));
@@ -227,7 +212,7 @@ mod tests {
             "instructions": "be terse",
         })
         .to_string();
-        let (out, summary) = fixup(body.as_bytes()).unwrap();
+        let (out, summary) = fixup(body.as_bytes());
         let v = parse(&out);
         assert_eq!(v["instructions"], Value::String("be terse".into()));
         assert!(summary.is_noop());
@@ -237,7 +222,7 @@ mod tests {
     fn fully_valid_body_is_noop_and_bytes_preserved() {
         // Particular formatting (whitespace, key order) survives noop.
         let body = b"{ \"instructions\": \"x\", \"stream\": true, \"store\": false }";
-        let (out, summary) = fixup(body).unwrap();
+        let (out, summary) = fixup(body);
         assert_eq!(out, body, "noop must preserve exact input bytes");
         assert!(summary.is_noop());
     }
@@ -245,7 +230,7 @@ mod tests {
     #[test]
     fn non_json_body_passes_through_unchanged() {
         let body = b"not json at all";
-        let (out, summary) = fixup(body).unwrap();
+        let (out, summary) = fixup(body);
         assert_eq!(out, body);
         assert!(summary.is_noop());
     }
@@ -253,7 +238,7 @@ mod tests {
     #[test]
     fn json_array_passes_through_unchanged() {
         let body = b"[1,2,3]";
-        let (out, summary) = fixup(body).unwrap();
+        let (out, summary) = fixup(body);
         assert_eq!(out, body);
         assert!(summary.is_noop());
     }
@@ -261,7 +246,7 @@ mod tests {
     #[test]
     fn json_null_passes_through_unchanged() {
         let body = b"null";
-        let (out, summary) = fixup(body).unwrap();
+        let (out, summary) = fixup(body);
         assert_eq!(out, body);
         assert!(summary.is_noop());
     }
@@ -269,40 +254,38 @@ mod tests {
     #[test]
     fn malformed_json_passes_through_unchanged() {
         let body = b"{\"store\": tru";
-        let (out, summary) = fixup(body).unwrap();
+        let (out, summary) = fixup(body);
         assert_eq!(out, body);
         assert!(summary.is_noop());
     }
 
     #[test]
-    fn body_over_size_cap_returns_too_large() {
-        let body = vec![b'a'; MAX_BODY_BYTES + 1];
-        let err = fixup(&body).unwrap_err();
-        assert!(matches!(err, CodexBodyError::TooLarge));
-    }
-
-    #[test]
-    fn body_at_exact_size_cap_is_processed() {
-        // Construct a JSON body that is exactly MAX_BODY_BYTES and
-        // missing all three fields. Padding is a long instructions
-        // string we then strip via override (instructions stays
-        // since we set it ourselves; we rely on store/stream being
-        // missing for the changed bytes).
-        let prefix = b"{\"a\":\"";
+    fn body_over_one_mib_is_fixed_up() {
+        // AGENT-248: the old 1 MiB cap is gone; a 3 MiB body with none of
+        // the required fields gets all of them, and max_output_tokens goes.
+        let prefix = b"{\"max_output_tokens\":5,\"input\":\"";
         let suffix = b"\"}";
-        let pad_len = MAX_BODY_BYTES - prefix.len() - suffix.len();
-        let mut body = Vec::with_capacity(MAX_BODY_BYTES);
+        let mut body = Vec::with_capacity(3 * 1024 * 1024);
         body.extend_from_slice(prefix);
-        body.extend(std::iter::repeat_n(b'x', pad_len));
+        body.extend(std::iter::repeat_n(b'x', 3 * 1024 * 1024));
         body.extend_from_slice(suffix);
-        assert_eq!(body.len(), MAX_BODY_BYTES);
 
-        let (_out, summary) = fixup(&body).expect("at-cap must be processed");
-        // All three fields should be added (none were present).
+        let (out, summary) = fixup(&body);
         assert_eq!(
             summary.fields_added,
             vec!["store", "stream", "instructions"]
         );
+        assert_eq!(summary.fields_removed, vec!["max_output_tokens"]);
+        let v = parse(&out);
+        assert_eq!(v["input"].as_str().map(str::len), Some(3 * 1024 * 1024));
+    }
+
+    #[test]
+    fn non_json_body_over_one_mib_passes_through_unchanged() {
+        let body = vec![b'a'; 2 * 1024 * 1024];
+        let (out, summary) = fixup(&body);
+        assert_eq!(out, body);
+        assert!(summary.is_noop());
     }
 
     #[test]
@@ -329,7 +312,7 @@ mod tests {
             "max_output_tokens": 16384,
         })
         .to_string();
-        let (out, summary) = fixup(body.as_bytes()).unwrap();
+        let (out, summary) = fixup(body.as_bytes());
         let v = parse(&out);
         assert!(
             v.get("max_output_tokens").is_none(),
@@ -348,7 +331,7 @@ mod tests {
             "instructions": "x",
         })
         .to_string();
-        let (_out, summary) = fixup(body.as_bytes()).unwrap();
+        let (_out, summary) = fixup(body.as_bytes());
         assert!(
             !summary.fields_removed.contains(&"max_output_tokens"),
             "absent param must not be reported as removed"
@@ -360,7 +343,7 @@ mod tests {
         // Empty input gets G3 additions (store/stream/instructions);
         // explicit max_output_tokens still stripped in same pass.
         let body = json!({"max_output_tokens": 0}).to_string();
-        let (out, summary) = fixup(body.as_bytes()).unwrap();
+        let (out, summary) = fixup(body.as_bytes());
         let v = parse(&out);
         assert!(v.get("max_output_tokens").is_none());
         assert_eq!(v["store"], Value::Bool(false));

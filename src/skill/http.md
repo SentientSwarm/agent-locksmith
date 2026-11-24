@@ -110,12 +110,10 @@ the body above. Everything else is locksmith.
 
 ### Codex body cap
 
-Locksmith inspects codex `/responses` request bodies for body fixup.
-Bodies > 1 MiB return **413 Payload Too Large** with envelope:
+Locksmith rewrites codex `/responses` request bodies up to the route's
+body limit (10 MiB unless the operator set another). A body over that
+limit returns **413 Payload Too Large** and is not sent:
 
 ```json
 { "error": { "type": "payload_too_large", "code": "codex_body_too_large" } }
 ```
-
-Codex bodies are tiny in practice (a few KB). The cap is a defense
-against pathological streaming-body edge cases.
