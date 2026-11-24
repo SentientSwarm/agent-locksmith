@@ -187,8 +187,11 @@ def test_inline_refresh_does_not_follow_a_token_redirect(rd):
     t, fake, sinks = rd
     sink = sinks["cross-host"]
     assert bootstrap(t, fake, "inline", expires_in=2).code == 0
-    agent = bind(t, "inline")
     time.sleep(2.5)
+    # Select only now: the background task refreshes selected sessions only, so
+    # binding before the sleep let a tick refresh the token first (about 1 run in
+    # 11) and the inline call then made no refresh at all.
+    agent = bind(t, "inline")
     with redirected(fake, sink) as r:
         response = t.http("GET", f"/api/{LEGACY_NAME}/records", token=agent["token"])
     assert response.status == 503, response.text
