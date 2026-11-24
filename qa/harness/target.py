@@ -150,7 +150,9 @@ class LocalTarget:
         self.bins = bins.resolve()
         # Short path outside the bundle: the admin socket path must fit SUN_LEN,
         # and the work directory (operators file, database) is never evidence.
-        base = "/tmp" if Path("/tmp").is_dir() else None
+        # LSQA_WORK_BASE lets a test isolate its leak check from other QA runs
+        # on the same host (AGENT-356); it must be a short path too.
+        base = os.environ.get("LSQA_WORK_BASE") or ("/tmp" if Path("/tmp").is_dir() else None)
         self.work = Path(tempfile.mkdtemp(prefix="lsqa-", dir=base)).resolve()
         canaries.add(str(self.work), "workdir")
         self.canaries = canaries

@@ -1,8 +1,10 @@
 """run.py end to end against a daemon that cannot start (needs QA_BINS)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -22,18 +24,25 @@ def test_daemon_that_cannot_start_fails_fast_and_names_the_cause(tmp_path):
                     'echo \'{"level":"ERROR","fields":{"message":"daemon exited with error","error":"qa-forced"}}\'\nexit 1\n')
     fake.chmod(0o755)
     out = tmp_path / "evidence"
-    before = set(Path("/tmp").glob("lsqa-*"))
+    # A private work base: other QA runs on the host also create /tmp/lsqa-*,
+    # so a shared-/tmp comparison blames their directories on this run
+    # (AGENT-356). Short, because the admin socket lives under it.
+    base = Path(tempfile.mkdtemp(prefix="lsqa-t-", dir="/tmp"))
     started = time.monotonic()
-    proc = subprocess.run([sys.executable, str(QA / "run.py"), "--bins", str(bins), "--out", str(out)],
-                          capture_output=True, text=True, timeout=120, check=False)
+    try:
+        proc = subprocess.run([sys.executable, str(QA / "run.py"), "--bins", str(bins), "--out", str(out)],
+                              capture_output=True, text=True, timeout=120, check=False,
+                              env={**os.environ, "LSQA_WORK_BASE": str(base)})
+        left = list(base.iterdir())
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
     assert proc.returncode == 1
     assert time.monotonic() - started < 60
     results = json.loads((out / "results.json").read_text())
     assert results["gate"]["passed"] is False
     assert all(c["status"] == "FAIL" for c in results["cases"])
     assert any("qa-forced" in c["detail"] for c in results["cases"])
-    # Compare with before: an interrupted earlier run can leave its own directory.
-    assert set(Path("/tmp").glob("lsqa-*")) <= before, "work directory left behind"
+    assert not left, f"work directory left behind: {left}"
 
 
 def test_existing_evidence_directory_is_refused(tmp_path):
