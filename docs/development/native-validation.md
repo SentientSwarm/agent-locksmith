@@ -120,4 +120,4 @@ unrelated live, provider, quality, owner or publication gates. Published v2.8.0
 metadata has four CLI assets and no daemon assets; releases from 3.0.0 publish
 all eight validated binaries. An exact-tag locally built
 prior daemon needs its own measured source, toolchain and hash record; never call
-the unreleased feature base the last published release or invent a published pair.
+an untagged feature base the last published release or invent a published pair.

@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -135,6 +136,46 @@ class ReleaseNotes(unittest.TestCase):
         self.assertTrue(
             R.changelog_section((ROOT / "CHANGELOG.md").read_text(), R.version(ROOT))
         )
+
+    def test_release_notes_fit_in_a_github_release_body(self):
+        # GitHub refuses a release body over 125,000 characters.
+        body = R.changelog_section((ROOT / "CHANGELOG.md").read_text(), R.version(ROOT))
+        self.assertLess(len(R.notes(body)), 125_000)
+
+
+class ThreeZeroZeroChangelogTest(unittest.TestCase):
+    """The 3.0.0 section is the whole release and reads as shipped (AGENT-214)."""
+
+    def setUp(self):
+        self.text = (ROOT / "CHANGELOG.md").read_text()
+        self.section = R.changelog_section(self.text, "3.0.0")
+
+    def test_breaking_legacy_mode_removal_leads(self):
+        first = re.search(r"^### (.+)\n\n- (.+)", self.section, re.MULTILINE)
+        self.assertEqual(first.group(1), "Removed")
+        self.assertIn("**Breaking:** legacy mode", first.group(2))
+
+    def test_no_unreleased_section_sits_above_3_0_0_before_the_tag(self):
+        if R.version(ROOT) == "3.0.0":
+            self.assertNotIn("## Unreleased", self.text)
+
+    def test_nothing_says_3_0_0_cannot_open_its_own_databases(self):
+        for path in [ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotRegex(path.read_text(), r"3\.0\.0 binary|3\.0\.0 cannot")
+
+    def test_upgrading_names_the_migrations_from_each_prior_build(self):
+        upgrading = re.search(r"^### Upgrading\n(.*?)(?=^### |\Z)", self.section,
+                              re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(upgrading)
+        note = upgrading.group(1)
+        self.assertIn("From v2.8.0 it\n  applies migrations 0009 to", note)
+        self.assertIn("b0cf08c", note)
+        self.assertIn("restoring the backup", note)
+        if R.version(ROOT) == "3.0.0":
+            newest = max(p.name[:4] for p in (ROOT / "migrations").glob("[0-9]*.sql"))
+            self.assertIn(f"0009 to {newest}", note)
+            self.assertIn(f"0023 to {newest}", note)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 3.0.0
+
+3.0.0 is a major release: it removes legacy mode, requires an explicit
+account and finite grants for every agent, and migrates the database
+forward. Read Upgrading, below, before you install it.
 
 ### Removed
 
@@ -19,6 +23,60 @@
   reports `agent_identity_required`, and the 401 `agent_identity_required`
   error code is retired. `inbound_auth` is still accepted and ignored, with
   a warning when a token is set.
+
+### Breaking changes
+
+- Credentialed requests require an explicitly selected account for each allowed
+  agent. Missing bindings deny access; unavailable selected credentials fail
+  closed. Locksmith no longer falls back to a registration default, another
+  OAuth session, or an unauthenticated upstream.
+- Credentialed legacy routes require a registered agent identity. Clearing a
+  binding removes access instead of restoring a default account. Direct
+  file-backed bindings require an explicit sealed-snapshot import.
+
+- New agents and bootstrap policies have no implicit HTTP grants. Existing
+  policies require finite review, including authless connections; adding a
+  registration never expands authority. Unsupported narrower selectors are refused.
+- Deleting/recreating a route or changing its upstream/egress clears its grants
+  and selections. Deliberate destination review and reapproval are required.
+
+### Upgrading
+
+- 3.0.0 migrates its database forward when it starts. From v2.8.0 it
+  applies migrations 0009 to 0029. From the pre-release candidate
+  b0cf08c, which also reports version 3.0.0 (`locksmithd --build-info`
+  names the revision), it applies 0023 to 0029: per-route upstream CA,
+  request profiles, route backends, broker backends, rate limits, binding
+  method policy and the write probe.
+- Migrations are forward-only. An older binary refuses to start on a
+  database a newer one has migrated, so downgrading means stopping the
+  daemon and restoring the backup taken before the upgrade. Take it with
+  SQLite's backup API while the daemon is stopped, for example
+  `sqlite3 "$DATABASE" ".backup 'before-3.0.0.db'"`.
+- From v2.8.0, also set `listen.admin_socket`, `database.path` and
+  `operator_credentials_path` (see Removed, above, and
+  [legacy mode was removed](docs/reference/config.md#legacy-mode-was-removed)),
+  and select an account for each agent before the cutover, as below.
+
+- Back up a consistent database, preview and review the reference-only mapping,
+  apply the selected bindings, then verify the cutover and restart. Existing
+  explicit selections are preserved; ambiguous mappings need operator input.
+  Follow [the migration guide](docs/concepts/migrating-account-bindings.md).
+- [The repeatable daemon/CLI smoke](docs/development/explicit-account-bindings-smoke.md)
+  covers account attribution, zero-dispatch denials, migration and the documented
+  setup commands using synthetic accounts. It does not establish live provider
+  compatibility, installed-deployment acceptance, a version tag or publication.
+- The binding-repair change guide distinguishes accepted D1 work from remote
+  integration and release status.
+
+- For the HTTP grant cutover, stop writers and take a compatible binary/schema/
+  configuration/state backup. Use the reviewed `preview --grants` workflow to
+  commit finite policy and account references atomically. Old unreviewed bootstrap
+  tokens need re-minting; stale plans must not resurrect removed authority.
+- See [HTTP grant and activation changes](docs/changes/explicit-http-grants.md)
+  for saved-but-failed activation repair, next-admission boundaries and limits.
+  Original local synthetic acceptance is historical. Live-provider
+  compatibility is not claimed.
 
 ### Fixed
 
@@ -661,6 +719,51 @@
   write `agent_credential_set` / `agent_credential_unset` naming the route
   and the binding kind, never a credential value.
 
+- Route backends (#155): the active-backend check on `route backend put`
+  and `delete` now runs inside the write, so a concurrent switch cannot
+  let an edit land on the live destination. `route backend list` and
+  `get` show the active backend from the route itself. A non-numeric
+  `If-Match` on `route switch` is 400 `if_match_invalid`, not 409
+  `revision_conflict`.
+- Broker hardening (#159). Hop-by-hop, framing and Locksmith-managed
+  header names are refused as a broker identity header (400
+  `invalid_broker`) and as any credential header (400 `invalid_metadata`).
+  An agent's `X-Locksmith-Agent` never reaches a broker, even when the
+  identity header is renamed or omitted. A broker key that cannot be
+  materialized is no longer reported as the broker being down: the probe
+  is skipped, `broker_key_unresolved` is logged, and requests fail with
+  503 `credential_unresolved`. Health probes no longer follow redirects.
+  The proxy and the prober share one key resolver. A repeated attribution
+  header is flagged `broker_account_invalid`. A broker `put` without
+  `auth` keeps the key only for the same destination (400
+  `invalid_broker` otherwise) and never undoes a concurrent rotation (409
+  `broker_key_changed`). Selection and key failures are reported before
+  a down broker.
+- Point upstream URLs in `Link` and `Location` response headers back at
+  Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
+  so following `rel="next"` bypassed Locksmith and failed without a
+  credential. Link targets under a route's upstream base now become
+  `<scheme>://<Host>/api/<route>/...`. Other URLs, URLs embedded in another
+  URL's query and links to the bare upstream base are left unchanged.
+- Forward every value of a repeated response header. Only the last
+  `Set-Cookie` or `Link` value reached the agent before.
+
+- Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is
+  enabled. Previously the setting was parsed but nothing bound it, so mtls-only
+  deployments had no enrolment path. It needs `listen.admin_socket`; startup
+  fails when that is missing, when `host` is not an IP address, or when the
+  port or certificate cannot be used.
+- Verify the bootstrap secret before agent registration creates the agent.
+  Previously a caller holding only a token's public id could create and then
+  revoke an agent under any name, permanently reserving that name.
+- Own native preparation request bodies before buffering through daemon shutdown,
+  retaining independent body and operation budgets.
+- Fail daemon startup immediately when the admin socket or admin HTTPS port
+  cannot be bound, and stop the daemon with an error-level log when any listener
+  stops before shutdown. Previously the daemon kept serving agents without its
+  admin surface and reported the error only when stopped. Listener "bound" log
+  lines now show the actually bound address, so a configured port 0 is usable.
+
 ### Added
 
 - `locksmith agent set-credential <id> <reg> --stored-header-stdin
@@ -736,27 +839,6 @@
   wrong. Keys are read only from owner-only files. This is the stored-key
   rotation path, and lets a database copy run under its own key.
 
-### Changed
-
-- The seed catalog (2.3.0) no longer ships the `lf-scan` sidecar
-  (AGENT-256); inline inspection replaces it. Removing a seed entry never
-  deletes a row, so a deployment that seeded it keeps the registration.
-  `locksmith infra delete lf-scan` disables a seeded row (it stays
-  listed); to remove it entirely, `locksmith infra put` it first so it
-  becomes operator-owned, then delete it.
-- Agents now receive upstream redirects instead of their final response.
-  Redirects to the route's own upstream point back at Locksmith, so
-  clients that follow redirects (`curl -L`, most HTTP libraries) see no
-  difference. Redirects to another host, such as GitHub tarball and log
-  downloads to signed storage URLs, must be fetched by the agent over its
-  own egress; an agent that can reach the network only through Locksmith
-  can no longer complete them. The agent's client must drop its
-  Locksmith bearer (`Authorization`) on a host change, as standard
-  clients do. On routes with response controls a redirect is returned
-  with an empty body.
-
-### Added
-
 - Broker routes (`--broker` on `tool|model put` and `route backend put`).
   A broker destination picks the provider account itself: Locksmith sends
   one route-level key (sealed with `tool|model set-key` or `route backend
@@ -792,64 +874,38 @@
   works. Unusable bundles, plain-HTTP upstreams and native MCP routes are
   refused with 400 `invalid_upstream_ca`. Changing or removing a route's CA
   clears its grants and account bindings, as an upstream change does.
-  Migration 0023 adds the column; a 3.0.0 binary cannot open a database
-  after it, so roll back by restoring a backup.
+  Migration 0023 adds the column; the pre-release candidate b0cf08c
+  cannot open a database after it, so roll back by restoring a backup.
 - `locksmith oauth device-login <name> [--label] [--replace]` and its admin
   API sign a ChatGPT-plan (codex) session in, or reconnect a degraded one,
   through OpenAI's device authorization. The daemon runs the code exchange,
   so no token reaches the operator's shell. A session needing reconnection is
   replaced in place and agent bindings to its label keep working (#138).
 
-### Fixed
-
-- Route backends (#155): the active-backend check on `route backend put`
-  and `delete` now runs inside the write, so a concurrent switch cannot
-  let an edit land on the live destination. `route backend list` and
-  `get` show the active backend from the route itself. A non-numeric
-  `If-Match` on `route switch` is 400 `if_match_invalid`, not 409
-  `revision_conflict`.
-- Broker hardening (#159). Hop-by-hop, framing and Locksmith-managed
-  header names are refused as a broker identity header (400
-  `invalid_broker`) and as any credential header (400 `invalid_metadata`).
-  An agent's `X-Locksmith-Agent` never reaches a broker, even when the
-  identity header is renamed or omitted. A broker key that cannot be
-  materialized is no longer reported as the broker being down: the probe
-  is skipped, `broker_key_unresolved` is logged, and requests fail with
-  503 `credential_unresolved`. Health probes no longer follow redirects.
-  The proxy and the prober share one key resolver. A repeated attribution
-  header is flagged `broker_account_invalid`. A broker `put` without
-  `auth` keeps the key only for the same destination (400
-  `invalid_broker` otherwise) and never undoes a concurrent rotation (409
-  `broker_key_changed`). Selection and key failures are reported before
-  a down broker.
-- Point upstream URLs in `Link` and `Location` response headers back at
-  Locksmith. GitHub pagination returned `Link: <https://api.github.com/...>`,
-  so following `rel="next"` bypassed Locksmith and failed without a
-  credential. Link targets under a route's upstream base now become
-  `<scheme>://<Host>/api/<route>/...`. Other URLs, URLs embedded in another
-  URL's query and links to the bare upstream base are left unchanged.
-- Forward every value of a repeated response header. Only the last
-  `Set-Cookie` or `Link` value reached the agent before.
-
-## 3.0.0
-
-- Bind the bootstrap-only enrolment listener when `listen.bootstrap_only` is
-  enabled. Previously the setting was parsed but nothing bound it, so mtls-only
-  deployments had no enrolment path. It needs `listen.admin_socket`; startup
-  fails when that is missing, when `host` is not an IP address, or when the
-  port or certificate cannot be used.
-- Verify the bootstrap secret before agent registration creates the agent.
-  Previously a caller holding only a token's public id could create and then
-  revoke an agent under any name, permanently reserving that name.
-- Own native preparation request bodies before buffering through daemon shutdown,
-  retaining independent body and operation budgets.
-- Fail daemon startup immediately when the admin socket or admin HTTPS port
-  cannot be bound, and stop the daemon with an error-level log when any listener
-  stops before shutdown. Previously the daemon kept serving agents without its
-  admin surface and reported the error only when stopped. Listener "bound" log
-  lines now show the actually bound address, so a configured port 0 is usable.
+- Finite reviewed HTTP grants pair named agents with explicitly selected accounts,
+  with runnable reference and independent customer-service setup instructions.
+- Operator reads distinguish active, pending and disabled connections. Saved
+  writes that fail activation report that failure while affected routes deny
+  admission and unrelated healthy routes remain available.
 
 ### Changed
+
+- The seed catalog (2.3.0) no longer ships the `lf-scan` sidecar
+  (AGENT-256); inline inspection replaces it. Removing a seed entry never
+  deletes a row, so a deployment that seeded it keeps the registration.
+  `locksmith infra delete lf-scan` disables a seeded row (it stays
+  listed); to remove it entirely, `locksmith infra put` it first so it
+  becomes operator-owned, then delete it.
+- Agents now receive upstream redirects instead of their final response.
+  Redirects to the route's own upstream point back at Locksmith, so
+  clients that follow redirects (`curl -L`, most HTTP libraries) see no
+  difference. Redirects to another host, such as GitHub tarball and log
+  downloads to signed storage URLs, must be fetched by the agent over its
+  own egress; an agent that can reach the network only through Locksmith
+  can no longer complete them. The agent's client must drop its
+  Locksmith bearer (`Authorization`) on a host change, as standard
+  clients do. On routes with response controls a redirect is returned
+  with an empty body.
 
 - Publish the daemon. Earlier releases shipped only the `locksmith` CLI for
   each platform; there was no `locksmithd` download. A release now carries
@@ -1046,50 +1102,6 @@
   existing wire/authority contracts are unchanged. This is bounded AGENT-209 work,
   not full onboarding or live-provider acceptance.
 
-### Internal
-
-- Add the `qa/` black-box qualification harness: a surface contract checked
-  against every route and CLI command, PASS/FAIL/NOT_EXERCISED/NOT_APPLICABLE
-  statuses with per-area floors, redaction-scanned evidence bundles, and
-  about 300 smoke cases covering every route, CLI command and daemon
-  behaviour, run against the release binaries in CI. See `qa/README.md`.
-- Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
-  after its TLS configuration loads. It previously logged both
-  `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,
-  `agent listener (mTLS) bound` with the admin address. The agent listener's
-  messages are unchanged.
-
-- Start daemon integration tests on port 0 and read the bound address back
-  instead of probing a free port and releasing it, which another process could
-  take first under parallel load. The admin HTTPS off-by-default tests now hold
-  the configured port, so a daemon that tried to bind it would fail startup.
-  The explicit-binding smoke keeps a stable port because its upgrade probes run
-  prior binaries.
-
-- Keep symbols in build-time artifacts of release builds
-  (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
-  corrupts proc-macro dylibs, which broke `cargo build --release`; shipped
-  binaries keep the default release stripping.
-
-- Make native ingress/body deadline tests use explicit pending/body barriers and
-  controlled Tokio time, with a nondefault five-second request budget for real
-  authenticated recovery on the same runtime. Production deadlines and authority are unchanged.
-
-- Box finished internal OAuth bootstrap error responses for current-stable
-  Clippy; handlers return the same responses and retain conditional cleanup.
-
-- Give the migration expiry test a ten-second preview setup margin and wait
-  from its recorded expiry before apply, retaining the post-expiry conflict
-  and unchanged-binding assertions.
-
-- Box the internal HTTP admission error response for current-stable Clippy;
-  the handler returns the original response with unchanged admission behavior.
-
-- Use a guarded match for inherited OAuth default-session selection to satisfy
-  current-stable Clippy. Existing explicit labels and non-OAuth sources retain
-  their behavior.
-
-
 ### Fixed native context and diagnosis
 
 - Review typed nonsecret fixed top-level values, deliberately grant the exact
@@ -1213,6 +1225,7 @@
   Follow [recovery/backup/rollback guidance](docs/operator/oauth-recovery.md).
   Already-admitted work may finish; this does not establish crash-safe rotating
   refresh or provider proof.
+
 ### Connector onboarding
 
 - Tool/model operator writes and newly applied seed catalogs now require an
@@ -1242,51 +1255,48 @@
   while still requiring runtime activation. No migration or version bump.
 - A focused [operator onboarding recipe](docs/operator/connector-onboarding.md)
   reuses reference/customer setup, inspection, named-agent grants and account
-  selection, with receiving-account checks and truthful readiness/repair guidance
- . Unsupported modes and narrower authority claims remain rejected.
+  selection, with receiving-account checks and truthful readiness/repair guidance.
+  Unsupported modes and narrower authority claims remain rejected.
 
-### Added
+### Internal
 
-- Finite reviewed HTTP grants pair named agents with explicitly selected accounts,
-  with runnable reference and independent customer-service setup instructions.
-- Operator reads distinguish active, pending and disabled connections. Saved
-  writes that fail activation report that failure while affected routes deny
-  admission and unrelated healthy routes remain available.
+- Add the `qa/` black-box qualification harness: a surface contract checked
+  against every route and CLI command, PASS/FAIL/NOT_EXERCISED/NOT_APPLICABLE
+  statuses with per-area floors, redaction-scanned evidence bundles, and
+  about 300 smoke cases covering every route, CLI command and daemon
+  behaviour, run against the release binaries in CI. See `qa/README.md`.
+- Admin HTTPS in mTLS mode now logs `admin HTTPS listener (mTLS) bound` once,
+  after its TLS configuration loads. It previously logged both
+  `admin HTTPS (mTLS) listener bound` and, from the shared serve loop,
+  `agent listener (mTLS) bound` with the admin address. The agent listener's
+  messages are unchanged.
 
-### Breaking changes
+- Start daemon integration tests on port 0 and read the bound address back
+  instead of probing a free port and releasing it, which another process could
+  take first under parallel load. The admin HTTPS off-by-default tests now hold
+  the configured port, so a daemon that tried to bind it would fail startup.
+  The explicit-binding smoke keeps a stable port because its upgrade probes run
+  prior binaries.
 
-- Credentialed requests require an explicitly selected account for each allowed
-  agent. Missing bindings deny access; unavailable selected credentials fail
-  closed. Locksmith no longer falls back to a registration default, another
-  OAuth session, or an unauthenticated upstream.
-- Credentialed legacy routes require a registered agent identity. Clearing a
-  binding removes access instead of restoring a default account. Direct
-  file-backed bindings require an explicit sealed-snapshot import.
+- Keep symbols in build-time artifacts of release builds
+  (`[profile.release.build-override] strip = false`). The macOS 27 `strip`
+  corrupts proc-macro dylibs, which broke `cargo build --release`; shipped
+  binaries keep the default release stripping.
 
-- New agents and bootstrap policies have no implicit HTTP grants. Existing
-  policies require finite review, including authless connections; adding a
-  registration never expands authority. Unsupported narrower selectors are refused.
-- Deleting/recreating a route or changing its upstream/egress clears its grants
-  and selections. Deliberate destination review and reapproval are required.
+- Make native ingress/body deadline tests use explicit pending/body barriers and
+  controlled Tokio time, with a nondefault five-second request budget for real
+  authenticated recovery on the same runtime. Production deadlines and authority are unchanged.
 
-### Upgrade and verification
+- Box finished internal OAuth bootstrap error responses for current-stable
+  Clippy; handlers return the same responses and retain conditional cleanup.
 
-- Back up a consistent database, preview and review the reference-only mapping,
-  apply the selected bindings, then verify the cutover and restart. Existing
-  explicit selections are preserved; ambiguous mappings need operator input.
-  Follow [the migration guide](docs/concepts/migrating-account-bindings.md).
-- [The repeatable daemon/CLI smoke](docs/development/explicit-account-bindings-smoke.md)
-  covers account attribution, zero-dispatch denials, migration and the documented
-  setup commands using synthetic accounts. It does not establish live provider
-  compatibility, installed-deployment acceptance, a version tag or publication.
-- The binding-repair change guide distinguishes accepted D1 work from remote
-  integration and release status.
+- Give the migration expiry test a ten-second preview setup margin and wait
+  from its recorded expiry before apply, retaining the post-expiry conflict
+  and unchanged-binding assertions.
 
-- For the HTTP grant cutover, stop writers and take a compatible binary/schema/
-  configuration/state backup. Use the reviewed `preview --grants` workflow to
-  commit finite policy and account references atomically. Old unreviewed bootstrap
-  tokens need re-minting; stale plans must not resurrect removed authority.
-- See [HTTP grant and activation changes](docs/changes/explicit-http-grants.md)
-  for saved-but-failed activation repair, next-admission boundaries and limits.
-  Original local synthetic acceptance is historical. Live-provider
-  compatibility is not claimed.
+- Box the internal HTTP admission error response for current-stable Clippy;
+  the handler returns the original response with unchanged admission behavior.
+
+- Use a guarded match for inherited OAuth default-session selection to satisfy
+  current-stable Clippy. Existing explicit labels and non-OAuth sources retain
+  their behavior.
