@@ -4,6 +4,8 @@ section; docs/concepts/oauth-flow.md, codex), against the local fake
 provider's OpenAI device-authorization dialect in qa/fakes/oau_provider.py.
 No real provider is contacted."""
 
+import threading
+
 import pytest
 
 from fakes.oau_admin import admin
@@ -265,3 +267,38 @@ def test_pending_logins_are_capped(dl):
     freed = start(t, "cap-extra")
     assert freed.status == 202, freed.text
     revoke(t, "cap-extra")
+
+
+@case(
+    "SMK-OAU-060",
+    area="OAU",
+    kind="refusal",
+    covers=[POLL, "cli.oauth.revoke"],
+    codes=["revoked_during_login"],
+)
+def test_revoke_during_the_code_exchange_publishes_nothing(dl):
+    """cli-reference.md `oauth device-login`: a revoke that lands while the login's
+    code is being exchanged fails it with 409 revoked_during_login, and no session
+    is published."""
+    t, fake = dl
+    started = start(t, "acct6")
+    assert started.status == 202, started.text
+    attempt = started.json["attempt"]
+    assert poll(t, attempt).json["status"] == "pending"
+    release = threading.Event()
+    fake.code_entered.clear()
+    fake.code_hold = release
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(r=poll(t, attempt)))
+    worker.start()
+    try:
+        assert fake.code_entered.wait(30), "the daemon never exchanged the code"
+        revoke(t, "acct6")
+    finally:
+        release.set()
+        fake.code_hold = None
+        worker.join(60)
+    assert not worker.is_alive(), "the poll did not return"
+    refused = result["r"]
+    assert refused.status == 409 and refused.code == "revoked_during_login"
+    assert status(t, "acct6")["present"] is False

@@ -601,7 +601,9 @@ The admin API is `POST /admin/operator/oauth/<name>/device-login?label=`
 once and returns `pending` or `complete` with the session status. Attempts
 are held in memory, expire after 15 minutes and do not survive a restart. At most
 16 are pending at once (429 `too_many_device_logins`). Revoking the label
-ends its pending logins, and a login fails with 409 `authority_changed`
+ends its pending logins; a revoke that lands while a login's code is being
+exchanged fails that login with 409 `revoked_during_login`, publishing nothing.
+A login fails with 409 `authority_changed`
 before any code is exchanged when its registration, or any agent binding that
 selects the label, no longer names the issuer and client it used, so tokens only ever go to the issuer that issued them.
 A login or a `bootstrap` also fails with 409 `authority_changed`, storing no
