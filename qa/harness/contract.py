@@ -74,7 +74,11 @@ def _check_gaps(contract: Contract, today: dt.date) -> None:
         missing = {"id", "reason", "ticket", "expires", "approved"} - gap.keys()
         if missing:
             raise ContractError(f"known gap {gap.get('id', '?')} lacks {sorted(missing)}")
-        empty = sorted(k for k in ("reason", "ticket", "approved") if not str(gap[k]).strip())
+        # A bare `approved:` loads as None, and str(None) is not empty.
+        empty = sorted(
+            k for k in ("reason", "ticket", "approved")
+            if not isinstance(gap[k], str) or not gap[k].strip()
+        )
         if empty:
             raise ContractError(f"known gap {gap['id']} has empty {empty}")
         entry = by_id.get(gap["id"])

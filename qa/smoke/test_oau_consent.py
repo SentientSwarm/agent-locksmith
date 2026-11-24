@@ -35,6 +35,7 @@ CLIENT_DEL = (
 CALLBACK = "callback.ANY./oauth/callback{,/slack,/custom/{redirect_profile_id}}"
 SELECT = "admin.PUT./admin/operator/agents/{agent}/oauth-selection/{name}"
 MCP = "agent.ANY./mcp/{name}"
+COMPACT = "agent.ANY./mcp/{name}/compact"
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
     "MCP-Protocol-Version": "2025-11-25",
@@ -961,6 +962,56 @@ def test_refresh_does_not_follow_a_token_redirect(cs):
 
 
 @case(
+    "SMK-OAU-061",
+    area="OAU",
+    kind="refusal",
+    covers=[MCP, COMPACT],
+    codes=["authority_changed"],
+)
+def test_expired_access_token_refuses_native_admission(cs):
+    """docs/operator/native-oauth.md#refresh-reconnect-and-token-lifetime: controlled
+    custody holds only the access token and never refreshes it, and a known expired
+    token is refused. A fresh MCP session on either route is 404 authority_changed,
+    and nothing reaches the provider."""
+    t, c = cs
+    lifetime = 8
+    c.fake.expires_in = lifetime
+    try:
+        connected(t, c, "short")
+        expired_at = time.monotonic() + lifetime
+    finally:
+        c.fake.expires_in = 3600
+    view = oc.account(t, "short")
+    agent = t.cli("agent", "register", "--name", "oau-short", "--allowlist", N)
+    assert agent.code == 0, agent.err
+    selected = t.cli(
+        "agent", "select-oauth", agent.json["public_id"], N,
+        "--label", "short", "--if-match", view["revision"],
+    )
+    assert selected.code == 0, selected.err
+    prepare(t, agent.json["public_id"])
+    time.sleep(max(0.0, expired_at - time.monotonic()) + 1.5)
+    calls = c.fake.counts["mcp-tool-call"]
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "qa-oau", "version": "1"},
+        },
+    }
+    for path in (f"/mcp/{N}", f"/mcp/{N}/compact"):
+        response = t.http(
+            "POST", path, token=agent.json["token"], body=init, headers=MCP_HEADERS
+        )
+        assert response.status == 404, (path, response.text)
+        assert response.code == "authority_changed", (path, response.text)
+    assert c.fake.counts["mcp-tool-call"] == calls
+
+
+@case(
     "SMK-OAU-033",
     area="OAU",
     kind="positive",
@@ -1016,3 +1067,4 @@ def test_retired_client_generation_cannot_start_consent(cs):
     attempt = oc.connect(t, "after-retire")
     assert attempt.code != 0, "consent started with a retired client generation"
     assert dict(c.fake.counts) == counts
+

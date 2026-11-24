@@ -99,11 +99,13 @@ def test_known_gap_requires_owner_approval(tmp_path):
         write(tmp_path, gaps=[{"id": "r.save", "reason": "x", "ticket": "AGENT-1", "expires": "2026-12-01"}])
 
 
+@pytest.mark.parametrize("value", ["  ", None, 0])
 @pytest.mark.parametrize("field", ["reason", "ticket", "approved"])
-def test_known_gap_fields_must_not_be_empty(tmp_path, field):
+def test_known_gap_fields_must_be_nonempty_text(tmp_path, field, value):
+    # `approved:` with no value loads as None; it must not count as an approval.
     gap = {"id": "r.save", "reason": "x", "ticket": "AGENT-1", "expires": "2026-12-01", "approved": APPROVED}
     with pytest.raises(ContractError, match="empty"):
-        write(tmp_path, gaps=[dict(gap, **{field: "  "})])
+        write(tmp_path, gaps=[dict(gap, **{field: value})])
 
 
 def test_duplicate_ids_rejected(tmp_path):

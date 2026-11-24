@@ -769,9 +769,9 @@ routes:
   - session_limit
   - invalid_credential
   - shutting_down
+  - authority_changed
   fault_refusals:
   - agent_inactive
-  - authority_changed
   - session_closed
   - connection_not_active
   fault_reason: reachable only in a race between admission and use, or with a failing store
@@ -810,9 +810,9 @@ routes:
   - session_limit
   - invalid_credential
   - shutting_down
+  - authority_changed
   fault_refusals:
   - agent_inactive
-  - authority_changed
   - session_closed
   - connection_not_active
   fault_reason: reachable only in a race between admission and use, or with a failing store
@@ -1481,12 +1481,6 @@ known_gaps:
   expires: '2026-12-24'
   approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}
-  code: authority_changed
-  reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
-  ticket: AGENT-227
-  expires: '2026-12-24'
-  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
-- id: agent.ANY./mcp/{name}
   code: session_closed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
@@ -1500,12 +1494,6 @@ known_gaps:
   approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
 - id: agent.ANY./mcp/{name}/compact
   code: agent_inactive
-  reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
-  ticket: AGENT-227
-  expires: '2026-12-24'
-  approved: 'John Stanford, 2026-11-24: class approval for the 3.0.0 fault-only codes'
-- id: agent.ANY./mcp/{name}/compact
-  code: authority_changed
   reason: 'fault-only: reachable only in a race between admission and use, or with a failing store; no case can produce it until the fault-injection build'
   ticket: AGENT-227
   expires: '2026-12-24'
