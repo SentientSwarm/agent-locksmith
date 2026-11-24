@@ -41,6 +41,8 @@ pass.
 | `pr` | any FAIL, a contract mismatch, a per-area floor not met, a redaction hit, zero cases |
 | `release` | all of the above, plus any NOT_EXERCISED case or contract entry |
 
+Before a release, run the release gate through `scripts/release-gate.py --bins <dir> --out <dir>`: it also checks that the bundle is release-ready, ran on a clean tree, and names the commit the binaries report.
+
 A contract entry is exercised only when a passing positive case covers it and
 passing refusal cases produce every refusal code the entry lists.
 

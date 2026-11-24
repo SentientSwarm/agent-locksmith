@@ -28,7 +28,7 @@ Preserve any existing local changes before changing branches. Use a separate wor
 
 ## Optional release branches
 
-Normally release a tested commit from `main` with a version tag. A release branch is useful only when stabilizing or maintaining a particular version while unrelated work continues on `main`.
+Normally release a tested commit from `main` with a version tag. Before tagging, build release binaries from a clean checkout of that commit and run `scripts/release-gate.py --bins <dir> --out <new dir>`: it runs the release-mode [QA gate](../../qa/README.md#statuses-and-gate) and checks that the bundle is release-ready and names that exact commit, clean. A release branch is useful only when stabilizing or maintaining a particular version while unrelated work continues on `main`.
 
 - Cut `release/<major>.<minor>` from a selected tested `main` commit, not from `develop`.
 - Limit it to stabilization, release metadata and fixes for that version. New features continue through feature branches into `main`.
