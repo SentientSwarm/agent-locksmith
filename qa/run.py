@@ -20,7 +20,7 @@ sys.path.insert(0, str(QA))
 import pytest
 
 from harness import uat
-from harness.contract import check_source, coverage, fault_gaps, load
+from harness.contract import check_source, coverage, fault_gaps, fault_waivers, load
 from harness.evidence import Bundle
 from harness.plugin import QaPlugin
 from harness.redact import Canaries, scan_bundle
@@ -128,7 +128,8 @@ def main(argv: list[str]) -> int:
     passed, reasons = gate(records, contract.floors, args.mode)
     reasons = errors + reasons
     faults = fault_gaps(contract, records) if args.suite == "smoke" else []
-    bundle.write_manifest({"fault_only_unexercised": faults})
+    waived = fault_waivers(contract, records) if args.suite == "smoke" else []
+    bundle.write_manifest({"fault_only_unexercised": faults, "fault_only_known_gaps": waived})
     if args.mode == "release":
         reasons += [f"surface {gap}" for gap in faults]
         reasons += [
@@ -152,6 +153,10 @@ def main(argv: list[str]) -> int:
     print(f"\nQA {args.mode} gate: {'PASS' if ok else 'FAIL'}  {counts}")
     for reason in reasons:
         print(f"  - {reason}")
+    if waived:
+        print(f"  fault-only codes under a known gap ({len(waived)}):")
+        for line in waived:
+            print(f"  - surface {line}")
     if args.publish_figures:
         if ok:
             uat.publish(args.out)

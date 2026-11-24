@@ -32,13 +32,16 @@ class Contract:
     behaviours: list[dict]
     journeys: list[dict]
     floors: dict[str, int]
-    known_gaps: dict[str, dict] = field(default_factory=dict)
+    known_gaps: list[dict] = field(default_factory=list)
 
     def entries(self) -> list[dict]:
         return self.routes + self.cli + self.behaviours + self.journeys
 
 
-def load(path: Path) -> Contract:
+MAX_GAP_DAYS = 30
+
+
+def load(path: Path, today: dt.date | None = None) -> Contract:
     data = yaml.safe_load(path.read_text())
     if data.get("version") != 1:
         raise ContractError("surface.yaml version must be 1")
@@ -48,19 +51,39 @@ def load(path: Path) -> Contract:
         behaviours=data.get("behaviours", []),
         journeys=data.get("journeys", []),
         floors=data.get("floors", {}),
-        known_gaps={g["id"]: g for g in data.get("known_gaps", [])},
+        known_gaps=data.get("known_gaps", []),
     )
     ids = Counter(e["id"] for e in contract.entries())
     dupes = sorted(i for i, n in ids.items() if n > 1)
     if dupes:
         raise ContractError(f"duplicate contract ids: {dupes}")
-    for gap in contract.known_gaps.values():
-        missing = {"reason", "ticket", "expires"} - gap.keys()
-        if missing:
-            raise ContractError(f"known gap {gap['id']} lacks {sorted(missing)}")
-        if gap["id"] not in ids:
-            raise ContractError(f"known gap {gap['id']} names no contract entry")
+    _check_gaps(contract, today or dt.date.today())
     return contract
+
+
+def _check_gaps(contract: Contract, today: dt.date) -> None:
+    """A gap names an entry, and optionally one of that entry's fault-only codes.
+
+    A gap without `code` waives the whole entry; a gap with `code` waives only
+    that fault-only code, so the entry's own coverage still counts.
+    """
+    by_id = {e["id"]: e for e in contract.entries()}
+    seen: set[tuple[str, str | None]] = set()
+    for gap in contract.known_gaps:
+        missing = {"id", "reason", "ticket", "expires"} - gap.keys()
+        if missing:
+            raise ContractError(f"known gap {gap.get('id', '?')} lacks {sorted(missing)}")
+        entry = by_id.get(gap["id"])
+        if entry is None:
+            raise ContractError(f"known gap {gap['id']} names no contract entry")
+        code = gap.get("code")
+        if code is not None and code not in entry.get("fault_refusals", []):
+            raise ContractError(f"known gap {gap['id']}: {code} is not one of the entry's fault_refusals")
+        if (gap["id"], code) in seen:
+            raise ContractError(f"duplicate known gap {gap['id']}" + (f": {code}" if code else ""))
+        seen.add((gap["id"], code))
+        if _expiry(gap) > today + dt.timedelta(days=MAX_GAP_DAYS):
+            raise ContractError(f"known gap {gap['id']} expires {_expiry(gap)}, more than {MAX_GAP_DAYS} days out")
 
 
 def _calls(text: str, opener: str):
@@ -157,7 +180,7 @@ def coverage(contract: Contract, records: list[CaseRecord], today: dt.date | Non
             result[eid] = Status.FAIL.value
         elif _exercised(entry, covering):
             result[eid] = Status.PASS.value
-        elif _gap_open(contract.known_gaps.get(eid), today):
+        elif _gap_open(_gap(contract, eid), today):
             result[eid] = Status.NOT_APPLICABLE.value
         else:
             result[eid] = Status.NOT_EXERCISED.value
@@ -172,23 +195,50 @@ def _exercised(entry: dict, covering: list[CaseRecord]) -> bool:
     return set(entry.get("refusals", [])) <= produced
 
 
-def _gap_open(gap: dict | None, today: dt.date) -> bool:
-    if not gap:
-        return False
+def _gap(contract: Contract, eid: str, code: str | None = None) -> dict | None:
+    return next((g for g in contract.known_gaps if g["id"] == eid and g.get("code") == code), None)
+
+
+def _expiry(gap: dict) -> dt.date:
     expires = gap["expires"]
-    expires = expires if isinstance(expires, dt.date) else dt.date.fromisoformat(str(expires))
-    return today <= expires
+    return expires if isinstance(expires, dt.date) else dt.date.fromisoformat(str(expires))
+
+
+def _gap_open(gap: dict | None, today: dt.date) -> bool:
+    return bool(gap) and today <= _expiry(gap)
+
+
+def _fault_codes(contract: Contract, records: list[CaseRecord]):
+    """Yield (entry id, code) for each fault-only code no passing refusal case produced."""
+    for entry in contract.entries():
+        wanted = entry.get("fault_refusals", [])
+        produced = {c for r in records if entry["id"] in r.covers and r.status is Status.PASS
+                    and r.kind == "refusal" for c in r.codes}
+        yield from ((entry["id"], code) for code in wanted if code not in produced)
+
+
+def _fault_gap(contract: Contract, eid: str, code: str, today: dt.date) -> dict | None:
+    """The open gap waiving this code: one for the code itself, else one for the whole entry."""
+    for gap in (_gap(contract, eid, code), _gap(contract, eid)):
+        if _gap_open(gap, today):
+            return gap
+    return None
 
 
 def fault_gaps(contract: Contract, records: list[CaseRecord], today: dt.date | None = None) -> list[str]:
     """Fault-only refusal codes no passing case produced (release blockers unless a gap is open)."""
     today = today or dt.date.today()
-    gaps: list[str] = []
-    for entry in contract.entries():
-        wanted = entry.get("fault_refusals", [])
-        if not wanted or _gap_open(contract.known_gaps.get(entry["id"]), today):
-            continue
-        produced = {c for r in records if entry["id"] in r.covers and r.status is Status.PASS
-                    and r.kind == "refusal" for c in r.codes}
-        gaps += [f"{entry['id']}: {code} (fault-only)" for code in wanted if code not in produced]
-    return gaps
+    return [f"{eid}: {code} (fault-only)" for eid, code in _fault_codes(contract, records)
+            if _fault_gap(contract, eid, code, today) is None]
+
+
+def fault_waivers(contract: Contract, records: list[CaseRecord], today: dt.date | None = None) -> list[str]:
+    """Fault-only codes no case produced that an open known gap covers, reported NOT_APPLICABLE."""
+    today = today or dt.date.today()
+    lines = []
+    for eid, code in _fault_codes(contract, records):
+        gap = _fault_gap(contract, eid, code, today)
+        if gap is not None:
+            lines.append(f"{eid}: {code} {Status.NOT_APPLICABLE.value} "
+                         f"(known gap {gap['ticket']}, expires {_expiry(gap)}: {gap['reason']})")
+    return lines
