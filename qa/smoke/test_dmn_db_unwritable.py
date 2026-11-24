@@ -55,20 +55,23 @@ def _error_lines(t) -> list[dict]:
 def wh(target_factory):
     fs = dmn_faultfs.FaultFs()
     up = Upstream()
-    t = target_factory(
-        label="dmn-unwritable",
-        config={"database": {"path": str(fs.mount / "locksmith.db")}},
-    )
-    put_tool(t, TOOL, up.url, "none", "--egress", "direct")
-    agent = enrol(t, "qa-dmn-unwritable", [TOOL], {TOOL: ["--no-auth"]})
-    ok = t.http("GET", f"/api/{TOOL}/before", token=agent["token"])
-    assert ok.status == 200, ok.text
-    yield t, fs, up, agent
-    # Stop the daemon before the filesystem goes away under it.
-    if "locksmithd" in t.procs:
-        t.stop()
-    fs.close()
-    up.close()
+    t = None
+    try:
+        t = target_factory(
+            label="dmn-unwritable",
+            config={"database": {"path": str(fs.mount / "locksmith.db")}},
+        )
+        put_tool(t, TOOL, up.url, "none", "--egress", "direct")
+        agent = enrol(t, "qa-dmn-unwritable", [TOOL], {TOOL: ["--no-auth"]})
+        ok = t.http("GET", f"/api/{TOOL}/before", token=agent["token"])
+        assert ok.status == 200, ok.text
+        yield t, fs, up, agent
+    finally:
+        # Stop the daemon before the filesystem goes away under it.
+        if t is not None and "locksmithd" in t.procs:
+            t.stop()
+        fs.close()
+        up.close()
 
 
 @case("SMK-DMN-083", area="DMN", kind="refusal", covers=[READY, LIVE, SEM], codes=["not_ready"])
