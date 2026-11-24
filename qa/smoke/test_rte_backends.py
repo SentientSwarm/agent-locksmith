@@ -18,6 +18,7 @@ GET = "admin.GET./admin/operator/routes/{route}/backends/{backend}"
 PUT = "admin.PUT./admin/operator/routes/{route}/backends/{backend}"
 DELETE = "admin.DELETE./admin/operator/routes/{route}/backends/{backend}"
 SWITCH = "admin.POST./admin/operator/routes/{route}/switch"
+KEY = "admin.PUT./admin/operator/routes/{route}/backends/{backend}/credential"
 BEH = "beh.route.backends"
 BAD_OP = "lkop_qartebadoperator.not-a-real-operator-secret"
 MCP_CONFIG = '{"protocol_version":"2025-11-25"}'
@@ -26,7 +27,8 @@ MCP_CONFIG = '{"protocol_version":"2025-11-25"}'
 @pytest.fixture(scope="module")
 def rte(target_factory):
     a, b = Upstream(), Upstream()
-    t = target_factory(label="rte-backends", upstream=False)
+    t = target_factory(label="rte-backends", upstream=False,
+                       env={"LOCKSMITH_CREDENTIAL_SEALING_KEY": sealing_key()})
     put_tool(t, "rte-r", a.url, "none", "--egress", "direct")
     agent = enrol(t, "qa-rte", ["rte-r"], {"rte-r": ["--no-auth"]})
     yield {"t": t, "a": a, "b": b, "agent": agent}
@@ -169,7 +171,7 @@ def test_switch_keeps_grant_and_moves_binding(rte):
 
 @case(
     "SMK-RTE-002", area="RTE", kind="refusal",
-    covers=[LIST, GET, PUT, DELETE, SWITCH], codes=["invalid_credential"],
+    covers=[LIST, GET, PUT, DELETE, SWITCH, KEY], codes=["invalid_credential"],
 )
 def test_backend_routes_require_an_operator(rte):
     """Every route backend endpoint is operator-authenticated."""
@@ -180,6 +182,7 @@ def test_backend_routes_require_an_operator(rte):
         ("PUT", "/admin/operator/routes/rte-r/backends/x", {"upstream": "https://x.example", "auth": {"kind": "none"}}),
         ("DELETE", "/admin/operator/routes/rte-r/backends/x", None),
         ("POST", "/admin/operator/routes/rte-r/switch", {"backend": "x"}),
+        ("PUT", "/admin/operator/routes/rte-r/backends/x/credential", {"value": "rte-unsent"}),
     ):
         r = uds(t, method, path, body, token=BAD_OP)
         assert r.status == 401 and r.code == "invalid_credential", (method, path, r.status)
@@ -293,6 +296,49 @@ def test_native_routes_are_not_switchable(rte, tmp_path):
         headers = {"If-Match": "1"} if method == "POST" else None
         r = uds(t, method, path, body, headers=headers)
         assert r.status == 409 and r.code == "route_not_switchable", (method, path, r.status)
+
+
+@case(
+    "SMK-RTE-011", area="RTE", kind="refusal",
+    covers=[KEY, "cli.route.backend.set-credential"],
+    codes=["unknown_name", "active_backend", "route_not_switchable"],
+)
+def test_backend_key_refusals_change_nothing(rte, tmp_path):
+    """docs/reference/cli-reference.md#route-backends: a key for a missing route or
+    backend is 404 `unknown_name`; the active backend cannot be replaced (409
+    `active_backend`); a native route has no backends (409 `route_not_switchable`).
+    Nothing is sealed, the revision does not move and the value is never echoed."""
+    t = rte["t"]
+    value = "qa-rte-refused-backend-key-0001"
+    t.canaries.add(value, "synthetic-backend-key")
+    cfg = tmp_path / "mcp.json"
+    cfg.write_text(MCP_CONFIG)
+    native = t.cli(
+        "tool", "put", "rte-native-key", "--upstream", "https://native.example/mcp",
+        "--auth", "none", "--egress", "direct", "--protocol", "mcp_streamable_http",
+        "--mcp-config-file", str(cfg),
+    )
+    assert native.code == 0, native.err
+    before = revision(t)
+    listed = t.cli("route", "backend", "list", "rte-r").json
+    for route, backend, status, code in (
+        ("rte-none", "x", 404, "unknown_name"),
+        ("rte-r", "none", 404, "unknown_name"),
+        ("rte-r", "primary", 409, "active_backend"),
+        ("rte-native-key", "x", 409, "route_not_switchable"),
+    ):
+        path = f"/admin/operator/routes/{route}/backends/{backend}/credential"
+        r = uds(t, "PUT", path, {"value": value})
+        assert (r.status, r.code) == (status, code), (path, r.status, r.text)
+        assert value not in r.text
+    cli = t.cli("route", "backend", "set-credential", "rte-r", "primary", stdin=value)
+    assert cli.error_code == "active_backend", cli.err
+    assert value not in cli.out + cli.err
+    assert t.cli("route", "backend", "set-credential", "rte-r", "none", stdin=value).code == 4
+    assert revision(t) == before
+    assert t.cli("route", "backend", "list", "rte-r").json == listed
+    rows = t.cli("audit", "query", "--limit", "200").json
+    assert not [r for r in rows if r.get("event") == "route_backend_credential_set"]
 
 
 @case(

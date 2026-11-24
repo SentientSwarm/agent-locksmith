@@ -27,6 +27,7 @@ OPERATOR_ROUTES = [
     ("GET", "/admin/operator/tools"),
     ("GET", "/admin/operator/audit"),
     ("GET", "/admin/operator/logs"),
+    ("POST", "/admin/operator/revoked-agents/prune"),
 ]
 AGENT_ROUTES = [
     ("GET", "/admin/agent/status"),
@@ -41,6 +42,7 @@ BODIES = {
     "PUT " + CRED: {"auth_spec": {"kind": "none"}},
     "PUT " + CRED + "/credential": {"value": "adm-sweep-value", "bearer": True},
     "POST /admin/operator/bootstrap_tokens": {},
+    "POST /admin/operator/revoked-agents/prune": {"dry_run": True},
     "POST /admin/agent/rotate": {"current_secret": "nope"},
 }
 
