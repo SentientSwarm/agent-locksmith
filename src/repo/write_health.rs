@@ -120,20 +120,31 @@ pub async fn run_probe(
 /// recovery with the write an audit insert is: a row in the audit table,
 /// with its indexes and growth. An in-place rewrite can succeed on a nearly
 /// full disk while audit inserts still fail, and clearing the flag on it let
-/// requests through unaudited (AGENT-354). Failed attempts leave nothing; the
-/// first success is one `database_writes_recovered` row.
+/// requests through unaudited (AGENT-354). Failed attempts leave nothing; each
+/// success is a `database_writes_recovered` row.
 pub async fn probe(audit: &AuditRepository) {
     let health = audit.write_health();
     let attempt = health.begin();
+    // The light write only detects failure; its success never clears one. A
+    // failure being published while this probe chose the light write (after
+    // `failed` takes its ticket, before it stores it) must still wait for an
+    // audit row.
+    let light = health.writable();
     let write = async {
-        if health.writable() {
-            audit.probe_write().await
+        if light {
+            audit.probe_write().await.map(|()| None)
         } else {
-            audit.record_recovery().await
+            audit.insert_recovery().await.map(Some)
         }
     };
     match tokio::time::timeout(PROBE_TIMEOUT, write).await {
-        Ok(Ok(())) => audit.write_health().succeeded(attempt),
+        Ok(Ok(None)) => {}
+        Ok(Ok(Some(row))) => {
+            // SQLite took the row: clear first, then mirror. A slow optional
+            // mirror must not turn a committed write into a failure.
+            health.succeeded(attempt);
+            audit.mirror(&row).await;
+        }
         Ok(Err(e)) => audit.write_health().failed("probe", &e),
         Err(_) => audit
             .write_health()

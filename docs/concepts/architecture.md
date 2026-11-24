@@ -130,9 +130,11 @@ shared write-health flag:
 - Only a write that began after the latest failure, and succeeded, clears
   it. While the flag is set, the probe writes an audit row instead, because
   an in-place rewrite can succeed on a nearly full disk while audit inserts
-  still fail. Failed attempts leave nothing; the first success is one
+  still fail. Failed attempts leave nothing; a successful one is a
   `security` row with event `database_writes_recovered`, which records the
-  recovery.
+  recovery (an outage that flaps can record several). That row is small: a disk with room for it but not for a larger
+  audit row can still clear the flag, and each time it does, requests are
+  admitted until the next audit insert fails.
 
 While the flag is set:
 

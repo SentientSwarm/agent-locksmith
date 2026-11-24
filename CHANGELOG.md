@@ -99,7 +99,7 @@ forward. Read Upgrading, below, before you install it.
   names the failure. Both clear by themselves within about 2 seconds once
   an audit row can be written again: while they are set, the probe writes
   an audit row rather than its in-place rewrite, so a nearly full disk
-  cannot clear them early (AGENT-354), and the first success records one
+  cannot clear them early (AGENT-354), and a recovery is recorded as a
   `database_writes_recovered` row. `/livez` is unchanged. See
   [when the database stops taking writes](docs/concepts/architecture.md#when-the-database-stops-taking-writes).
 - QA cases now cite the docs they check by heading
