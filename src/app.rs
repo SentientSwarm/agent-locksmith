@@ -545,15 +545,35 @@ async fn livez_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
-/// Readiness: process is ready to serve traffic. Returns 200 only when all
-/// tools that declare an `auth` block have a resolved credential
-/// (non-empty value). Tools without auth declarations are always ready.
-/// In M2, this also checks DB reachability.
+/// Readiness: process is ready to serve traffic. Returns 503
+/// `database_unwritable` while the database does not take writes
+/// (AGENT-251), and 503 `tool_credentials_unresolved` unless every tool
+/// that declares an `auth` block has a resolved credential (non-empty
+/// value). Tools without auth declarations are always ready.
 ///
 /// "Required backend" semantics (per INF-3 / Q-18 / A-4): in M1, all tools
 /// are considered required. M2 introduces per-tool `on_secret_failure:
 /// degraded` to opt out of the readiness check.
 async fn readyz_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // AGENT-251: a daemon that cannot write its database cannot keep the
+    // one-audit-row-per-request promise, so it is not ready. The flag is
+    // set by a failed audit insert or write probe and cleared by the next
+    // successful write (`repo::write_health`).
+    if state
+        .audit
+        .as_ref()
+        .is_some_and(|audit| !audit.write_health().writable())
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "not_ready",
+                "reason": "database_unwritable",
+            })),
+        )
+            .into_response();
+    }
+
     let config = state.config.load();
     let resolved = state.resolved_creds.load();
     let unconfigured: Vec<&str> = config

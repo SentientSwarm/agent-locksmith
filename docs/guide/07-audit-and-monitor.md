@@ -93,7 +93,10 @@ done
 
 ![Liveness, readiness and version](img/07-audit-and-monitor/health.svg)
 
-Alert when `/readyz` is not 200: a startup dependency is missing. A ready
+Alert when `/readyz` is not 200: a startup dependency is missing, or the
+database has stopped taking writes (`database_unwritable`). While it can't
+write, Locksmith refuses agent requests with `503 audit_unavailable` rather
+than serve them unaudited, and it recovers by itself once writes succeed. A ready
 daemon can still refuse an individual agent whose selected account is
 unavailable, with `503 credential_unresolved`; those refusals are in the
 audit.

@@ -208,7 +208,7 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 9. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
 10. Emits one `AuditEvent` per request. Phase F adds `details.oauth_session_id`; Phase G adds `details.auth_source` (`agent_override` on authenticated selected requests; legacy authless paths may retain `registration_default`) and `details.oauth_session_label`. `details.auth_mode` covers `none` / `header` / `bearer` / `oauth_pkce` / `oauth_device_code` / `config` / `config_absent`. Audit query results LEFT JOIN `agents` to surface `agent_name` alongside `agent_public_id` (G.0).
 
-`/livez` is liveness (`/health` is its legacy alias). `/readyz` checks startup tool dependencies. It does not attest every per-agent binding; selected source failures can return 503 on a ready instance.
+`/livez` is liveness (`/health` is its legacy alias). `/readyz` checks startup tool dependencies and database writability: while the database takes no writes it reports `database_unwritable` and the proxy refuses with 503 `audit_unavailable` before dispatch (AGENT-251, `src/repo/write_health.rs`). It does not attest every per-agent binding; selected source failures can return 503 on a ready instance.
 
 ## Module map
 

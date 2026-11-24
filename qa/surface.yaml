@@ -709,6 +709,7 @@ routes:
   - egress_proxy_unconfigured
   - inspection_blocked
   - rate_limited
+  - audit_unavailable
   audit_causes:
   - account_binding_missing
   - selected_credential_unavailable
@@ -1401,6 +1402,8 @@ behaviours:
   - revoked_by_blocklist
 - id: beh.readyz.semantics
   summary: /readyz refuses unresolved config credentials
+- id: beh.audit.write-health
+  summary: An unwritable database makes /readyz database_unwritable and proxied requests 503 audit_unavailable with no dispatch; both recover when writes succeed
 - id: beh.native.limits
   summary: Native MCP session limits, deadlines and Origin/Host allowlists
 - id: beh.telemetry.logging

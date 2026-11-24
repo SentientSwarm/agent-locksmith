@@ -296,6 +296,22 @@ async fn run_owned(
         operational_log_for_app.as_ref(),
     );
 
+    // AGENT-251: prove the database takes writes before serving, then
+    // keep proving it. While a write fails, /readyz reports
+    // database_unwritable and the proxy refuses with 503
+    // audit_unavailable; the daemon keeps running so the state is visible
+    // and clears by itself when writes succeed again.
+    let mut write_probe_task = match audit_for_sweeper.clone() {
+        Some(audit) => {
+            crate::repo::write_health::probe(&audit).await;
+            let shutdown = coord.shutdown_signal();
+            Some(tokio::spawn(crate::repo::write_health::run_probe(
+                audit, shutdown,
+            )))
+        }
+        None => None,
+    };
+
     // Audit retention sweeper (T3.5). Runs only when admin substrate is
     // up — otherwise there's no audit to sweep. Defaults to
     // 90 days / hourly when `audit:` is absent from config.
@@ -730,6 +746,9 @@ async fn run_owned(
         if let Some(s) = broker_probe_task.as_mut() {
             let _ = s.await;
         }
+        if let Some(s) = write_probe_task.as_mut() {
+            let _ = s.await;
+        }
         if let Some(s) = revocation_task.as_mut() {
             let _ = s.await;
         }
@@ -774,6 +793,7 @@ async fn run_owned(
                 ops_log_sweeper_task.as_mut(),
                 credential_sweeper_task.as_mut(),
                 broker_probe_task.as_mut(),
+                write_probe_task.as_mut(),
                 revocation_task.as_mut(),
                 refresh_task.as_mut(),
             ]

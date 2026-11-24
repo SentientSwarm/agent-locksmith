@@ -7,7 +7,7 @@
 //! when a migration is added, removed or renumbered without updating it.
 
 /// The highest migration version the current daemon must apply.
-const LATEST: i64 = 28;
+const LATEST: i64 = 29;
 
 pub fn latest() -> i64 {
     LATEST

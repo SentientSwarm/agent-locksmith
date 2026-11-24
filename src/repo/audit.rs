@@ -2,6 +2,7 @@
 //! M3 wires writes from ProxyEngine and AdminService.
 
 use super::agent::RepoError;
+use super::write_health::WriteHealth;
 use crate::audit_sink::JsonlSink;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -97,17 +98,51 @@ impl Default for AuditPage {
     }
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct AuditRepository {
     pool: SqlitePool,
     /// Optional JSONL mirror sink (T3.3). When set, every successful
     /// SQL insert also appends one line. Mirrors columns 1:1.
     sink: Option<Arc<JsonlSink>>,
+    /// AGENT-251: whether the database still takes writes, shared by
+    /// every clone. Set by a failed insert or probe, cleared by the next
+    /// successful one.
+    health: WriteHealth,
 }
 
 impl AuditRepository {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool, sink: None }
+        Self {
+            pool,
+            sink: None,
+            health: WriteHealth::default(),
+        }
+    }
+
+    /// The shared database write-health flag (AGENT-251).
+    pub fn write_health(&self) -> &WriteHealth {
+        &self.health
+    }
+
+    /// Rewrite the single `db_write_probe` row: a committed write that
+    /// proves the database file still takes writes (AGENT-251). The
+    /// caller updates [`WriteHealth`] from the result.
+    pub async fn probe_write(&self) -> Result<(), RepoError> {
+        sqlx::query(
+            "INSERT INTO db_write_probe (id, probed_at_ms) VALUES (1, ?) \
+             ON CONFLICT(id) DO UPDATE SET probed_at_ms = excluded.probed_at_ms",
+        )
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Attach a JSONL sink that mirrors every successful insert. The
@@ -121,12 +156,26 @@ impl AuditRepository {
     /// NOT propagate to the caller — audit must never block proxy traffic.
     /// Callers that need to know about a failure can inspect the returned
     /// `Result`; production code typically logs and discards.
+    ///
+    /// AGENT-251: the outcome also updates [`WriteHealth`], so one failed
+    /// insert makes `/readyz` not ready and stops further proxying.
     pub async fn record(&self, event: &AuditEvent) -> Result<(), RepoError> {
+        match self.insert(event).await {
+            Ok(()) => {
+                self.health.succeeded();
+                self.mirror(event).await;
+                Ok(())
+            }
+            Err(e) => {
+                self.health.failed("audit", &e);
+                Err(e)
+            }
+        }
+    }
+
+    async fn insert(&self, event: &AuditEvent) -> Result<(), RepoError> {
         let mut connection = self.pool.acquire().await?;
-        self.insert_on(&mut connection, event).await?;
-        drop(connection);
-        self.mirror(event).await;
-        Ok(())
+        self.insert_on(&mut connection, event).await
     }
 
     /// Delete audit rows whose timestamp is strictly older than
