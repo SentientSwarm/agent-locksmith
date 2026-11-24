@@ -22,6 +22,16 @@
 
 ### Fixed
 
+- A database that stops taking writes no longer loses audit silently
+  (AGENT-251). On 2026-11-14 a filesystem shutdown left the daemon ready
+  for 2.5 hours while every audit row was dropped. Now a failed audit
+  insert, or a failed write probe (one row in the new `db_write_probe`
+  table, migration 0029, rewritten every 2 seconds), makes `/readyz`
+  answer `503 database_unwritable`, and proxied requests are refused with
+  `503 audit_unavailable` before anything is sent upstream. One error line
+  names the failure. Both clear by themselves within about 2 seconds of
+  the next successful write. `/livez` is unchanged. See
+  [when the database stops taking writes](docs/concepts/architecture.md#when-the-database-stops-taking-writes).
 - QA cases now cite the docs they check by heading
   (`docs/reference/cli-reference.md#exit-codes`) rather than by line, and
   `qa/tests/test_doc_citations.py` fails when a cited heading is gone or a

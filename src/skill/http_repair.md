@@ -12,7 +12,8 @@ HTTP proxy authentication and authorization failures use a uniform JSON shape:
                "tool_not_allowed" | "internal_error" | "backend_error" |
                "credential_unresolved" |
                "oauth_session_missing" | "oauth_refresh_failed" |
-               "oauth_sealing_key_unset" | "codex_body_too_large"
+               "oauth_sealing_key_unset" | "codex_body_too_large" |
+               "audit_unavailable"
   }
 }
 ```
@@ -35,6 +36,10 @@ Status codes:
 - `503` — `type: auth_error code: credential_unresolved | oauth_*`:
   the selected source is unavailable or OAuth is degraded. No upstream call
   is made; operator diagnosis is required.
+- `503` — `type: availability_error code: audit_unavailable`: Locksmith
+  cannot write its audit log, so it forwards nothing. No upstream call is
+  made. Retry later; it clears by itself once the operator's database takes
+  writes again, and `/readyz` says `database_unwritable` until then.
 
 ## HTTP authentication diagnosis
 

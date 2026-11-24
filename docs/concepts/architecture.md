@@ -51,6 +51,9 @@ When an agent calls `POST /api/anthropic/v1/messages` with
      Stamps AgentIdentity into request extensions.
      Failure → 401 invalid_credential
    ↓
+2a. Audit write health (AGENT-251): while the database takes no writes
+     → 503 audit_unavailable, no dispatch (see below).
+   ↓
 3. M9 ACL gate: identity.allows_tool(name)
      Failure → 403 tool_not_allowed + audit row
    ↓
@@ -113,6 +116,50 @@ new admissions use current persisted state. There are no identityless
 requests: legacy mode was removed in 3.0.0 (AGENT-297). See
 [explicit account bindings](../changes/explicit-account-bindings.md) for repair.
 
+## When the database stops taking writes
+
+The audit row is the record of each request, so Locksmith does not proxy
+a request it cannot record (AGENT-251). An `AuditRepository` keeps one
+shared write-health flag:
+
+- A failed audit insert sets it.
+- So does a failed write probe: every 2 seconds the daemon rewrites the
+  single row of `db_write_probe` (migration 0029). The probe notices a
+  failure when no traffic arrives, and notices the recovery while the
+  proxy is refusing everything. A probe that takes longer than 5 seconds
+  counts as a failure.
+- The next successful write, probe or audit, clears it.
+
+While the flag is set:
+
+- `/readyz` answers `503 {"status": "not_ready", "reason": "database_unwritable"}`.
+  `/livez` stays 200: the process is up, and restarting it does not fix a
+  filesystem.
+- Every `/api/*` request is refused with `503 audit_unavailable` after
+  authentication and before the ACL gate (step 2a above). Nothing is
+  sent upstream. The refusal itself
+  cannot be audited.
+- One `ERROR` log line on stderr (or `logging.file`) names the failed
+  write and the SQLite error when the flag is set, and one `INFO` line
+  says so when it clears. Neither carries a credential.
+
+The flag is checked before dispatch, so a request already past the check
+when the database fails can still reach its upstream. Its audit write
+then fails, the flag is set, and every later request is refused. The
+response the upstream already sent is still returned, because withholding
+it would invite the agent to retry an action the upstream has already
+taken.
+
+A daemon started while its database takes no writes exits non-zero with
+`database: ... disk I/O error`: SQLite cannot open the database's WAL
+index, so there is nothing to serve from. Under a supervisor that
+restarts it, each attempt logs the same error until the filesystem
+recovers.
+
+Native MCP lifecycle rows (`/mcp/{connection}`) are best-effort
+diagnostics rather than per-request records, so the `/mcp` path does not
+consult the flag.
+
 ## Composition root: `daemon::run`
 
 `src/daemon.rs::run` is the only place where state gets wired up.
@@ -141,7 +188,9 @@ Read it first if you're contributing code. It does (in order):
      refresh task.
    - Construct `AdminService` + `BearerAuthenticator` +
      `OperatorAuthenticator`.
-5. Spawn the **audit retention sweeper** (T3.5).
+5. Probe the database with one write, then spawn the **write probe**
+   (AGENT-251; see [above](#when-the-database-stops-taking-writes)) and
+   the **audit retention sweeper** (T3.5).
 6. Bind agent listener (TCP for bearer, TLS for mTLS).
 7. Bind admin UDS listener.
 8. Optionally bind admin HTTPS listener.

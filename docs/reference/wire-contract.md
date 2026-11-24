@@ -54,6 +54,15 @@ HTTP 200 application/json
 {"status": "ready", "uptime_seconds": 3600}
 ```
 
+Or, while the database is not taking writes (AGENT-251; proxied requests
+are refused with `503 audit_unavailable` meanwhile, and both clear when a
+write succeeds, within about 2 seconds):
+
+```
+HTTP 503 application/json
+{"status": "not_ready", "reason": "database_unwritable"}
+```
+
 Or, when any tool with auth has unresolved credentials:
 
 ```
@@ -281,6 +290,7 @@ Codes:
 | 502 | `response_size_exceeded` | `response_size_exceeded` | M7 size cap exceeded on a buffered response (redaction configured). Streamed responses are truncated instead; see below. |
 | 503 | `availability_error` | `connection_not_active` | Registration is not active in the running daemon (for example, persisted and runtime state differ). |
 | 503 | `auth_error` | `credential_unresolved` | Selected source unavailable; no alternate/default dispatch. |
+| 503 | `availability_error` | `audit_unavailable` | The database is not taking writes, so the request's audit row could not be written; refused before dispatch. `/readyz` reports `database_unwritable` until a write succeeds. |
 | 503 | `auth_error` | `oauth_session_missing` | OAuth tool but no session bootstrapped. |
 | 503 | `auth_error` | `oauth_refresh_failed` | OAuth session degraded, or this request's refresh failed; operator action required. |
 | 503 | `auth_error` | `oauth_reconnect_required` | An earlier refresh failed after trying the token endpoint; the session must be signed in again. |

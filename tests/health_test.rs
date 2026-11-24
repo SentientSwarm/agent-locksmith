@@ -169,3 +169,62 @@ tools: []
         );
     }
 }
+
+// ─── AGENT-251: database write health ─────────────────────────────────
+
+fn open_tool_yaml(upstream: &str) -> String {
+    format!(
+        r#"
+listen:
+  host: "127.0.0.1"
+  port: 9200
+tools:
+  - name: "open"
+    description: "authless upstream"
+    upstream: "{upstream}"
+    egress: "direct"
+"#
+    )
+}
+
+#[tokio::test]
+async fn test_readyz_503_while_database_unwritable_then_recovers() {
+    let h =
+        registered::setup(parse_config_str(&open_tool_yaml("http://127.0.0.1:9")).unwrap()).await;
+    h.audit.write_health().failed("test", &"disk I/O error");
+    let resp: TestResponse = h.server.get("/readyz").await;
+    resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["status"], "not_ready");
+    assert_eq!(body["reason"], "database_unwritable");
+    h.server.get("/livez").await.assert_status_ok();
+
+    // A successful probe write against the (writable) database clears it.
+    agent_locksmith::repo::write_health::probe(&h.audit).await;
+    h.server.get("/readyz").await.assert_status_ok();
+}
+
+#[tokio::test]
+async fn test_proxy_refuses_without_dispatch_while_database_unwritable() {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
+    let mock = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock)
+        .await;
+    let h = registered::authed(parse_config_str(&open_tool_yaml(&mock.uri())).unwrap()).await;
+
+    h.audit.write_health().failed("test", &"disk I/O error");
+    let resp: TestResponse = h.server.post("/api/open/thing").await;
+    resp.assert_status(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["error"]["code"], "audit_unavailable");
+    assert_eq!(body["error"]["type"], "availability_error");
+
+    // Recovered: the next request is forwarded (the mock's single expected
+    // hit) and audited.
+    h.audit.write_health().succeeded();
+    h.server.get("/api/open/after").await.assert_status_ok();
+    mock.verify().await;
+}

@@ -49,6 +49,7 @@ Proxy-path types and codes are listed in the [wire contract](wire-contract.md#er
 | 400 | `bad_request` | `invalid_upstream` | Operator tool/model destination is not an absolute HTTP(S) base URL, or contains userinfo, query or fragment. Validation does not echo the URL; no row, grant or selection changes. See [operator onboarding](../operator/connector-onboarding.md). |
 | 400 | `bad_request` | `invalid_http_service` | Optional service metadata fails the strict versioned [HTTP descriptor contract](../agents/http-services.md). Static error does not echo authored content; no row, grant or selection changes. |
 | 503 | `auth_error` | `credential_unresolved` | Selected environment/stored/1Password source unavailable or selection unreadable. No alternate/default dispatch. |
+| 503 | `availability_error` | `audit_unavailable` | The database is not taking writes, so the proxied request's audit row could not be written. Refused before dispatch; `/readyz` reports `database_unwritable` (AGENT-251). |
 | 503 | `auth_error` | `oauth_session_missing` / `oauth_refresh_failed` / `oauth_sealing_key_unset` | Selected OAuth session unavailable; operator diagnosis required. |
 | 503 | `auth_error` | `oauth_reconnect_required` | A refresh of the selected OAuth session failed after trying the token endpoint, or the daemon stopped during one, so its custody is uncertain; the operator signs it in again. |
 | 429 | `auth_error` | `rate_limited` | Token validation rate-limited. Includes `Retry-After` header (seconds). |

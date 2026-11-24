@@ -470,6 +470,16 @@ async fn proxy_request(
         return crate::auth_v2::auth_error_response(&crate::auth_v2::AuthError::Misconfigured);
     };
 
+    // AGENT-251: audit is one row per request. While the database does
+    // not take writes that row would be lost, so refuse before admission
+    // and send nothing upstream. The refusal itself can't be audited; the
+    // write-health transition is logged once instead.
+    if let Some(audit) = &state.audit
+        && !audit.write_health().writable()
+    {
+        return audit_unavailable_response();
+    }
+
     // M9 ACL gate: the agent's tool_allowlist / tool_denylist, before
     // the tool resolver.
     if let Err(reason) = identity.allows_tool(&ctx.tool_name) {
@@ -2514,8 +2524,10 @@ async fn record_response_redaction(
     audit_record(audit, event).await;
 }
 
-/// Best-effort audit write. Errors are logged and swallowed — audit
-/// must never block proxy traffic (INF-26).
+/// Audit write whose error does not change this response: the upstream
+/// has usually answered already. A failure still marks the database
+/// unwritable (AGENT-251), so `/readyz` goes not ready and the next
+/// request is refused with 503 `audit_unavailable` before dispatch.
 async fn audit_record(audit: &Option<AuditRepository>, event: AuditEvent) {
     let Some(repo) = audit else {
         return;
@@ -2616,6 +2628,22 @@ async fn resolve_stored_credential(
 /// Always `503` with code `credential_unresolved` — the loud contract that
 /// a `stored_*` registration whose value can't be materialized fails the
 /// request rather than forwarding it unauthenticated.
+/// AGENT-251: the 503 for a request refused because its audit row could
+/// not be written.
+fn audit_unavailable_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": {
+                "type": "availability_error",
+                "code": "audit_unavailable",
+                "message": "the audit store is not taking writes; request refused and not forwarded",
+            }
+        })),
+    )
+        .into_response()
+}
+
 fn stored_unavailable_envelope(message: &str) -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,

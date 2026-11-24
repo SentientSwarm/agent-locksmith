@@ -189,13 +189,13 @@ M0's `/health` returned a JSON body with `{ status, uptime_seconds, tools, versi
 | Endpoint | Body shape | Auth | Role |
 |----------|-----------|------|------|
 | `/livez` | `{ status: "live", uptime_seconds }` | None | systemd readiness, k8s livenessProbe |
-| `/readyz` | `{ status: "ready" \| "not_ready", reason?, tools? }` | None | k8s readinessProbe; 503 when any tool's credential is unresolved |
+| `/readyz` | `{ status: "ready" \| "not_ready", reason?, tools? }` | None | k8s readinessProbe; 503 `database_unwritable` while the database takes no writes (AGENT-251), 503 `tool_credentials_unresolved` when any tool's credential is unresolved |
 | `/version` | `{ version, name }` | None | Incident response |
 | `/health` | Alias to `/livez` (200 + body) | None | M0 compat — existing systemd / Ansible probes keep working |
 
 Operators using `/health` for HTTP-200 probes need no changes. Operators parsing the body should switch to `/livez` (matches the `/health` body shape exactly) and add `/readyz` polling if they want degraded-mode awareness.
 
-`/readyz` semantics in M1: returns 200 only when every tool that declares an `auth` block has a non-empty resolved credential. M2 introduces per-tool `on_secret_failure: degraded` (INF-4 / Q-17) to opt out of the readiness check.
+`/readyz` semantics in M1: returns 200 only when every tool that declares an `auth` block has a non-empty resolved credential. Since 3.0.0 it also returns 503 `database_unwritable` while the database takes no writes, and proxied requests are refused with 503 `audit_unavailable` until a write succeeds; see [when the database stops taking writes](../../concepts/architecture.md#when-the-database-stops-taking-writes). M2 introduces per-tool `on_secret_failure: degraded` (INF-4 / Q-17) to opt out of the readiness check.
 
 ---
 
