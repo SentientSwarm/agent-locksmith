@@ -533,22 +533,28 @@ on malformed bodies — that's the right error for the agent to see).
 
 ### Size cap
 
-Locksmith enforces a 1 MiB cap on bodies it inspects for fixup. Over
-the cap returns **413 Payload Too Large** with envelope:
+The fixup has no cap of its own. It applies to any `/responses` body
+the route accepts, up to the route's `body_limit_bytes` (10 MiB unless
+the operator sets another with `tool put --body-limit`). Before 3.0.0
+it had a smaller fixed cap, which real Codex sessions with long
+histories exceeded (AGENT-248).
+
+A body over the route's limit returns **413 Payload Too Large**, and
+nothing is sent upstream:
 
 ```json
 {
   "error": {
     "type": "payload_too_large",
     "code": "codex_body_too_large",
-    "message": "Codex request body exceeds 1048576 byte cap"
+    "message": "Codex request body exceeds the route's 10485760 byte limit"
   }
 }
 ```
 
-Codex bodies are tiny in practice (a few KB). The cap is a defense
-against pathological streaming bodies blowing memory during the
-inspect+rewrite pass.
+Locksmith reads the whole body before it forwards anything, so an agent
+that disconnects part way through an upload gets nothing sent upstream.
+The request is audited as `request_body_read_error`.
 
 ### Audit
 

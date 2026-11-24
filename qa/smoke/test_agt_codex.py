@@ -4,7 +4,9 @@ and the OAuth proxy refusals, against a fake upstream whose path contains
 
 import json
 import shutil
+import socket
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,8 @@ API = "agent.ANY./api/{tool_name}/{*path}"
 FIX = "beh.codex.fixups"
 FLOW = "docs/concepts/oauth-flow.md"
 DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
+MIB = 1024 * 1024
+LIMIT = 10 * MIB  # agt-codexl body_limit_bytes
 
 
 @pytest.fixture(scope="module")
@@ -71,13 +75,26 @@ def cx(target_factory):
         "--profile",
         "openai-codex-responses",
     )
+    # AGENT-248: a Codex route with an explicit 10 MiB body limit; the
+    # fixup is bounded by this limit and nothing smaller.
+    put_tool(
+        t,
+        "agt-codexl",
+        f"{up.url}/large/backend-api/codex",
+        "bearer=AGT_CRED_TOKEN",
+        "--egress",
+        "direct",
+        "--body-limit",
+        str(LIMIT),
+    )
     agent = enrol(
         t,
         "qa-agt-codex",
-        ["agt-codexb", "agt-codexp"],
+        ["agt-codexb", "agt-codexp", "agt-codexl"],
         {
             "agt-codexb": ["--auth", "bearer=AGT_CRED_TOKEN"],
             "agt-codexp": ["--auth", "bearer=AGT_CRED_TOKEN"],
+            "agt-codexl": ["--auth", "bearer=AGT_CRED_TOKEN"],
         },
     )
     yield {"t": t, "up": up, "tokens": tokens, "agent": agent, "jwt": jwt}
@@ -210,15 +227,15 @@ def test_codex_non_responses_path_keeps_body_gets_headers(cx):
     covers=[API, FIX],
     codes=["codex_body_too_large"],
 )
-def test_codex_body_over_one_mib_is_413(cx):
-    """docs/concepts/oauth-flow.md#size-cap — a /responses body over the 1 MiB inspection cap is 413 with
-    code codex_body_too_large; nothing is dispatched."""
+def test_codex_body_over_route_limit_is_413(cx):
+    """docs/concepts/oauth-flow.md#size-cap — a /responses body over the route's body_limit_bytes
+    is 413 with code codex_body_too_large; nothing is dispatched (AGENT-248)."""
     t, up, agent = cx["t"], cx["up"], cx["agent"]
-    before = up.count("/backend-api")
-    big = json.dumps({"model": "qa-model", "input": "x" * (1024 * 1024 + 16)})
+    before = up.count("/large")
+    big = json.dumps({"model": "qa-model", "input": "x" * (LIMIT + 16)})
     resp = t.http(
         "POST",
-        "/api/agt-codexb/responses",
+        "/api/agt-codexl/responses",
         token=agent["token"],
         body=big,
         headers={"Content-Type": "application/json"},
@@ -226,7 +243,88 @@ def test_codex_body_over_one_mib_is_413(cx):
     assert resp.status == 413
     assert resp.code == "codex_body_too_large"
     assert resp.json["error"]["type"] == "payload_too_large"
-    assert up.count("/backend-api") == before, "a refused request reached the upstream"
+    assert str(LIMIT) in resp.json["error"]["message"]
+    assert up.count("/large") == before, "a refused request reached the upstream"
+
+
+@case("SMK-AGT-093", area="AGT", kind="positive", covers=[API, FIX])
+def test_codex_body_over_one_mib_is_fixed_up(cx):
+    """docs/concepts/oauth-flow.md#size-cap — a 3 MiB /responses body under the route's limit
+    reaches the upstream with the G3 fixups (store:false, stream:true, default instructions) and
+    G5 (max_output_tokens removed); the old 1 MiB cap is gone (AGENT-248)."""
+    t, up, agent = cx["t"], cx["up"], cx["agent"]
+    payload = "y" * (3 * MIB)
+    body = {"model": "qa-model", "input": payload, "max_output_tokens": 7}
+    resp = t.http("POST", "/api/agt-codexl/responses", token=agent["token"], body=body)
+    assert resp.status == 200, resp.text[:500]
+    rec = up.last("/large/backend-api/codex/responses")
+    sent = rec.json()
+    assert sent["store"] is False
+    assert sent["stream"] is True
+    assert sent["instructions"] == DEFAULT_INSTRUCTIONS
+    assert "max_output_tokens" not in sent
+    assert sent["input"] == payload
+    rows = audit(t, "agt-codexl", "proxy_request", limit=5)
+    assert rows, "no proxy_request audit row"
+    fixup = rows[0]["details"]["codex_body_fixup"]
+    assert fixup["fields_added"] == ["store", "stream", "instructions"]
+    assert fixup["fields_removed"] == ["max_output_tokens"]
+
+
+@case("SMK-AGT-094", area="AGT", kind="corner", covers=[API, FIX])
+def test_codex_non_json_body_over_one_mib_passes_through(cx):
+    """docs/concepts/oauth-flow.md#how-it-works — a non-JSON /responses body over 1 MiB passes
+    through byte for byte (codex is the right party to reject it) (AGENT-248)."""
+    t, up, agent = cx["t"], cx["up"], cx["agent"]
+    body = b"not json " + b"z" * (2 * MIB)
+    resp = t.http(
+        "POST",
+        "/api/agt-codexl/responses",
+        token=agent["token"],
+        body=body,
+        headers={"Content-Type": "text/plain"},
+    )
+    assert resp.status == 200, resp.text[:500]
+    rec = up.last("/large/backend-api/codex/responses")
+    assert rec.body == body
+
+
+@case("SMK-AGT-095", area="AGT", kind="corner", covers=[API, FIX])
+def test_codex_upload_abandoned_mid_body_is_not_forwarded(cx):
+    """docs/concepts/oauth-flow.md#size-cap — an agent that disconnects part way through a large
+    /responses upload gets nothing forwarded: no upstream request, no partial body; the
+    request is audited as request_body_read_error (AGENT-248)."""
+    t, up, agent = cx["t"], cx["up"], cx["agent"]
+    before = up.count("/large")
+    declared = 3 * MIB
+    head = (
+        "POST /api/agt-codexl/responses HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{t.port}\r\n"
+        f"Authorization: Bearer {agent['token']}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {declared}\r\n"
+        "\r\n"
+    ).encode()
+    partial = b'{"model":"qa-model","input":"' + b"w" * MIB
+    with socket.create_connection(("127.0.0.1", t.port), timeout=10) as sock:
+        sock.sendall(head + partial)
+        time.sleep(0.5)
+    t.bundle.transcript(
+        t.current_case,
+        "http",
+        f"POST /api/agt-codexl/responses (bearer), Content-Length {declared}, "
+        f"{len(partial)} bytes sent, then the connection closed",
+    )
+    deadline = time.monotonic() + 10
+    rows = []
+    while time.monotonic() < deadline:
+        rows = audit(t, "agt-codexl", "request_body_read_error", limit=10)
+        if rows:
+            break
+        time.sleep(0.2)
+    assert rows, "the abandoned upload was not audited"
+    assert rows[0]["status"] == 400
+    assert up.count("/large") == before, "an abandoned upload reached the upstream"
 
 
 @case(
