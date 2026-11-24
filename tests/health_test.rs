@@ -229,3 +229,44 @@ async fn test_proxy_refuses_without_dispatch_while_database_unwritable() {
     h.server.get("/api/open/after").await.assert_status_ok();
     mock.verify().await;
 }
+
+/// AGENT-354: a probe lighter than an audit insert (an in-place rewrite) can
+/// succeed on a nearly full disk while audit inserts still fail. Once an audit
+/// insert has failed, only a written audit row clears the flag.
+#[tokio::test]
+async fn test_probe_recovers_only_when_audit_rows_can_be_written() {
+    use agent_locksmith::repo::audit::{AuditEvent, AuditRepository};
+    use agent_locksmith::repo::write_health::probe;
+    let dir = tempfile::TempDir::new().unwrap();
+    let pool = agent_locksmith::migrations::open_and_migrate(&dir.path().join("locksmith.db"))
+        .await
+        .unwrap();
+    let audit = AuditRepository::new(pool.clone());
+    sqlx::raw_sql(
+        "CREATE TRIGGER qa_fail_audit BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT,'full'); END;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(audit.record(&AuditEvent::default()).await.is_err());
+    assert!(!audit.write_health().writable());
+
+    probe(&audit).await;
+    assert!(
+        !audit.write_health().writable(),
+        "a write that is not an audit insert cleared an audit-insert failure"
+    );
+
+    sqlx::raw_sql("DROP TRIGGER qa_fail_audit")
+        .execute(&pool)
+        .await
+        .unwrap();
+    probe(&audit).await;
+    assert!(audit.write_health().writable());
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit WHERE event = 'database_writes_recovered'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 1, "the recovery is recorded once, as an audit row");
+}

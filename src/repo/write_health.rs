@@ -114,9 +114,25 @@ pub async fn run_probe(
 
 /// One probe write, bounded by [`PROBE_TIMEOUT`]; updates the shared
 /// [`WriteHealth`].
+///
+/// While writable, the probe rewrites one row in place, which notices a
+/// database that takes no writes at all. While not writable, it proves
+/// recovery with the write an audit insert is: a row in the audit table,
+/// with its indexes and growth. An in-place rewrite can succeed on a nearly
+/// full disk while audit inserts still fail, and clearing the flag on it let
+/// requests through unaudited (AGENT-354). Failed attempts leave nothing; the
+/// first success is one `database_writes_recovered` row.
 pub async fn probe(audit: &AuditRepository) {
-    let attempt = audit.write_health().begin();
-    match tokio::time::timeout(PROBE_TIMEOUT, audit.probe_write()).await {
+    let health = audit.write_health();
+    let attempt = health.begin();
+    let write = async {
+        if health.writable() {
+            audit.probe_write().await
+        } else {
+            audit.record_recovery().await
+        }
+    };
+    match tokio::time::timeout(PROBE_TIMEOUT, write).await {
         Ok(Ok(())) => audit.write_health().succeeded(attempt),
         Ok(Err(e)) => audit.write_health().failed("probe", &e),
         Err(_) => audit

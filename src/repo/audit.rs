@@ -145,6 +145,20 @@ impl AuditRepository {
         Ok(())
     }
 
+    /// The recovery probe's write (AGENT-354): one audit row, the same kind
+    /// of write an audit insert is. The caller updates [`WriteHealth`].
+    pub async fn record_recovery(&self) -> Result<(), RepoError> {
+        let event = AuditEvent {
+            ts_ms: now_ms(),
+            event_class: EventClass::Security,
+            event: "database_writes_recovered".into(),
+            ..AuditEvent::default()
+        };
+        self.insert(&event).await?;
+        self.mirror(&event).await;
+        Ok(())
+    }
+
     /// Attach a JSONL sink that mirrors every successful insert. The
     /// sink is shared across cloned `AuditRepository` handles via Arc.
     pub fn with_sink(mut self, sink: Arc<JsonlSink>) -> Self {
