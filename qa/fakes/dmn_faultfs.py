@@ -45,8 +45,10 @@ def available() -> str | None:
 
 class FaultFs:
     def __init__(self) -> None:
-        # A short, bounded root of our own; removed on close.
-        self.root = Path(tempfile.mkdtemp(prefix="lsqa-fault-", dir="/tmp")).resolve()
+        # A short, bounded root of our own; removed on close. Same base as the
+        # harness work directories, so the leak check covers it (AGENT-356).
+        base = os.environ.get("LSQA_WORK_BASE") or "/tmp"
+        self.root = Path(tempfile.mkdtemp(prefix="lsqa-fault-", dir=base)).resolve()
         self.backing = self.root / "backing"
         self.mount = self.root / "mnt"
         self.flag = self.root / "fail-writes"
