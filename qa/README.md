@@ -98,6 +98,24 @@ A contract entry may be listed under `known_gaps` with a reason, a ticket and
 an expiry at most 30 days out; while unexpired it reports `NOT_APPLICABLE`.
 Only the owner approves a known gap or waiver, by approving the PR that adds it.
 
+A gap with a `code` covers only that one fault-only code of the entry, and
+the code must be in the entry's `fault_refusals`. The entry's own coverage
+still counts: its positive case and its ordinary refusal codes are still
+required. A release run lists each covered code as `NOT_APPLICABLE` with the
+gap's ticket, expiry and reason, in the run output, `manifest.json`
+(`fault_only_known_gaps`) and `report.md`. Loading the contract fails if a gap
+names an unknown entry or code, repeats another gap, or expires more than 30
+days from today.
+
+```yaml
+known_gaps:
+- id: agent.ANY./mcp/{name}
+  code: session_closed
+  reason: reachable only in a race between admission and use; no fault-injection build yet
+  ticket: AGENT-227
+  expires: 2026-12-24
+```
+
 ## UAT
 
 The user guide under `docs/guide/` is also the UAT script. A shell block

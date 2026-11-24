@@ -25,10 +25,10 @@ ROUTES = [
 ]
 
 
-def write(tmp_path, routes=ROUTES, gaps=()):
+def write(tmp_path, routes=ROUTES, gaps=(), today=None):
     path = tmp_path / "surface.yaml"
     path.write_text(yaml.safe_dump({"version": 1, "routes": routes, "known_gaps": list(gaps)}))
-    return load(path)
+    return load(path, today)
 
 
 def test_source_routes_parses_multiline_and_fallback():
@@ -104,3 +104,54 @@ def test_fault_refusals_do_not_block_coverage_but_are_listed(tmp_path):
     assert coverage(contract, records)["r.list"] == "PASS"
     assert fault_gaps(contract, records) == ["r.list: backend_error (fault-only)"]
     assert fault_gaps(contract, records + [rec(["r.list"], "refusal", codes=["backend_error"])]) == []
+
+
+FAULT_ROUTES = [dict(ROUTES[1], fault_refusals=["store_down", "race_lost"])] + [ROUTES[0]] + ROUTES[2:]
+TODAY = dt.date(2026, 11, 24)
+
+
+def fault_gap(code, expires="2026-12-24", **extra):
+    return {"id": "r.show", "code": code, "reason": "needs a fault build", "ticket": "AGENT-227",
+            "expires": expires, **extra}
+
+
+def test_code_gap_waives_only_that_fault_code(tmp_path):
+    from harness.contract import fault_gaps, fault_waivers
+
+    contract = write(tmp_path, FAULT_ROUTES, [fault_gap("store_down")], TODAY)
+    records = [rec(["r.show"], "positive"), rec(["r.show"], "refusal", codes=["unknown_name"])]
+    assert fault_gaps(contract, records, TODAY) == ["r.show: race_lost (fault-only)"]
+    assert fault_waivers(contract, records, TODAY) == [
+        "r.show: store_down NOT_APPLICABLE (known gap AGENT-227, expires 2026-12-24: needs a fault build)"
+    ]
+    assert fault_gaps(contract, records, dt.date(2026, 12, 25)) == [
+        "r.show: store_down (fault-only)", "r.show: race_lost (fault-only)"]
+
+
+def test_code_gap_does_not_mask_entry_coverage(tmp_path):
+    contract = write(tmp_path, FAULT_ROUTES, [fault_gap("store_down"), fault_gap("race_lost")], TODAY)
+    assert coverage(contract, [rec(["r.show"], "positive")], TODAY)["r.show"] == "NOT_EXERCISED"
+
+
+def test_produced_fault_code_needs_no_waiver(tmp_path):
+    from harness.contract import fault_waivers
+
+    contract = write(tmp_path, FAULT_ROUTES, [fault_gap("store_down")], TODAY)
+    records = [rec(["r.show"], "refusal", codes=["store_down"])]
+    assert fault_waivers(contract, records, TODAY) == []
+
+
+def test_code_gap_must_name_a_fault_only_code(tmp_path):
+    with pytest.raises(ContractError, match="not one of the entry's fault_refusals"):
+        write(tmp_path, FAULT_ROUTES, [fault_gap("unknown_name")], TODAY)
+
+
+def test_duplicate_code_gap_rejected(tmp_path):
+    with pytest.raises(ContractError, match="duplicate known gap r.show: store_down"):
+        write(tmp_path, FAULT_ROUTES, [fault_gap("store_down"), fault_gap("store_down")], TODAY)
+
+
+def test_gap_expiry_at_most_30_days_out(tmp_path):
+    write(tmp_path, FAULT_ROUTES, [fault_gap("store_down", "2026-12-24")], TODAY)
+    with pytest.raises(ContractError, match="more than 30 days out"):
+        write(tmp_path, FAULT_ROUTES, [fault_gap("store_down", "2026-12-25")], TODAY)

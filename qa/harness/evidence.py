@@ -60,6 +60,10 @@ class Bundle:
         counts = Counter(coverage.values())
         lines += ["", "## Surface coverage", ""]
         lines += [f"- {k}: {v}" for k, v in sorted(counts.items())]
+        waived = m.get("fault_only_known_gaps", [])
+        if waived:
+            lines += ["", "## Fault-only codes under a known gap", ""]
+            lines += [f"- {w}" for w in waived]
         (self.root / "report.md").write_text("\n".join(lines) + "\n")
 
     def _write_json(self, name: str, data) -> None:
