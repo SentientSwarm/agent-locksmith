@@ -15,6 +15,8 @@ One threaded server plays every provider role the OAU cases need:
 - ``POST /mcp`` / ``DELETE /mcp``: minimal MCP 2025-11-25 server for native calls.
 - ``ANY /api/...``: plain HTTP resource that reports which access-token
   generation it received (never the token itself).
+- ``token_redirect``: when set, both token endpoints answer 307 to it instead;
+  ``RedirectSink`` is a listener for it that counts anything that arrives.
 
 Every credential it issues is random per run and handed to ``on_secret`` so
 the caller can register it as a redaction canary before anything is recorded.
@@ -27,6 +29,7 @@ import base64
 import hashlib
 import json
 import secrets
+import socket
 import ssl
 import threading
 import time
@@ -103,6 +106,8 @@ class FakeProvider:
         self.deny_authorize = False
         self.wrong_identity = False
         self.scope = "catalog:inspect records:read"
+        # When set, every token endpoint POST answers 307 to this URL.
+        self.token_redirect: str | None = None
         # Consent contract expectations (set by the case that configures them).
         self.client_id = ""
         self.client_secret: str | None = None
@@ -180,6 +185,63 @@ class FakeProvider:
     def current_generation(self) -> int:
         with self.lock:
             return self.generation
+
+
+class RedirectSink:
+    """Where a redirected token call would land (AGENT-243).
+
+    A bare TCP listener that counts every connection, plain or TLS, and
+    whether the bytes it read name ``refresh_token`` or ``client_secret``. It
+    never answers and never keeps what it read. ``host`` is ``127.0.0.1`` for
+    a same-host redirect; ``cross_host()`` picks a loopback address other than
+    the fake provider's, so a followed redirect would cross hosts.
+    """
+
+    def __init__(self, host: str = "127.0.0.1") -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((host, 0))
+        self.sock.listen(8)
+        self.sock.settimeout(0.1)
+        self.host = host
+        self.port = self.sock.getsockname()[1]
+        self.connections = 0
+        self.secrets_seen = 0
+        self._stop = threading.Event()
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    @classmethod
+    def cross_host(cls) -> RedirectSink:
+        try:
+            return cls("127.0.0.2")
+        except OSError:  # no 127.0.0.2 (macOS): a distinct host name instead
+            sink = cls("127.0.0.1")
+            sink.host = "localhost"
+            return sink
+
+    @property
+    def url(self) -> str:
+        return f"http://{self.host}:{self.port}/token"
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except (TimeoutError, OSError):
+                continue
+            self.connections += 1
+            conn.settimeout(1)
+            try:
+                seen = conn.recv(65536)
+            except OSError:
+                seen = b""
+            if b"refresh_token" in seen or b"client_secret" in seen:
+                self.secrets_seen += 1
+            conn.close()
+
+    def close(self) -> None:
+        self._stop.set()
+        self.sock.close()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -288,6 +350,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def _token(self, raw: bytes) -> None:
+        if self.fake.token_redirect is not None:
+            self._count("token-redirected")
+            return self._reply(307, headers={"Location": self.fake.token_redirect})
         self._count("token")
         form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
         grant = form.get("grant_type")

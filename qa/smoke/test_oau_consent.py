@@ -7,12 +7,14 @@ import json
 import secrets
 import signal
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
 from fakes import oau_consent as oc
 from fakes.oau_admin import admin
+from fakes.oau_provider import RedirectSink
 
 case = pytest.mark.case
 N = oc.NAME
@@ -880,6 +882,82 @@ def test_unknown_attempts_and_accounts_are_not_found(cs):
                        "--if-match", absent["revision"])
     assert disconnect.code == 4 and disconnect.error_code == "not_found"
     assert dict(c.fake.counts) == counts
+
+
+@case(
+    "SMK-OAU-058",
+    area="OAU",
+    kind="refusal",
+    covers=[CALLBACK, POLL],
+)
+def test_code_exchange_does_not_follow_a_token_redirect(cs):
+    """docs/operator/oauth-consent.md#configure-the-controlled-profile: no redirect
+    following; a token endpoint that answers a redirect is refused as
+    token_http_refused. The callback's code exchange (which carries the client
+    secret) meets a 307 to another host: the attempt fails with that reason, no
+    account is connected, and the redirect target sees nothing (AGENT-243)."""
+    t, c = cs
+    sink = RedirectSink.cross_host()
+    try:
+        created = oc.connect(t, "redirected-code")
+        assert created.code == 0, created.err
+        location = oc.consent_redirect(c, created.json["authorization_url"])
+        before = c.fake.counts["token-redirected"]
+        c.fake.token_redirect = sink.url
+        try:
+            oc.deliver(c, location)
+        finally:
+            c.fake.token_redirect = None
+        assert c.fake.counts["token-redirected"] == before + 1
+        time.sleep(0.3)
+        assert sink.connections == 0, "the redirect target was contacted"
+        assert sink.secrets_seen == 0
+        polled = oc.attempt(t, created.json["attempt_id"])
+        assert (polled["state"], polled["safe_reason"]) == (
+            "failed",
+            "token_http_refused",
+        ), polled
+        assert oc.account(t, "redirected-code")["state"] == "absent"
+    finally:
+        sink.close()
+
+
+@case(
+    "SMK-OAU-059",
+    area="OAU",
+    kind="refusal",
+    covers=[REFRESH, "cli.oauth.refresh"],
+)
+def test_refresh_does_not_follow_a_token_redirect(cs):
+    """docs/operator/oauth-consent.md#configure-the-controlled-profile: a renewal whose
+    token endpoint answers 307, to the same host or another, is refused as
+    token_http_refused, and the redirect target never sees the refresh token or
+    client secret (AGENT-243)."""
+    t, c = cs
+    for where, sink in (
+        ("same", RedirectSink()),
+        ("cross", RedirectSink.cross_host()),
+    ):
+        label = f"redirected-{where}"
+        try:
+            connected(t, c, label)
+            view = oc.account(t, label)
+            before = c.fake.counts["token-redirected"]
+            c.fake.token_redirect = sink.url
+            try:
+                renewed = t.cli(
+                    "oauth", "refresh", N, "--label", label, "--if-match", view["revision"]
+                )
+            finally:
+                c.fake.token_redirect = None
+            assert renewed.code != 0
+            assert renewed.error_code == "token_http_refused", renewed.err
+            assert c.fake.counts["token-redirected"] == before + 1
+            time.sleep(0.3)
+            assert sink.connections == 0, f"{where}: the redirect target was contacted"
+            assert sink.secrets_seen == 0
+        finally:
+            sink.close()
 
 
 @case(
