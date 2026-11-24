@@ -57,7 +57,8 @@ def check_status(child, root, port, files, identity, env):
         raise ValueError('smoke_operator_status_refused')
 
 
-def owned_smoke(files, identity, root, record):
+def owned_smoke(files, identity, root, record, wrap=()):
+    """wrap prefixes the daemon command (qemu-user or arch -x86_64) for a non-native pair."""
     env = C.environment(root)
     record.update(stage='version_help', daemon_started=False, cleanup=None)
     for role, path in files.items():
@@ -66,7 +67,7 @@ def owned_smoke(files, identity, root, record):
         if not C.V.execute(path, ['--help'], env=env).strip():
             raise ValueError('smoke_help_empty')
     port = configure(root, files['locksmith'], env)
-    child = subprocess.Popen([str(files['locksmithd']), '--config', 'config.json'], cwd=root, env=env,
+    child = subprocess.Popen([*wrap, str(files['locksmithd']), '--config', 'config.json'], cwd=root, env=env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     record.update(stage='startup_status', daemon_started=True)
     try:
