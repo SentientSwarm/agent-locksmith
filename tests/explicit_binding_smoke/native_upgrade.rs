@@ -9,7 +9,10 @@ pub async fn exercise() {
     let mut f = Fixture::new(&receiver.server.uri());
     let (agents, before) = prepare(&mut f, &receiver, &prior, &old_cli).await;
     f.start().await;
-    assert_eq!(sql(&f, "SELECT max(version) FROM _sqlx_migrations;"), "27");
+    assert_eq!(
+        sql(&f, "SELECT max(version) FROM _sqlx_migrations;"),
+        crate::latest_migration::latest().to_string()
+    );
     // Migration 0027 adds rate limits empty: an upgrade limits nothing.
     assert_eq!(sql(&f, "SELECT count(*) FROM rate_limits;"), "0");
     assert_eq!(authority(&f), before);

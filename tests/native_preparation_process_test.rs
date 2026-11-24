@@ -7,6 +7,8 @@ mod bounds;
 mod fixture;
 #[path = "native_preparation/process_flow.rs"]
 mod flow;
+#[path = "support/latest_migration.rs"]
+mod latest_migration;
 #[path = "native_process/observations.rs"]
 mod observations;
 #[path = "native_process/pki.rs"]

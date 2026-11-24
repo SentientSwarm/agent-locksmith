@@ -493,7 +493,7 @@ pub async fn upgrade() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        27
+        crate::latest_migration::latest()
     );
     let rows = sqlx::query("SELECT * FROM oauth_sessions")
         .fetch_all(&pool)
@@ -536,6 +536,7 @@ pub async fn upgrade() {
     f.stop();
     t.stop();
     println!(
-        "actual schema-{prior_schema} CLI+daemon connected account -> schema-27 unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined"
+        "actual schema-{prior_schema} CLI+daemon connected account -> schema-{} unchanged custody -> prior refusal before listeners -> new reopen/manual refresh; joined",
+        crate::latest_migration::latest()
     );
 }

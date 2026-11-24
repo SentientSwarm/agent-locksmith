@@ -139,6 +139,7 @@ LOCKSMITH_ADMIN_URL=https://host:9201 LOCKSMITH_CA_BUNDLE=ca.crt \
 ```
 
 SQLite migrations under `migrations/` are embedded and applied on daemon startup via `migrations::open_and_migrate`; there is no external migration tool to run.
+Adding one means bumping `LATEST` in `tests/support/latest_migration.rs`: every upgrade test expects that version, and a plain `cargo test` fails until it matches `migrations/`. The upgrade tests themselves need prior daemon binaries, so only `scripts/ci-local.py` runs them; run it before landing a migration.
 
 ## Two-binary layout
 

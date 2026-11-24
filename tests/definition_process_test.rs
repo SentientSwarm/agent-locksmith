@@ -3,6 +3,8 @@
 mod fixture;
 #[path = "definition_process/invalid.rs"]
 mod invalid;
+#[path = "support/latest_migration.rs"]
+mod latest_migration;
 #[allow(dead_code)]
 #[path = "native_process/observations.rs"]
 mod observations;

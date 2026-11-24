@@ -110,7 +110,7 @@ pub async fn exercise() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        27
+        crate::latest_migration::latest()
     );
     pool.close().await;
     assert_eq!(

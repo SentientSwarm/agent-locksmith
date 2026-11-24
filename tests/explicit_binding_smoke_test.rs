@@ -12,6 +12,8 @@ mod fixture;
 mod guidance;
 #[path = "explicit_binding_smoke/http_grants.rs"]
 mod http_grants;
+#[path = "support/latest_migration.rs"]
+mod latest_migration;
 #[path = "explicit_binding_smoke/lifecycle.rs"]
 mod lifecycle;
 #[path = "explicit_binding_smoke/migration.rs"]

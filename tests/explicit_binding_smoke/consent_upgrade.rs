@@ -23,11 +23,14 @@ pub async fn exercise() {
     f.stop();
     let before = snapshot(&f);
     f.start_with_env(setup::ENV).await;
-    assert_eq!(oauth_upgrade::version(&f), "27");
+    assert_eq!(
+        oauth_upgrade::version(&f),
+        crate::latest_migration::latest().to_string()
+    );
     assert_eq!(
         snapshot(&f),
         before,
-        "migrations 0015-0027 changed legacy custody"
+        "migrations from 0015 on changed legacy custody"
     );
     assert_eq!(
         migration::sqlite(&f, &f.db, "SELECT DISTINCT kind FROM oauth_sessions;").trim(),
