@@ -28,7 +28,8 @@ Recent phase shipments:
   upstream is codex AND the path ends with `/responses`, locksmith
   inspects the request body and injects/overrides three required
   fields: `store: false`, `stream: true`, `instructions: <default>`.
-  1 MiB body cap (413 over). Audit captures
+  Bodies up to the route's `body_limit_bytes` (413 over; 3.0.0 replaced
+  the old 1 MiB cap, AGENT-248). Audit captures
   `details.codex_body_fixup` when fixup happened.
 - **Phase G4** (v2.4.0): codex required-header injection
   (`OpenAI-Beta: responses=experimental` + `originator: <agent>`).
@@ -202,7 +203,7 @@ Router is built by `app::build_app_full_with_oauth` in `src/app.rs`:
 6. Strips agent-sent `Authorization` and `x-api-key` headers, plus the target's auth header (defense against agent override). Always strips even when `auth: none`.
 7. Injects only the explicitly selected credential for authenticated agent requests. Header/bearer values were read from the selected env, stored values unsealed from the selected handle, and op values read from the selected cache. OAuth uses the selected mechanism/client/endpoints/label, with full cross-binding consensus before cached-token use or refresh. Missing/degraded/conflicting sources fail with 503 and never try another account. The legacy cache is not agent authority.
 7a. **Phase G2 codex header injection**: when `ProxyAuth::Oauth.account_id` is `Some(_)` and `is_chatgpt_codex_upstream(target.upstream)` matches (`/backend-api/codex` substring, case-insensitive), adds `ChatGPT-Account-ID: <account_id>`. Silent skip otherwise. The account_id was extracted from the access-token JWT at bootstrap/refresh by `oauth::jwt::extract_chatgpt_account_id` and stored in `oauth_sessions.account_id`.
-7b. **Phase G3 codex body fixup**: when `is_chatgpt_codex_upstream(target.upstream)` AND `request_path_ends_with_responses(ctx.request_path)` both match, calls `codex_body::fixup` on the request body. Injects `store: false`, `stream: true`, `instructions: <default>` if missing; overrides `store`/`stream` if set wrong; preserves user-supplied `instructions`. 1 MiB body cap (413 over via `record_codex_body_too_large`). Non-JSON bodies pass through. `RequestCtx.codex_body_fixup` records what changed; surfaces in audit `details.codex_body_fixup` when non-noop.
+7b. **Phase G3 codex body fixup**: when `is_chatgpt_codex_upstream(target.upstream)` AND `request_path_ends_with_responses(ctx.request_path)` both match, calls `codex_body::fixup` on the request body. Injects `store: false`, `stream: true`, `instructions: <default>` if missing; overrides `store`/`stream` if set wrong; preserves user-supplied `instructions`. Bodies up to the route's `body_limit_bytes` (413 over via `record_codex_body_too_large`); only top-level fields are parsed (AGENT-355). Non-JSON bodies pass through. `RequestCtx.codex_body_fixup` records what changed; surfaces in audit `details.codex_body_fixup` when non-noop.
 7c. **Phase G4 codex required headers**: when `is_chatgpt_codex_upstream(target.upstream)` matches (any path, not just `/responses`), forces `OpenAI-Beta: responses=experimental` (agent's value stripped during forward loop). Injects `originator: <agent-name>` from `AgentIdentity.name` if the agent didn't supply their own (`"locksmith-proxy"` remains only as a defensive fallback; every proxied request has an identity since 3.0.0). Preserves agent-supplied `originator`.
 8. Routes through `egress_proxy` (CONNECT proxy / Pipelock) when `target.egress: proxied`; otherwise direct.
 9. Applies `ResponseControls` (M7) when the tool has a `response:` block: `max_size_bytes` (with streaming truncation marker via `SizeCappedStream`), `content_type_allowlist`, `redaction_patterns` (regex; cleartext is **never** logged — audit stores `pattern_id`, match count, and SHA-256 hash).
@@ -235,7 +236,7 @@ src/
   definitions/             Strict offline definition schema/API; immutable revisions and disabled pins
   registrations/           Phase E: kind enum, AuthSpec, validators, RegistrationRepository, Catalog cache, seed_loader, legacy_bootstrap, admin api
   oauth/                   Phase F + G + G2: SealingKey (AES-GCM), OauthSessionRepository (label-aware + account_id), refresh task + RefreshLockMap, jwt.rs (chatgpt_account_id extraction), admin handlers
-  codex_body.rs            Phase G3: pure-functional fixup() for codex /responses request bodies — inject store:false / stream:true / instructions, 1 MiB cap
+  codex_body.rs            Phase G3: pure-functional fixup() for codex /responses request bodies — inject store:false / stream:true / instructions, top-level parse only
   repo/agent_creds.rs      Phase G: AgentCredentialRepository — per-agent credential overrides keyed on (agent_id, registration)
   shutdown.rs              ShutdownCoordinator + drain window
   telemetry.rs             tracing-subscriber JSON setup

@@ -35,7 +35,14 @@
 //! for the original formal design and the G3 addendum to ADR-0005.
 //! G5 follows the same shape; addendum lives alongside.
 
-use serde_json::{Map, Value};
+use serde_json::value::RawValue;
+use std::collections::BTreeMap;
+
+/// The body's top level only. Nested values stay as the bytes the agent sent,
+/// so memory stays close to the body size and nested content is forwarded
+/// exactly, numbers included (AGENT-355). Keys are ordered as `Value`'s map
+/// orders them, so re-serialized bodies keep the shape they had before.
+type TopLevel = BTreeMap<String, Box<RawValue>>;
 
 /// Default `instructions` injected when the agent didn't set any.
 /// Operators can document an override later if this becomes a
@@ -77,11 +84,9 @@ impl FixupSummary {
 /// read under the route's `body_limit_bytes`, and the proxy answers a
 /// codex `/responses` body over that limit with 413 before calling this.
 pub fn fixup(body: &[u8]) -> (Vec<u8>, FixupSummary) {
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return (body.to_vec(), FixupSummary::default());
-    };
-
-    let Value::Object(mut map) = value else {
+    // Only a JSON object deserializes into the map; arrays, null, scalars and
+    // malformed bodies pass through unchanged.
+    let Ok(mut map) = serde_json::from_slice::<TopLevel>(body) else {
         return (body.to_vec(), FixupSummary::default());
     };
 
@@ -97,50 +102,48 @@ pub fn fixup(body: &[u8]) -> (Vec<u8>, FixupSummary) {
         return (body.to_vec(), summary);
     }
 
-    let new_body =
-        serde_json::to_vec(&Value::Object(map)).expect("re-serializing a parsed Value cannot fail");
+    let new_body = serde_json::to_vec(&map).expect("serializing raw JSON values cannot fail");
     (new_body, summary)
 }
 
-fn apply_store_rule(map: &mut Map<String, Value>, summary: &mut FixupSummary) {
-    match map.get("store") {
-        Some(Value::Bool(false)) => {} // already correct
+fn raw(json: &str) -> Box<RawValue> {
+    RawValue::from_string(json.to_string()).expect("a fixed JSON literal")
+}
+
+/// Force a top-level boolean. JSON spells each boolean one way, so the raw
+/// text is compared without parsing whatever value the agent sent.
+fn apply_bool_rule(map: &mut TopLevel, key: &'static str, want: bool, summary: &mut FixupSummary) {
+    let literal = if want { "true" } else { "false" };
+    match map.get(key) {
+        Some(v) if v.get() == literal => {} // already correct
         Some(_) => {
-            map.insert("store".into(), Value::Bool(false));
-            summary.fields_overridden.push("store");
+            map.insert(key.into(), raw(literal));
+            summary.fields_overridden.push(key);
         }
         None => {
-            map.insert("store".into(), Value::Bool(false));
-            summary.fields_added.push("store");
+            map.insert(key.into(), raw(literal));
+            summary.fields_added.push(key);
         }
     }
 }
 
-fn apply_stream_rule(map: &mut Map<String, Value>, summary: &mut FixupSummary) {
-    match map.get("stream") {
-        Some(Value::Bool(true)) => {} // already correct
-        Some(_) => {
-            map.insert("stream".into(), Value::Bool(true));
-            summary.fields_overridden.push("stream");
-        }
-        None => {
-            map.insert("stream".into(), Value::Bool(true));
-            summary.fields_added.push("stream");
-        }
-    }
+fn apply_store_rule(map: &mut TopLevel, summary: &mut FixupSummary) {
+    apply_bool_rule(map, "store", false, summary);
 }
 
-fn apply_instructions_rule(map: &mut Map<String, Value>, summary: &mut FixupSummary) {
+fn apply_stream_rule(map: &mut TopLevel, summary: &mut FixupSummary) {
+    apply_bool_rule(map, "stream", true, summary);
+}
+
+fn apply_instructions_rule(map: &mut TopLevel, summary: &mut FixupSummary) {
     if !map.contains_key("instructions") {
-        map.insert(
-            "instructions".into(),
-            Value::String(DEFAULT_INSTRUCTIONS.to_string()),
-        );
+        let value = serde_json::to_string(DEFAULT_INSTRUCTIONS).expect("a string serializes");
+        map.insert("instructions".into(), raw(&value));
         summary.fields_added.push("instructions");
     }
 }
 
-fn apply_max_output_tokens_rule(map: &mut Map<String, Value>, summary: &mut FixupSummary) {
+fn apply_max_output_tokens_rule(map: &mut TopLevel, summary: &mut FixupSummary) {
     // Phase G5 — codex /responses returns 400 with body
     // `{"detail":"Unsupported parameter: max_output_tokens"}` when
     // this is set. Strip it silently; agents stay generic.
@@ -152,7 +155,7 @@ fn apply_max_output_tokens_rule(map: &mut Map<String, Value>, summary: &mut Fixu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn parse(bytes: &[u8]) -> Value {
         serde_json::from_slice(bytes).expect("output must be valid JSON")
@@ -286,6 +289,30 @@ mod tests {
         let (out, summary) = fixup(&body);
         assert_eq!(out, body);
         assert!(summary.is_noop());
+    }
+
+    // AGENT-355: only the top level is parsed, so nested content is
+    // forwarded exactly as sent and memory stays close to the body size.
+    #[test]
+    fn nested_content_is_forwarded_byte_for_byte() {
+        let nested = r#"{"z":1,"a":[1.10,123456789012345678901234567890]}"#;
+        let body = format!(r#"{{"input":{nested},"store":true}}"#);
+        let (out, summary) = fixup(body.as_bytes());
+        assert!(summary.fields_overridden.contains(&"store"));
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(nested), "nested content was rewritten: {out}");
+    }
+
+    #[test]
+    fn rules_read_only_the_top_level_values() {
+        // A huge or odd value under a rule's key is replaced, never parsed.
+        let big = format!(
+            r#"{{"store":[{}0],"stream":true,"instructions":"x"}}"#,
+            "0,".repeat(1000)
+        );
+        let (out, summary) = fixup(big.as_bytes());
+        assert_eq!(summary.fields_overridden, vec!["store"]);
+        assert_eq!(parse(&out)["store"], Value::Bool(false));
     }
 
     #[test]

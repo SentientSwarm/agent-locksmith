@@ -114,10 +114,37 @@ pub async fn run_probe(
 
 /// One probe write, bounded by [`PROBE_TIMEOUT`]; updates the shared
 /// [`WriteHealth`].
+///
+/// While writable, the probe rewrites one row in place, which notices a
+/// database that takes no writes at all. While not writable, it proves
+/// recovery with the write an audit insert is: a row in the audit table,
+/// with its indexes and growth. An in-place rewrite can succeed on a nearly
+/// full disk while audit inserts still fail, and clearing the flag on it let
+/// requests through unaudited (AGENT-354). Failed attempts leave nothing; each
+/// success is a `database_writes_recovered` row.
 pub async fn probe(audit: &AuditRepository) {
-    let attempt = audit.write_health().begin();
-    match tokio::time::timeout(PROBE_TIMEOUT, audit.probe_write()).await {
-        Ok(Ok(())) => audit.write_health().succeeded(attempt),
+    let health = audit.write_health();
+    let attempt = health.begin();
+    // The light write only detects failure; its success never clears one. A
+    // failure being published while this probe chose the light write (after
+    // `failed` takes its ticket, before it stores it) must still wait for an
+    // audit row.
+    let light = health.writable();
+    let write = async {
+        if light {
+            audit.probe_write().await.map(|()| None)
+        } else {
+            audit.insert_recovery().await.map(Some)
+        }
+    };
+    match tokio::time::timeout(PROBE_TIMEOUT, write).await {
+        Ok(Ok(None)) => {}
+        Ok(Ok(Some(row))) => {
+            // SQLite took the row: clear first, then mirror. A slow optional
+            // mirror must not turn a committed write into a failure.
+            health.succeeded(attempt);
+            audit.mirror(&row).await;
+        }
         Ok(Err(e)) => audit.write_health().failed("probe", &e),
         Err(_) => audit
             .write_health()

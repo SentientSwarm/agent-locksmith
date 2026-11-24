@@ -82,9 +82,12 @@ forward. Read Upgrading, below, before you install it.
 
 - Large Codex `/responses` bodies get the body fixups instead of a 413
   (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
-  only bound now is the route's `body_limit_bytes` (10 MiB by default), and
-  a body over it is refused with `413 codex_body_too_large` without being
-  sent. Other routes still answer an over-limit body with 400. See
+  only bound now is the route's `body_limit_bytes` (50 MB for the shipped
+  `codex` registration, 10 MiB for a route that sets none), and a body over
+  it is refused with `413 codex_body_too_large` without being sent. Other
+  routes still answer an over-limit body with 400. The fixup parses only the
+  top-level fields, so memory stays close to the body size and nested content,
+  numbers included, is forwarded exactly as sent (AGENT-355). See
   [size cap](docs/concepts/oauth-flow.md#size-cap).
 - A database that stops taking writes no longer loses audit silently
   (AGENT-251). On 2026-11-14 a filesystem shutdown left the daemon ready
@@ -93,8 +96,11 @@ forward. Read Upgrading, below, before you install it.
   table, migration 0029, rewritten every 2 seconds), makes `/readyz`
   answer `503 database_unwritable`, and proxied requests are refused with
   `503 audit_unavailable` before anything is sent upstream. One error line
-  names the failure. Both clear by themselves within about 2 seconds of
-  the next successful write. `/livez` is unchanged. See
+  names the failure. Both clear by themselves within about 2 seconds once
+  an audit row can be written again: while they are set, the probe writes
+  an audit row rather than its in-place rewrite, so a nearly full disk
+  cannot clear them early (AGENT-354), and a recovery is recorded as a
+  `database_writes_recovered` row. `/livez` is unchanged. See
   [when the database stops taking writes](docs/concepts/architecture.md#when-the-database-stops-taking-writes).
 - QA cases now cite the docs they check by heading
   (`docs/reference/cli-reference.md#exit-codes`) rather than by line, and

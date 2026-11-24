@@ -125,10 +125,16 @@ shared write-health flag:
 - A failed audit insert sets it.
 - So does a failed write probe: every 2 seconds the daemon rewrites the
   single row of `db_write_probe` (migration 0029). The probe notices a
-  failure when no traffic arrives, and notices the recovery while the
-  proxy is refusing everything. A probe that takes longer than 5 seconds
+  failure when no traffic arrives. A probe that takes longer than 5 seconds
   counts as a failure.
-- The next successful write, probe or audit, clears it.
+- Only a write that began after the latest failure, and succeeded, clears
+  it. While the flag is set, the probe writes an audit row instead, because
+  an in-place rewrite can succeed on a nearly full disk while audit inserts
+  still fail. Failed attempts leave nothing; a successful one is a
+  `security` row with event `database_writes_recovered`, which records the
+  recovery (an outage that flaps can record several). That row is small: a disk with room for it but not for a larger
+  audit row can still clear the flag, and each time it does, requests are
+  admitted until the next audit insert fails.
 
 While the flag is set:
 

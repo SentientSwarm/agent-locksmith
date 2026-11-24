@@ -534,10 +534,13 @@ on malformed bodies — that's the right error for the agent to see).
 ### Size cap
 
 The fixup has no cap of its own. It applies to any `/responses` body
-the route accepts, up to the route's `body_limit_bytes` (10 MiB unless
-the operator sets another with `tool put --body-limit`). Before 3.0.0
-it had a smaller fixed cap, which real Codex sessions with long
-histories exceeded (AGENT-248).
+the route accepts, up to the route's `body_limit_bytes`: 50 MB for the
+shipped `codex` registration, and 10 MiB for a route that sets none
+(change it with `tool put --body-limit`). Before 3.0.0 it had a smaller
+fixed cap, which real Codex sessions with long histories exceeded
+(AGENT-248). Only the top-level fields are parsed; everything nested,
+such as the conversation history, is forwarded exactly as sent, so the
+fixup holds little more than the body itself in memory.
 
 A body over the route's limit returns **413 Payload Too Large**, and
 nothing is sent upstream:
