@@ -12,6 +12,8 @@ use crate::output::{Format, print};
 pub enum AgentCmd {
     /// Replace or clear a binding's upstream method policy (live).
     MethodPolicy {
+        /// Agent public_id.
+        #[arg(allow_hyphen_values = true)]
         id: String,
         registration: String,
         /// Exact methods, family.* or * (comma separated). Empty denies all.

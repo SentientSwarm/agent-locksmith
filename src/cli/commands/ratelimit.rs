@@ -19,7 +19,7 @@ pub enum RateLimitCmd {
         #[arg(long)]
         concurrent: Option<u32>,
         /// Agent public id or name; omit for the route default.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         agent: Option<String>,
     },
     /// List every limit.
@@ -27,7 +27,7 @@ pub enum RateLimitCmd {
     /// Remove a route's limit, or one agent's override of it.
     Unset {
         route: String,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         agent: Option<String>,
     },
 }
