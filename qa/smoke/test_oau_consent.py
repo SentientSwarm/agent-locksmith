@@ -974,24 +974,33 @@ def test_expired_access_token_refuses_native_admission(cs):
     token is refused. A fresh MCP session on either route is 404 authority_changed,
     and nothing reaches the provider."""
     t, c = cs
-    lifetime = 8
-    c.fake.expires_in = lifetime
-    try:
-        connected(t, c, "short")
-        expired_at = time.monotonic() + lifetime
-    finally:
-        c.fake.expires_in = 3600
-    view = oc.account(t, "short")
-    agent = t.cli("agent", "register", "--name", "oau-short", "--allowlist", N)
-    assert agent.code == 0, agent.err
-    selected = t.cli(
-        "agent", "select-oauth", agent.json["public_id"], N,
-        "--label", "short", "--if-match", view["revision"],
-    )
-    assert selected.code == 0, selected.err
-    prepare(t, agent.json["public_id"])
+    # Selection and observation refuse an expired token, so expiry must fall
+    # after setup. Setup gets a budget it can miss without failing the case:
+    # an attempt left with too little lifetime retries on a fresh label.
+    lifetime, budget = 30, 20
+    for attempt in range(3):
+        label = f"short-{attempt}"
+        c.fake.expires_in = lifetime
+        try:
+            connected(t, c, label)
+            expired_at = time.monotonic() + lifetime
+        finally:
+            c.fake.expires_in = 3600
+        view = oc.account(t, label)
+        agent = t.cli("agent", "register", "--name", f"oau-{label}", "--allowlist", N)
+        assert agent.code == 0, agent.err
+        selected = t.cli(
+            "agent", "select-oauth", agent.json["public_id"], N,
+            "--label", label, "--if-match", view["revision"],
+        )
+        assert selected.code == 0, selected.err
+        if expired_at - time.monotonic() >= budget:
+            prepare(t, agent.json["public_id"])
+            break
+    else:
+        pytest.fail("setup outlasted the token lifetime in all three attempts")
     time.sleep(max(0.0, expired_at - time.monotonic()) + 1.5)
-    calls = c.fake.counts["mcp-tool-call"]
+    before = dict(c.fake.counts)
     init = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -1008,8 +1017,7 @@ def test_expired_access_token_refuses_native_admission(cs):
         )
         assert response.status == 404, (path, response.text)
         assert response.code == "authority_changed", (path, response.text)
-    assert c.fake.counts["mcp-tool-call"] == calls
-
+    assert dict(c.fake.counts) == before, "an admission reached the provider"
 
 @case(
     "SMK-OAU-033",
