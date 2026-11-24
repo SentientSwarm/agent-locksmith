@@ -40,24 +40,32 @@ def rd(target_factory):
     fake = FakeProvider(
         on_secret=lambda v, label: holder["t"].canaries.add(v, label)
     ).start()
-    t = target_factory(
-        env={"LOCKSMITH_OAUTH_SEALING_KEY": sealing_key()},
-        label="oau-redirect",
-        upstream=False,
-    )
-    holder["t"] = t
-    for path, body in (
-        (f"/admin/operator/tools/{LEGACY_NAME}", legacy_registration(fake)),
-        (f"/admin/operator/models/{DEVICE_NAME}", device_registration(fake)),
-    ):
-        put = admin(t, "PUT", path, body)
-        assert put.status == 200, put.text
-    sinks = {"same-host": RedirectSink(), "cross-host": RedirectSink.cross_host()}
-    yield t, fake, sinks
-    fake.token_redirect = None
-    fake.stop()
-    for sink in sinks.values():
-        sink.close()
+    sinks = {}
+    # Everything after the fake starts is inside the cleanup scope, so a
+    # daemon or registration failure cannot leave its listeners running.
+    try:
+        t = target_factory(
+            env={"LOCKSMITH_OAUTH_SEALING_KEY": sealing_key()},
+            label="oau-redirect",
+            upstream=False,
+        )
+        holder["t"] = t
+        for path, body in (
+            (f"/admin/operator/tools/{LEGACY_NAME}", legacy_registration(fake)),
+            (f"/admin/operator/models/{DEVICE_NAME}", device_registration(fake)),
+        ):
+            put = admin(t, "PUT", path, body)
+            assert put.status == 200, put.text
+        sinks["same-host"] = RedirectSink()
+        sinks["cross-host"] = RedirectSink.cross_host()
+        yield t, fake, sinks
+    finally:
+        fake.token_redirect = None
+        try:
+            fake.stop()
+        finally:
+            for sink in sinks.values():
+                sink.close()
 
 
 class redirected:
@@ -186,21 +194,32 @@ def test_inline_refresh_does_not_follow_a_token_redirect(rd):
     a reconnect; the redirect target sees nothing."""
     t, fake, sinks = rd
     sink = sinks["cross-host"]
-    assert bootstrap(t, fake, "inline", expires_in=2).code == 0
-    time.sleep(2.5)
-    # Select only now: the background task refreshes selected sessions only, so
-    # binding before the sleep let a tick refresh the token first (about 1 run in
-    # 11) and the inline call then made no refresh at all.
-    agent = bind(t, "inline")
-    with redirected(fake, sink) as r:
-        response = t.http("GET", f"/api/{LEGACY_NAME}/records", token=agent["token"])
-    assert response.status == 503, response.text
-    assert response.code == "oauth_refresh_failed", response.text
+    # The background task refreshes selected sessions on a fixed 30 s tick, so
+    # one can still land between bind() and the request. Its outcome is
+    # distinct (200 before the redirect is set, oauth_reconnect_required after),
+    # so retry on a fresh label then: the case judges only an inline refresh,
+    # and a daemon that never refreshes inline fails every attempt.
+    for attempt in range(3):
+        label = f"inline-{attempt}"
+        assert bootstrap(t, fake, label, expires_in=2).code == 0
+        time.sleep(2.5)
+        # Select only after expiry: the task refreshes selected sessions only.
+        agent = bind(t, label)
+        dispatched = fake.counts["resource"]
+        with redirected(fake, sink) as r:
+            response = t.http("GET", f"/api/{LEGACY_NAME}/records", token=agent["token"])
+        if response.status == 503 and response.code == "oauth_refresh_failed":
+            break
+        assert response.status == 200 or response.code == "oauth_reconnect_required", (
+            response.text
+        )
+    else:
+        pytest.fail("the background task refreshed first in all three attempts")
     assert r.answered == 1
     assert_not_followed(sink)
-    assert refresh_failure_logged(t, "inline"), "the log must name token_redirect"
-    assert status(t, "inline")["reconnect_required"] is True
-    assert fake.counts["resource"] == 0, "nothing may be dispatched upstream"
+    assert refresh_failure_logged(t, label), "the log must name token_redirect"
+    assert status(t, label)["reconnect_required"] is True
+    assert fake.counts["resource"] == dispatched, "nothing may be dispatched upstream"
 
 
 @case("SMK-OAU-056", area="OAU", kind="refusal", covers=[TASK, STATUS])

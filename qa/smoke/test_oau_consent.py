@@ -934,11 +934,11 @@ def test_refresh_does_not_follow_a_token_redirect(cs):
     token_http_refused, and the redirect target never sees the refresh token or
     client secret (AGENT-243)."""
     t, c = cs
-    for where, sink in (
-        ("same", RedirectSink()),
-        ("cross", RedirectSink.cross_host()),
-    ):
+    # Build each sink inside its own cleanup scope, so a failed first pass
+    # cannot leave the second sink listening.
+    for where, make in (("same", RedirectSink), ("cross", RedirectSink.cross_host)):
         label = f"redirected-{where}"
+        sink = make()
         try:
             connected(t, c, label)
             view = oc.account(t, label)
