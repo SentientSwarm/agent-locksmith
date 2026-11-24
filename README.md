@@ -72,7 +72,8 @@ middleware (`kind=infra`) is operator-only.
   required fields: `store: false`, `stream: true`, `instructions:
   <default>` (preserves user-supplied `instructions`). Agents that
   send a generic `openai-responses` body shape get a working codex
-  call without needing codex-specific code paths. 1 MiB body cap.
+  call without needing codex-specific code paths, for bodies up to the
+  route's body limit.
   Audit captures `details.codex_body_fixup` when fixup happened.
 - **codex required-header injection (Phase G4)** — locksmith
   injects `OpenAI-Beta: responses=experimental` (forced) and
