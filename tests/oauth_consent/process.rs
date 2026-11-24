@@ -29,7 +29,9 @@ impl Twin {
             .stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log));
         let mut child = process::Guard(command.spawn().unwrap());
-        let until = Instant::now() + Duration::from_secs(5);
+        // A deadline, not a sleep: 5 s was too short for Python start-up on a
+        // saturated host (AGENT-352).
+        let until = Instant::now() + Duration::from_secs(30);
         loop {
             assert!(child.0.try_wait().unwrap().is_none());
             // The twin may be mid-write: retry until the file parses.

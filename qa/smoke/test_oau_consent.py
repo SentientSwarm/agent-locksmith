@@ -35,6 +35,7 @@ CLIENT_DEL = (
 CALLBACK = "callback.ANY./oauth/callback{,/slack,/custom/{redirect_profile_id}}"
 SELECT = "admin.PUT./admin/operator/agents/{agent}/oauth-selection/{name}"
 MCP = "agent.ANY./mcp/{name}"
+COMPACT = "agent.ANY./mcp/{name}/compact"
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
     "MCP-Protocol-Version": "2025-11-25",
@@ -934,11 +935,11 @@ def test_refresh_does_not_follow_a_token_redirect(cs):
     token_http_refused, and the redirect target never sees the refresh token or
     client secret (AGENT-243)."""
     t, c = cs
-    for where, sink in (
-        ("same", RedirectSink()),
-        ("cross", RedirectSink.cross_host()),
-    ):
+    # Build each sink inside its own cleanup scope, so a failed first pass
+    # cannot leave the second sink listening.
+    for where, make in (("same", RedirectSink), ("cross", RedirectSink.cross_host)):
         label = f"redirected-{where}"
+        sink = make()
         try:
             connected(t, c, label)
             view = oc.account(t, label)
@@ -959,6 +960,64 @@ def test_refresh_does_not_follow_a_token_redirect(cs):
         finally:
             sink.close()
 
+
+@case(
+    "SMK-OAU-061",
+    area="OAU",
+    kind="refusal",
+    covers=[MCP, COMPACT],
+    codes=["authority_changed"],
+)
+def test_expired_access_token_refuses_native_admission(cs):
+    """docs/operator/native-oauth.md#refresh-reconnect-and-token-lifetime: controlled
+    custody holds only the access token and never refreshes it, and a known expired
+    token is refused. A fresh MCP session on either route is 404 authority_changed,
+    and nothing reaches the provider."""
+    t, c = cs
+    # Selection and observation refuse an expired token, so expiry must fall
+    # after setup. Setup gets a budget it can miss without failing the case:
+    # an attempt left with too little lifetime retries on a fresh label.
+    lifetime, budget = 30, 20
+    for attempt in range(3):
+        label = f"short-{attempt}"
+        c.fake.expires_in = lifetime
+        try:
+            connected(t, c, label)
+            expired_at = time.monotonic() + lifetime
+        finally:
+            c.fake.expires_in = 3600
+        view = oc.account(t, label)
+        agent = t.cli("agent", "register", "--name", f"oau-{label}", "--allowlist", N)
+        assert agent.code == 0, agent.err
+        selected = t.cli(
+            "agent", "select-oauth", agent.json["public_id"], N,
+            "--label", label, "--if-match", view["revision"],
+        )
+        assert selected.code == 0, selected.err
+        if expired_at - time.monotonic() >= budget:
+            prepare(t, agent.json["public_id"])
+            break
+    else:
+        pytest.fail("setup outlasted the token lifetime in all three attempts")
+    time.sleep(max(0.0, expired_at - time.monotonic()) + 1.5)
+    before = dict(c.fake.counts)
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "qa-oau", "version": "1"},
+        },
+    }
+    for path in (f"/mcp/{N}", f"/mcp/{N}/compact"):
+        response = t.http(
+            "POST", path, token=agent.json["token"], body=init, headers=MCP_HEADERS
+        )
+        assert response.status == 404, (path, response.text)
+        assert response.code == "authority_changed", (path, response.text)
+    assert dict(c.fake.counts) == before, "an admission reached the provider"
 
 @case(
     "SMK-OAU-033",
@@ -1016,3 +1075,4 @@ def test_retired_client_generation_cannot_start_consent(cs):
     attempt = oc.connect(t, "after-retire")
     assert attempt.code != 0, "consent started with a retired client generation"
     assert dict(c.fake.counts) == counts
+

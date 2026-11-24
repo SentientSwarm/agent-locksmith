@@ -288,6 +288,33 @@ mod tests {
             ],
             &["locksmith", "agent", "credentials", "list", "-Oabc"],
             &["locksmith", "bootstrap", "revoke", "-Oabc"],
+            // Added after #98 without the setting (AGENT-358).
+            &[
+                "locksmith",
+                "agent",
+                "method-policy",
+                "-Oabc",
+                "lmstudio",
+                "--clear",
+            ],
+            &[
+                "locksmith",
+                "rate-limit",
+                "set",
+                "lmstudio",
+                "--rpm",
+                "1",
+                "--agent",
+                "-Oabc",
+            ],
+            &[
+                "locksmith",
+                "rate-limit",
+                "unset",
+                "lmstudio",
+                "--agent",
+                "-Oabc",
+            ],
             // Consent attempt ids and account revisions are URL-safe base64 too.
             &["locksmith", "oauth", "attempt-status", "linear", "-Oabc"],
             &["locksmith", "oauth", "cancel", "linear", "-Oabc"],

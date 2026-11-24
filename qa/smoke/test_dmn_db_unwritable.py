@@ -54,9 +54,9 @@ def _error_lines(t) -> list[dict]:
 @pytest.fixture(scope="module")
 def wh(target_factory):
     fs = dmn_faultfs.FaultFs()
-    up = Upstream()
-    t = None
+    up = t = None
     try:
+        up = Upstream()
         t = target_factory(
             label="dmn-unwritable",
             config={"database": {"path": str(fs.mount / "locksmith.db")}},
@@ -67,11 +67,17 @@ def wh(target_factory):
         assert ok.status == 200, ok.text
         yield t, fs, up, agent
     finally:
-        # Stop the daemon before the filesystem goes away under it.
-        if t is not None and "locksmithd" in t.procs:
-            t.stop()
-        fs.close()
-        up.close()
+        # Stop the daemon before the filesystem goes away under it. Each step
+        # runs even if an earlier one raises, so no mount or listener leaks.
+        try:
+            if t is not None and "locksmithd" in t.procs:
+                t.stop()
+        finally:
+            try:
+                fs.close()
+            finally:
+                if up is not None:
+                    up.close()
 
 
 @case("SMK-DMN-083", area="DMN", kind="refusal", covers=[READY, LIVE, SEM], codes=["not_ready"])

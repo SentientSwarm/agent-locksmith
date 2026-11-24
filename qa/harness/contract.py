@@ -70,9 +70,17 @@ def _check_gaps(contract: Contract, today: dt.date) -> None:
     by_id = {e["id"]: e for e in contract.entries()}
     seen: set[tuple[str, str | None]] = set()
     for gap in contract.known_gaps:
-        missing = {"id", "reason", "ticket", "expires"} - gap.keys()
+        # `approved` records the owner's approval: this repo lands without PRs.
+        missing = {"id", "reason", "ticket", "expires", "approved"} - gap.keys()
         if missing:
             raise ContractError(f"known gap {gap.get('id', '?')} lacks {sorted(missing)}")
+        # A bare `approved:` loads as None, and str(None) is not empty.
+        empty = sorted(
+            k for k in ("reason", "ticket", "approved")
+            if not isinstance(gap[k], str) or not gap[k].strip()
+        )
+        if empty:
+            raise ContractError(f"known gap {gap['id']} has empty {empty}")
         entry = by_id.get(gap["id"])
         if entry is None:
             raise ContractError(f"known gap {gap['id']} names no contract entry")

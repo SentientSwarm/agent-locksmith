@@ -224,7 +224,8 @@ async fn test_proxy_refuses_without_dispatch_while_database_unwritable() {
 
     // Recovered: the next request is forwarded (the mock's single expected
     // hit) and audited.
-    h.audit.write_health().succeeded();
+    let health = h.audit.write_health();
+    health.succeeded(health.begin());
     h.server.get("/api/open/after").await.assert_status_ok();
     mock.verify().await;
 }
