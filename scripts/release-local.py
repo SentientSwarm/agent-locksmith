@@ -29,18 +29,20 @@ DIR (outside the source tree) holds:
   notes.md         the commit's CHANGELOG section, from its release-notes.py
 
 A rerun reuses a target whose record is verified for this commit and whose
-files still match it. Exit 0 when all six verify. Otherwise exit 1, naming
-each failed target, with no assets/ (so no SHA256SUMS).
+files still match it. Exit 0 when all six verify and the notes are written.
+Otherwise exit 1, naming each failed target or step, with no assets/ (so no
+SHA256SUMS) and no notes.md. validation.json names each build platform, never
+a host name.
 """
 import argparse
 import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -126,8 +128,13 @@ class Local:
         self.env = {**C.environment(), "PATH": os.pathsep.join(
             [*map(str, path_prefix), str(Path.home() / ".cargo/bin"), os.environ.get("PATH", "")])}
 
-    def label(self):
-        return f"{socket.gethostname().split('.')[0]} ({platform.system()} {platform.machine()})"
+    def label(self):  # published in validation.json, so the platform only, never a host name
+        return f"{platform.system()} {platform.machine()}"
+
+    def make_work(self):
+        work = shlex.quote(str(self.work))  # under this run's private mkdtemp root
+        self.sh(f"rm -rf {work} && mkdir -p {work}", what="work dir")
+        return str(self.work)
 
     def sh(self, command, timeout=STEP_TIMEOUT, what="command"):
         return run(["bash", "-c", command], env=self.env, timeout=timeout, what=what)
@@ -143,16 +150,29 @@ class Local:
         shutil.rmtree(self.work, ignore_errors=True)
 
 
+MAC_DEST = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
 class Remote:
-    def __init__(self, dest, work, ssh_options):
-        self.dest, self.work = dest, work
+    def __init__(self, dest, ssh_options):
+        if not MAC_DEST.fullmatch(dest):  # never read as an ssh option
+            raise ValueError(f"not USER@HOST: {dest!r}")
+        self.dest, self.work = dest, None
         self.ssh = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
         for option in ssh_options:
             self.ssh += ["-o", option]
         self.name = dest
 
-    def label(self):
-        return f"{self.dest.split('@')[-1]} ({self.sh('uname -sm').strip()})"
+    def label(self):  # published in validation.json, so the platform only, never a host name
+        return self.sh("uname -sm", what="uname").strip()
+
+    def make_work(self):
+        # mktemp, not a predictable /tmp name another account could pre-create or race.
+        work = self.sh('mktemp -d "${TMPDIR:-/tmp}/release-local.XXXXXXXX"', what="work dir").strip()
+        if not work.startswith("/") or "\n" in work:
+            raise Failed(f"mktemp gave {work!r}")
+        self.work = work
+        return work
 
     def sh(self, command, timeout=STEP_TIMEOUT, what="command"):
         wrapped = f'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; {command}'
@@ -167,6 +187,8 @@ class Remote:
         run(["scp", "-q", *self.ssh, f"{self.dest}:{src}", str(dst)], what=f"copy from {self.dest}")
 
     def cleanup(self):
+        if self.work is None:
+            return
         try:
             self.sh(f"rm -rf {shlex.quote(self.work)}", what="cleanup")
         except Failed:
@@ -198,8 +220,7 @@ class Producer:
         """Clone the commit and copy the smoke helpers onto the host, once."""
         if host.name in self.ready:
             return self.ready[host.name]
-        work = str(host.work)
-        host.sh(f"rm -rf {shlex.quote(work)} && mkdir -p {shlex.quote(work)}", what="work dir")
+        work = host.make_work()
         host.put(self.bundle, f"{work}/src.bundle")
         host.sh(f"cd {shlex.quote(work)} && git clone -q src.bundle src && "
                 f"git -C src checkout -q --detach {self.commit} && "
@@ -224,10 +245,8 @@ class Producer:
         local = self.out / "targets" / target.suffix
         shutil.rmtree(local, ignore_errors=True)
         pair = f"{work}/pair-{target.suffix}"
-        host.sh(f"rm -rf {pair} && mkdir -p {pair}", what="pair dir")
-        for role, name in zip(ROLES, target.names()):
-            built = f"{tdir}/{target.triple}/release/{role}"
-            host.sh(f"cp {shlex.quote(built)} {pair}/{name}", what="capture")
+        host.sh(capture_script(tdir, target, pair), what="capture")
+        for name in target.names():
             host.get(f"{pair}/{name}", local / name)
             C.binary_arch(local / name, target.triple)
         smoke = self.helper(host, work, target, "smoke", pair, wrap)
@@ -264,7 +283,22 @@ class Producer:
             raise Failed(f"{target.suffix} {mode} gave no result") from None
 
 
+def capture_script(tdir, target, pair):
+    """Shell that copies the built pair into a fresh pair dir; every path quoted."""
+    q = shlex.quote
+    steps = [f"rm -rf {q(pair)}", f"mkdir -p {q(pair)}"]
+    steps += [f"cp {q(f'{tdir}/{target.triple}/release/{role}')} {q(f'{pair}/{name}')}"
+              for role, name in zip(ROLES, target.names())]
+    return " && ".join(steps)
+
+
 # --- the release -------------------------------------------------------------
+
+def discard_outputs(out):
+    """Remove anything publishable, so a failed or unfinished run leaves none."""
+    for name in ("assets", "assets.partial"):
+        shutil.rmtree(out / name, ignore_errors=True)
+    (out / "notes.md").unlink(missing_ok=True)
 
 def load_record(out, target, commit):
     path = out / "targets" / target.suffix / "record.json"
@@ -320,8 +354,7 @@ def progress(line):
 def release(out, commit, source, producer, targets=TARGETS, log=progress):
     """Produce every target, verify each against SHA256SUMS, then write assets/."""
     out = Path(out)
-    shutil.rmtree(out / "assets", ignore_errors=True)
-    shutil.rmtree(out / "assets.partial", ignore_errors=True)
+    discard_outputs(out)
     records, failures = {}, {}
     for target in targets:
         record = load_record(out, target, commit)
@@ -362,6 +395,19 @@ def release(out, commit, source, producer, targets=TARGETS, log=progress):
         return failures
     assemble(out, records, source)
     return {}
+
+
+def produce(out, commit, source, producer, notes, log=progress):
+    """release(), then the notes; any failure leaves nothing publishable."""
+    try:
+        failures = release(out, commit, source, producer, log=log)
+        if not failures:
+            notes()
+    except (Failed, ValueError, OSError) as error:
+        failures = {"release notes" if (Path(out) / "assets").exists() else "assemble": str(error)}
+    if failures:
+        discard_outputs(Path(out))
+    return failures
 
 
 # --- helper modes, run on the host that executes the pair --------------------
@@ -440,6 +486,9 @@ def driver_main(argv):
         parser.error("--out must be outside the source tree")
     if (platform.system(), platform.machine()) != ("Linux", "x86_64"):
         parser.error("run this on an x86_64 Linux host")
+    if not MAC_DEST.fullmatch(args.mac):
+        parser.error("--mac must be USER@HOST")
+    discard_outputs(out)  # an earlier run's assets must not outlive this one
     started = time.monotonic()
     try:
         commit = run(["git", "-C", str(ROOT), "rev-parse", "--verify", args.commit + "^{commit}"],
@@ -450,7 +499,7 @@ def driver_main(argv):
     out.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="release-local-", dir=out))
     hosts = {"local": Local(work / "local", args.zig_path),
-             "mac": Remote(args.mac, f"/tmp/release-local-{commit[:12]}-{os.getpid()}", args.ssh_option)}
+             "mac": Remote(args.mac, args.ssh_option)}
     try:
         src = work / "src"
         run(["git", "clone", "-q", "--no-local", str(ROOT), str(src)], what="clone")
@@ -460,14 +509,15 @@ def driver_main(argv):
         producer = Producer(commit, source["version"], out, work / "src.bundle", hosts,
                             {"local": sys.executable, "mac": args.mac_python},
                             args.qemu and args.qemu.resolve(), args.arm64_root and args.arm64_root.resolve())
-        failures = release(out, commit, source, producer)
-        if not failures:
-            # Notes come from the commit's own CHANGELOG and release-notes.py.
+
+        def notes():  # from the commit's own CHANGELOG and release-notes.py
             run([sys.executable, "-B", str(src / "scripts/release-notes.py"), "--assets", str(out / "assets"),
                  "--ref", f"refs/tags/v{source['version']}", "--revision", commit,
                  "--out", str(out / "notes.md")], what="release notes")
+        failures = produce(out, commit, source, producer, notes)
     except (Failed, ValueError, OSError) as error:
         failures = {"setup": str(error)}
+        discard_outputs(out)
     finally:
         for host in hosts.values():
             host.cleanup()

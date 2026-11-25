@@ -3,6 +3,9 @@
 import hashlib
 import importlib.util
 import json
+import platform
+import socket
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -143,6 +146,72 @@ class ReleaseLocal(unittest.TestCase):
         other = FakeProducer(self.out)
         self.assertEqual(L.release(self.out, "f" * 40, SOURCE, other, log=self.logs.append), {})
         self.assertEqual(len(other.built), 3)
+
+
+    def test_capture_script_quotes_every_path(self):
+        # Output-derived paths reach a shell; a space or $ in them must not split or expand.
+        work = self.out / "odd dir $HOME;x"
+        target = next(t for t in L.TARGETS if t.suffix == "linux-amd64")
+        built = work / "t" / target.triple / "release"
+        built.mkdir(parents=True)
+        for role in L.ROLES:
+            (built / role).write_text(role)
+        pair = f"{work}/pair-{target.suffix}"
+        subprocess.run(["bash", "-c", L.capture_script(f"{work}/t", target, pair)], check=True)
+        self.assertEqual(sorted(p.name for p in Path(pair).iterdir()), sorted(target.names()))
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["odd dir $HOME;x"])
+
+    def test_host_labels_name_the_platform_not_the_host(self):
+        # validation.json is a published asset: no host names in it.
+        local = L.Local(self.out / "local")
+        self.assertEqual(local.label(), f"{platform.system()} {platform.machine()}")
+        self.assertNotIn(socket.gethostname().split(".")[0], local.label())
+        remote = L.Remote("builder@private-mac.internal", [])
+        remote.sh = lambda command, **kw: "Darwin arm64\n" if command == "uname -sm" else ""
+        self.assertEqual(remote.label(), "Darwin arm64")
+
+    def test_remote_rejects_a_destination_ssh_would_read_as_an_option(self):
+        for dest in ("-oProxyCommand=touch pwned", "host", "user@-oX", "user@host cmd"):
+            with self.assertRaises(ValueError, msg=dest):
+                L.Remote(dest, [])
+        with self.assertRaises(SystemExit):
+            L.driver_main(["--commit", "HEAD", "--out", str(self.out), "--mac", "-oProxyCommand=touch pwned"])
+
+    def test_remote_work_dir_comes_from_mktemp(self):
+        remote, sent = L.Remote("builder@mac", []), []
+
+        def sh(command, **kw):
+            sent.append(command)
+            return "/tmp/release-local.Ab12Cd34\n"
+        remote.sh = sh
+        self.assertEqual(remote.make_work(), "/tmp/release-local.Ab12Cd34")
+        self.assertEqual(len(sent), 1)
+        self.assertIn("mktemp -d", sent[0])
+        remote.cleanup()
+        self.assertEqual(sent[-1], "rm -rf /tmp/release-local.Ab12Cd34")
+
+    def test_a_notes_failure_leaves_nothing_publishable(self):
+        def notes():
+            (self.out / "notes.md").write_text("partial")
+            raise L.Failed("release notes exited 1")
+        failures = L.produce(self.out, REV, SOURCE, FakeProducer(self.out), notes, log=self.logs.append)
+        self.assertEqual(list(failures), ["release notes"])
+        self.assertFalse((self.out / "assets").exists())
+        self.assertFalse((self.out / "notes.md").exists())
+        self.assertFalse(list(self.out.rglob("SHA256SUMS")))
+        self.assertEqual(L.produce(self.out, REV, SOURCE, FakeProducer(self.out), lambda: None,
+                                   log=self.logs.append), {})
+        self.assertTrue((self.out / "assets" / "SHA256SUMS").exists())
+
+    @unittest.skipUnless((platform.system(), platform.machine()) == ("Linux", "x86_64"), "driver runs on x86_64 Linux")
+    def test_a_failed_setup_removes_an_earlier_runs_assets(self):
+        (self.out / "assets").mkdir()
+        (self.out / "assets" / "SHA256SUMS").write_text("from an earlier commit\n")
+        (self.out / "notes.md").write_text("earlier notes")
+        code = L.driver_main(["--commit", "no-such-revision", "--out", str(self.out), "--mac", "builder@mac"])
+        self.assertEqual(code, 1)
+        self.assertFalse((self.out / "assets").exists())
+        self.assertFalse((self.out / "notes.md").exists())
 
 
 if __name__ == "__main__":

@@ -1,5 +1,9 @@
 # Prepare a nonpublishing native candidate
 
+> **Dormant, and still four targets.** GitHub Actions is off for this repository, and 3.0.0 ships
+> three platforms, not the four below: there is no darwin-amd64 (Intel Mac) build. Releases are
+> built with `scripts/release-local.py`; see [Branching and releases](branching.md).
+
 `.github/workflows/native-validation.yml` is a separate pull-request/manual lane.
 It has read-only repository permissions,45-minute native jobs,10-minute aggregate
 and one cancelable concurrency group per calling workflow and PR/ref. It does not
