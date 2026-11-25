@@ -32,8 +32,8 @@ SOURCE = {"version": "3.0.0", "revision": REV, "tree": "d" * 40, "lock_sha256": 
 class FakeProducer:
     """Writes stand-in binaries the way a real build captures them."""
 
-    def __init__(self, out, fail=(), refuse=()):
-        self.out, self.fail, self.refuse = Path(out), set(fail), set(refuse)
+    def __init__(self, out, fail=(), refuse=(), label="Linux x86_64"):
+        self.out, self.fail, self.refuse, self.label = Path(out), set(fail), set(refuse), label
         self.built, self.verified = [], []
 
     def build_and_smoke(self, target):
@@ -46,9 +46,9 @@ class FakeProducer:
             (local / name).write_bytes(f"{name} {REV}".encode())
         return {"state": "smoked", "target": target.triple, "suffix": target.suffix, "revision": REV,
                 "version": "3.0.0", "files": {n: L.sha256(local / n) for n in target.names()},
-                "build": {"host": "h", "rustc": "rustc 1.94.0", "builder": "cargo build", "command": "c",
+                "build": {"host": self.label, "rustc": "rustc 1.94.0", "builder": "cargo build", "command": "c",
                           "seconds": 1},
-                "smoke": {"method": target.smoke, "host": "h", "wrapper": None, "result": {"checks": {}}}}
+                "smoke": {"method": target.smoke, "host": self.label, "wrapper": None, "result": {"checks": {}}}}
 
     def verify(self, target, sums):
         self.verified.append(target.suffix)
@@ -110,7 +110,7 @@ class ReleaseLocal(unittest.TestCase):
         self.assertEqual(set(validation["assets"]), set(L.BINARIES))
         for name, entry in validation["assets"].items():
             self.assertEqual(entry["revision"], REV)
-            self.assertTrue({"target", "sha256", "build_host", "rustc", "smoke", "verify"} <= set(entry), name)
+            self.assertTrue({"target", "sha256", "build_platform", "rustc", "smoke", "verify"} <= set(entry), name)
         self.assertEqual(validation["assets"]["locksmith-linux-arm64"]["smoke"]["method"], "qemu-user")
 
     def test_a_failed_target_is_named_and_leaves_no_checksums(self):
@@ -169,6 +169,30 @@ class ReleaseLocal(unittest.TestCase):
         remote = L.Remote("builder@private-mac.internal", [])
         remote.sh = lambda command, **kw: "Darwin arm64\n" if command == "uname -sm" else ""
         self.assertEqual(remote.label(), "Darwin arm64")
+
+    def test_reused_records_with_host_names_publish_only_the_platform(self):
+        # Records from before platform-only labels are still reused; their names must not ship.
+        self.assertEqual(self.run_release(FakeProducer(self.out, label="private-builder (Linux x86_64)")), {})
+        text = (self.out / "assets" / "validation.json").read_text()
+        self.assertNotIn("private-builder", text)
+        entry = json.loads(text)["assets"]["locksmith-linux-amd64"]
+        self.assertEqual((entry["build_platform"], entry["smoke"]["platform"]), ("Linux x86_64", "Linux x86_64"))
+        again = FakeProducer(self.out)
+        self.assertEqual(self.run_release(again), {})
+        self.assertEqual((again.built, again.verified), ([], []))  # verified binaries kept, not rebuilt
+        self.assertNotIn("private-builder", (self.out / "assets" / "validation.json").read_text())
+
+    def test_a_label_that_is_not_a_platform_is_never_published(self):
+        for label in ("private-builder", "private-builder.internal (Darwin arm64) extra", "10.0.0.5 (Plan9 mips)"):
+            with self.assertRaises(L.Failed, msg=label):
+                L.platform_only(label)
+        failures = L.produce(self.out, REV, SOURCE, FakeProducer(self.out, label="private-builder"), lambda: None,
+                             log=self.logs.append)
+        self.assertEqual(list(failures), ["assemble"])
+        self.assertNotIn("private-builder", failures["assemble"])
+        self.assertFalse((self.out / "assets").exists())
+        self.assertFalse((self.out / "assets.partial").exists())
+        self.assertFalse(list(self.out.rglob("SHA256SUMS")))
 
     def test_remote_rejects_a_destination_ssh_would_read_as_an_option(self):
         for dest in ("-oProxyCommand=touch pwned", "host", "user@-oX", "user@host cmd"):

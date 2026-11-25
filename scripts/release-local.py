@@ -318,6 +318,22 @@ def save_record(out, target, record):
     path.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
 
 
+PLATFORM = re.compile(r"(Linux|Darwin) (x86_64|aarch64|arm64)")
+
+
+def platform_only(label):
+    """The OS and architecture from a record's host label, for publishing.
+
+    Records written before labels were platform-only read "name (OS arch)";
+    a reused one must not put that name into validation.json.
+    """
+    inner = re.search(r"\(([^()]*)\)\s*$", label)
+    text = (inner.group(1) if inner else label).strip()
+    if not PLATFORM.fullmatch(text):
+        raise Failed("a record's host label is not an OS and architecture")
+    return text
+
+
 def assemble(out, records, source):
     """Write assets/ from verified records, all at once."""
     hashes = {name: digest for r in records.values() for name, digest in r["files"].items()}
@@ -335,8 +351,8 @@ def assemble(out, records, source):
         "source": source,
         "recipe": "scripts/release-local.py (local build; GitHub Actions not used)",
         "assets": {name: {"target": r["target"], "sha256": r["files"][name], "revision": r["revision"],
-                          "build_host": r["build"]["host"], "rustc": r["build"]["rustc"],
-                          "smoke": {"method": r["smoke"]["method"], "host": r["smoke"]["host"],
+                          "build_platform": platform_only(r["build"]["host"]), "rustc": r["build"]["rustc"],
+                          "smoke": {"method": r["smoke"]["method"], "platform": platform_only(r["smoke"]["host"]),
                                     "result": r["smoke"]["result"]},
                           "verify": r["verify"]}
                    for r in records.values() for name in r["files"]},
