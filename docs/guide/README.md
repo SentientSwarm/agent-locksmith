@@ -19,10 +19,12 @@ those runs, so what you see is what the current release does.
 | 6 | [Connect an OAuth service](06-oauth-service.md) | declare a provider contract, approve access in the browser, let an agent act as the account |
 | 7 | [Audit and monitor](07-audit-and-monitor.md) | configure the audit, operational and process logs, watch health, read who did what |
 | 8 | [Day-two operations](08-operate.md) | rotate agent and operator tokens, back up and restore, revoke an agent |
+| 9 | [Deploy to an Incus edge](09-incus-edge.md) | render hardened units from a site file, lay out custody, start, upgrade and back out |
+| 10 | [Egress, inspection and rate limits](10-egress-inspection-limits.md) | choose an egress mode, run a classifier sidecar, flag and block requests, limit each agent |
 
 Not yet covered here: upgrading an existing 2.x instance (see the
-[change notes](../changes/)) and running Locksmith as a system service
-(see the hardened unit in `dist/systemd/`).
+[change notes](../changes/)) and running Locksmith as a native systemd
+service outside a container (see the hardened unit in `dist/systemd/`).
 
 ## Conventions
 

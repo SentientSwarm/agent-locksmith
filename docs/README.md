@@ -22,6 +22,8 @@ To try Locksmith on a disposable instance first, follow
 6. [Connect an OAuth service](guide/06-oauth-service.md)
 7. [Audit and monitor](guide/07-audit-and-monitor.md)
 8. [Day-two operations](guide/08-operate.md)
+9. [Deploy to an Incus edge](guide/09-incus-edge.md)
+10. [Egress, inspection and rate limits](guide/10-egress-inspection-limits.md)
 
 The [guide index](guide/README.md) lists its conventions and how it is tested.
 
@@ -34,12 +36,14 @@ CLI). This repository ships two ways to run the daemon:
   [`dist/systemd/`](../dist/systemd/locksmith.service.template).
 - **Incus edge.** [Edge packaging](operator/edge-packaging.md) renders
   hardened systemd units for Incus system containers from a site file you
-  keep privately (`dist/edge/`).
+  keep privately (`dist/edge/`). [Journey 9](guide/09-incus-edge.md) takes
+  one instance from site file to running service.
 
 Outbound traffic for `egress: proxied` routes is set by `egress.mode` in the
 config. `pipelock` sends those routes through the egress proxy named by
 `egress_proxy`. `external` sends them directly and relies on your network to
-enforce egress. See [egress and inspection](concepts/egress-and-inspection.md).
+enforce egress. See [egress and inspection](concepts/egress-and-inspection.md)
+and [journey 10](guide/10-egress-inspection-limits.md).
 
 ### Task how-tos
 
