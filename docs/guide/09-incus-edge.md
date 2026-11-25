@@ -12,6 +12,11 @@ and unit files. They never start a container or a service, and they never
 handle a credential. [Edge packaging](../operator/edge-packaging.md) is the
 reference for every option; this journey takes one instance through its life.
 
+The UAT can't run Incus. It runs this page's site-file, render and config
+steps, and loads the edge config in a local daemon. The `incus` steps
+(install, state layout, custody, start, upgrade and back out) are listed in
+its `NOT-EXECUTED.md` and checked only by `dist/edge`'s own tests.
+
 You need:
 
 - an Incus host (`<incus-host>` below) with a project for edge containers
@@ -27,7 +32,9 @@ You need:
   in a directory named by `$BINS`.
 
 Run the `incus` commands as root on the Incus host. Writing the site file
-and rendering it need no privileges.
+and rendering it need no privileges. If you switch to a root shell, set
+`$SITE`, `$BINS` and `$LOCKSMITH_SRC` there too, as absolute paths: under
+`sudo -i`, `$HOME` is root's.
 
 ## Write the site file
 
@@ -74,8 +81,9 @@ EOF
   which will hold the sealing keys. Never put a secret in `env`: unit files
   are world-readable.
 - `ingress` accepts TCP on 9200 only from the listed networks. `closed`
-  rejects 9201, the admin HTTPS port, from every source, so it stays
-  unreachable even if you turn it on later. Operators use `incus exec`.
+  rejects 9201, the admin HTTPS port, from every other host (loopback inside
+  the container still reaches it), so it stays unreachable from the network
+  even if you turn it on later. Operators use `incus exec`.
 
 The tools refuse a site file with unknown keys, duplicate names, a state
 root that is not a plain absolute path, bad addresses or ports, or a service
@@ -218,7 +226,9 @@ makes the process non-dumpable from the moment it starts, so nothing else
 running as `locksmith` can read its environment or memory. The guard
 refuses to start it otherwise. That holds only while the host's
 `fs.suid_dumpable` sysctl is `0` or `2`; it is kernel-wide, so if the guard
-refuses, set it on the Incus host and keep it across reboots:
+refuses, set it on the Incus host and keep it across reboots. If the `grep`
+finds a `= 1` line in a file that sorts after `60-locksmith-edge.conf` (Ubuntu's
+`99-sysctl.conf`, for example), remove that line first, or it wins at boot:
 
 ```sh
 grep -rn suid_dumpable /etc/sysctl.conf /etc/sysctl.d /usr/lib/sysctl.d
@@ -324,9 +334,17 @@ The image may not have `curl`, so ask with Python from inside the container:
 
 ```sh
 incus --project edge exec edge-locksmith -- python3 -I -c '
-import urllib.request as u
-for probe in ("readyz", "version"):
-    print(probe, u.urlopen(f"http://127.0.0.1:9200/{probe}", timeout=5).read().decode())'
+import time, urllib.request as u
+for _ in range(30):  # the service answers a few seconds after systemctl returns
+    try:
+        ready = u.urlopen("http://127.0.0.1:9200/readyz", timeout=5).read().decode()
+        break
+    except OSError:
+        time.sleep(1)
+else:
+    raise SystemExit("not ready after 30 s; see journalctl -u locksmith-edge-locksmith")
+print("readyz", ready)
+print("version", u.urlopen("http://127.0.0.1:9200/version", timeout=5).read().decode())'
 ```
 
 Expect `"status":"ready"` and the version you installed. From a host on the
@@ -370,7 +388,18 @@ incus --project edge file push --uid 0 --gid 0 --mode 0644 "$LOCKSMITH_SRC/seed/
 incus --project edge exec edge-locksmith -- bash -euo pipefail <<'EOS'
 sha256sum /usr/local/bin/locksmithd /usr/local/bin/locksmith
 systemctl start locksmith-edge-locksmith.service
-python3 -I -c 'import urllib.request as u; print(u.urlopen("http://127.0.0.1:9200/version", timeout=5).read().decode())'
+python3 -I -c '
+import time, urllib.request as u
+for _ in range(30):  # the service answers a few seconds after systemctl returns
+    try:
+        ready = u.urlopen("http://127.0.0.1:9200/readyz", timeout=5).read().decode()
+        break
+    except OSError:
+        time.sleep(1)
+else:
+    raise SystemExit("not ready after 30 s; see journalctl -u locksmith-edge-locksmith")
+print("readyz", ready)
+print("version", u.urlopen("http://127.0.0.1:9200/version", timeout=5).read().decode())'
 EOS
 ```
 

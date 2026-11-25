@@ -32,7 +32,7 @@ destinations your routes need, and Locksmith makes no proxy hop. It is a
 statement that something else enforces egress; Locksmith cannot check it,
 so choose it only where that control exists. Without a proxy you also lose
 an egress record independent of Locksmith's own audit. A proxied route
-never falls back to a direct connection, and routes sent without a proxy
+never falls back from its proxy to a direct connection, and routes sent without a proxy
 ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the daemon's
 environment. See [egress and inspection](../concepts/egress-and-inspection.md)
 for Pipelock and for OAuth token calls.
@@ -66,9 +66,12 @@ its own hardened systemd unit.
 
 On an [Incus edge](09-incus-edge.md), `dist/edge/install_model.py` installs
 a model pinned in `dist/edge/models.toml` into an offline Hugging Face cache
-instead, checking every file against its pinned hash. The catalog pins the
-ungated `horizon-small` (Apache-2.0) and the gated `promptguard2-86m`, which
-downloads under your own Hugging Face token after you accept its licence. See
+instead, checking every file against its pinned hash. The reference sidecar
+loads PromptGuard 2 through LlamaFirewall, so it needs `promptguard2-86m`,
+which downloads under your own Hugging Face token after you accept its
+licence. The catalog also pins the ungated `horizon-small` (Apache-2.0), but
+the reference sidecar can't load it: use it only with a sidecar you supply
+that speaks the same protocol. See
 [edge packaging](../operator/edge-packaging.md#5-install-a-classifier-model-optional).
 
 Start the sidecar in its own terminal and leave it running, with
