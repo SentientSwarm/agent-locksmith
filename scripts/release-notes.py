@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check a validated release asset set and write its notes from CHANGELOG.md.
 
-The assets are the native validation aggregate: the CLI and daemon for each of
-the four targets, SHA256SUMS and validation.json. A tag must name the Cargo
+The assets are the CLI and daemon for each shipped platform (Linux amd64 and
+arm64, macOS arm64), SHA256SUMS and validation.json. A tag must name the Cargo
 version, and every checksum must match. Exit 1 refuses with a reason.
 """
 
@@ -16,7 +16,8 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-SUFFIXES = ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"]
+# darwin-amd64 is not shipped from 3.0.0: Intel Macs build from source.
+SUFFIXES = ["linux-amd64", "linux-arm64", "darwin-arm64"]
 BINARIES = sorted(
     f"{role}-{s}" for role in ("locksmith", "locksmithd") for s in SUFFIXES
 )
@@ -45,7 +46,7 @@ def check_assets(assets: Path, cargo_version: str, revision: str) -> None:
         digest, name = line.split("  ", 1)
         sums[name] = digest
     if set(sums) != set(BINARIES):
-        raise ValueError("SHA256SUMS does not list exactly the eight binaries")
+        raise ValueError("SHA256SUMS does not list exactly the six binaries")
     for name, digest in sums.items():
         if hashlib.sha256((assets / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f"{name} does not match SHA256SUMS")
@@ -71,9 +72,12 @@ def changelog_section(text: str, cargo_version: str) -> str:
 def notes(body: str) -> str:
     return (
         f"{body}\n\n## Assets\n\n"
-        "Each platform has two programs: `locksmithd` (the daemon) and `locksmith` "
-        "(the CLI). All eight were built natively with Rust 1.94.0 and smoke-tested "
-        "on their own platform before upload. Check a download with "
+        "There are programs for Linux amd64 (`linux-amd64`), Linux arm64 "
+        "(`linux-arm64`) and macOS on Apple silicon (`darwin-arm64`). Each platform "
+        "has two: `locksmithd` (the daemon) and `locksmith` (the CLI). On an Intel "
+        "Mac, build from source with `cargo +1.94.0 build --locked --release --bins`. "
+        "All six were built with Rust 1.94.0 and `--locked` and smoke-tested before "
+        "upload, linux-arm64 under qemu-user and the others natively. Check a download with "
         "`shasum -a 256 -c SHA256SUMS --ignore-missing`; `validation.json` records "
         "the source revision and how each binary was built and tested.\n"
     )

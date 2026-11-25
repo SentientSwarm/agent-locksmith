@@ -68,7 +68,9 @@ class ReleaseLocal(unittest.TestCase):
 
     def test_asset_names_are_release_yml_names(self):
         self.assertEqual(L.BINARIES, R.BINARIES)
-        self.assertEqual({t.triple for t in L.TARGETS}, set(L.C.TARGETS))
+        self.assertEqual(L.BINARIES, sorted(f"{role}-{s}" for role in ("locksmith", "locksmithd")
+                                            for s in ("linux-amd64", "linux-arm64", "darwin-arm64")))
+        self.assertLessEqual({t.triple for t in L.TARGETS}, set(L.C.TARGETS))
         workflow = yaml.load((ROOT / ".github/workflows/release.yml").read_text(), Loader=yaml.BaseLoader)
         create = next(s["run"] for s in workflow["jobs"]["publish"]["steps"] if "gh release create" in s.get("run", ""))
         for pattern in ("locksmith-*", "locksmithd-*", "SHA256SUMS", "validation.json"):
@@ -83,14 +85,19 @@ class ReleaseLocal(unittest.TestCase):
             self.assertEqual(args[args.index("--target") + 1], target.triple)
         smoke = {t.suffix: t.smoke for t in L.TARGETS}
         self.assertEqual(smoke, {"linux-amd64": "native", "linux-arm64": "qemu-user",
-                                 "darwin-arm64": "native", "darwin-amd64": "rosetta"})
+                                 "darwin-arm64": "native"})
+
+    def test_darwin_amd64_is_not_built(self):
+        # 3.0.0 ships no Intel Mac programs: nothing can smoke-test them.
+        self.assertNotIn("x86_64-apple-darwin", {t.triple for t in L.TARGETS})
+        self.assertFalse([n for n in L.BINARIES if "darwin-amd64" in n])
 
     def test_complete_run_writes_assets_release_notes_accepts(self):
         self.assertEqual(self.run_release(FakeProducer(self.out)), {})
         assets = self.out / "assets"
         self.assertEqual({p.name for p in assets.iterdir()}, R.EXPECTED)
         lines = (assets / "SHA256SUMS").read_text().splitlines()
-        self.assertEqual([line.split("  ")[1] for line in lines], L.BINARIES)  # sorted, exactly eight
+        self.assertEqual([line.split("  ")[1] for line in lines], L.BINARIES)  # sorted, exactly six
         for line in lines:
             digest, name = line.split("  ")
             self.assertEqual(hashlib.sha256((assets / name).read_bytes()).hexdigest(), digest)
@@ -106,8 +113,8 @@ class ReleaseLocal(unittest.TestCase):
     def test_a_failed_target_is_named_and_leaves_no_checksums(self):
         (self.out / "assets").mkdir()
         (self.out / "assets" / "SHA256SUMS").write_text("stale\n")  # from an earlier run
-        failures = self.run_release(FakeProducer(self.out, fail={"darwin-amd64"}))
-        self.assertEqual(list(failures), ["darwin-amd64"])
+        failures = self.run_release(FakeProducer(self.out, fail={"darwin-arm64"}))
+        self.assertEqual(list(failures), ["darwin-arm64"])
         self.assertFalse((self.out / "assets").exists())
         self.assertFalse(list(self.out.rglob("SHA256SUMS")))
 
@@ -117,12 +124,12 @@ class ReleaseLocal(unittest.TestCase):
         self.assertFalse((self.out / "assets").exists())
 
     def test_rerun_reuses_verified_targets_and_rebuilds_only_the_failed_one(self):
-        first = FakeProducer(self.out, fail={"darwin-amd64"})
+        first = FakeProducer(self.out, fail={"darwin-arm64"})
         self.run_release(first)
-        self.assertEqual(len(first.built), 4)
+        self.assertEqual(len(first.built), 3)
         second = FakeProducer(self.out)
         self.assertEqual(self.run_release(second), {})
-        self.assertEqual(second.built, ["darwin-amd64"])
+        self.assertEqual(second.built, ["darwin-arm64"])
         third = FakeProducer(self.out)
         self.assertEqual(self.run_release(third), {})
         self.assertEqual((third.built, third.verified), ([], []))  # all verified: nothing redone
@@ -135,7 +142,7 @@ class ReleaseLocal(unittest.TestCase):
         self.assertEqual(again.built, ["linux-amd64"])
         other = FakeProducer(self.out)
         self.assertEqual(L.release(self.out, "f" * 40, SOURCE, other, log=self.logs.append), {})
-        self.assertEqual(len(other.built), 4)
+        self.assertEqual(len(other.built), 3)
 
 
 if __name__ == "__main__":

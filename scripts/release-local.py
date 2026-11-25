@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, smoke-test and verify the eight release assets for a commit, locally.
+"""Build, smoke-test and verify the six release assets for a commit, locally.
 
   scripts/release-local.py --commit SHA --out DIR --mac USER@HOST [--ssh-option OPT ...]
       [--qemu PATH --arm64-root DIR]
@@ -11,7 +11,9 @@ This script does the same job on hosts you control:
   x86_64-unknown-linux-gnu   this host   cargo build          natively
   aarch64-unknown-linux-gnu  this host   cargo zigbuild       under qemu-user (--qemu, --arm64-root)
   aarch64-apple-darwin       --mac       cargo build          natively
-  x86_64-apple-darwin        --mac       cargo build (cross)  under Rosetta
+
+x86_64-apple-darwin (Intel Macs) is not shipped: there is no host to smoke-test
+it on, so Intel Mac users build from source with the tested recipe.
 
 This host must be x86_64 Linux. Each target builds with Rust 1.94.0 --locked
 from a fresh clone of the commit, so the binaries report source_state clean.
@@ -22,12 +24,12 @@ refuse it for a wrong revision.
 
 DIR (outside the source tree) holds:
   targets/SUFFIX/  each target's pair and record.json, kept between runs
-  assets/          the eight binaries, SHA256SUMS and validation.json, written
+  assets/          the six binaries, SHA256SUMS and validation.json, written
                    only once every target verifies
   notes.md         the commit's CHANGELOG section, from its release-notes.py
 
 A rerun reuses a target whose record is verified for this commit and whose
-files still match it. Exit 0 when all eight verify. Otherwise exit 1, naming
+files still match it. Exit 0 when all six verify. Otherwise exit 1, naming
 each failed target, with no assets/ (so no SHA256SUMS).
 """
 import argparse
@@ -70,7 +72,6 @@ TARGETS = [
     Target("x86_64-unknown-linux-gnu", "local", "build", "native"),
     Target("aarch64-unknown-linux-gnu", "local", "zigbuild", "qemu-user"),
     Target("aarch64-apple-darwin", "mac", "build", "native"),
-    Target("x86_64-apple-darwin", "mac", "build", "rosetta"),
 ]
 BINARIES = sorted(name for t in TARGETS for name in t.names())
 
@@ -191,8 +192,6 @@ class Producer:
             if not (self.qemu and self.arm64_root):
                 raise Failed("--qemu and --arm64-root are needed to run linux-arm64")
             return [str(self.qemu), "-L", str(self.arm64_root)]
-        if target.smoke == "rosetta":
-            return ["arch", "-x86_64"]
         return []
 
     def prepare(self, host):
@@ -214,11 +213,6 @@ class Producer:
     def build_and_smoke(self, target):
         host = self.hosts[target.where]
         wrap = self.wrap(target)
-        if target.smoke == "rosetta":
-            try:
-                host.sh("arch -x86_64 /usr/bin/true", what="Rosetta check")
-            except Failed:
-                raise Failed("Rosetta is not installed on the Mac (softwareupdate --install-rosetta)") from None
         work = self.prepare(host)
         tdir = f"{work}/target-{target.suffix}"
         command = " ".join(shlex.quote(a) for a in ["cargo", *cargo_args(target)])
@@ -294,7 +288,7 @@ def assemble(out, records, source):
     """Write assets/ from verified records, all at once."""
     hashes = {name: digest for r in records.values() for name, digest in r["files"].items()}
     if sorted(hashes) != BINARIES:
-        raise Failed("the records do not name exactly the eight binaries")
+        raise Failed("the records do not name exactly the six binaries")
     staging = out / "assets.partial"
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)

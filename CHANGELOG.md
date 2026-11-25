@@ -42,6 +42,11 @@ forward. Read Upgrading, below, before you install it.
 
 ### Upgrading
 
+- 3.0.0 ships programs for Linux amd64, Linux arm64 and macOS arm64 (Apple
+  silicon) only. There is no Intel Mac (darwin-amd64) download, as there was
+  for v2.8.0: on an Intel Mac, build from source with the tested recipe,
+  `cargo +1.94.0 build --locked --release --bins`
+  ([install guide](docs/guide/01-install.md#install-the-binaries)).
 - 3.0.0 migrates its database forward when it starts. From v2.8.0 it
   applies migrations 0009 to 0029. From the pre-release candidate
   b0cf08c, which also reports version 3.0.0 (`locksmithd --build-info`
@@ -916,11 +921,11 @@ forward. Read Upgrading, below, before you install it.
 - Publish the daemon. Earlier releases shipped only the `locksmith` CLI for
   each platform; there was no `locksmithd` download. A release now carries
   `locksmith-SUFFIX` and `locksmithd-SUFFIX` for Linux amd64/arm64 and macOS
-  amd64/arm64, built natively with Rust 1.94.0 and `--locked`, smoke-tested on
-  their own platform, plus `SHA256SUMS` and `validation.json`. The CLI asset
-  names are unchanged. Release notes come from this changelog, and a tag is
-  published only when its commit has a successful CI run on `main` or
-  `release/**`.
+  arm64, built with Rust 1.94.0 and `--locked` and smoke-tested (linux-arm64
+  under qemu-user, the others natively), plus `SHA256SUMS` and
+  `validation.json`. The CLI asset names are unchanged, but there is no
+  darwin-amd64 asset from 3.0.0 (see Upgrading). Release notes come from this
+  changelog.
 - Document that config changes need a restart. Earlier docs said the YAML
   config could be hot-reloaded; nothing reloads it, and there is no `SIGHUP`
   handler or `config reload` command. The architecture guide now lists what

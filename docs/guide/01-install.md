@@ -10,11 +10,12 @@ This takes about five minutes.
 
 ## Install the binaries
 
-Download both programs for your platform from the latest GitHub release,
+Releases carry both programs for Linux amd64, Linux arm64 and macOS on Apple
+silicon. Download them for your platform from the latest GitHub release,
 check them against `SHA256SUMS`, and put them on your `PATH`:
 
 ```sh
-platform=linux-amd64   # or linux-arm64, darwin-amd64, darwin-arm64
+platform=linux-amd64   # or linux-arm64, darwin-arm64
 url=https://github.com/SentientSwarm/agent-locksmith/releases/latest/download
 mkdir -p ~/bin && cd ~/bin
 curl -fsSLO "$url/locksmith-$platform" -fsSLO "$url/locksmithd-$platform" -fsSLO "$url/SHA256SUMS"
@@ -25,8 +26,9 @@ export PATH="$HOME/bin:$PATH"
 ```
 
 On macOS, files downloaded with a browser carry a quarantine flag; clear it with
-`xattr -d com.apple.quarantine locksmith locksmithd`. Or build from source with
-Rust 1.94.0:
+`xattr -d com.apple.quarantine locksmith locksmithd`. There are no Intel Mac
+(darwin-amd64) downloads; on an Intel Mac, or any other platform, build from
+source with Rust 1.94.0:
 
 ```sh
 cargo +1.94.0 build --locked --release --bins

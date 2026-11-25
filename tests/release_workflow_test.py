@@ -137,6 +137,24 @@ class ReleaseNotes(unittest.TestCase):
             R.changelog_section((ROOT / "CHANGELOG.md").read_text(), R.version(ROOT))
         )
 
+    def test_six_binaries_for_the_three_shipped_platforms(self):
+        self.assertEqual(R.SUFFIXES, ["linux-amd64", "linux-arm64", "darwin-arm64"])
+        self.assertEqual(len(R.BINARIES), 6)
+
+    def test_an_intel_mac_pair_is_refused(self):
+        assets(self.dir)
+        (self.dir / "locksmith-darwin-amd64").write_bytes(b"x")
+        with self.assertRaisesRegex(ValueError, "extra .*locksmith-darwin-amd64"):
+            R.check_assets(self.dir, "3.0.0", REV)
+
+    def test_notes_list_only_the_shipped_platforms(self):
+        text = R.notes("- body")
+        for suffix in R.SUFFIXES:
+            self.assertIn(f"`{suffix}`", text)
+        self.assertNotIn("darwin-amd64", text)
+        self.assertIn("Intel Mac, build from source", text)
+        self.assertIn("All six", text)
+
     def test_release_notes_fit_in_a_github_release_body(self):
         # GitHub refuses a release body over 125,000 characters.
         body = R.changelog_section((ROOT / "CHANGELOG.md").read_text(), R.version(ROOT))
@@ -163,6 +181,21 @@ class ThreeZeroZeroChangelogTest(unittest.TestCase):
         for path in [ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]:
             with self.subTest(path=path.relative_to(ROOT)):
                 self.assertNotRegex(path.read_text(), r"3\.0\.0 binary|3\.0\.0 cannot")
+
+    def test_docs_name_the_three_shipped_platforms_and_no_intel_mac_download(self):
+        install = (ROOT / "docs/guide/01-install.md").read_text()
+        self.assertIn("platform=linux-amd64   # or linux-arm64, darwin-arm64\n", install)
+        self.assertIn("no Intel Mac\n(darwin-amd64) downloads", install)
+        upgrading = re.search(r"^### Upgrading\n(.*?)(?=^### |\Z)", self.section,
+                              re.MULTILINE | re.DOTALL).group(1)
+        self.assertIn("Linux amd64, Linux arm64 and macOS arm64", upgrading)
+        self.assertIn("build from source", upgrading)
+        for path in [ROOT / "README.md", *sorted((ROOT / "docs").glob("[!a]*/**/*.md"))]:
+            if path.is_file():
+                with self.subTest(path=path.relative_to(ROOT)):
+                    text = path.read_text()
+                    self.assertNotRegex(text, r"(locksmithd?|\$platform|download)[^\n]*darwin-amd64"
+                                              r"|or linux-arm64, darwin-amd64")
 
     def test_upgrading_names_the_migrations_from_each_prior_build(self):
         upgrading = re.search(r"^### Upgrading\n(.*?)(?=^### |\Z)", self.section,
