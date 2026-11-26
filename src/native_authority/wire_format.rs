@@ -4,21 +4,19 @@ use locksmith_mcp_transport::{Error as WireError, strict_json};
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse as Reply;
 use serde_json::Value;
 pub fn validate(value: &Value) -> std::result::Result<(), WireError> {
-    validate_inner(value).map_err(|_| WireError("observation_response_invalid"))
+    validate_inner(value).map_err(|e| WireError(e.0))
 }
 pub(super) fn validate_inner(value: &Value) -> Result<()> {
     validate_mode(value, false)
 }
 pub fn validate_v2(value: &Value) -> std::result::Result<(), WireError> {
-    validate_selection(value, false, Policy::V2, false)
-        .map_err(|_| WireError("observation_response_invalid"))
+    validate_selection(value, false, Policy::V2, false).map_err(|e| WireError(e.0))
 }
 pub fn validate_selected_v2(value: &Value) -> std::result::Result<(), WireError> {
-    validate_selection(value, false, Policy::V2, true)
-        .map_err(|_| WireError("observation_response_invalid"))
+    validate_selection(value, false, Policy::V2, true).map_err(|e| WireError(e.0))
 }
 pub fn validate_hosted(value: &Value) -> std::result::Result<(), WireError> {
-    validate_mode(value, true).map_err(|_| WireError("observation_response_invalid"))
+    validate_mode(value, true).map_err(|e| WireError(e.0))
 }
 pub(super) fn notification(value: &Value) -> bool {
     value.get("id").is_none() && value.get("method").is_some()

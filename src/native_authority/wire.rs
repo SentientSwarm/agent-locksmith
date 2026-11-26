@@ -154,14 +154,17 @@ impl Connection<'_> {
             .await
             .map_err(|e| {
                 let code = refusal(&e);
-                if let Some(status) = locksmith_mcp_transport::http_status(&e) {
-                    // The number and our own step name only (AGENT-371).
-                    tracing::warn!(
+                // Fixed names and the number only, never reply bytes (AGENT-371, AGENT-374).
+                let transport = locksmith_mcp_transport::failure_detail(&e);
+                match locksmith_mcp_transport::http_status(&e) {
+                    Some(status) => tracing::warn!(
                         upstream_status = status,
                         step,
                         code,
+                        transport,
                         "native_upstream_refused"
-                    );
+                    ),
+                    None => tracing::warn!(step, code, transport, "native_upstream_refused"),
                 }
                 Error(code)
             })

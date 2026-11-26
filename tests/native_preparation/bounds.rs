@@ -38,6 +38,29 @@ fn invalid(f: &Fixture, id: &str) {
     let counts: serde_json::Value =
         serde_json::from_slice(&std::fs::read(f.path().join("counts.json")).unwrap()).unwrap();
     assert_eq!(counts["tools/call"], serde_json::Value::Null);
+    // Every refusal names the step and the transport's own static detail (AGENT-374).
+    let log = std::fs::read_to_string(f.path().join("daemon.log")).unwrap();
+    let listed: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("native_upstream_refused") && l.contains("\"step\":\"tools/list\""))
+        .collect();
+    assert!(!listed.is_empty(), "no tools/list refusal logged");
+    for line in &listed {
+        assert!(line.contains("\"transport\":\""), "{line}");
+        assert!(!line.contains("observation_response_invalid"), "{line}");
+        assert!(
+            !line.contains("never-fetch") && !line.contains("synthetic-unprojected"),
+            "{line}"
+        );
+    }
+    // metadata/schema add members, oversize exceeds the body cap, too-many the manifest.
+    for detail in ["unsupported_member", "response_bytes", "manifest_limit"] {
+        let field = format!("\"transport\":\"{detail}\"");
+        assert!(
+            listed.iter().any(|l| l.contains(&field)),
+            "{detail}: {listed:?}"
+        );
+    }
 }
 fn behavior(f: &Fixture, mode: &str) {
     std::fs::write(

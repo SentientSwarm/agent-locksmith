@@ -14,7 +14,7 @@ mod sse_guard;
 mod transport;
 
 pub use client::Client;
-pub use error::{Error, failure_code, http_status, io_code};
+pub use error::{Error, failure_code, failure_detail, http_status, io_code};
 
 /// MCP revisions this transport will send or accept. The caller still pins
 /// one exact revision per connection; this only bounds the choice.

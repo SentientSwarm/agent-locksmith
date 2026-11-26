@@ -53,6 +53,27 @@ pub fn failure_code(error: &StreamableHttpError<Error>) -> &'static str {
     }
 }
 
+/// Which refusal this was, by our own code or the SDK variant's fixed name.
+/// Every value is a literal; nothing from the reply is carried.
+pub fn failure_detail(error: &StreamableHttpError<Error>) -> &'static str {
+    match error {
+        StreamableHttpError::Client(Error(code)) => code,
+        StreamableHttpError::Sse(_) => "sse",
+        StreamableHttpError::Io(_) => "io",
+        StreamableHttpError::UnexpectedEndOfStream => "unexpected_end_of_stream",
+        StreamableHttpError::UnexpectedServerResponse(_) => "unexpected_server_response",
+        StreamableHttpError::UnexpectedContentType(_) => "unexpected_content_type",
+        StreamableHttpError::ServerDoesNotSupportSse => "server_does_not_support_sse",
+        StreamableHttpError::Deserialize(_) => "deserialize",
+        StreamableHttpError::TransportChannelClosed => "transport_channel_closed",
+        StreamableHttpError::MissingSessionIdInResponse => "missing_session_id",
+        StreamableHttpError::AuthRequired(_) => "auth_required",
+        StreamableHttpError::InsufficientScope(_) => "insufficient_scope",
+        StreamableHttpError::SessionExpired => "session_expired",
+        _ => "other",
+    }
+}
+
 /// The status of a non-2xx refusal that carried no JSON-RPC error.
 pub fn http_status(error: &StreamableHttpError<Error>) -> Option<u16> {
     match error {
