@@ -80,6 +80,7 @@ impl Runtime {
             policy: before.current.source.contract_policy,
             selected_tools: before.current.selected_tools(),
             hosted: before.current.hosted(),
+            version: wire::revision(reg)?,
         };
         let result = self
             .prepared(call, &before, control, audit, &mut upstream, trace)

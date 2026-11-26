@@ -80,6 +80,7 @@ impl Runtime {
             selected_tools,
             policy: current.source.contract_policy,
             hosted: current.hosted(),
+            version: wire::revision(reg)?,
         };
         let result = connection.observe().await;
         // No background cleanup: a stalled DELETE shares the enclosing deadline.

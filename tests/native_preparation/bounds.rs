@@ -104,3 +104,57 @@ fn refusals(f: &Fixture, id: &str) {
         );
     }
 }
+
+/// A registration speaks exactly its declared MCP revision (AGENT-372).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_registration_speaks_its_declared_revision() {
+    let mut f = Fixture::new();
+    receiver::configure(&f);
+    let r = receiver::Receiver::start(&f);
+    f.start(process::DAEMON).await;
+    let mcp = f.path().join("mcp.json");
+    std::fs::write(
+        &mcp,
+        json!({"protocol_version":"2025-03-26","allow_private_destination":true}).to_string(),
+    )
+    .unwrap();
+    let put = process::run(f.command(&[
+        "tool",
+        "put",
+        "native",
+        "--upstream",
+        "https://localhost:1/mcp",
+        "--auth",
+        "none",
+        "--egress",
+        "direct",
+        "--protocol",
+        "mcp_streamable_http",
+        "--mcp-config-file",
+        mcp.to_str().unwrap(),
+    ]));
+    assert!(!put.status.success(), "an unsupported revision is refused");
+    std::fs::write(
+        &mcp,
+        json!({"protocol_version":"2025-06-18","allow_private_destination":true}).to_string(),
+    )
+    .unwrap();
+    let agent = f.enroll("older", &format!("https://localhost:{}/mcp", r.port));
+    let id = agent["public_id"].as_str().unwrap();
+    let speak = |answer: &str, accept: &str| {
+        std::fs::write(
+            f.path().join("behavior.json"),
+            json!({"answer":answer,"accept":accept}).to_string(),
+        )
+        .unwrap();
+    };
+    // The header and the initialize request carry 2025-06-18, or this server answers 400.
+    speak("2025-06-18", "2025-06-18");
+    assert_eq!(flow::observe(&f, id)["observation"]["status"], "ready");
+    // A server that settles on another revision is refused, never silently used.
+    speak("2025-11-25", "2025-06-18");
+    flow::refuse_observe(&f, id);
+    assert_eq!(flow::show(&f, id)["observation"]["status"], "failed");
+    f.stop();
+    r.stop();
+}

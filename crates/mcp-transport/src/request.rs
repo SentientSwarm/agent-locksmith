@@ -71,7 +71,7 @@ fn custom(
         ) {
             return Err(fail("reserved_header"));
         }
-        if name == "mcp-protocol-version" && value != "2025-11-25" {
+        if name == "mcp-protocol-version" && !crate::PROTOCOL_VERSIONS.iter().any(|v| value == *v) {
             return Err(fail("protocol_version"));
         }
         request = request.header(name, value);

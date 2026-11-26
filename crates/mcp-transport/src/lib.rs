@@ -15,6 +15,10 @@ mod transport;
 
 pub use client::Client;
 pub use error::{Error, failure_code, http_status, io_code};
+
+/// MCP revisions this transport will send or accept. The caller still pins
+/// one exact revision per connection; this only bounds the choice.
+pub const PROTOCOL_VERSIONS: [&str; 2] = ["2025-11-25", "2025-06-18"];
 pub use limits::Limits;
 pub use metrics::{Metrics, Snapshot};
 

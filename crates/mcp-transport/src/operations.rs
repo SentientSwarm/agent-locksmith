@@ -163,7 +163,7 @@ fn check_version(message: &ClientJsonRpcMessage) -> Result<()> {
     use rmcp::model::ClientRequest;
     if let ClientJsonRpcMessage::Request(request) = message
         && let ClientRequest::InitializeRequest(init) = &request.request
-        && init.params.protocol_version.as_str() != "2025-11-25"
+        && !crate::PROTOCOL_VERSIONS.contains(&init.params.protocol_version.as_str())
     {
         return Err(fail("protocol_version"));
     }

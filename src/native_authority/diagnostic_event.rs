@@ -93,6 +93,7 @@ const REASONS: &[&str] = &[
     "upstream_content_type",
     "upstream_notification",
     "upstream_id",
+    "upstream_initialize",
     "upstream_session",
 ];
 

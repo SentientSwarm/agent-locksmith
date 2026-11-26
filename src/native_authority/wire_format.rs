@@ -94,7 +94,9 @@ fn initialize(result: &Value) -> Result<()> {
             "instructions",
         ],
     )?;
-    if result["protocolVersion"] != crate::registrations::protocol::VERSION
+    if !result["protocolVersion"]
+        .as_str()
+        .is_some_and(|v| crate::registrations::protocol::SUPPORTED.contains(&v))
         || !result["capabilities"].is_object()
         || !result["serverInfo"].is_object()
     {

@@ -66,6 +66,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(202, b"")
             return
         behavior = json.loads((directory / "behavior.json").read_text())
+        accept = behavior.get("accept")
+        if accept and self.headers.get("MCP-Protocol-Version") != accept:
+            self.reply(400, b"")  # as a server does for an unsupported revision
+            return
         refusal = behavior.get("refuse")
         if refusal and method == "initialize":
             value = {"jsonrpc": "2.0", "id": message["id"], "result": {}}
@@ -75,6 +79,8 @@ class Handler(BaseHTTPRequestHandler):
         if method == "tools/list" and behavior.get("hold"):
             hold(behavior["hold"])
         result = result_for(method)
+        if method == "initialize" and behavior.get("answer"):
+            result["protocolVersion"] = behavior["answer"]
         if result is None:
             self.reply(400, b"{}")
             return

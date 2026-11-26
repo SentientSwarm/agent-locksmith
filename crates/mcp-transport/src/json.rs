@@ -70,7 +70,7 @@ pub(crate) fn decode(bytes: &[u8], limits: Limits) -> Result<ServerJsonRpcMessag
     let message = serde_json::from_value(raw).map_err(|_| Error("json_syntax"))?;
     if let ServerJsonRpcMessage::Response(response) = &message
         && let rmcp::model::ServerResult::InitializeResult(result) = &response.result
-        && result.protocol_version.as_str() != "2025-11-25"
+        && !crate::PROTOCOL_VERSIONS.contains(&result.protocol_version.as_str())
     {
         return Err(Error("protocol_version"));
     }

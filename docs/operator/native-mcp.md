@@ -51,6 +51,16 @@ Store this non-secret object in `mcp.json`:
 {"protocol_version":"2025-11-25"}
 ```
 
+`protocol_version` is the MCP revision the upstream server speaks: `2025-11-25` or
+`2025-06-18`. Locksmith sends that revision in `initialize` and in every
+`MCP-Protocol-Version` header. It refuses a server that answers with a different
+revision (`upstream_initialize`), and never falls back to another one. A server that
+does not support the declared revision usually answers 400; the daemon then logs
+`native_upstream_refused` with `upstream_status=400` and `step=initialize`. For a
+connection created from a definition, pass `--protocol-version` to
+`tool from-definition`. The revision is fixed once the connection exists. Agents
+always reach Locksmith's own `/mcp/` surface with `2025-11-25`.
+
 For compact search/full describe/invoke, use this explicit opt-in **before** setup:
 
 ```json

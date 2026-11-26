@@ -50,7 +50,9 @@ fn registration(
         contract_policy: Default::default(),
         selected_tools: None,
         compact: false,
-        protocol_version: crate::registrations::protocol::VERSION.into(),
+        protocol_version: input
+            .protocol_version
+            .unwrap_or_else(|| crate::registrations::protocol::VERSION.into()),
         allow_private_destination: input.allow_private_destination,
         definition: Some(pin),
         definition_activation: None,

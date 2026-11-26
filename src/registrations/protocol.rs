@@ -3,7 +3,18 @@ use super::{Kind, RegistrationError, validate_upstream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The revision Locksmith serves to agents, and the default for upstreams.
 pub const VERSION: &str = "2025-11-25";
+/// Upstream revisions a registration may declare (AGENT-372). Each
+/// connection speaks exactly the declared one; nothing is negotiated.
+pub const SUPPORTED: [&str; 2] = locksmith_mcp_transport::PROTOCOL_VERSIONS;
+
+/// The declared upstream revision, if it is one Locksmith supports.
+pub fn revision(config: &McpConfig) -> Option<&'static str> {
+    SUPPORTED
+        .into_iter()
+        .find(|v| *v == config.protocol_version)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,7 +85,7 @@ pub fn validate(
     let url = reqwest::Url::parse(upstream).map_err(|_| RegistrationError::InvalidMcp)?;
     if kind != Kind::Tool
         || egress != crate::config::EgressMode::Direct
-        || config.protocol_version != VERSION
+        || revision(config).is_none()
         || url.scheme() != "https"
         || metadata.is_some_and(|m| m.get("http_service").is_some())
         || (!config.allow_private_destination && private_host(&url))

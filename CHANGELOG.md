@@ -85,6 +85,21 @@ forward. Read Upgrading, below, before you install it.
 
 ### Fixed
 
+- Native MCP works under the shipped systemd units (AGENT-367). The
+  destination check reads local addresses over netlink, which
+  `RestrictAddressFamilies` blocked, so observe and every native call failed
+  with `local_addresses_unavailable`. All three units now allow `AF_NETLINK`;
+  an installed unit needs the same line, then a restart.
+- Native MCP names why an upstream refused (AGENT-369, AGENT-371):
+  `upstream_unauthorized`, `upstream_forbidden`, `upstream_redirect`,
+  `upstream_status`, `upstream_session` or `upstream_content_type` instead of
+  one `upstream_observation_failed`. The daemon logs `native_upstream_refused`
+  with the numeric status and the step, never the reply.
+- Native MCP connects to servers on MCP 2025-06-18 (AGENT-372). A
+  connection declares `protocol_version` `2025-06-18` or `2025-11-25`
+  (`tool from-definition --protocol-version`), and Locksmith speaks exactly
+  that revision. Before, it sent 2025-11-25 to every server, and a server on
+  2025-06-18 (Slack's, for one) answered `initialize` with 400.
 - Large Codex `/responses` bodies get the body fixups instead of a 413
   (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
   only bound now is the route's `body_limit_bytes` (50 MB for the shipped

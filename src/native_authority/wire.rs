@@ -23,13 +23,15 @@ pub struct Connection<'a> {
     pub policy: Policy,
     pub hosted: bool,
     pub selected_tools: Option<&'a [String]>,
+    /// The registration's declared MCP revision, sent and required exactly.
+    pub version: &'static str,
 }
 impl Connection<'_> {
     pub async fn initialize(&mut self) -> Result<()> {
         self.rpc(
             1,
             "initialize",
-            json!({"protocolVersion":"2025-11-25","capabilities":{},
+            json!({"protocolVersion":self.version,"capabilities":{},
             "clientInfo":{"name":"locksmith-observer","version":"1"}}),
         )
         .await?;
@@ -114,6 +116,9 @@ impl Connection<'_> {
         {
             return Err(Error("upstream_id"));
         }
+        if method == "initialize" && value["result"]["protocolVersion"] != self.version {
+            return Err(Error("upstream_initialize"));
+        }
         if let Some(bearer) = self.bearer {
             contract::screen(&value, bearer)?;
         }
@@ -143,7 +148,7 @@ impl Connection<'_> {
                 message,
                 self.session.clone(),
                 self.bearer.map(str::to_owned),
-                headers(),
+                headers(self.version),
                 64 * 1024,
             )
             .await
@@ -169,11 +174,18 @@ impl Connection<'_> {
                     self.endpoint.clone(),
                     session.clone(),
                     self.bearer.map(str::to_owned),
-                    headers(),
+                    headers(self.version),
                 )
                 .await;
         }
     }
+}
+/// The registration's declared revision; stored rows were validated on write.
+pub fn revision(reg: &crate::registrations::Registration) -> Result<&'static str> {
+    reg.mcp
+        .as_ref()
+        .and_then(crate::registrations::protocol::revision)
+        .ok_or(Error("upstream_client"))
 }
 /// Name the upstream refusal with a fixed code; nothing from the reply survives (AGENT-369).
 fn refusal(
@@ -193,10 +205,10 @@ fn refusal(
         _ => "upstream_observation_failed",
     }
 }
-fn headers() -> HashMap<axum::http::HeaderName, axum::http::HeaderValue> {
+fn headers(version: &'static str) -> HashMap<axum::http::HeaderName, axum::http::HeaderValue> {
     HashMap::from([(
         axum::http::HeaderName::from_static("mcp-protocol-version"),
-        axum::http::HeaderValue::from_static("2025-11-25"),
+        axum::http::HeaderValue::from_static(version),
     )])
 }
 fn append_page(

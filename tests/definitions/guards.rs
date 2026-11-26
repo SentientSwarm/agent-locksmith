@@ -98,3 +98,34 @@ async fn malformed_pins(f: &Fixture) {
         );
     }
 }
+/// An instance declares its upstream MCP revision from the supported set (AGENT-372).
+#[tokio::test]
+async fn instance_declares_a_supported_revision() {
+    let f = Fixture::new().await;
+    f.import(&definition())
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    for (name, version, created) in [
+        ("default", None, Some("2025-11-25")),
+        ("older", Some("2025-06-18"), Some("2025-06-18")),
+        ("newer", Some("2025-11-25"), Some("2025-11-25")),
+        ("unknown", Some("2025-03-26"), None),
+    ] {
+        let mut body = instance();
+        if let Some(v) = version {
+            body["protocol_version"] = json!(v);
+        }
+        let response = f.create(name, &body).await;
+        match created {
+            Some(expected) => {
+                response.assert_status(axum::http::StatusCode::CREATED);
+                let r = f.repo.get(name).await.unwrap().unwrap();
+                assert_eq!(r.mcp.unwrap().protocol_version, expected, "{name}");
+            }
+            None => {
+                assert!(response.status_code().is_client_error(), "{name}");
+                assert!(f.repo.get(name).await.unwrap().is_none(), "{name}");
+            }
+        }
+    }
+}

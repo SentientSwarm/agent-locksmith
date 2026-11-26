@@ -96,4 +96,7 @@ pub struct Instance {
     pub upstream: String,
     #[serde(default)]
     pub allow_private_destination: bool,
+    /// Upstream MCP revision; defaults to the one Locksmith serves.
+    #[serde(default)]
+    pub protocol_version: Option<String>,
 }

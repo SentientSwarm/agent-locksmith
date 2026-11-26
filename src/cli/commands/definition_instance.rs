@@ -92,6 +92,9 @@ pub struct Options {
     /// Allow a private destination in this disabled configuration.
     #[arg(long)]
     pub allow_private_destination: bool,
+    /// Upstream MCP revision the server speaks (default 2025-11-25).
+    #[arg(long, value_parser = agent_locksmith::registrations::protocol::SUPPORTED)]
+    pub protocol_version: Option<String>,
 }
 pub async fn run(
     client: &CliClient,
@@ -102,7 +105,10 @@ pub async fn run(
     agent_locksmith::registrations::validate_name(name).map_err(invalid)?;
     agent_locksmith::definitions::validate::identity(&options.definition, options.revision)
         .map_err(invalid)?;
-    let body = json!({"definition":{"id":options.definition,"revision":options.revision},"auth_profile_id":options.auth_profile,"upstream":options.upstream,"allow_private_destination":options.allow_private_destination});
+    let mut body = json!({"definition":{"id":options.definition,"revision":options.revision},"auth_profile_id":options.auth_profile,"upstream":options.upstream,"allow_private_destination":options.allow_private_destination});
+    if let Some(version) = options.protocol_version {
+        body["protocol_version"] = version.into();
+    }
     request(
         client,
         format,
