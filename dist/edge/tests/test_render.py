@@ -32,7 +32,7 @@ SANDBOX = [
     "RestrictRealtime=yes",
     "RestrictNamespaces=yes",
     "LockPersonality=yes",
-    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
     "SystemCallArchitectures=native",
     "UMask=0077",
 ]
@@ -73,6 +73,20 @@ class RenderTest(unittest.TestCase):
 
     def unit(self, out, component):
         return (out / UNITS / f"locksmith-edge-{component}.service").read_text()
+
+    def test_every_shipped_unit_allows_netlink(self):
+        # Native MCP's destination check reads interfaces with getifaddrs,
+        # which glibc implements over AF_NETLINK (AGENT-367).
+        dist = EDGE.parent
+        for unit in (
+            dist / "systemd" / "locksmith.service.template",
+            dist / "examples" / "sealed-secrets" / "locksmith.service",
+        ):
+            with self.subTest(unit=unit.name):
+                self.assertIn(
+                    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+                    unit.read_text().splitlines(),
+                )
 
     def test_sandbox_lines_present(self):
         text = self.unit(self.out("lab-locksmith"), "locksmith")

@@ -68,7 +68,10 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK: native MCP's destination check lists local addresses with
+# getifaddrs, which glibc implements over netlink. With no capabilities,
+# netlink can read interfaces but not change them (AGENT-367).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @debug @mount

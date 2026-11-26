@@ -7,6 +7,7 @@ import sitefile
 GUARD = "/usr/local/sbin/locksmith-edge-state-check"
 NFT = "/etc/locksmith-edge/input.nft"
 
+# AF_NETLINK: getifaddrs, for native MCP's destination check (AGENT-367).
 SANDBOX = """NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -23,7 +24,7 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
 LockPersonality=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native"""
 
 INPUT_SERVICE = f"""[Unit]
