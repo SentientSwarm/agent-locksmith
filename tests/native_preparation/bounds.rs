@@ -151,6 +151,9 @@ async fn each_registration_speaks_its_declared_revision() {
     // The header and the initialize request carry 2025-06-18, or this server answers 400.
     speak("2025-06-18", "2025-06-18");
     assert_eq!(flow::observe(&f, id)["observation"]["status"], "ready");
+    // Session cleanup carries the declared revision too (AGENT-373).
+    let deleted = std::fs::read_to_string(f.path().join("delete-version.json")).unwrap();
+    assert_eq!(deleted, "\"2025-06-18\"");
     // A server that settles on another revision is refused, never silently used.
     speak("2025-11-25", "2025-06-18");
     flow::refuse_observe(&f, id);

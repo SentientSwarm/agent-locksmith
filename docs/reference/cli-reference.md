@@ -38,8 +38,9 @@ Existing command syntax/help and authentication are unchanged.
 `integration import --file FILE` saves one strict immutable definition;
 `integration get ID --revision N` reads the exact revision.
 `tool from-definition NAME --definition ID --revision N --auth-profile ID
---upstream URL [--allow-private-destination]` creates a disabled pinned native
-connection. No provider request, account selection, credential or grant occurs.
+--upstream URL [--allow-private-destination] [--protocol-version V]` creates a
+disabled pinned native connection. `V` is the upstream's MCP revision,
+`2025-11-25` (default) or `2025-06-18`; it is fixed once the connection exists. No provider request, account selection, credential or grant occurs.
 General edits/enable remain refused for these derived instances.
 
 `tool activate-definition NAME --if-match REVISION [--compact]

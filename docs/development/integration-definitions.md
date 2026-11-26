@@ -63,7 +63,9 @@ body-read deadline. There is no new agent-facing authoring endpoint.
 }
 ```
 
-Only `allow_private_destination` is optional (defaultfalse). Exact existing
+`allow_private_destination` (default false) and `protocol_version` (the
+upstream MCP revision, `2025-11-25` or `2025-06-18`; default `2025-11-25`) are
+optional. Exact existing
 profile membership and native tool/direct/HTTPS/self/private policy are required.
 No account/grant/tool authority is inferred. Errors are static bounded envelopes
 with codes `definition_invalid`, `definition_conflict`, `definition_not_found`,

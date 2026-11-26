@@ -57,8 +57,9 @@ an oversized response or cancellation: rejection cannot undo it.
 
 Construct `Client::new(Limits, extra_roots)` and use `Client::client_config()`
 with `client.transport(uri, bearer)`. The application installs its normal
-Rustls crypto provider first. Protocol2025-11-25 is the supported version;
-other initialization/negotiated versions and version headers fail explicitly.
+Rustls crypto provider first. `PROTOCOL_VERSIONS` (2025-11-25 and 2025-06-18) bounds the revisions it
+sends and accepts; any other initialization, negotiated version or version header
+fails explicitly. The caller pins one exact revision per connection.
 No `locksmithd` YAML option or CLI switch is introduced by this prerequisite.
 `Limits` supports serde, rejects unknown fields and validates every constructor.
 All fields must be supplied when deserializing; `Limits::default()` supplies
@@ -108,9 +109,12 @@ Transport faults are static `mcp_transport_*` codes: `response_bytes`,
 `chunk_bytes`, `chunks`, `event_bytes`, `events`, `json_depth`, `json_units`,
 `json_syntax`, `sse`, `sse_truncated`, `content_encoding`, `content_type`,
 `framing`, `transfer_encoding`, `get_renewal_unsupported`,
-`deadline`, `http`, `redirect`, `http_status`, `auth`, `auth_header`,
+`deadline`, `http`, `redirect`, `http_status`, `unauthorized`, `forbidden`,
+`auth_header`,
 `session_header`, `protocol_version`, `reserved_header`, `resume_unsupported`,
-`url`, `invalid_limits` and `client_setup`. SSE wraps the same codes. No
+`url`, `invalid_limits` and `client_setup`. SSE wraps the same codes. A non-2xx
+POST reply without a JSON-RPC error is `UnexpectedServerResponse` carrying only
+the numeric status; `failure_code` and `http_status` classify it. No
 response-body preview or request URL is placed in adapter error text.
 Auth challenges and legitimate bounded JSON-RPC error messages remain protocol
 data: callers must not blindly log their debug representation or whole results.

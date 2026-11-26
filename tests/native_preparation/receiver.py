@@ -53,6 +53,8 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_DELETE(self) -> None:
+        seen = self.headers.get("MCP-Protocol-Version")
+        write(directory / "delete-version.json", seen)
         self.reply(204, b"")
 
     def do_POST(self) -> None:
@@ -62,13 +64,13 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             counts[method] = counts.get(method, 0) + 1
             write(directory / "counts.json", counts)
-        if method == "notifications/initialized":
-            self.reply(202, b"")
-            return
         behavior = json.loads((directory / "behavior.json").read_text())
         accept = behavior.get("accept")
-        if accept and self.headers.get("MCP-Protocol-Version") != accept:
+        if accept and revision_refused(self.headers, message, accept):
             self.reply(400, b"")  # as a server does for an unsupported revision
+            return
+        if method == "notifications/initialized":
+            self.reply(202, b"")
             return
         refusal = behavior.get("refuse")
         if refusal and method == "initialize":
@@ -88,6 +90,15 @@ class Handler(BaseHTTPRequestHandler):
             message, result, behavior, self.headers.get("Authorization", "")
         )
         self.reply(200, body, behavior.get("mode") == "sse")
+
+
+def revision_refused(headers, message: dict, accept: str) -> bool:
+    """Every request carries the header; initialize also offers it in params."""
+    if headers.get("MCP-Protocol-Version") != accept:
+        return True
+    if message["method"] == "initialize":
+        return message["params"].get("protocolVersion") != accept
+    return False
 
 
 def response(message: dict, result: dict, behavior: dict, authorization: str) -> bytes:
