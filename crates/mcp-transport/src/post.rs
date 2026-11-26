@@ -78,7 +78,10 @@ impl Client {
             // A refusal is named by its status unless it carries a JSON-RPC error.
             return match self.decode(mime, bytes) {
                 Ok(decoded @ ServerJsonRpcMessage::Error(_)) => Ok(Reply::Json(decoded, session)),
-                _ => Err(fail("http_status")),
+                // Only our own rendering of the number; never the reason phrase.
+                _ => Err(StreamableHttpError::UnexpectedServerResponse(
+                    status.as_u16().to_string().into(),
+                )),
             };
         }
         Ok(Reply::Json(self.decode(mime, bytes)?, session))

@@ -38,6 +38,9 @@ pub fn failure_code(error: &StreamableHttpError<Error>) -> &'static str {
         StreamableHttpError::InsufficientScope(_) => "forbidden",
         StreamableHttpError::SessionExpired => "session_expired",
         StreamableHttpError::UnexpectedContentType(_) => "content_type",
+        StreamableHttpError::UnexpectedServerResponse(_) if http_status(error).is_some() => {
+            "status"
+        }
         StreamableHttpError::Client(Error(code)) => match *code {
             "unauthorized" => "unauthorized",
             "forbidden" => "forbidden",
@@ -47,6 +50,16 @@ pub fn failure_code(error: &StreamableHttpError<Error>) -> &'static str {
             _ => "other",
         },
         _ => "other",
+    }
+}
+
+/// The status of a non-2xx refusal that carried no JSON-RPC error.
+pub fn http_status(error: &StreamableHttpError<Error>) -> Option<u16> {
+    match error {
+        StreamableHttpError::UnexpectedServerResponse(text) => {
+            text.parse::<u16>().ok().filter(|n| (100..=599).contains(n))
+        }
+        _ => None,
     }
 }
 

@@ -36,7 +36,7 @@ impl Connection<'_> {
         let message: ClientJsonRpcMessage =
             serde_json::from_value(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
                 .map_err(|_| Error("request_invalid"))?;
-        let reply = self.send(message).await?;
+        let reply = self.send("notifications/initialized", message).await?;
         if !matches!(reply, Reply::Accepted) {
             return Err(Error("upstream_notification"));
         }
@@ -91,12 +91,12 @@ impl Connection<'_> {
         }
         Err(Error("page_limit"))
     }
-    async fn rpc(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
+    async fn rpc(&mut self, id: u64, method: &'static str, params: Value) -> Result<Value> {
         let message = serde_json::from_value(
             json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
         )
         .map_err(|_| Error("request_invalid"))?;
-        let reply = self.send(message).await?;
+        let reply = self.send(method, message).await?;
         let (value, session) = response(reply, self.hosted).await?;
         if method == "tools/call" {
             super::call_result::envelope(&value).map_err(|_| Error("upstream_result"))?;
@@ -136,7 +136,7 @@ impl Connection<'_> {
         }
         Ok(())
     }
-    async fn send(&self, message: ClientJsonRpcMessage) -> Result<Reply> {
+    async fn send(&self, step: &'static str, message: ClientJsonRpcMessage) -> Result<Reply> {
         self.client
             .post_message_with_max_sse_event_size(
                 self.endpoint.clone(),
@@ -147,7 +147,19 @@ impl Connection<'_> {
                 64 * 1024,
             )
             .await
-            .map_err(|e| Error(refusal(&e)))
+            .map_err(|e| {
+                let code = refusal(&e);
+                if let Some(status) = locksmith_mcp_transport::http_status(&e) {
+                    // The number and our own step name only (AGENT-371).
+                    tracing::warn!(
+                        upstream_status = status,
+                        step,
+                        code,
+                        "native_upstream_refused"
+                    );
+                }
+                Error(code)
+            })
     }
     pub async fn cleanup(&self) {
         if let Some(session) = &self.session {

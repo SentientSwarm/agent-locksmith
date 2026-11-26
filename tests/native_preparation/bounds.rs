@@ -83,5 +83,24 @@ fn refusals(f: &Fixture, id: &str) {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{code}");
         assert!(stderr.contains(&format!("\"{code}\"")), "{code}: {stderr}");
+        assert!(!stderr.contains("well-known"), "{code}: {stderr}");
+    }
+    // The operator learns which status and step refused, and nothing else (AGENT-371).
+    let log = std::fs::read_to_string(f.path().join("daemon.log")).unwrap();
+    let refused: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("native_upstream_refused"))
+        .collect();
+    assert!(
+        refused
+            .iter()
+            .any(|l| l.contains("\"upstream_status\":500") && l.contains("\"step\":\"initialize\"")),
+        "{refused:?}"
+    );
+    for line in refused {
+        assert!(
+            !line.contains("well-known") && !line.contains("jsonrpc"),
+            "{line}"
+        );
     }
 }

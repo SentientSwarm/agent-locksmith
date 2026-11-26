@@ -179,7 +179,7 @@ async fn assert_get_cap(
 }
 #[tokio::test]
 async fn refusals_keep_a_static_class() -> Result<(), Error> {
-    use locksmith_mcp_transport::failure_code;
+    use locksmith_mcp_transport::{failure_code, http_status};
     let challenge = "Bearer resource_metadata=\"https://example.test/.well-known\"";
     let cases = [
         (
@@ -243,6 +243,9 @@ async fn refusals_keep_a_static_class() -> Result<(), Error> {
             .await
             .unwrap_err();
         assert_eq!(failure_code(&error), code, "{status} {mime}");
+        let number = status[..3].parse::<u16>().unwrap();
+        let expected = (code == "status").then_some(number);
+        assert_eq!(http_status(&error), expected, "{status} {mime}");
     }
     let mut gone = Reply::body("application/json", Vec::new());
     gone.head = gone.head.replace("200 OK", "404 Gone");
