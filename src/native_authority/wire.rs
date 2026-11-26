@@ -147,9 +147,7 @@ impl Connection<'_> {
                 64 * 1024,
             )
             .await
-            .map_err(|e| {
-                Error(locksmith_mcp_transport::io_code(&e).unwrap_or("upstream_observation_failed"))
-            })
+            .map_err(|e| Error(refusal(&e)))
     }
     pub async fn cleanup(&self) {
         if let Some(session) = &self.session {
@@ -163,6 +161,24 @@ impl Connection<'_> {
                 )
                 .await;
         }
+    }
+}
+/// Name the upstream refusal with a fixed code; nothing from the reply survives (AGENT-369).
+fn refusal(
+    error: &rmcp::transport::streamable_http_client::StreamableHttpError<
+        locksmith_mcp_transport::Error,
+    >,
+) -> &'static str {
+    match locksmith_mcp_transport::failure_code(error) {
+        "deadline" => "deadline",
+        "http" => "http",
+        "unauthorized" => "upstream_unauthorized",
+        "forbidden" => "upstream_forbidden",
+        "redirect" => "upstream_redirect",
+        "status" => "upstream_status",
+        "session_expired" => "upstream_session",
+        "content_type" => "upstream_content_type",
+        _ => "upstream_observation_failed",
     }
 }
 fn headers() -> HashMap<axum::http::HeaderName, axum::http::HeaderValue> {

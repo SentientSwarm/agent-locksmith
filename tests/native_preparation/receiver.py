@@ -36,8 +36,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def reply(self, status: int, body: bytes, sse: bool = False) -> None:
+    def reply(
+        self, status: int, body: bytes, sse: bool = False, challenge: str = ""
+    ) -> None:
         self.send_response(status)
+        if challenge:
+            self.send_header("WWW-Authenticate", challenge)
         self.send_header(
             "Content-Type", "text/event-stream" if sse else "application/json"
         )
@@ -62,6 +66,12 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(202, b"")
             return
         behavior = json.loads((directory / "behavior.json").read_text())
+        refusal = behavior.get("refuse")
+        if refusal and method == "initialize":
+            value = {"jsonrpc": "2.0", "id": message["id"], "result": {}}
+            body = json.dumps(value).encode() if refusal.get("body") else b""
+            self.reply(refusal["status"], body, challenge=refusal.get("challenge", ""))
+            return
         if method == "tools/list" and behavior.get("hold"):
             hold(behavior["hold"])
         result = result_for(method)

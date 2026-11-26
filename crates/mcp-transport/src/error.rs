@@ -27,6 +27,29 @@ pub fn io_code(mut error: &(dyn std::error::Error + 'static)) -> Option<&'static
     None
 }
 
+/// Classify a refused exchange into a fixed name an operator can act on.
+/// Names are static: no status text, header, body or credential survives.
+pub fn failure_code(error: &StreamableHttpError<Error>) -> &'static str {
+    if let Some(code) = io_code(error) {
+        return code;
+    }
+    match error {
+        StreamableHttpError::AuthRequired(_) => "unauthorized",
+        StreamableHttpError::InsufficientScope(_) => "forbidden",
+        StreamableHttpError::SessionExpired => "session_expired",
+        StreamableHttpError::UnexpectedContentType(_) => "content_type",
+        StreamableHttpError::Client(Error(code)) => match *code {
+            "unauthorized" => "unauthorized",
+            "forbidden" => "forbidden",
+            "redirect" => "redirect",
+            "http_status" => "status",
+            "content_type" => "content_type",
+            _ => "other",
+        },
+        _ => "other",
+    }
+}
+
 pub(crate) type Result<T> = std::result::Result<T, StreamableHttpError<Error>>;
 pub(crate) fn fail(code: &'static str) -> StreamableHttpError<Error> {
     StreamableHttpError::Client(Error(code))

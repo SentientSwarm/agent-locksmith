@@ -62,8 +62,11 @@ impl Client {
         message: &ClientJsonRpcMessage,
         session: Option<String>,
     ) -> Result<Reply> {
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-            return Err(fail("auth"));
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(fail("unauthorized"));
+        }
+        if status == StatusCode::FORBIDDEN {
+            return Err(fail("forbidden"));
         }
         if bytes.is_empty()
             && status.is_success()
@@ -71,17 +74,21 @@ impl Client {
         {
             return Ok(Reply::Accepted);
         }
+        if !status.is_success() {
+            // A refusal is named by its status unless it carries a JSON-RPC error.
+            return match self.decode(mime, bytes) {
+                Ok(decoded @ ServerJsonRpcMessage::Error(_)) => Ok(Reply::Json(decoded, session)),
+                _ => Err(fail("http_status")),
+            };
+        }
+        Ok(Reply::Json(self.decode(mime, bytes)?, session))
+    }
+    fn decode(&self, mime: &str, bytes: &[u8]) -> Result<ServerJsonRpcMessage> {
         if !mime.eq_ignore_ascii_case("application/json") {
             return Err(fail("content_type"));
         }
         self.validate_raw(bytes)?;
-        let decoded =
-            crate::json::decode(bytes, self.limits).map_err(StreamableHttpError::Client)?;
-        if status.is_success() || matches!(decoded, ServerJsonRpcMessage::Error(_)) {
-            Ok(Reply::Json(decoded, session))
-        } else {
-            Err(fail("http_status"))
-        }
+        crate::json::decode(bytes, self.limits).map_err(StreamableHttpError::Client)
     }
     fn validate_raw(&self, bytes: &[u8]) -> Result<()> {
         if let Some(validate) = self.validator {

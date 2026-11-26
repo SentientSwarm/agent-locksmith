@@ -177,3 +177,86 @@ async fn assert_get_cap(
     assert!(stream.next().await.unwrap().is_err());
     Ok(())
 }
+#[tokio::test]
+async fn refusals_keep_a_static_class() -> Result<(), Error> {
+    use locksmith_mcp_transport::failure_code;
+    let challenge = "Bearer resource_metadata=\"https://example.test/.well-known\"";
+    let cases = [
+        (
+            "401 Denied",
+            "application/json",
+            Some(challenge),
+            Vec::new(),
+            "unauthorized",
+        ),
+        (
+            "403 Denied",
+            "application/json",
+            Some(challenge),
+            Vec::new(),
+            "forbidden",
+        ),
+        (
+            "401 Denied",
+            "application/json",
+            None,
+            Vec::new(),
+            "unauthorized",
+        ),
+        (
+            "403 Denied",
+            "application/json",
+            None,
+            Vec::new(),
+            "forbidden",
+        ),
+        (
+            "302 Found",
+            "application/json",
+            None,
+            Vec::new(),
+            "redirect",
+        ),
+        ("500 Broken", "application/json", None, json(128), "status"),
+        (
+            "200 OK",
+            "text/html",
+            None,
+            b"<html></html>".to_vec(),
+            "content_type",
+        ),
+        (
+            "200 OK",
+            "application/json",
+            None,
+            b"{not json".to_vec(),
+            "other",
+        ),
+    ];
+    for (status, mime, auth, body, code) in cases {
+        let mut reply = Reply::body(mime, body);
+        if let Some(auth) = auth {
+            reply = reply.header("WWW-Authenticate", auth);
+        }
+        reply.head = reply.head.replace("200 OK", status);
+        let error = post(&client(limits(512)), &Server::start(reply).await)
+            .await
+            .unwrap_err();
+        assert_eq!(failure_code(&error), code, "{status} {mime}");
+    }
+    let mut gone = Reply::body("application/json", Vec::new());
+    gone.head = gone.head.replace("200 OK", "404 Gone");
+    let s = Server::start(gone).await;
+    let error = client(limits(512))
+        .post_message(
+            Arc::from(s.url.as_str()),
+            ping(),
+            Some("old".into()),
+            None,
+            HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), "session_expired");
+    Ok(())
+}
