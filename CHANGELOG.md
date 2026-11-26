@@ -100,6 +100,10 @@ forward. Read Upgrading, below, before you install it.
   (`tool from-definition --protocol-version`), and Locksmith speaks exactly
   that revision. Before, it sent 2025-11-25 to every server, and a server on
   2025-06-18 (Slack's, for one) answered `initialize` with 400.
+- Native MCP accepts finite-v2 tools whose input objects leave
+  `additionalProperties` unset, as Slack's do (AGENT-375). The review records
+  `input_restriction:"closed-objects"` and agents see the objects closed, which
+  Locksmith already enforced. An explicit open object is still refused.
 - Large Codex `/responses` bodies get the body fixups instead of a 413
   (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
   only bound now is the route's `body_limit_bytes` (50 MB for the shipped

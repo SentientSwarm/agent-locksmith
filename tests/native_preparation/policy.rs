@@ -83,3 +83,46 @@ fn policy_open_empty_input_is_separate_explicit_restriction() {
     let mut output=review(tool(json!({"type":"boolean"})));
     output["tool"]["outputSchema"]=t["inputSchema"].clone();assert!(protected::load(&output).is_err());
 }
+#[test]
+fn policy_open_objects_are_an_explicit_closed_restriction() {
+    // AGENT-375: v2 input objects without additionalProperties become callable
+    // only through an explicit closed-objects review; agents see them closed.
+    let t = json!({"name":"invented_search","inputSchema":{"type":"object","properties":{
+        "query":{"type":"string"},
+        "options":{"type":"object","properties":{"limit":{"type":"integer"}}},
+        "tags":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}}},
+        "required":["query"]}});
+    assert!(contract::tool(&t).is_err(), "finite-v1 stays strict");
+    assert!(protected::load(&review(t.clone())).is_err(), "restriction must be explicit");
+    let mut wrong = review(t.clone());
+    wrong["input_restriction"] = "empty-arguments".into();
+    assert!(protected::load(&wrong).is_err());
+    let created = protected::create_with(&t, "read", &Default::default(), agent_locksmith::native_authority::policy::Policy::V2).unwrap();
+    assert_eq!(created["input_restriction"], "closed-objects");
+    let mut value = review(t.clone());
+    value["input_restriction"] = "closed-objects".into();
+    let r = protected::load(&value).unwrap();
+    assert_eq!(r.full, t, "the provider tool is retained unchanged");
+    let s = &r.public["inputSchema"];
+    assert_eq!(s["additionalProperties"], false);
+    assert_eq!(s["properties"]["options"]["additionalProperties"], false);
+    assert_eq!(s["properties"]["tags"]["items"]["additionalProperties"], false);
+    let marker = &r.public["_meta"]["locksmith.dev/native-contract"];
+    assert_eq!(marker["input_restriction"], "closed-objects");
+    assert_eq!(marker["schema_origin"], "derived_callable");
+    assert!(protected::merge(&r, &json!({"query":"q","options":{"limit":1}})).is_ok());
+    for bad in [json!({"query":"q","extra":1}), json!({"query":"q","options":{"other":1}}),
+        json!({"query":"q","tags":[{"name":"a","other":1}]})] {
+        assert!(protected::merge(&r, &bad).is_err(), "{bad}");
+    }
+    // An explicit open object is a different claim and stays refused.
+    for open in [json!(true), json!({})] {
+        let mut explicit = value.clone();
+        explicit["tool"]["inputSchema"]["properties"]["options"]["additionalProperties"] = open;
+        assert!(protected::load(&explicit).is_err());
+    }
+    // Output schemas are not relaxed.
+    let mut output = review(tool(json!({"type":"boolean"})));
+    output["tool"]["outputSchema"] = json!({"type":"object","properties":{"x":{"type":"string"}}});
+    assert!(protected::load(&output).is_err());
+}

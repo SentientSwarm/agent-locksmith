@@ -21,6 +21,36 @@ pub fn empty_input(value: &Value) -> bool {
             .is_some_and(|p| p.is_empty())
         && value.get("additionalProperties").is_none()
 }
+/// A v2 input object that leaves `additionalProperties` unset (AGENT-375).
+/// Locksmith closes it: undeclared argument members are refused at call time.
+pub fn open_objects(value: &Value) -> bool {
+    walk(value, &mut |o| o.get("additionalProperties").is_none())
+}
+/// Declare every object closed, as Locksmith enforces it.
+pub fn close_objects(value: &mut Value) {
+    if let Some(o) = value.as_object_mut() {
+        if o.get("type").and_then(Value::as_str) == Some("object") {
+            o.entry("additionalProperties")
+                .or_insert(Value::Bool(false));
+        }
+        if let Some(props) = o.get_mut("properties").and_then(Value::as_object_mut) {
+            props.values_mut().for_each(close_objects);
+        }
+        if let Some(items) = o.get_mut("items") {
+            close_objects(items);
+        }
+    }
+}
+fn walk(value: &Value, open: &mut impl FnMut(&Map<String, Value>) -> bool) -> bool {
+    let Some(o) = value.as_object() else {
+        return false;
+    };
+    (o.get("type").and_then(Value::as_str) == Some("object") && open(o))
+        || o.get("properties")
+            .and_then(Value::as_object)
+            .is_some_and(|p| p.values().any(|v| walk(v, open)))
+        || o.get("items").is_some_and(|v| walk(v, open))
+}
 fn root_with(value: &Value, policy: Policy, input: bool) -> Result<()> {
     if value.get("type").and_then(Value::as_str) != Some("object") {
         return Err(Error("schema_root_object"));
@@ -45,7 +75,7 @@ fn node(value: &Value, depth: usize, count: &mut usize, policy: Policy, input: b
     object(value, &allowed)?;
     common(obj, kind, policy)?;
     match kind {
-        "object" => properties(obj, depth, count, policy, input && depth == 0),
+        "object" => properties(obj, depth, count, policy, input),
         "array" => {
             range(obj, "minItems", "maxItems", true)?;
             node(
@@ -53,7 +83,7 @@ fn node(value: &Value, depth: usize, count: &mut usize, policy: Policy, input: b
                 depth + 1,
                 count,
                 policy,
-                false,
+                input,
             )
         }
         "string" => range(obj, "minLength", "maxLength", true),
@@ -132,10 +162,13 @@ fn properties(
     depth: usize,
     count: &mut usize,
     policy: Policy,
-    input_root: bool,
+    input: bool,
 ) -> Result<()> {
+    // v2 input objects may leave it unset; review then records closed-objects
+    // (or empty-arguments). An explicit open value is always refused.
+    let unset = obj.get("additionalProperties").is_none();
     if obj.get("additionalProperties") != Some(&Value::Bool(false))
-        && !(policy == Policy::V2 && input_root && empty_input(&Value::Object(obj.clone())))
+        && !(policy == Policy::V2 && input && unset)
     {
         return Err(Error("schema_additional_properties"));
     }
@@ -145,7 +178,7 @@ fn properties(
         .ok_or(Error("schema_properties"))?;
     for (name, schema) in props {
         text(&Value::String(name.clone()), 128)?;
-        node(schema, depth + 1, count, policy, false)?;
+        node(schema, depth + 1, count, policy, input)?;
     }
     if let Some(required) = obj.get("required") {
         let required = required.as_array().ok_or(Error("schema_required"))?;

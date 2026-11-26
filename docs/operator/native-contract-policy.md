@@ -97,6 +97,24 @@ schema adds `additionalProperties:false`; it describes what Locksmith will send,
 not a claim that the provider declared a closed schema. Only `{}` is callable.
 Any supplied key or fixed-context key refuses before a business request.
 
+## Open input objects are an explicit restriction
+
+Under finite-v2, an input schema may leave `additionalProperties` unset on its
+objects (the root, a property or an array's items), as some providers do. The
+review request must then include:
+
+```json
+{"contract_policy":"finite-v2","input_restriction":"closed-objects"}
+```
+
+Locksmith already refuses an undeclared argument member at call time for every
+object, so this changes no enforcement. The callable schema adds
+`additionalProperties:false` to each of those objects, so agents see what
+Locksmith accepts. The provider tool and its `observed_digest` are unchanged.
+An explicit `additionalProperties:true`, or a schema-valued one, is still
+refused, because it claims a free-form object Locksmith would not forward.
+Output schemas stay strict.
+
 Standard `tools/list` presents the callable tool. Its `_meta` retains provider
 metadata and adds `locksmith.dev/native-contract` with `policy`,
 `contract_digest`, nullable `input_restriction` and `schema_origin` (`provider`

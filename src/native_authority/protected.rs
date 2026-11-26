@@ -32,6 +32,8 @@ pub fn create_with(
         value["contract_policy"] = json!(policy);
         if schema::empty_input(&tool["inputSchema"]) {
             value["input_restriction"] = "empty-arguments".into();
+        } else if schema::open_objects(&tool["inputSchema"]) {
+            value["input_restriction"] = "closed-objects".into();
         }
     }
     if !context.is_empty() {
@@ -111,7 +113,7 @@ fn project(review: &Value, context: &Map<String, Value>, policy: Policy) -> Resu
         required.retain(|v| !context.contains_key(v.as_str().unwrap_or("")));
     }
     if review.get("input_restriction").is_some() {
-        schema["additionalProperties"] = false.into();
+        schema::close_objects(schema);
     }
     contract::tool_with(&public, policy)?;
     if policy == Policy::V2 {
