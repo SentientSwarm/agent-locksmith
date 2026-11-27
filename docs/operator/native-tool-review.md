@@ -37,8 +37,9 @@ Or ingest a bearer through stdin, never as an argument. The daemon seals it with
 locksmith agent set-credential AGENT_ID sample --stored-bearer-stdin
 ```
 
-Provide one UTF-8 value on stdin (1–8192 printable ASCII bytes, no spaces or
-controls; one terminal newline is removed). Explicit bearer intent replaces
+Provide one UTF-8 value on stdin (1–8192 printable ASCII bytes, no controls;
+one terminal newline is removed). A bearer holds no space; a
+`--stored-header-stdin` value may hold inner spaces or tabs. Explicit bearer intent replaces
 an existing header-shaped selection. The older stored-value API still inherits
 header shape when neither `bearer: true` nor an explicit header is supplied.
 `--stored-header-stdin` sends `stored_header: true` instead, which takes the

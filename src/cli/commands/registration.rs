@@ -175,21 +175,33 @@ impl BrokerArgs {
     }
 }
 
-/// Read one secret value from stdin: printable ASCII, at most 8 KiB, one
-/// trailing newline ignored. Never from argv.
-pub(crate) fn read_secret_stdin() -> Result<String, CliError> {
+/// Read one credential value from stdin, one trailing newline ignored,
+/// never from argv. `None` when it breaks the daemon's rule (AGENT-328,
+/// `valid_credential_value`): visible ASCII, at most 8 KiB, inner spaces or
+/// tabs only when it is not sent as a bearer (AGENT-381).
+pub(crate) fn read_credential_stdin(bearer: bool) -> Result<Option<String>, CliError> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::io::stdin().take(8194).read_to_end(&mut bytes)?;
     if bytes.last() == Some(&b'\n') {
         bytes.pop();
     }
-    if bytes.is_empty() || bytes.len() > 8192 || !bytes.iter().all(|b| (0x21..=0x7e).contains(b)) {
-        return Err(CliError::Usage(
-            "stdin must hold one printable value of at most 8 KiB".into(),
-        ));
-    }
-    String::from_utf8(bytes).map_err(|_| CliError::Usage("stdin is not UTF-8".into()))
+    Ok(String::from_utf8(bytes)
+        .ok()
+        .filter(|v| agent_locksmith::registrations::validators::valid_credential_value(v, bearer)))
+}
+
+/// A route key or backend credential from stdin. The daemon knows whether
+/// the route sends it in a header or as a bearer, so this allows the
+/// header form and leaves the bearer rule to the daemon (400
+/// `invalid_credential_value`).
+pub(crate) fn read_secret_stdin() -> Result<String, CliError> {
+    read_credential_stdin(false)?.ok_or_else(|| {
+        CliError::Usage(
+            "stdin must hold one value of at most 8 KiB: visible ASCII, inner spaces allowed"
+                .into(),
+        )
+    })
 }
 
 /// Seal the route's own key from stdin (`PUT /{kind}/{name}/credential`).

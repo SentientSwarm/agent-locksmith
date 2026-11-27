@@ -136,8 +136,9 @@ Later template changes do not redirect that binding's refresh exchange. Old
 empty-placeholder bindings require deliberate re-selection.
 
 `--stored-bearer-stdin` and `--stored-header-stdin` read one value from stdin,
-never argv: printable ASCII with no spaces, at most 8 KiB, one trailing newline
-ignored. They seal it for this agent alone, replacing its current binding on
+never argv: printable ASCII, at most 8 KiB, one trailing newline ignored. A
+header value may hold inner spaces or tabs (`Basic <b64>`); a bearer holds
+none. They seal it for this agent alone, replacing its current binding on
 the route. A stored bearer is sent as `Authorization: Bearer <value>`. A stored
 header is sent bare, in `--header` or else the route's own header (its
 `header:` auth), for APIs that refuse a bearer (Linear wants
@@ -388,6 +389,8 @@ locksmith agent set-credential "$AGENT_ID" codex-pool --broker
   client checked (400 `invalid_credential_value` from `set-key` and
   `route backend set-credential`): empty, over 8 KiB, padded, holding a
   control character or non-ASCII, or, sent as a bearer, holding a space.
+  The CLI refuses the same values but allows an inner space, since only the
+  daemon knows whether the route sends the key as a bearer.
 - **Attribution.** `--attribution-header H` copies the broker's response
   header `H` into audit as `details.broker_account` when it is 1-64
   printable ASCII characters without spaces; otherwise audit records

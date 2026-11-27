@@ -4,6 +4,8 @@
 //!
 //! AGENT-325 — on the same daemon + CLI fixture, `agent set-credential
 //! --stored-header-stdin` seals a per-agent value sent bare in a header.
+//!
+//! AGENT-381 — the CLI seals a header value with an inner space.
 
 #![allow(dead_code)]
 #[path = "native_process/fixture.rs"]
@@ -246,5 +248,116 @@ async fn a_stored_header_from_stdin_is_sent_bare() {
             .unwrap();
         assert_eq!(r.status(), 200, "{p}");
     }
+    f.stop();
+}
+
+/// AGENT-381 — a header value may hold an inner space (`Basic <b64>` for
+/// git smart-HTTP). `tool set-key --header` and `agent set-credential
+/// --stored-header-stdin` seal it and the upstream gets it intact; a
+/// bearer still refuses one, an outer blank is refused, and nothing is
+/// sealed for a refusal.
+#[tokio::test]
+async fn a_header_value_with_an_inner_space_is_sealed_intact() {
+    let upstream = MockServer::start().await;
+    for (p, v) in [
+        ("/route", "Basic cm91dGU6a2V5"),
+        ("/agent", "Basic YWdlbnQ6a2V5"),
+    ] {
+        Mock::given(path(p))
+            .and(header("authorization", v))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&upstream)
+            .await;
+    }
+    let mut f = Fixture::new();
+    f.start_with_key(process::DAEMON, Some(SEALING_KEY)).await;
+    let uri = upstream.uri();
+    for (route, auth) in [
+        ("git", "--broker"),
+        ("own", "--auth=none"),
+        ("plain", "--auth=none"),
+    ] {
+        f.op(&[
+            "tool",
+            "put",
+            route,
+            "--upstream",
+            &uri,
+            "--egress",
+            "direct",
+            auth,
+        ]);
+    }
+    piped(
+        &f,
+        &["tool", "set-key", "git", "--header", "Authorization"],
+        "Basic cm91dGU6a2V5\n",
+    );
+    let a = f.op(&[
+        "agent",
+        "register",
+        "--name",
+        "sp",
+        "--allowlist",
+        "git,own,plain",
+    ]);
+    let id = a["public_id"].as_str().unwrap();
+    piped(&f, &set(id, "git", &["--broker"]), "");
+    piped(
+        &f,
+        &set(
+            id,
+            "own",
+            &["--stored-header-stdin", "--header", "Authorization"],
+        ),
+        "Basic YWdlbnQ6a2V5",
+    );
+    let token = a["token"].as_str().unwrap();
+    for p in ["/api/git/route", "/api/own/agent"] {
+        let r = f
+            .http
+            .get(f.url(p))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r.status(),
+            200,
+            "{p}: the value reached the upstream intact"
+        );
+    }
+
+    // A bearer holds no blank: the route that names no header refuses on
+    // the daemon, the per-agent bearer in the CLI; an outer blank is
+    // refused for a header too. None of them seals anything.
+    let before = sealed_count(&f).await;
+    let key = ["tool", "set-key", "git", "--header", "Authorization"];
+    let usage = "visible ASCII";
+    for (args, value, why) in [
+        (
+            vec!["tool", "set-key", "plain"],
+            "Basic abc",
+            "invalid_credential_value",
+        ),
+        (
+            set(id, "plain", &["--stored-bearer-stdin"]),
+            "Basic abc",
+            "invalid native",
+        ),
+        (key.to_vec(), " Basic abc", usage),
+        (key.to_vec(), "Basic abc ", usage),
+        (
+            set(id, "own", &["--stored-header-stdin"]),
+            "Basic\u{7}abc",
+            "invalid native",
+        ),
+    ] {
+        let (code, err) = run_piped(&f, &args, value);
+        assert_ne!(code, Some(0), "{args:?} {value:?} must be refused: {err}");
+        assert!(err.contains(why), "{args:?} {value:?}: {err}");
+        assert!(!err.contains("abc"), "the value is never echoed: {err}");
+    }
+    assert_eq!(sealed_count(&f).await, before, "a refusal seals nothing");
     f.stop();
 }

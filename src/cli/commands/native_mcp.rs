@@ -110,15 +110,8 @@ pub async fn ingest(
         connection: connection.into(),
         agent: agent.into(),
     })?;
-    let mut bytes = Vec::new();
-    std::io::stdin().take(8194).read_to_end(&mut bytes)?;
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    if bytes.is_empty() || bytes.len() > 8192 || !bytes.iter().all(|b| (0x21..=0x7e).contains(b)) {
-        return Err(invalid());
-    }
-    let value = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let bearer = matches!(sealed, Sealed::Bearer);
+    let value = super::registration::read_credential_stdin(bearer)?.ok_or_else(invalid)?;
     let body = match sealed {
         Sealed::Bearer => json!({"value":value,"bearer":true}),
         Sealed::Header(None) => json!({"value":value,"stored_header":true}),

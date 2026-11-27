@@ -111,6 +111,12 @@ forward. Read Upgrading, below, before you install it.
   unchanged tool list keeps the generation; a changed tool loses its grants,
   as after an operator observe. Before, every list and call needed an
   operator observation under 60 seconds old.
+- A header credential can hold an inner space (AGENT-381). `tool|model|infra
+  set-key`, `route backend set-credential` and `agent set-credential
+  --stored-header-stdin` refused any space, so `Authorization: Basic <b64>`
+  for git smart-HTTP could not be sealed, though the daemon accepts it. The
+  CLI now applies the daemon's rule: no space or tab at either end, and none
+  at all in a bearer.
 - Large Codex `/responses` bodies get the body fixups instead of a 413
   (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
   only bound now is the route's `body_limit_bytes` (50 MB for the shipped
