@@ -41,6 +41,10 @@ memory for runtimes that need it, such as Python with ONNX. It also takes
 `env = { NAME = "value" }` for extra variables on the service command.
 `env` values are written into the unit file, which is world-readable, so
 never put a secret there; use `environment_file` for secrets.
+`net_bind_service = true` lets a component listen on a port below 1024,
+such as a TLS front end on 443, while it runs as its own user. The unit
+then grants `CAP_NET_BIND_SERVICE` and no other capability. It is refused
+unless the component has an ingress port below 1024.
 `private_network = true` gives the component no network beyond loopback
 (`PrivateNetwork=yes`), for one that reaches nothing over the network,
 such as the classifier sidecar running offline. Unix sockets on the

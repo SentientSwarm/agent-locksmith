@@ -24,6 +24,7 @@ COMPONENT_KEYS = {
     "environment_file",
     "jit",
     "private_network",
+    "net_bind_service",
     "env",
     "ingress",
     "closed",
@@ -47,6 +48,9 @@ class Component:
     # No network namespace of its own beyond loopback (PrivateNetwork=yes),
     # for a component that reaches nothing over the network (AGENT-288).
     private_network: bool = False
+    # CAP_NET_BIND_SERVICE and nothing else, for a component that listens
+    # on a port below 1024, such as a TLS front end on 443 (AGENT-383).
+    net_bind_service: bool = False
     env: dict[str, str] = field(default_factory=dict)
     ingress: list[Ingress] = field(default_factory=list)
     # Ports rejected for every source, e.g. an admin listener reached only
@@ -142,6 +146,11 @@ def _component(raw: object, parent: str) -> Component:
     )
     if private_network and ingress:
         raise SiteError(f"{where}: private_network cannot take ingress")
+    net_bind = check.as_bool(
+        table.get("net_bind_service", False), f"{where} net_bind_service"
+    )
+    if net_bind and not any(r.port < 1024 for r in ingress):
+        raise SiteError(f"{where}: net_bind_service needs an ingress port below 1024")
     return Component(
         name=name,
         user=check.user(table.get("user"), where),
@@ -151,6 +160,7 @@ def _component(raw: object, parent: str) -> Component:
         ),
         jit=check.as_bool(table.get("jit", False), f"{where} jit"),
         private_network=private_network,
+        net_bind_service=net_bind,
         env=check.env(table.get("env", {}), where),
         ingress=ingress,
         closed=closed,

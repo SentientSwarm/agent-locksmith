@@ -45,6 +45,17 @@ WantedBy=multi-user.target
 """
 
 
+def sandbox(comp: sitefile.Component) -> str:
+    """The sandbox, with CAP_NET_BIND_SERVICE as the only capability for a
+    component that listens below 1024 (AGENT-383)."""
+    if not comp.net_bind_service:
+        return SANDBOX
+    cap = "CAP_NET_BIND_SERVICE"
+    return SANDBOX.replace(
+        "CapabilityBoundingSet=\n", f"CapabilityBoundingSet={cap}\n"
+    ).replace("AmbientCapabilities=\n", f"AmbientCapabilities={cap}\n")
+
+
 def unit_literal(text: str) -> str:
     """Escape systemd specifiers (%) and variable expansion ($)."""
     return text.replace("%", "%%").replace("$", "$$")
@@ -98,7 +109,7 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=60
 KillMode=control-group
-{SANDBOX}
+{sandbox(comp)}
 MemoryDenyWriteExecute={"no" if comp.jit else "yes"}
 {"PrivateNetwork=yes" + chr(10) if comp.private_network else ""}ReadWritePaths={root}/{comp.name} /run/locksmith-edge/{comp.name}
 

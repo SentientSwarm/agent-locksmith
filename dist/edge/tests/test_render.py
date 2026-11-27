@@ -102,6 +102,36 @@ class RenderTest(unittest.TestCase):
             "ReadWritePaths=/srv/locksmith-edge/locksmith /run/locksmith-edge/locksmith", lines
         )
 
+    def test_net_bind_service_grants_only_that_capability(self):
+        # AGENT-383: a TLS front end on 443 runs as its own user.
+        site = sitefile.parse(
+            ESCAPES
+            + """
+[[instance.component]]
+name = "front"
+user = "front"
+command = "/usr/local/bin/caddy run --config /srv/edge/front/Caddyfile"
+ingress = [{ port = 443, from = ["10.0.1.0/24"] }]
+net_bind_service = true
+"""
+        )
+        out = self.out("site-a", site)
+        front = self.unit(out, "front").splitlines()
+        for line in (
+            "CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
+            "AmbientCapabilities=CAP_NET_BIND_SERVICE",
+            "User=front",
+            "NoNewPrivileges=yes",
+        ):
+            self.assertIn(line, front)
+        self.assertNotIn("CapabilityBoundingSet=", front)
+        self.assertNotIn("AmbientCapabilities=", front)
+        for other in ("app", "quiet"):
+            lines = self.unit(out, other).splitlines()
+            self.assertIn("CapabilityBoundingSet=", lines)
+            self.assertIn("AmbientCapabilities=", lines)
+            self.assertFalse([l for l in lines if "CAP_NET_BIND_SERVICE" in l])
+
     def test_private_network_only_where_declared(self):
         out = self.out("lab-locksmith")
         self.assertIn("PrivateNetwork=yes", self.unit(out, "inspector").splitlines())

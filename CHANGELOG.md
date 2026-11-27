@@ -809,6 +809,11 @@ forward. Read Upgrading, below, before you install it.
 
 ### Added
 
+- Edge components take `net_bind_service = true`, which grants
+  `CAP_NET_BIND_SERVICE` and no other capability, so a component running
+  as its own user can listen below 1024, such as a TLS front end on 443
+  (AGENT-383). It is refused unless the component has an ingress port
+  below 1024.
 - `locksmith agent set-credential <id> <reg> --stored-header-stdin
   [--header <Name>]` (AGENT-325) seals a per-agent value read from stdin
   that is sent bare in a header: `--header`, or else the route's own

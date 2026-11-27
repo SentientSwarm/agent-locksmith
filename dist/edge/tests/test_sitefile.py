@@ -255,6 +255,20 @@ ingress = [{ port = 9201, from = ["10.0.0.0/24"] }]
             "private_network",
         )
 
+    def test_net_bind_service(self):
+        low = 'ingress = [{ port = 443, from = ["10.0.0.0/24"] }]\nnet_bind_service = true'
+        comp = sitefile.parse(with_component_line(low)).instances[0].components[0]
+        self.assertTrue(comp.net_bind_service)
+        self.assertFalse(sitefile.parse(MINIMAL).instances[0].components[0].net_bind_service)
+        self.assertRefused(with_component_line('net_bind_service = "yes"'), "net_bind_service")
+
+    def test_net_bind_service_needs_a_privileged_ingress_port(self):
+        # AGENT-383: the capability only for a component that listens below 1024.
+        for extra in ("", 'ingress = [{ port = 8443, from = ["10.0.0.0/24"] }]\n'):
+            self.assertRefused(
+                with_component_line(extra + "net_bind_service = true"), "below 1024"
+            )
+
     def test_non_bool_jit(self):
         self.assertRefused(with_component_line('jit = "yes"'), "jit")
 
