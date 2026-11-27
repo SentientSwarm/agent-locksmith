@@ -128,7 +128,8 @@ pub async fn invalidate_drift(
     c: &mut SqliteConnection,
     current: &Current,
     manifest: &Value,
-) -> Result<()> {
+) -> Result<usize> {
+    let mut invalidated = 0;
     let rows = sqlx::query("SELECT g.agent_id,g.name,g.contract_digest,r.observed_digest FROM native_tool_grants g JOIN native_reviews r USING(instance,account_key,name,contract_digest) WHERE g.instance=? AND g.account_key=?")
         .bind(&current.source.instance).bind(&current.source.account_key).fetch_all(&mut *c).await?;
     for row in rows {
@@ -146,6 +147,7 @@ pub async fn invalidate_drift(
             .await?;
         sqlx::query("UPDATE native_grant_sets SET revision=lower(hex(randomblob(16))) WHERE agent_id=? AND instance=?")
             .bind(agent).bind(&current.source.instance).execute(&mut *c).await?;
+        invalidated += 1;
     }
-    Ok(())
+    Ok(invalidated)
 }

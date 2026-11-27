@@ -3,6 +3,8 @@
 mod native;
 #[path = "native_dispatch/pins.rs"]
 mod pins;
+#[path = "native_dispatch/refresh_store.rs"]
+mod refresh_store;
 #[path = "native_preparation/support.rs"]
 mod support;
 #[path = "native_dispatch/validation.rs"]
