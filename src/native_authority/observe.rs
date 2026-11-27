@@ -33,14 +33,16 @@ impl Runtime {
         current.matches(expected)?;
         let generation = store::reserve(&mut tx, &current, &self.run, generation).await?;
         tx.commit().await?;
-        let result = self.collect(owner, agent, name, &current).await;
+        let result = self.collect(Some(owner), agent, name, &current).await;
         self.finish(owner, agent, name, expected, &generation, result)
             .await?;
         self.snapshot_for(owner, agent, name).await
     }
-    async fn collect(
+    /// `owner` is `Some(..)` for the operator's owner-gated path and `None`
+    /// for an agent's own delegation (AGENT-378 refresh), as in `materialize_for`.
+    pub(super) async fn collect(
         &self,
-        owner: Option<&str>,
+        owner: Option<Option<&str>>,
         agent: &str,
         name: &str,
         current: &Current,
@@ -52,7 +54,7 @@ impl Runtime {
             .is_some_and(|c| c.allow_private_destination);
         let addresses = destination::resolve(&reg.upstream, private, &self.listeners).await?;
         let bearer = self
-            .materialize_for(Some(owner), agent, name, &current.source)
+            .materialize_for(owner, agent, name, &current.source)
             .await?;
         let selected_tools = current.selected_tools();
         let client = locksmith_mcp_transport::Client::pinned(

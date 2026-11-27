@@ -37,6 +37,7 @@ impl Runtime {
         trace.checked.take().map(Ok).unwrap_or(result)
     }
     async fn capture(&self, call: &mut Invocation, trace: &mut Trace) -> Result<Snapshot> {
+        self.ensure_fresh(&call.agent, &call.connection).await;
         let mut tx = self.repo.pool.begin().await?;
         let snapshot = self
             .effective(&mut tx, &call.agent, &call.connection)

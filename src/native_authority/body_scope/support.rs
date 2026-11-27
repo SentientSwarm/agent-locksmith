@@ -49,5 +49,6 @@ pub fn runtime(owner: RefreshOwner) -> Runtime {
         owner,
         slots: tokio::sync::Semaphore::new(8),
         consent: None,
+        refreshes: Default::default(),
     }
 }

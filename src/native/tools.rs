@@ -112,6 +112,9 @@ async fn snapshot(
     h.0.current()
         .await
         .map_err(|_| authority::Error("authority_changed"))?;
+    authority
+        .ensure_fresh(&h.0.identity.public_id, &h.0.name)
+        .await;
     let mut tx = authority.repo.pool.begin().await?;
     let current = authority
         .effective(&mut tx, &h.0.identity.public_id, &h.0.name)

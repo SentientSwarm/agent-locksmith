@@ -26,6 +26,7 @@ pub struct Runtime {
     pub owner: RefreshOwner,
     pub slots: Semaphore,
     pub consent: Option<Arc<crate::oauth::consent::Runtime>>,
+    pub(super) refreshes: super::refresh::Refreshes,
 }
 impl Runtime {
     pub async fn new(
@@ -46,6 +47,7 @@ impl Runtime {
             owner,
             slots: Semaphore::new(8),
             consent: None,
+            refreshes: Default::default(),
         })
     }
     pub fn with_consent(mut self, consent: Option<Arc<crate::oauth::consent::Runtime>>) -> Self {
