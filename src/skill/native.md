@@ -38,8 +38,10 @@ The first successful tools/list pins names/contracts, including an empty list.
 Later lists can shrink but cannot add names or changed contracts. After intended
 operator repair/grant changes, close the old session and initialize a fresh one.
 Every call still checks current grants, selection and observation freshness;
-a previously listed tool is not permanent permission. Restart also requires a
-fresh operator observation and session. There is no background observation refresh.
+a previously listed tool is not permanent permission. A stale observation is
+refreshed by your own list or call; if that refresh fails or finds changed
+tools, the request is refused and the operator must observe or review again.
+After a restart, initialize a fresh session.
 
 Use unique safe integer IDs (absolute value at most 9007199254740991) or nonempty
 strings at most 64 UTF-8 bytes without controls. No ID reuse, even after completion.

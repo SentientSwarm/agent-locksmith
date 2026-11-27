@@ -68,7 +68,19 @@ connection authority. Metadata or disable/re-enable changes require a new
 observation; unchanged contracts can retain prepared grants after refresh.
 
 Observations become stale after 60 seconds and after every daemon restart.
-Re-observe before review/grant writes or agent calls. No background observation refresh runs.
+Re-observe before review/grant writes. Agents' own requests keep an
+observation fresh (AGENT-378). When an agent with grants on a connection lists
+or calls and the observation is at least 50 seconds old, or from an earlier
+daemon run, Locksmith re-observes as that agent, once per connection and
+account. An unchanged tool list keeps the generation. A changed or missing tool
+loses its grants, exactly as after an operator observe, and must be reviewed and
+granted again; new tools are never granted. A failed refresh leaves the
+observation as it was and is not retried for 5 seconds. The daemon logs
+`native_observation_refreshed` (`outcome` `unchanged`, or `changed` with the
+`invalidated` count, as a warning) and `native_observation_refresh_failed`
+with the error code. You still make the first observation, and observe again
+after a registration change or a controlled OAuth token renewal (AGENT-379).
+Nothing refreshes while no agent is asking.
 409 means a source/generation/grant revision changed: read again and review the
 new state. 429 means all eight shared observation/dispatch slots are busy. Other static errors
 identify unsupported input, source, destination, trust or incomplete upstream

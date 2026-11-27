@@ -104,6 +104,13 @@ forward. Read Upgrading, below, before you install it.
   `additionalProperties` unset, as Slack's do (AGENT-375). The review records
   `input_restriction:"closed-objects"` and agents see the objects closed, which
   Locksmith already enforced. An explicit open object is still refused.
+- Agents can use a native MCP connection without an operator observing it
+  first (AGENT-378). An agent's list or call refreshes a stale observation as
+  that agent, from 50 seconds on and after a restart. One refresh runs per
+  connection and account, and a failed one backs off for 5 seconds. An
+  unchanged tool list keeps the generation; a changed tool loses its grants,
+  as after an operator observe. Before, every list and call needed an
+  operator observation under 60 seconds old.
 - Large Codex `/responses` bodies get the body fixups instead of a 413
   (AGENT-248). Codex sessions with long histories hit the old fixed cap. The
   only bound now is the route's `body_limit_bytes` (50 MB for the shipped
